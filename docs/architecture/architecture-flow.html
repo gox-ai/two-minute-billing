@@ -1,0 +1,421 @@
+<title>tmbilling · architecture & money flows</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --panel-2: #f1f3f7;
+    --ink: #1a1f2b;
+    --ink-2: #4a5468;
+    --ink-3: #8a94a8;
+    --line: #e2e6ee;
+    --line-2: #cdd4e0;
+    --accent: #3b5bdb;
+    --good: #0f9d6b;
+    --good-bg: #e6f6ef;
+    --bad: #d64550;
+    --bad-bg: #fbe9ea;
+    --warn: #c07a00;
+
+    --L-kernel: #64748b;
+    --L-foundation: #6d5cd6;
+    --L-catalog: #0d9488;
+    --L-customer: #c2851b;
+    --L-billing: #3b5bdb;
+    --L-payments: #0f9d6b;
+    --L-tooling: #b0567a;
+
+    --radius: 9px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1017; --panel: #151a24; --panel-2: #1b2230;
+      --ink: #e7ecf4; --ink-2: #a9b4c7; --ink-3: #6b7688;
+      --line: #232b3a; --line-2: #2e3849;
+      --accent: #7d94f5; --good: #34d399; --good-bg: #10281f;
+      --bad: #f47b83; --bad-bg: #2c1618; --warn: #e0a83a;
+      --L-kernel: #94a3b8; --L-foundation: #a394f0; --L-catalog: #2dd4bf;
+      --L-customer: #e0b44a; --L-billing: #7d94f5; --L-payments: #34d399; --L-tooling: #e08bab;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f1f3f7;
+    --ink: #1a1f2b; --ink-2: #4a5468; --ink-3: #8a94a8; --line: #e2e6ee; --line-2: #cdd4e0;
+    --accent: #3b5bdb; --good: #0f9d6b; --good-bg: #e6f6ef; --bad: #d64550; --bad-bg: #fbe9ea; --warn: #c07a00;
+    --L-kernel: #64748b; --L-foundation: #6d5cd6; --L-catalog: #0d9488;
+    --L-customer: #c2851b; --L-billing: #3b5bdb; --L-payments: #0f9d6b; --L-tooling: #b0567a;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1017; --panel: #151a24; --panel-2: #1b2230;
+    --ink: #e7ecf4; --ink-2: #a9b4c7; --ink-3: #6b7688; --line: #232b3a; --line-2: #2e3849;
+    --accent: #7d94f5; --good: #34d399; --good-bg: #10281f; --bad: #f47b83; --bad-bg: #2c1618; --warn: #e0a83a;
+    --L-kernel: #94a3b8; --L-foundation: #a394f0; --L-catalog: #2dd4bf;
+    --L-customer: #e0b44a; --L-billing: #7d94f5; --L-payments: #34d399; --L-tooling: #e08bab;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  header.top { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 34px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 10px;
+  }
+  h1 { font-size: 30px; line-height: 1.15; margin: 0 0 8px; letter-spacing: -.01em; text-wrap: balance; }
+  h1 .mono { font-family: var(--mono); font-weight: 700; color: var(--accent); }
+  .lede { color: var(--ink-2); max-width: 68ch; margin: 0; font-size: 15px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px 20px; margin-top: 20px; }
+  .legend .grp { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .legend .k {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--ink-2);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  section { margin-top: 46px; }
+  h2 {
+    font-size: 12px; font-family: var(--mono); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 4px; font-weight: 600;
+  }
+  .h2sub { color: var(--ink-2); font-size: 14px; margin: 0 0 20px; max-width: 70ch; }
+
+  /* ---- module map ---- */
+  .band {
+    display: grid; grid-template-columns: 130px 1fr; gap: 18px; align-items: start;
+    padding: 14px 0; border-top: 1px solid var(--line);
+  }
+  .band:last-child { border-bottom: 1px solid var(--line); }
+  .band .lname {
+    font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .03em;
+    padding-top: 4px; position: relative; padding-left: 12px;
+  }
+  .band .lname::before {
+    content: ""; position: absolute; left: 0; top: 6px; bottom: 2px; width: 3px; border-radius: 2px;
+    background: var(--lc);
+  }
+  .band .lname small { display: block; color: var(--ink-3); font-weight: 400; letter-spacing: 0; margin-top: 3px; text-transform: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: flex; flex-direction: column; gap: 1px;
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--lc);
+    border-radius: var(--radius); padding: 7px 11px; min-width: 120px;
+  }
+  .chip .id { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .chip .role { font-size: 11px; color: var(--ink-2); line-height: 1.35; }
+  .chip.star { box-shadow: inset 0 0 0 1px var(--lc); }
+  .chip .tag {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--lc); margin-top: 2px;
+  }
+
+  /* ---- flows ---- */
+  .flow {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .flow .fh { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .flow .fname { font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+  .flow .fnote { font-size: 12px; color: var(--ink-2); }
+  .seq { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; }
+  .seq .s {
+    font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 3px solid var(--sc, var(--line-2)); white-space: nowrap; color: var(--ink);
+  }
+  .seq .arw { color: var(--ink-3); font-size: 12px; padding: 0 2px; }
+  .seq .brk { flex-basis: 100%; height: 0; }
+  .seq .lbl {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-3); padding: 3px 6px 3px 0; white-space: nowrap;
+  }
+  .seq .s.good { border-color: var(--good); border-left-color: var(--good); background: var(--good-bg); color: var(--good); font-weight: 600; }
+  .seq .s.bad { border-color: var(--bad); border-left-color: var(--bad); background: var(--bad-bg); color: var(--bad); font-weight: 600; text-decoration: line-through; text-decoration-thickness: 1px; }
+
+  /* ---- spotlight ---- */
+  .spot { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card {
+    border-radius: var(--radius); padding: 16px 18px; border: 1px solid var(--line); background: var(--panel);
+  }
+  .card.cur { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+  .card.tgt { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+  .card .badge {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 10px;
+  }
+  .card.cur .badge { color: var(--bad); }
+  .card.tgt .badge { color: var(--good); }
+  .card h3 { font-size: 15px; margin: 0 0 6px; }
+  .card p { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); }
+  .card .path { display: flex; flex-direction: column; gap: 6px; }
+  .card .step {
+    font-family: var(--mono); font-size: 12px; padding: 6px 10px; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  }
+  .card .step b { color: var(--ink); }
+  .card .step .em-bad { color: var(--bad); font-weight: 700; }
+  .card .step .em-good { color: var(--good); font-weight: 700; }
+  .card .ref { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+
+  .note {
+    margin-top: 16px; font-size: 13px; color: var(--ink-2); border-left: 3px solid var(--accent);
+    padding: 4px 0 4px 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent);
+  }
+  code { font-family: var(--mono); font-size: .92em; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); }
+  footer { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+  @media (max-width: 720px) {
+    .band { grid-template-columns: 1fr; gap: 8px; }
+    .band .lname::before { top: 2px; }
+    .spot { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Architecture reference · as-built · 2026-07-10</p>
+    <h1><span class="mono">tmbilling</span> — modules &amp; money flows</h1>
+    <p class="lede">The 27 domain modules by layer, and how state &amp; money move through them for each billing
+      operation. Built to give shared context before we change the credits/invoicing flow — the current
+      downgrade-credit path is flagged against its target below.</p>
+
+    <div class="legend">
+      <div class="grp">
+        <span class="k"><span class="swatch" style="background:var(--L-foundation)"></span>foundation</span>
+        <span class="k"><span class="swatch" style="background:var(--L-catalog)"></span>catalog</span>
+        <span class="k"><span class="swatch" style="background:var(--L-customer)"></span>customer</span>
+        <span class="k"><span class="swatch" style="background:var(--L-billing)"></span>billing</span>
+        <span class="k"><span class="swatch" style="background:var(--L-payments)"></span>payments</span>
+        <span class="k"><span class="swatch" style="background:var(--L-tooling)"></span>tooling</span>
+      </div>
+      <div class="grp">
+        <span class="k"><span class="swatch" style="background:var(--good)"></span>target path</span>
+        <span class="k"><span class="swatch" style="background:var(--bad)"></span>current (to change)</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== MODULE MAP ===================== -->
+  <section>
+    <h2>Module map</h2>
+    <p class="h2sub">Tenancy hierarchy <b>Organization → Business → Customer → Subscription</b>. The
+      <b>ledger</b> is the money truth — append-only double-entry; every balance is derived, never mutated.</p>
+
+    <div class="band" style="--lc:var(--L-foundation)">
+      <div class="lname" style="--lc:var(--L-foundation)">foundation<small>cross-cutting</small></div>
+      <div class="chips">
+        <div class="chip star" style="--lc:var(--L-foundation)"><span class="id">ledger</span><span class="role">Double-entry postings; money truth</span><span class="tag">source of truth</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">tenancy</span><span class="role">Orgs, businesses, API keys, isolation</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">auth</span><span class="role">Login, sessions, RBAC</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">events</span><span class="role">~67-event registry + payloads</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">webhooks</span><span class="role">Outbox: emit, deliver, redeliver</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">audit</span><span class="role">Append-only actor/diff log</span></div>
+        <div class="chip" style="--lc:var(--L-foundation)"><span class="id">ops</span><span class="role">Billing-clock observability</span></div>
+      </div>
+    </div>
+
+    <div class="band" style="--lc:var(--L-catalog)">
+      <div class="lname" style="--lc:var(--L-catalog)">catalog<small>pricing</small></div>
+      <div class="chips">
+        <div class="chip" style="--lc:var(--L-catalog)"><span class="id">catalog</span><span class="role">Products, prices, snapshots</span></div>
+        <div class="chip" style="--lc:var(--L-catalog)"><span class="id">coupons</span><span class="role">Stacked discount computation</span></div>
+        <div class="chip" style="--lc:var(--L-catalog)"><span class="id">tax</span><span class="role">Per-line tax, inclusive/exclusive</span></div>
+        <div class="chip" style="--lc:var(--L-catalog)"><span class="id">entitlements</span><span class="role">Features + grants + checks</span></div>
+      </div>
+    </div>
+
+    <div class="band" style="--lc:var(--L-customer)">
+      <div class="lname" style="--lc:var(--L-customer)">customer<small>balances</small></div>
+      <div class="chips">
+        <div class="chip star" style="--lc:var(--L-customer)"><span class="id">customers</span><span class="role">3-balance wallet: promo / refundable / excess</span><span class="tag">buckets</span></div>
+        <div class="chip star" style="--lc:var(--L-customer)"><span class="id">credit-notes</span><span class="role">Adjustment + refundable CNs, allocations, refunds, void</span><span class="tag">credit flow</span></div>
+        <div class="chip" style="--lc:var(--L-customer)"><span class="id">wallet</span><span class="role">Legacy top-up audit trail</span></div>
+      </div>
+    </div>
+
+    <div class="band" style="--lc:var(--L-billing)">
+      <div class="lname" style="--lc:var(--L-billing)">billing<small>engine</small></div>
+      <div class="chips">
+        <div class="chip star" style="--lc:var(--L-billing)"><span class="id">subscriptions</span><span class="role">Engine + billing clock: create/change/cancel/pause, proration, dunning</span><span class="tag">state owner</span></div>
+        <div class="chip star" style="--lc:var(--L-billing)"><span class="id">invoicing</span><span class="role">Invoice lifecycle + generation, credit allocation, dunning transitions</span><span class="tag">credit flow</span></div>
+        <div class="chip" style="--lc:var(--L-billing)"><span class="id">metering</span><span class="role">Usage ingestion + aggregation</span></div>
+        <div class="chip" style="--lc:var(--L-billing)"><span class="id">metrics</span><span class="role">MRR/ARR/churn per currency</span></div>
+      </div>
+    </div>
+
+    <div class="band" style="--lc:var(--L-payments)">
+      <div class="lname" style="--lc:var(--L-payments)">payments<small>gateway</small></div>
+      <div class="chips">
+        <div class="chip" style="--lc:var(--L-payments)"><span class="id">gateway</span><span class="role">Provider router + webhook ingest</span></div>
+        <div class="chip" style="--lc:var(--L-payments)"><span class="id">payment-methods</span><span class="role">Vaulted sources, roles, expiry</span></div>
+        <div class="chip" style="--lc:var(--L-payments)"><span class="id">payment-intents</span><span class="role">3DS/SCA on-session intents</span></div>
+        <div class="chip" style="--lc:var(--L-payments)"><span class="id">transactions</span><span class="role">Gateway-facing money log</span></div>
+        <div class="chip star" style="--lc:var(--L-payments)"><span class="id">payments</span><span class="role">Settle charge → invoice + ledger + dunning</span><span class="tag">settlement</span></div>
+        <div class="chip" style="--lc:var(--L-payments)"><span class="id">refunds</span><span class="role">Full/partial refund execution</span></div>
+      </div>
+    </div>
+
+    <div class="band" style="--lc:var(--L-tooling)">
+      <div class="lname" style="--lc:var(--L-tooling)">tooling<small>ops</small></div>
+      <div class="chips">
+        <div class="chip" style="--lc:var(--L-tooling)"><span class="id">migration</span><span class="role">billing-system/JSON import + reconcile</span></div>
+        <div class="chip" style="--lc:var(--L-tooling)"><span class="id">transfer</span><span class="role">Catalog copy test↔live + samples</span></div>
+        <div class="chip" style="--lc:var(--L-tooling)"><span class="id">time-travel</span><span class="role">Virtual clock for test businesses</span></div>
+      </div>
+    </div>
+    <p class="note">A <b>kernel</b> under everything — <code>platform.db</code> (RLS tx), <code>platform.auth</code>,
+      <code>platform.idempotency</code>, <code>platform.clock</code> — carries no domain logic.</p>
+  </section>
+
+  <!-- ===================== MONEY FLOWS ===================== -->
+  <section>
+    <h2>Money &amp; state flows</h2>
+    <p class="h2sub">Each operation as an ordered pass through modules. Branches are labelled; the credit path
+      shows current vs target inline.</p>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Subscribe</span><span class="fnote">create → bill first period in advance → collect</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-foundation)">auth</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-customer)">customers</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">payment-methods</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-catalog)">catalog</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-catalog)">coupons</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">subscriptions</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">invoicing</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">payments</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Renewal</span><span class="fnote">billing-clock tick at term end · recurring in advance, usage in arrears</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-kernel)">clock</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">subscriptions</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">invoicing</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-catalog)">tax</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-catalog)">coupons</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-customer)">customers</span><span class="lbl">apply credit (FIFO)</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">payments</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Change / Proration</span><span class="fnote">upgrade charges; downgrade credits — the flow we are changing</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-foundation)">auth</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">subscriptions</span><span class="lbl">proration</span>
+        <span class="brk"></span>
+        <span class="lbl">↳ upgrade (net&gt;0)</span>
+        <span class="s" style="--sc:var(--L-billing)">invoicing</span><span class="lbl">posted invoice</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">payments</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span>
+        <span class="brk"></span>
+        <span class="lbl">↳ downgrade now</span>
+        <span class="s bad">invoicing · negative “credited” invoice</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span>
+        <span class="lbl">target →</span>
+        <span class="s good">credit-notes · CN vs current-term invoice</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Cancel</span><span class="fnote">timing + unbilled + AR + refundable handling → credit for unused term</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-billing)">subscriptions</span><span class="lbl">cancel opts</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">cancellation-credit</span><span class="lbl">paid/unpaid + promo/excess split</span><span class="arw">→</span>
+        <span class="s good">credit-notes</span><span class="lbl">adjustment | refundable</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">refunds</span><span class="lbl">if schedule_refund</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Credit-note lifecycle</span><span class="fnote">issue → auto-allocate to next invoice → optional payout</span></div>
+      <div class="seq">
+        <span class="s good">credit-notes</span><span class="lbl">issue (refund_due)</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">invoicing</span><span class="lbl">allocateRefundableDraw · FIFO</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">refunds</span><span class="lbl">payout (opt.)</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Dunning</span><span class="fnote">retry schedule → exhaust → final action</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-kernel)">clock</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">invoicing</span><span class="lbl">due transitions</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-billing)">subscriptions</span><span class="lbl">retry / exhaust</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">payments</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="lbl">final: cancel | void | write-off</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fh"><span class="fname">Refund</span><span class="fnote">payment refund vs credit-note payout — distinct ledger contra</span></div>
+      <div class="seq">
+        <span class="s" style="--sc:var(--L-payments)">refunds</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">gateway</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-payments)">transactions</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">ledger</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-customer)">credit-notes</span><span class="arw">→</span>
+        <span class="s" style="--sc:var(--L-foundation)">webhooks</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== SPOTLIGHT ===================== -->
+  <section>
+    <h2>Flow change · downgrade &amp; item-removal credit</h2>
+    <p class="h2sub">The one path we are changing. Same net ledger effect on both sides — only the artifact
+      (and one debit account) changes.</p>
+    <div class="spot">
+      <div class="card cur">
+        <div class="badge">● current — as-built</div>
+        <h3>Credit becomes a negative invoice</h3>
+        <p>The downgrade mints a <b>negative-total invoice</b> with <code>status='credited'</code> and posts to the
+          refundable bucket. It pollutes the invoice list and has no credit-note document.</p>
+        <div class="path">
+          <div class="step">subscriptions · <span class="em-bad">changeSubscription</span> (net &lt; 0)</div>
+          <div class="step">invoicing · insert <span class="em-bad">invoice status=credited</span>, total &lt; 0</div>
+          <div class="step">ledger · dr <b>revenue</b> / cr refundable_credit_balance</div>
+        </div>
+        <p class="ref" style="margin-top:12px">proration.ts:293-365 · invoicing/service.ts:754-777</p>
+      </div>
+      <div class="card tgt">
+        <div class="badge">● target — feature-complete billing</div>
+        <h3>Credit becomes a credit note</h3>
+        <p>Issue a real <b>credit note</b> against the current-term invoice (adjustment if unpaid, refundable if
+          paid). The source invoice stays a normal positive invoice.</p>
+        <div class="path">
+          <div class="step">subscriptions · <span class="em-good">issueCurrentTermCredit</span> (net &lt; 0)</div>
+          <div class="step">credit-notes · <span class="em-good">issueAdjustment | issueRefundable</span> CN</div>
+          <div class="step">ledger · dr <b>credit_adjustments</b> / cr refundable_credit_balance</div>
+        </div>
+        <p class="ref" style="margin-top:12px">reuses the shipped change_term_end template · proration.ts:472-499</p>
+      </div>
+    </div>
+    <p class="note">This is row <b>H1/H2</b> of the reconciliation matrix in <code>docs/PARITY.md</code>. Fixing it
+      also corrects the paid/unpaid split (H2) and removes the credit-only invoice artifact (M3).</p>
+  </section>
+
+  <footer>tmbilling · 27 modules · 7 layers · derived from docs/architecture.json + billing-behavior audit</footer>
+</div>

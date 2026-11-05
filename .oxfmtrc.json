@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+
+  // oxfmt is gofmt-shaped: the style itself has no options, so this file exists
+  // only to say what NOT to touch. Everything in .gitignore is already skipped.
+  "ignorePatterns": [
+    // ── Committed but GENERATED. Reformatting these makes the generator
+    // produce a permanent diff against its own output.
+    "sdk/schema.d.ts",
+    "sdk/openapi.json",
+    "db/migrations/**",
+    // `pnpm gen:event-types`. Not ignoring it would let lint-staged reflow the
+    // file and make the generator's own --check gate fail on a clean tree.
+    "dashboard/lib/api/event-types.ts",
+    // `pnpm permissions:generate`; verify:permission-coverage compares it byte for byte.
+    "dashboard/lib/permissions.generated.ts",
+    // `pnpm gen:webhook-reference`, same reason — and measured, not assumed:
+    // oxfmt DOES rewrite this one.
+    "docs-site/data/webhooks.json",
+    // `scripts/gen-changelog.ts`, run by every docs build. oxfmt rewrites it (measured);
+    // `docs-site/data/api-stats.json` it leaves alone, so that one is not listed.
+    "docs-site/data/releases.json",
+    // All of docs/architecture/ is emitted by `pnpm docs:generate` — the json
+    // source and the two rendered html views alike.
+    "docs/architecture/**",
+    // Frozen payloads written by `capture-analytics-golden`. oxfmt collapses their short
+    // arrays; the file is the generator's output and only it decides the shape.
+    "test/golden/**",
+    ".parity/**",
+    ".reference/**",
+
+    // ── Prose. On markdown oxfmt rewrites *emphasis* to _emphasis_ and inserts
+    // blank lines before lists: 1362 changed lines in docs/PROGRESS.md and 423
+    // in docs/GUIDE.md, none of it meaning. Our docs are a small curated set
+    // (CLAUDE.md § Docs are a fixed set), hand-wrapped at ~100 cols on purpose,
+    // and they are read in diffs — reflow churn there costs more than
+    // consistency buys.
+    "**/*.md",
+
+    // ── Manifests. oxfmt SORTS package.json keys (it moves `engines`,
+    // `packageManager` and `pnpm` below `devDependencies`). No data is lost,
+    // but it fights the conventional field order every other tool prints and
+    // turns a one-line dependency bump into a whole-file diff.
+    "package.json",
+    "dashboard/package.json",
+    "docs-site/package.json"
+  ]
+}

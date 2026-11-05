@@ -1,0 +1,1902 @@
+{
+  "v2020": {
+    "charge.refunded#1": {
+      "id": "evt_XXXXXXXXXXXX01",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012458,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX01",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 1000,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX01",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012455,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "invoice": null,
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 57,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "4242",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": false,
+          "refunds": {
+            "object": "list",
+            "data": [
+              {
+                "id": "re_XXXXXXXXXXXX01",
+                "object": "refund",
+                "amount": 1000,
+                "balance_transaction": "txn_XXXXXXXXXXXX02",
+                "charge": "ch_XXXXXXXXXXXX01",
+                "created": 1793012458,
+                "currency": "usd",
+                "customer": null,
+                "customer_account": null,
+                "destination_details": {
+                  "card": {
+                    "reference_status": "pending",
+                    "reference_type": "acquirer_reference_number",
+                    "type": "refund"
+                  },
+                  "type": "card"
+                },
+                "metadata": {},
+                "payment_intent": "pi_XXXXXXXXXXXX01",
+                "payment_method": "pm_XXXXXXXXXXXX01",
+                "reason": null,
+                "receipt_number": null,
+                "source_transfer_reversal": null,
+                "status": "succeeded",
+                "transfer_reversal": null
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/charges/ch_XXXXXXXXXXXX01/refunds"
+          },
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        },
+        "previous_attributes": {
+          "amount_refunded": 0,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunds": {
+            "data": [],
+            "total_count": 0
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "charge.refunded#2": {
+      "id": "evt_XXXXXXXXXXXX02",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012461,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX01",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 1500,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX01",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012455,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "invoice": null,
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 57,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "4242",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": false,
+          "refunds": {
+            "object": "list",
+            "data": [
+              {
+                "id": "re_XXXXXXXXXXXX02",
+                "object": "refund",
+                "amount": 500,
+                "balance_transaction": "txn_XXXXXXXXXXXX03",
+                "charge": "ch_XXXXXXXXXXXX01",
+                "created": 1793012460,
+                "currency": "usd",
+                "customer": null,
+                "customer_account": null,
+                "destination_details": {
+                  "card": {
+                    "reference_status": "pending",
+                    "reference_type": "acquirer_reference_number",
+                    "type": "refund"
+                  },
+                  "type": "card"
+                },
+                "metadata": {},
+                "payment_intent": "pi_XXXXXXXXXXXX01",
+                "payment_method": "pm_XXXXXXXXXXXX01",
+                "reason": null,
+                "receipt_number": null,
+                "source_transfer_reversal": null,
+                "status": "succeeded",
+                "transfer_reversal": null
+              },
+              {
+                "id": "re_XXXXXXXXXXXX01",
+                "object": "refund",
+                "amount": 1000,
+                "balance_transaction": "txn_XXXXXXXXXXXX02",
+                "charge": "ch_XXXXXXXXXXXX01",
+                "created": 1793012458,
+                "currency": "usd",
+                "customer": null,
+                "customer_account": null,
+                "destination_details": {
+                  "card": {
+                    "reference": "XXXXXXXXXXXXXXXX",
+                    "reference_status": "available",
+                    "reference_type": "acquirer_reference_number",
+                    "type": "refund"
+                  },
+                  "type": "card"
+                },
+                "metadata": {},
+                "payment_intent": "pi_XXXXXXXXXXXX01",
+                "payment_method": "pm_XXXXXXXXXXXX01",
+                "reason": null,
+                "receipt_number": null,
+                "source_transfer_reversal": null,
+                "status": "succeeded",
+                "transfer_reversal": null
+              }
+            ],
+            "has_more": false,
+            "total_count": 2,
+            "url": "/v1/charges/ch_XXXXXXXXXXXX01/refunds"
+          },
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        },
+        "previous_attributes": {
+          "amount_refunded": 1000,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunds": {
+            "data": [
+              {
+                "id": "re_XXXXXXXXXXXX01",
+                "object": "refund",
+                "amount": 1000,
+                "balance_transaction": "txn_XXXXXXXXXXXX02",
+                "charge": "ch_XXXXXXXXXXXX01",
+                "created": 1793012458,
+                "currency": "usd",
+                "customer": null,
+                "customer_account": null,
+                "destination_details": {
+                  "card": {
+                    "reference": "XXXXXXXXXXXXXXXX",
+                    "reference_status": "available",
+                    "reference_type": "acquirer_reference_number",
+                    "type": "refund"
+                  },
+                  "type": "card"
+                },
+                "metadata": {},
+                "payment_intent": "pi_XXXXXXXXXXXX01",
+                "payment_method": "pm_XXXXXXXXXXXX01",
+                "reason": null,
+                "receipt_number": null,
+                "source_transfer_reversal": null,
+                "status": "succeeded",
+                "transfer_reversal": null
+              }
+            ],
+            "total_count": 1
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX02",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "refund.created#1": {
+      "id": "evt_XXXXXXXXXXXX03",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012458,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "pending",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {}
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.created#2": {
+      "id": "evt_XXXXXXXXXXXX04",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012461,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX02",
+          "object": "refund",
+          "amount": 500,
+          "balance_transaction": "txn_XXXXXXXXXXXX03",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012460,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "pending",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {}
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX02",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.updated#1": {
+      "id": "evt_XXXXXXXXXXXX05",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012460,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "destination_details": {
+            "card": {
+              "reference": null,
+              "reference_status": "pending"
+            }
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "refund.updated"
+    },
+    "charge.refund.updated#1": {
+      "id": "evt_XXXXXXXXXXXX06",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012460,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "destination_details": {
+            "card": {
+              "reference": null,
+              "reference_status": "pending"
+            }
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "charge.refund.updated"
+    },
+    "charge.refunded#failing": {
+      "id": "evt_XXXXXXXXXXXX07",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012464,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX02",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 3000,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX04",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012462,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "invoice": null,
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 51,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "5126",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": true,
+          "refunds": {
+            "object": "list",
+            "data": [
+              {
+                "id": "re_XXXXXXXXXXXX03",
+                "object": "refund",
+                "amount": 3000,
+                "balance_transaction": "txn_XXXXXXXXXXXX05",
+                "charge": "ch_XXXXXXXXXXXX02",
+                "created": 1793012464,
+                "currency": "usd",
+                "customer": null,
+                "customer_account": null,
+                "destination_details": {
+                  "card": {
+                    "reference_status": "pending",
+                    "reference_type": "acquirer_reference_number",
+                    "type": "refund"
+                  },
+                  "type": "card"
+                },
+                "metadata": {},
+                "payment_intent": "pi_XXXXXXXXXXXX02",
+                "payment_method": "pm_XXXXXXXXXXXX02",
+                "reason": null,
+                "receipt_number": null,
+                "source_transfer_reversal": null,
+                "status": "succeeded",
+                "transfer_reversal": null
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/charges/ch_XXXXXXXXXXXX02/refunds"
+          },
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        },
+        "previous_attributes": {
+          "amount_refunded": 0,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": false,
+          "refunds": {
+            "data": [],
+            "total_count": 0
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX03",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "refund.created#failing": {
+      "id": "evt_XXXXXXXXXXXX08",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012464,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "pending",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {}
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX03",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.failed": {
+      "id": "evt_XXXXXXXXXXXX09",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012594,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "unavailable",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "failure_balance_transaction": "txn_XXXXXXXXXXXX06",
+          "failure_reason": "expired_or_canceled_card",
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "failed",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "failure_balance_transaction": null,
+          "failure_reason": null,
+          "status": "succeeded"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "refund.failed"
+    },
+    "charge.refund.updated#failed": {
+      "id": "evt_XXXXXXXXXXXX10",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012594,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "unavailable",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "failure_balance_transaction": "txn_XXXXXXXXXXXX06",
+          "failure_reason": "expired_or_canceled_card",
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "failed",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "failure_balance_transaction": null,
+          "failure_reason": null,
+          "status": "succeeded"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "charge.refund.updated"
+    },
+    "payment_method.card_automatically_updated": {
+      "id": "evt_XXXXXXXXXXXX11",
+      "object": "event",
+      "api_version": "2020-03-02",
+      "created": 1793012518,
+      "data": {
+        "object": {
+          "id": "pm_XXXXXXXXXXXX01",
+          "object": "payment_method",
+          "allow_redisplay": "unspecified",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "card": {
+            "brand": "visa",
+            "checks": {
+              "address_line1_check": null,
+              "address_postal_code_check": null,
+              "cvc_check": "pass"
+            },
+            "country": "US",
+            "display_brand": "visa",
+            "exp_month": 4,
+            "exp_year": 2030,
+            "fingerprint": "XXXXXXXXXXXXXXXX",
+            "funding": "credit",
+            "generated_from": null,
+            "last4": "4242",
+            "networks": {
+              "available": ["visa"],
+              "preferred": null
+            },
+            "regulated_status": "unregulated",
+            "three_d_secure_usage": {
+              "supported": true
+            },
+            "wallet": null
+          },
+          "created": 1793012455,
+          "customer": null,
+          "customer_account": null,
+          "livemode": false,
+          "metadata": {},
+          "shared_payment_granted_token": null,
+          "type": "card"
+        },
+        "previous_attributes": {
+          "card": {
+            "exp_month": 10,
+            "exp_year": 2027
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "payment_method.card_automatically_updated"
+    }
+  },
+  "dahlia": {
+    "charge.refunded#1": {
+      "id": "evt_XXXXXXXXXXXX12",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012458,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX01",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 1000,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX01",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012455,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 57,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "4242",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": false,
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        },
+        "previous_attributes": {
+          "amount_refunded": 0
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "charge.refunded#2": {
+      "id": "evt_XXXXXXXXXXXX13",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012461,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX01",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 1500,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX01",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012455,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 57,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "4242",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": false,
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        },
+        "previous_attributes": {
+          "amount_refunded": 1000
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX02",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "refund.created#1": {
+      "id": "evt_XXXXXXXXXXXX14",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012458,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.created#2": {
+      "id": "evt_XXXXXXXXXXXX15",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012461,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX02",
+          "object": "refund",
+          "amount": 500,
+          "balance_transaction": "txn_XXXXXXXXXXXX03",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012460,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX02",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.updated#1": {
+      "id": "evt_XXXXXXXXXXXX16",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012460,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "destination_details": {
+            "card": {
+              "reference": null,
+              "reference_status": "pending"
+            }
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "refund.updated"
+    },
+    "charge.refund.updated#1": {
+      "id": "evt_XXXXXXXXXXXX17",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012460,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX01",
+          "object": "refund",
+          "amount": 1000,
+          "balance_transaction": "txn_XXXXXXXXXXXX02",
+          "charge": "ch_XXXXXXXXXXXX01",
+          "created": 1793012458,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference": "XXXXXXXXXXXXXXXX",
+              "reference_status": "available",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX01",
+          "payment_method": "pm_XXXXXXXXXXXX01",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "destination_details": {
+            "card": {
+              "reference": null,
+              "reference_status": "pending"
+            }
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "charge.refund.updated"
+    },
+    "charge.refunded#failing": {
+      "id": "evt_XXXXXXXXXXXX18",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012464,
+      "data": {
+        "object": {
+          "id": "ch_XXXXXXXXXXXX02",
+          "object": "charge",
+          "amount": 3000,
+          "amount_captured": 3000,
+          "amount_refunded": 3000,
+          "application": null,
+          "application_fee": null,
+          "application_fee_amount": null,
+          "balance_transaction": "txn_XXXXXXXXXXXX04",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "calculated_statement_descriptor": "TWO MINUTE REPORTS",
+          "captured": true,
+          "created": 1793012462,
+          "currency": "usd",
+          "customer": null,
+          "description": "version capture",
+          "destination": null,
+          "dispute": null,
+          "disputed": false,
+          "failure_balance_transaction": null,
+          "failure_code": null,
+          "failure_message": null,
+          "fraud_details": {},
+          "livemode": false,
+          "metadata": {},
+          "on_behalf_of": null,
+          "order": null,
+          "outcome": {
+            "advice_code": null,
+            "network_advice_code": null,
+            "network_decline_code": null,
+            "network_status": "approved_by_network",
+            "reason": null,
+            "risk_level": "normal",
+            "risk_score": 51,
+            "seller_message": "Payment complete.",
+            "type": "authorized"
+          },
+          "paid": true,
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "payment_method_details": {
+            "card": {
+              "amount_authorized": 3000,
+              "authorization_code": "XXXXXX",
+              "brand": "visa",
+              "checks": {
+                "address_line1_check": null,
+                "address_postal_code_check": null,
+                "cvc_check": "pass"
+              },
+              "country": "US",
+              "electronic_commerce_indicator": "07",
+              "exp_month": 10,
+              "exp_year": 2027,
+              "extended_authorization": {
+                "status": "disabled"
+              },
+              "fingerprint": "XXXXXXXXXXXXXXXX",
+              "funding": "credit",
+              "incremental_authorization": {
+                "status": "unavailable"
+              },
+              "installments": null,
+              "last4": "5126",
+              "mandate": null,
+              "multicapture": {
+                "status": "unavailable"
+              },
+              "network": "visa",
+              "network_token": null,
+              "network_transaction_id": "XXXXXXXXXXXXXXX",
+              "overcapture": {
+                "maximum_amount_capturable": 3000,
+                "status": "unavailable"
+              },
+              "regulated_status": "unregulated",
+              "three_d_secure": null,
+              "transaction_link_id": null,
+              "wallet": null
+            },
+            "type": "card"
+          },
+          "radar_options": {},
+          "receipt_email": null,
+          "receipt_number": null,
+          "receipt_url": "https://pay.stripe.com/receipts/XXXXXXXX",
+          "refunded": true,
+          "review": null,
+          "shipping": {
+            "address": {
+              "city": "Austin",
+              "country": "US",
+              "line1": "1 Test St",
+              "line2": null,
+              "postal_code": "78701",
+              "state": "TX"
+            },
+            "carrier": null,
+            "name": "Test Buyer",
+            "phone": null,
+            "tracking_number": null
+          },
+          "source": null,
+          "source_transfer": null,
+          "statement_descriptor": null,
+          "statement_descriptor_suffix": null,
+          "status": "succeeded",
+          "transfer_data": null,
+          "transfer_group": null
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX03",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "charge.refunded"
+    },
+    "refund.created#failing": {
+      "id": "evt_XXXXXXXXXXXX19",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012464,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "unavailable",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "succeeded",
+          "transfer_reversal": null
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX03",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "refund.created"
+    },
+    "refund.failed": {
+      "id": "evt_XXXXXXXXXXXX20",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012594,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "unavailable",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "failure_balance_transaction": "txn_XXXXXXXXXXXX06",
+          "failure_reason": "expired_or_canceled_card",
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "failed",
+          "transfer_reversal": null
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "refund.failed"
+    },
+    "charge.refund.updated#failed": {
+      "id": "evt_XXXXXXXXXXXX21",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012594,
+      "data": {
+        "object": {
+          "id": "re_XXXXXXXXXXXX03",
+          "object": "refund",
+          "amount": 3000,
+          "balance_transaction": "txn_XXXXXXXXXXXX05",
+          "charge": "ch_XXXXXXXXXXXX02",
+          "created": 1793012464,
+          "currency": "usd",
+          "customer": null,
+          "customer_account": null,
+          "destination_details": {
+            "card": {
+              "reference_status": "unavailable",
+              "reference_type": "acquirer_reference_number",
+              "type": "refund"
+            },
+            "type": "card"
+          },
+          "failure_balance_transaction": "txn_XXXXXXXXXXXX06",
+          "failure_reason": "expired_or_canceled_card",
+          "metadata": {},
+          "payment_intent": "pi_XXXXXXXXXXXX02",
+          "payment_method": "pm_XXXXXXXXXXXX02",
+          "reason": null,
+          "receipt_number": null,
+          "source_transfer_reversal": null,
+          "status": "failed",
+          "transfer_reversal": null
+        },
+        "previous_attributes": {
+          "failure_balance_transaction": null,
+          "failure_reason": null,
+          "status": "succeeded"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "charge.refund.updated"
+    },
+    "payment_method.automatically_updated": {
+      "id": "evt_XXXXXXXXXXXX22",
+      "object": "event",
+      "api_version": "2026-05-27.dahlia",
+      "created": 1793012518,
+      "data": {
+        "object": {
+          "id": "pm_XXXXXXXXXXXX01",
+          "object": "payment_method",
+          "allow_redisplay": "unspecified",
+          "billing_details": {
+            "address": {
+              "city": null,
+              "country": null,
+              "line1": null,
+              "line2": null,
+              "postal_code": null,
+              "state": null
+            },
+            "email": null,
+            "name": null,
+            "phone": null,
+            "tax_id": null
+          },
+          "card": {
+            "brand": "visa",
+            "checks": {
+              "address_line1_check": null,
+              "address_postal_code_check": null,
+              "cvc_check": "pass"
+            },
+            "country": "US",
+            "display_brand": "visa",
+            "exp_month": 4,
+            "exp_year": 2030,
+            "fingerprint": "XXXXXXXXXXXXXXXX",
+            "funding": "credit",
+            "generated_from": null,
+            "last4": "4242",
+            "networks": {
+              "available": ["visa"],
+              "preferred": null
+            },
+            "regulated_status": "unregulated",
+            "three_d_secure_usage": {
+              "supported": true
+            },
+            "wallet": null
+          },
+          "created": 1793012455,
+          "customer": null,
+          "customer_account": null,
+          "livemode": false,
+          "metadata": {},
+          "shared_payment_granted_token": null,
+          "type": "card"
+        },
+        "previous_attributes": {
+          "card": {
+            "exp_month": 10,
+            "exp_year": 2027
+          }
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 3,
+      "request": {
+        "id": "req_XXXXXXXXXXXX01",
+        "idempotency_key": "00000000-0000-4000-8000-000000000001"
+      },
+      "type": "payment_method.automatically_updated"
+    }
+  },
+  "dahliaRefundList": {
+    "object": "list",
+    "count": 2,
+    "data": [
+      {
+        "id": "re_XXXXXXXXXXXX02",
+        "object": "refund",
+        "amount": 500,
+        "balance_transaction": "txn_XXXXXXXXXXXX03",
+        "charge": "ch_XXXXXXXXXXXX01",
+        "created": 1793012460,
+        "currency": "usd",
+        "customer": null,
+        "customer_account": null,
+        "destination_details": {
+          "card": {
+            "reference": "XXXXXXXXXXXXXXXX",
+            "reference_status": "available",
+            "reference_type": "acquirer_reference_number",
+            "type": "refund"
+          },
+          "type": "card"
+        },
+        "metadata": {},
+        "payment_intent": "pi_XXXXXXXXXXXX01",
+        "payment_method": "pm_XXXXXXXXXXXX01",
+        "reason": null,
+        "receipt_number": null,
+        "source_transfer_reversal": null,
+        "status": "succeeded",
+        "transfer_reversal": null
+      },
+      {
+        "id": "re_XXXXXXXXXXXX01",
+        "object": "refund",
+        "amount": 1000,
+        "balance_transaction": "txn_XXXXXXXXXXXX02",
+        "charge": "ch_XXXXXXXXXXXX01",
+        "created": 1793012458,
+        "currency": "usd",
+        "customer": null,
+        "customer_account": null,
+        "destination_details": {
+          "card": {
+            "reference": "XXXXXXXXXXXXXXXX",
+            "reference_status": "available",
+            "reference_type": "acquirer_reference_number",
+            "type": "refund"
+          },
+          "type": "card"
+        },
+        "metadata": {},
+        "payment_intent": "pi_XXXXXXXXXXXX01",
+        "payment_method": "pm_XXXXXXXXXXXX01",
+        "reason": null,
+        "receipt_number": null,
+        "source_transfer_reversal": null,
+        "status": "succeeded",
+        "transfer_reversal": null
+      }
+    ],
+    "has_more": false,
+    "url": "/v1/refunds"
+  }
+}

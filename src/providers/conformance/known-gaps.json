@@ -1,0 +1,15 @@
+{
+  "$comment": "Open conformance gaps per gateway: suite row -> { reason, planRef }. One key per gateway that has a fixture module ({} = every row passes). verify:gateway-conformance passes only when the failing rows equal this set exactly; a listed row that passes fails the suite until it is removed here. See scripts/conformance/README.md.",
+  "stripe": {},
+  "gocardless": {},
+  "square": {},
+  "paypal": {},
+  "razorpay": {},
+  "cashfree": {},
+  "checkoutcom": {},
+  "adyen": {},
+  "mollie": {},
+  "braintree": {},
+  "authorizenet": {},
+  "payu": {}
+}

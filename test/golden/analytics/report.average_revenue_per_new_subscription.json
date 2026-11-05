@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "comparison": {
+    "basis": "complete_month",
+    "change_bps": null,
+    "prev_label": "Jun 2026",
+    "prev_value": null
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "New recurring revenue divided by the number of subscriptions that brought it.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": null,
+  "key": "average_revenue_per_new_subscription",
+  "kind": "money",
+  "name": "Average Revenue per New Subscription",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

@@ -1,0 +1,43 @@
+{
+  "as_of": "<timestamp>",
+  "converted": {
+    "arr_minor": 338796,
+    "currency": "USD",
+    "missing_rates": [],
+    "mrr_minor": 28233
+  },
+  "currencies": [
+    {
+      "active": 4,
+      "arpu_minor": 6225,
+      "arr_minor": 298800,
+      "currency": "USD",
+      "mrr_minor": 24900,
+      "trialing": 1
+    },
+    {
+      "active": 1,
+      "arpu_minor": 3000,
+      "arr_minor": 36000,
+      "currency": "EUR",
+      "mrr_minor": 3000,
+      "trialing": 0
+    }
+  ],
+  "movement_30d": {
+    "canceled_subscriptions": 0,
+    "churned_mrr_minor": {},
+    "logo_churn_rate_bps": 0,
+    "new_mrr_minor": {
+      "USD": 0
+    },
+    "new_subscriptions": 1
+  },
+  "subscribers": {
+    "active": 5,
+    "cancelled": 2,
+    "future": 0,
+    "in_trial": 1,
+    "paused": 0
+  }
+}

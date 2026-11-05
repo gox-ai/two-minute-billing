@@ -1,0 +1,50 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Checkout links created in the period, and how many reached each step. The total is the number of completed checkouts.",
+  "dimensions": [],
+  "funnel": true,
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "checkout_funnel",
+  "kind": "count",
+  "name": "Checkout Funnel",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Links created",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Opened",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Details entered",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Payment started",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Completed",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

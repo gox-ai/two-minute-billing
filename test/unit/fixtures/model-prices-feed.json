@@ -1,0 +1,630 @@
+[
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": [
+      {
+        "id": "claude-haiku-5-5",
+        "match": {
+          "or": [
+            {
+              "equals": "claude-haiku-5-5"
+            },
+            {
+              "regex": "^claude-haiku-5-5-\\d{8}$"
+            },
+            {
+              "starts_with": "claude-haiku-5-5@"
+            },
+            {
+              "starts_with": "claude-haiku-5.5"
+            },
+            {
+              "starts_with": "claude-5-5-haiku"
+            },
+            {
+              "starts_with": "claude-5.5-haiku"
+            }
+          ]
+        },
+        "context_window": 1000000,
+        "prices": {
+          "input_mtok": {
+            "base": 0.1,
+            "tiers": [
+              {
+                "start": 100000,
+                "price": 0.5
+              }
+            ]
+          },
+          "cache_write_mtok": {
+            "base": 0.125,
+            "tiers": [
+              {
+                "start": 100000,
+                "price": 0.625
+              }
+            ]
+          },
+          "cache_read_mtok": {
+            "base": 0.01,
+            "tiers": [
+              {
+                "start": 100000,
+                "price": 0.05
+              }
+            ]
+          },
+          "output_mtok": {
+            "base": 0.5,
+            "tiers": [
+              {
+                "start": 100000,
+                "price": 2.5
+              }
+            ]
+          },
+          "cache_write_1h_mtok": {
+            "base": 0.2,
+            "tiers": [
+              {
+                "start": 100000,
+                "price": 1
+              }
+            ]
+          },
+          "web_searches_kcount": 10
+        },
+        "price_variants": [
+          {
+            "when": {
+              "processing": "batch"
+            },
+            "prices": {
+              "input_mtok": {
+                "base": 0.05,
+                "tiers": [
+                  {
+                    "start": 100000,
+                    "price": 0.25
+                  }
+                ]
+              },
+              "cache_write_mtok": {
+                "base": 0.0625,
+                "tiers": [
+                  {
+                    "start": 100000,
+                    "price": 0.3125
+                  }
+                ]
+              },
+              "cache_read_mtok": {
+                "base": 0.005,
+                "tiers": [
+                  {
+                    "start": 100000,
+                    "price": 0.025
+                  }
+                ]
+              },
+              "output_mtok": {
+                "base": 0.25,
+                "tiers": [
+                  {
+                    "start": 100000,
+                    "price": 1.25
+                  }
+                ]
+              },
+              "cache_write_1h_mtok": {
+                "base": 0.1,
+                "tiers": [
+                  {
+                    "start": 100000,
+                    "price": 0.5
+                  }
+                ]
+              }
+            },
+            "constraint": {
+              "start_date": "2026-10-14"
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-opus-4-0",
+        "match": {
+          "or": [
+            {
+              "starts_with": "claude-opus-4-0"
+            },
+            {
+              "starts_with": "claude-4-opus"
+            },
+            {
+              "equals": "claude-opus-4"
+            },
+            {
+              "equals": "claude-opus-4-20250514"
+            }
+          ]
+        },
+        "context_window": 200000,
+        "prices": {
+          "input_mtok": 15,
+          "cache_write_mtok": 18.75,
+          "cache_read_mtok": 1.5,
+          "output_mtok": 75,
+          "cache_write_1h_mtok": 30,
+          "web_searches_kcount": 10
+        }
+      },
+      {
+        "id": "claude-opus-4-6",
+        "match": {
+          "or": [
+            {
+              "starts_with": "claude-opus-4-6"
+            },
+            {
+              "starts_with": "claude-opus-4.6"
+            },
+            {
+              "starts_with": "claude-4-6-opus"
+            },
+            {
+              "starts_with": "claude-4.6-opus"
+            }
+          ]
+        },
+        "context_window": 1000000,
+        "prices": [
+          {
+            "prices": {
+              "input_mtok": {
+                "base": 5,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 10
+                  }
+                ]
+              },
+              "cache_write_mtok": {
+                "base": 6.25,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 12.5
+                  }
+                ]
+              },
+              "cache_read_mtok": {
+                "base": 0.5,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 1
+                  }
+                ]
+              },
+              "output_mtok": {
+                "base": 25,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 37.5
+                  }
+                ]
+              },
+              "cache_write_1h_mtok": {
+                "base": 10,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 20
+                  }
+                ]
+              },
+              "web_searches_kcount": 10
+            }
+          },
+          {
+            "constraint": {
+              "start_date": "2026-03-13"
+            },
+            "prices": {
+              "input_mtok": 5,
+              "cache_write_mtok": 6.25,
+              "cache_read_mtok": 0.5,
+              "output_mtok": 25,
+              "cache_write_1h_mtok": 10,
+              "web_searches_kcount": 10
+            }
+          }
+        ],
+        "price_variants": [
+          {
+            "when": {
+              "processing": "batch"
+            },
+            "prices": {
+              "input_mtok": 2.5,
+              "cache_write_mtok": 3.125,
+              "cache_read_mtok": 0.25,
+              "output_mtok": 12.5,
+              "cache_write_1h_mtok": 5
+            },
+            "constraint": {
+              "start_date": "2026-10-14"
+            }
+          }
+        ]
+      },
+      {
+        "id": "claude-sonnet-4-5",
+        "match": {
+          "or": [
+            {
+              "starts_with": "claude-sonnet-4-5"
+            },
+            {
+              "starts_with": "claude-sonnet-4.5"
+            }
+          ]
+        },
+        "context_window": 200000,
+        "prices": {
+          "input_mtok": {
+            "base": 3,
+            "tiers": [
+              {
+                "start": 200000,
+                "price": 6
+              }
+            ]
+          },
+          "cache_write_mtok": {
+            "base": 3.75,
+            "tiers": [
+              {
+                "start": 200000,
+                "price": 7.5
+              }
+            ]
+          },
+          "cache_read_mtok": {
+            "base": 0.3,
+            "tiers": [
+              {
+                "start": 200000,
+                "price": 0.6
+              }
+            ]
+          },
+          "output_mtok": {
+            "base": 15,
+            "tiers": [
+              {
+                "start": 200000,
+                "price": 22.5
+              }
+            ]
+          },
+          "cache_write_1h_mtok": {
+            "base": 6,
+            "tiers": [
+              {
+                "start": 200000,
+                "price": 12
+              }
+            ]
+          },
+          "web_searches_kcount": 10
+        },
+        "price_variants": [
+          {
+            "when": {
+              "processing": "batch"
+            },
+            "prices": {
+              "input_mtok": {
+                "base": 1.5,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 3
+                  }
+                ]
+              },
+              "cache_write_mtok": {
+                "base": 1.875,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 3.75
+                  }
+                ]
+              },
+              "cache_read_mtok": {
+                "base": 0.15,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 0.3
+                  }
+                ]
+              },
+              "output_mtok": {
+                "base": 7.5,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 11.25
+                  }
+                ]
+              },
+              "cache_write_1h_mtok": {
+                "base": 3,
+                "tiers": [
+                  {
+                    "start": 200000,
+                    "price": 6
+                  }
+                ]
+              }
+            },
+            "constraint": {
+              "start_date": "2026-10-14"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "avian",
+    "name": "Avian",
+    "models": [
+      {
+        "id": "deepseek/deepseek-v4-flash",
+        "match": {
+          "equals": "deepseek/deepseek-v4-flash"
+        },
+        "context_window": 1000000,
+        "prices": [
+          {
+            "prices": {
+              "input_mtok": 0.0805,
+              "cache_read_mtok": 0.0165,
+              "output_mtok": 0.161
+            }
+          },
+          {
+            "constraint": {
+              "start_date": "2026-10-18"
+            },
+            "prices": {
+              "input_mtok": 0.14,
+              "cache_read_mtok": 0.0028,
+              "output_mtok": 0.28
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "azure",
+    "name": "Microsoft Azure",
+    "models": []
+  },
+  {
+    "id": "deepseek",
+    "name": "Deepseek",
+    "models": [
+      {
+        "id": "deepseek-chat",
+        "match": {
+          "or": [
+            {
+              "starts_with": "deepseek-chat"
+            },
+            {
+              "equals": "deepseek-chat-v3-0324"
+            }
+          ]
+        },
+        "context_window": 64000,
+        "prices": [
+          {
+            "prices": {
+              "input_mtok": 0.135,
+              "cache_read_mtok": 0.035,
+              "output_mtok": 0.55
+            }
+          },
+          {
+            "constraint": {
+              "start_time": "00:30:00Z",
+              "end_time": "16:30:00Z"
+            },
+            "prices": {
+              "input_mtok": 0.27,
+              "cache_read_mtok": 0.07,
+              "output_mtok": 1.1
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": [
+      {
+        "id": "gpt-4o",
+        "match": {
+          "or": [
+            {
+              "equals": "gpt-4o"
+            },
+            {
+              "equals": "gpt-4o-2024-08-06"
+            },
+            {
+              "equals": "gpt-4o-2024-11-20"
+            }
+          ]
+        },
+        "context_window": 128000,
+        "prices": {
+          "input_mtok": 2.5,
+          "cache_read_mtok": 1.25,
+          "output_mtok": 10,
+          "web_searches_kcount": 10,
+          "storage_searches_kcount": 2.5
+        },
+        "price_variants": [
+          {
+            "when": {
+              "service_tier": "default"
+            },
+            "prices": {}
+          },
+          {
+            "when": {
+              "service_tier": "priority"
+            },
+            "prices": {
+              "input_mtok": 4.25,
+              "cache_read_mtok": 2.125,
+              "output_mtok": 17
+            },
+            "constraint": {
+              "start_date": "2026-10-12"
+            }
+          },
+          {
+            "when": {
+              "service_tier": "fast"
+            },
+            "prices": {
+              "input_mtok": 4.25,
+              "cache_read_mtok": 2.125,
+              "output_mtok": 17
+            },
+            "constraint": {
+              "start_date": "2026-10-12"
+            }
+          },
+          {
+            "when": {
+              "processing": "batch"
+            },
+            "prices": {
+              "input_mtok": 1.25,
+              "output_mtok": 5
+            },
+            "constraint": {
+              "start_date": "2026-10-14"
+            }
+          }
+        ]
+      },
+      {
+        "id": "gpt-4o-mini",
+        "match": {
+          "or": [
+            {
+              "equals": "gpt-4o-mini"
+            },
+            {
+              "equals": "gpt-4o-mini-2024-07-18"
+            },
+            {
+              "equals": "gpt-4o-mini-search-preview"
+            },
+            {
+              "equals": "gpt-4o-mini-search-preview-2025-03-11"
+            }
+          ]
+        },
+        "context_window": 128000,
+        "prices": {
+          "input_mtok": 0.15,
+          "cache_read_mtok": 0.075,
+          "output_mtok": 0.6,
+          "web_searches_kcount": 10,
+          "storage_searches_kcount": 2.5
+        },
+        "price_variants": [
+          {
+            "when": {
+              "service_tier": "default"
+            },
+            "prices": {}
+          },
+          {
+            "when": {
+              "service_tier": "priority"
+            },
+            "prices": {
+              "input_mtok": 0.25,
+              "cache_read_mtok": 0.125,
+              "output_mtok": 1
+            },
+            "constraint": {
+              "start_date": "2026-10-12"
+            }
+          },
+          {
+            "when": {
+              "service_tier": "fast"
+            },
+            "prices": {
+              "input_mtok": 0.25,
+              "cache_read_mtok": 0.125,
+              "output_mtok": 1
+            },
+            "constraint": {
+              "start_date": "2026-10-12"
+            }
+          },
+          {
+            "when": {
+              "processing": "batch"
+            },
+            "prices": {
+              "input_mtok": 0.075,
+              "output_mtok": 0.3
+            },
+            "constraint": {
+              "start_date": "2026-10-14"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "groq",
+    "name": "Groq",
+    "models": [
+      {
+        "id": "canopylabs/orpheus-arabic-saudi",
+        "match": {
+          "equals": "canopylabs/orpheus-arabic-saudi"
+        },
+        "context_window": 4000,
+        "prices": {
+          "input_mchars": 40
+        }
+      }
+    ]
+  }
+]

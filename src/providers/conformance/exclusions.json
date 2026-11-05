@@ -1,0 +1,12 @@
+{
+  "$comment": "Gateways in the catalog with no conformance fixture module, and why. verify:gateway-conformance fails for a catalog gateway that has neither fixtures nor an entry here. A `pending` entry counts as an open gap (conformanceGaps), so the gateway is not offered. Remove the entry when its fixture module lands. See scripts/conformance/README.md.",
+  "tmtest": {
+    "kind": "test-gateway",
+    "reason": "The in-process test gateway. It moves no real money."
+  },
+  "cybersource": {
+    "kind": "pending",
+    "reason": "CyberSource is not available yet. We did not complete its live tests.",
+    "planRef": "4 live proof"
+  }
+}

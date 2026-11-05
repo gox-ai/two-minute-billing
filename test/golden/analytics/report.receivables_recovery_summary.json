@@ -1,0 +1,44 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "receivables",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Overdue invoices that were eventually paid, by how late they were.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 5000,
+  "key": "receivables_recovery_summary",
+  "kind": "money",
+  "name": "Receivables Recovery Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Paid on time",
+      "group_id": null,
+      "value": 5000
+    },
+    {
+      "group": "1–30 days late",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "31–60 days late",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "60+ days late",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["collections"]
+}

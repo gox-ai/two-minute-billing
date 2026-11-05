@@ -1,0 +1,547 @@
+[
+  {
+    "slug": "2026-10-28-eleven-gateways-and-more",
+    "title": "Eleven payment gateways, roles, usage billing and more",
+    "date": "2026-10-28",
+    "type": "Feature",
+    "tags": [
+      "Payments",
+      "Gateways",
+      "Developers",
+      "Accounts",
+      "Usage",
+      "Dunning",
+      "Integrations"
+    ],
+    "summary": "Connect eight more payment gateways, give your team custom roles, bill usage with more pricing models, and get more control over collections.",
+    "body": "You can now collect through 11 payment gateways. This release also adds custom roles, a request\nlog, more ways to price usage and more control over collections.\n\n- **Eight more payment gateways.** Square, Braintree, Checkout.com, Adyen, Mollie, Authorize.net,\n  GoCardless and Cashfree, together with Stripe, PayPal and Razorpay. Each has a setup guide in\n  [Connect a payment gateway](https://twominutebilling.com/help/guides/connect-a-payment-gateway).\n- **More ways to pay.** Apple Pay, Google Pay, Venmo, Cash App Pay and PayPal through Braintree,\n  plus direct debits such as Bacs, SEPA, ACH, BECS, PAD, Autogiro, Betalingsservice, PayTo, eNACH\n  and UPI Autopay. Each payment shows the payment method that paid it.\n- **The correct account for each payment.** With more than one gateway account, pay now and\n  save a payment method each use an account that can do that action.\n- **Gateway messages are not lost.** If we cannot process a message from your gateway, we try\n  again for about four days. On **Gateway Webhooks**, select **Replay** to try again yourself.\n- **Record a dispute.** If your gateway cannot report a chargeback, select **Record dispute** on\n  the payment. Refunds that you make in your gateway now show in Two Minute Billing too.\n- **Custom roles.** On **Team → Roles**, make a role with only the permissions that it needs.\n  You can also limit an API key to the resources that it needs.\n- **Safer API keys.** Each key shows when it was last used. Set an expiry date, or select\n  **Rotate key** to replace a key with an overlap of up to 7 days.\n- **Request logs.** **Developers → Request logs** shows each API request, with secrets removed.\n  The webhook delivery log now has filters and paging.\n- **Usage-based pricing.** Price usage as tiered, volume, stairstep, package or percentage, and\n  set a minimum spend. Customers see their usage so far in the customer portal.\n- **Usage on yearly plans.** Bill a yearly plan's usage each month, and set a minimum commitment\n  for each term.\n- **More control over collections.** Select **Exclude from dunning** for a customer, set a\n  minimum amount for dunning in each currency, and give a customer their own dunning policy.\n  Set how many days before a trial end, a renewal or a scheduled cancellation the reminder goes.\n- **Receipts and payment requests.** Each payment gets a numbered receipt with a PDF, also in\n  the customer portal. A payment request collects up to 50 open invoices in one charge.\n- **HubSpot invoices.** Send your invoices to a custom object in HubSpot Enterprise.\n- **More accurate bills.** Each billing period gets one invoice, credit notes reverse the\n  correct tax, and a cancel at the end of a term bills the usage and charges of that term."
+  },
+  {
+    "slug": "2026-10-22-transfer-preview-and-live-override",
+    "title": "Check every change before you copy your set-up",
+    "date": "2026-10-22",
+    "type": "Feature",
+    "tags": [
+      "Dashboard",
+      "Settings",
+      "Tax",
+      "Email"
+    ],
+    "summary": "Copy set-up now shows each change first, copies your company profile and email sending, and keeps a list of past copies.",
+    "body": "**Copy set-up** (on the Transfer page) copies your configuration from one business to another.\nNow you see each change before you copy, and you can copy more of your set-up.\n\n- **Check the changes first.** Select **Check changes** to see each value that the copy changes,\n  with its value now and its value after. Filter the list to new, replaced or left-out values.\n  Secrets show as `••••`.\n- **Leave out a section that cannot be copied.** If a section has a problem, the list tells you\n  why. Select **Leave out these sections** to continue without it.\n- **Copy your company profile.** Address, tax registration number, invoice issuer, default HSN/SAC\n  code and default tax behavior.\n- **Copy email sending.** Sender details and your SMTP or Amazon SES settings, with their secrets.\n  Email templates stay with each business.\n- **Keep each business's own numbers and links.** The destination keeps its invoice and credit\n  note prefixes, its checkout return and cancel URLs and its portal error text. To give it new\n  prefixes, enter them in the copy. The copy refuses a prefix that another business uses.\n- **Start clean on a test business.** Select **Delete its catalog, coupons and taxes first** to\n  give a test business an exact copy.\n- **Copy the test businesses in the same run.** When you copy one live business to another, you\n  can also copy their test businesses. The test businesses go first. If they fail, the live\n  business does not change.\n\n## Past copies\n\nThe **Past copies** list shows each copy for this business or for your whole organization, with\nwhat it added and updated. Select **Repeat** to start a new copy with the same choices.\n\n## Update a live business, with a confirmation\n\nA live business takes only new records from a copy. To also change its settings, company\nprofile, email sending, numbering or tax profiles, an owner or admin selects **Also update what is\nthere** and types the business name to confirm. The audit log records each value that changed.\nInvoices that you already issued keep their tax details."
+  },
+  {
+    "slug": "2026-10-18-product-images",
+    "title": "Show a picture of each product",
+    "date": "2026-10-18",
+    "type": "Feature",
+    "tags": [
+      "Catalog",
+      "Checkout",
+      "Customer portal"
+    ],
+    "summary": "Add an image to a product. Buyers see it on checkout, payment links, the pricing page and their purchases.",
+    "body": "Each product can now have an image. Buyers see it next to the product on the hosted checkout, on\npayment links, on your pricing page and in their purchases in the customer portal.\n\n- **Add an image.** On the new or edit page of a product, select an image: PNG, JPEG, GIF or WebP,\n  up to 5 MB. You see a preview before you save.\n- **See what buyers see.** On a one-time product, the summary shows the product as the checkout\n  shows it: the image, the name, the description and the price with its tax.\n- **Send buyers to your page after payment.** Enter an **After-payment page**, for example a\n  thank-you or download page. Checkout sends buyers there after they pay, if the checkout link or\n  payment link has no page of its own.\n\n## One-time products are easier to set up\n\n- **How you sell it.** One card shows the two ways to sell a one-time product: on its own with a\n  checkout link or payment link, or with a subscription, for example as a setup fee.\n- **SKU and accounting codes.** Enter them with the first price.\n- **Taxable.** Disable it for an item that has no tax, for example a gift card.\n- **Next step.** After you create a one-time product, its page opens at its payment links.\n- **Product ID.** If you leave the ID empty, we make one from the name."
+  },
+  {
+    "slug": "2026-10-16-sell-one-time-products",
+    "title": "Sell one-time products from the hosted checkout",
+    "date": "2026-10-16",
+    "type": "Feature",
+    "tags": [
+      "Checkout",
+      "Payments",
+      "Customer portal",
+      "Reports",
+      "Emails"
+    ],
+    "summary": "Sell setup fees, credit packs and other one-time products with a checkout link, a payment link or a pricing page.",
+    "body": "The hosted checkout now sells one-time products, not only subscriptions. When all the prices in a\ncheckout are one-time prices, the buyer pays once and gets a paid invoice. No subscription is\ncreated. When a checkout has a recurring price, it continues to create a subscription.\n\n- **One-time products.** The catalog shows them under **One-time products**. On a product page,\n  the **Hosted checkout** card makes a checkout link for a one-time price.\n- **Payment links.** Under **Payment links**, make one link that many buyers can use. Put it on\n  your website or in an email. Each buyer gets their own checkout, customer record and invoice.\n- **A public pricing page.** Show your products and prices on one page that buyers can open\n  without a login.\n- **Quantities.** On a payment link, you can let the buyer change the quantity, between the\n  limits that you set.\n- **Save the payment method.** In **Hosted pages → One-time purchases**, select if the checkout\n  saves the buyer's payment method: never, always, or the buyer decides.\n\n## A faster checkout\n\n- **One page.** The buyer's details and the payment step show on one page. On a phone, the order\n  lines fold to make the page shorter.\n- **The total first.** The checkout shows the amount due today, with tax, before the buyer pays.\n- **Faster to open.** The checkout loads the card form only when the buyer needs it.\n\n## After the purchase\n\n- **Purchases in the customer portal.** Buyers see their one-time purchases, each with a link to\n  its receipt.\n- **Payments that the bank must still confirm.** Sometimes a payment provider holds a payment to\n  check it. We keep the payment and record it when the provider confirms it. In the customer\n  portal, the buyer sees **Payment in progress**, and **Pay now** is not available for that\n  invoice until the payment completes.\n\n## Bring buyers back\n\n- **Checkout reminders.** In **Emails**, switch on **Checkout reminder**. A buyer who gives an\n  email address and does not complete the checkout gets a reminder after 1 hour, and a second\n  reminder after 24 hours. The link in the email opens the same checkout. This email is off until\n  you switch it on.\n- **Two new reports.** In **Reports → Acquisitions**, **Checkout Reminders** shows how many buyers\n  got a reminder and how many completed their checkout after it. **Recovered Checkout Revenue**\n  shows the money from those purchases."
+  },
+  {
+    "slug": "2026-10-16-live-and-test-mode",
+    "title": "Each business has a live mode and a test mode",
+    "date": "2026-10-16",
+    "type": "Feature",
+    "tags": [
+      "Dashboard",
+      "Businesses",
+      "Developers",
+      "Payments"
+    ],
+    "summary": "Try your setup in the test mode of a business, then bill real customers in live mode.",
+    "body": "When you create a business, you get two modes: live and test. Live mode bills your real\ncustomers. Use test mode to try your catalog, settings and integration before you go live.\n\n- **One switch.** Inside a business, use **Mode** at the bottom of the navigation. You go to the\n  same page in the other mode.\n- **A copy to start.** Test mode starts with the settings of the live business. After that, the\n  two modes are separate. A change in one mode does not change the other.\n- **Move your setup.** To copy the catalog and settings from one mode to the other, use\n  **Transfer & Sample Data**. The other mode of the business is already selected.\n- **Two business IDs.** Each mode has its own business ID. A test API key gets access only to test\n  mode, and a live API key gets access only to live mode. On the **Developers** page, your keys\n  show in two groups: Live keys and Test keys.\n\n## Safe to test\n\n- **No real money.** Test mode uses the TM Billing Test Gateway. The hosted checkout and the\n  customer portal show a \"Test mode\" notice.\n- **Email only to your team.** In test mode, we send email only to the addresses of your team\n  members. Other customer emails are not sent, and the email log shows why.\n- **Start again.** In test mode, **Delete test data** deletes all customers and their\n  subscriptions, invoices and payments. The catalog and settings stay.\n- **HubSpot is live only.** Test data does not go into your CRM, so you connect HubSpot in live\n  mode.\n\n## Your existing businesses\n\nYour organization overview and reports show live data. A business that you created before today\ngets its test mode the first time that you select **Mode → Test**. Test businesses that you\ncreated before today continue to work. The organization overview lists them separately."
+  },
+  {
+    "slug": "2026-10-08-your-account-page",
+    "title": "A new account page, retention for your organization, and metadata rules",
+    "date": "2026-10-08",
+    "type": "Feature",
+    "tags": [
+      "Dashboard",
+      "Accounts",
+      "Customers",
+      "Subscriptions",
+      "Metrics"
+    ],
+    "summary": "Manage your profile and sessions, see retention for all businesses, and set and edit metadata with rules and suggestions.",
+    "body": "Your account shows your profile, appearance and security on one page.\n\n- **Profile.** Enter your name and upload a profile photo. The sidebar and the Team list show them.\n  If you sign in with Google and do not upload a photo, the dashboard shows your Google photo.\n- **Appearance.** Select Light, Dark or System. The dashboard keeps your selection on all your\n  browsers.\n- **Active sessions.** See each browser where you are signed in and its last activity. Sign out\n  one browser or all other browsers.\n\n## Retention for your organization\n\nThe Performance card on the organization overview now shows the same rates as each business:\nQuick ratio, Gross revenue retention, Net revenue retention and Customer churn. The organization\nfigures combine all your businesses in your reporting currency. A larger business has more effect\non the result than a smaller business. Each card shows the period that it measures.\n\n## Rules for metadata\n\nSet rules for the metadata on customers and subscriptions in **Settings → Metadata rules**.\n\n- **Rules by path.** A rule applies to a key, or to a nested key such as `billing.po`. It sets the\n  type of the value, and it can set a pattern, a maximum length or a list of permitted values.\n- **Optional keys.** A rule examines a value only when the value is present. A missing key is\n  always permitted.\n- **On or off.** Validation is off until you enable it, separately for customers and for\n  subscriptions. When it is on, the API and the dashboard refuse a value that does not obey a\n  rule, and the error names the key.\n- **Strict mode.** Enable strict mode to also refuse keys that do not have a rule.\n- **Existing data stays.** Rules examine new and changed values only. Stored metadata does not\n  change.\n- **Number and list rules.** A number rule can permit only whole numbers and set a minimum and a\n  maximum. A list rule can set the type of each item and the permitted item values.\n\n## Edit metadata in a form\n\nOn a customer and on a subscription change, metadata is now a form, not a JSON text box.\n\n- **A field for each rule.** A list of values shows as a menu or as buttons. A number shows as a\n  number field. A nested key shows in a group. Errors show on the field before you save.\n- **Key suggestions.** When you add a key, the form suggests the keys that your other customers or\n  subscriptions use, with the number of records for each key. For a key with few values, the form\n  also suggests the values.\n- **Rules from your data.** In **Settings → Metadata rules**, the suggested keys have a **Create\n  rule** button that fills in the rule for you.\n- **JSON is still available.** Select **Edit as JSON** to edit the raw text.\n\n## Search finds all pages\n\nPush ⌘K (Ctrl K on Windows) and type the name of a page. All settings pages are in the search. This\nincludes dunning, email delivery, invoice settings, payment gateways and each billing rule. You can\nalso use common words. For example, \"retries\" finds dunning.\n\n## On your phone\n\nThe account menu at the bottom of the navigation opens correctly. The navigation stays open below\nthe menu."
+  },
+  {
+    "slug": "2026-10-08-two-factor-and-passkeys",
+    "title": "Two-factor authentication and passkeys for you and your team",
+    "date": "2026-10-08",
+    "type": "Security",
+    "tags": [
+      "Accounts",
+      "Security",
+      "Team"
+    ],
+    "summary": "Protect each sign-in with an authenticator app or a passkey. Make it necessary for all your organization.",
+    "body": "Enable two-factor authentication on Your account. Then each sign-in asks for\na second proof. This applies when you sign in with a password and when you sign in with Google.\n\n- **Passkeys.** Use your fingerprint, face or screen lock as the second step. You can also sign in\n  with only a passkey. You do not type a password.\n- **Authenticator apps.** Scan the QR code with an authenticator app. When you sign in, enter the\n  6-digit code from the app. Each code operates one time only.\n- **Recovery codes.** You get ten recovery codes. Each code operates one time only. Use a code if\n  you lose your phone. You can download the codes and make a new set at any time.\n- **Trusted browsers.** Select \"Don't ask again on this browser\" to skip the code for 30 days.\n  When you change your password or disable two-factor authentication, the dashboard forgets all\n  trusted browsers.\n\n## Make two-factor authentication necessary for your organization\n\nAn admin can enable **Require two-factor authentication** in Settings.\n\n- **Grace period.** Each teammate has seven days to enable two-factor authentication. The dashboard\n  and an email remind them before the deadline.\n- **Status of each teammate.** The Team list shows who has two-factor authentication, who must\n  enable it, and the deadline.\n- **API keys.** When this setting is on, only teammates with two-factor authentication can make\n  new API keys. Existing keys continue to operate.\n\n## You get an email for each security change\n\n- **Security emails.** We send you an email when someone enables or disables two-factor authentication.\n  We also send an email when you add or remove a method, use or replace recovery codes, or change\n  your password.\n- **Warning about your password.** Someone can enter your password correctly and then fail the\n  second step many times. When this occurs, we send you an email. Change your password immediately.\n- **If you cannot sign in.** On the code step, select \"Get help signing in\". Support can reset\n  two-factor authentication after three days. We send you an email with a link. If you did not\n  ask for the reset, use the link to cancel it."
+  },
+  {
+    "slug": "2026-09-30-record-pages-redesign",
+    "title": "Every record page, redesigned around what needs you",
+    "date": "2026-09-30",
+    "type": "Feature",
+    "tags": [
+      "Dashboard",
+      "Customers",
+      "Subscriptions",
+      "Invoicing",
+      "Catalog",
+      "Coupons"
+    ],
+    "summary": "Customers, subscriptions, invoices and the whole catalog open on what needs attention, then the numbers, then the detail.",
+    "body": "Every detail page now follows one layout: what needs your attention first, the key figures next,\nthen the record itself in clear sections. It applies to customers, subscriptions, invoices, credit\nnotes, transactions, payment intents, tax regions, products, prices, product groups,\ncoupons and coupon sets.\n\n## Act on what needs you\n\n- **Needs attention sits at the top.** An unpaid invoice shows how long it has been due, how many\n  attempts were made and when the next retry is, with a timeline of every attempt and the retries\n  still to come. Hover a step for the card and the decline reason.\n- **Collect payment lets you choose.** On a customer, tick the unpaid invoices to collect; on an\n  invoice or subscription, pick the card to charge. A payment you collect by hand never uses up\n  one of the scheduled retries.\n- **Invoices within their terms stay calm.** An invoice that is issued but not yet due is not\n  flagged; Collect payment is still in More if a customer wants to pay early.\n\n## Know your catalog\n\n- **See what each plan earns.** Products, prices and product groups show their active\n  subscriptions and MRR, per currency.\n- **See what each coupon has given.** Coupons show every redemption and the total discount given;\n  coupon sets show which subscription redeemed each code, can be renamed, and export their codes\n  as CSV.\n- **Limit redemptions per customer.** A coupon can now be capped at a number of uses per customer.\n- **Activity and comments on catalog records.** Changes to products, prices, families, coupons and\n  coupon sets appear in the Activity log, and your team can leave comments on them.\n\n## Forms that preview the result\n\n- **Create a plan with its price in one go.** New plans, add-ons and charges take their first price\n  point on the same page, and every form shows a live summary such as \"Customers pay $19.80 per seat\n  every month, with a 14-day free trial.\"\n- **Every option on one form.** Tiers, trials, billing cycles, tax behaviour and metadata are all\n  editable where you create or edit the record. Fields that cannot change after creation say why.\n\n## Easier to read\n\n- **Long lists page instead of scrolling.** History, activity, comments, codes and redemptions show\n  10 or 5 at a time, newest first, with every record reachable.\n- **Tables keep their shape.** Columns stay fixed as rows appear, and long text wraps instead of\n  pushing the table sideways."
+  },
+  {
+    "slug": "2026-09-27-resume-bills-the-new-term",
+    "title": "Resuming a subscription bills exactly what it should",
+    "date": "2026-09-27",
+    "type": "Fix",
+    "tags": [
+      "Subscriptions",
+      "Invoicing"
+    ],
+    "summary": "A resume inside a paid term carries on at no charge; a resume after it starts and bills a new term.",
+    "body": "When you resume a paused subscription, what it bills now depends on one question: has the term\nyour customer already paid for ended?\n\n- **Still inside the paid term:** the subscription carries on to the same renewal date and nothing\n  new is charged. Your customer keeps the time they paid for.\n- **After the paid term ended:** a new term starts on the day of the resume and is billed for in\n  full, just like a renewal.\n\n## Choose how the new term is billed\n\n- **Invoice immediately** raises and collects the new term's invoice at the moment of resume.\n  It is the default unless you have chosen otherwise.\n- **Add to unbilled charges** holds the charge and bills it with the next invoice instead.\n- **Set your default** in Settings → Billing rules → Pause and resume. The Resume dialog preselects\n  it, and you can still pick the other option for a single resume.\n- **The same rule applies everywhere:** resumes from the dashboard, the API, your customers'\n  self-serve portal, and pauses that resume automatically after a set number of cycles."
+  },
+  {
+    "slug": "2026-09-25-adaptive-retry-timing",
+    "title": "Retries timed to when the payment is likely to go through",
+    "date": "2026-09-25",
+    "type": "Feature",
+    "tags": [
+      "Dunning",
+      "Payments"
+    ],
+    "summary": "With Smart decline handling, each retry can now be timed by why the payment failed, in your customer's morning.",
+    "body": "**Turn on Adaptive retry timing** in Settings → Dunning, alongside Smart decline handling. Instead\nof one schedule for every failure, each retry is timed by the reason the payment was declined:\n\n- **A gateway or network hiccup is retried within hours**, then after a day and after three days.\n- **Insufficient funds is retried on the next likely payday**: the 1st, the 15th or the last day\n  of the month, up to four times.\n- **A generic decline is retried a few days apart**, then the invoice is held and your customer is\n  asked to update their card.\n\n## Retries land in your customer's morning\n\n- **At 10:00 where the card was issued**, or in your business's timezone when that isn't known.\n- **Card networks are respected.** When a card network or gateway says how long to wait before\n  trying again, the next attempt waits at least that long.\n- **Your limits still apply.** No retry lands more than 30 days after the due date or past your\n  dunning period, and mandate debits (UPI, e-NACH, card mandates) keep your retry schedule.\n\nThese timings follow common practice rather than a guarantee, so compare your collections\nrecovery rate before and after you turn it on. Adaptive retry timing is off until you do, and\nyour existing schedule is unchanged.\n\n## Also in this release, for every business\n\n- **A card the network says not to retry is never charged again** until it's replaced or\n  updated, including when you collect by hand. Retrying those cards can bring network fees.\n- **Each card stays under the card networks' attempt limits.** When a card has been declined\n  many times recently, across all its invoices, the next retry waits instead."
+  },
+  {
+    "slug": "2026-09-24-smart-dunning",
+    "title": "Dunning that reads why a payment failed",
+    "date": "2026-09-24",
+    "type": "Feature",
+    "tags": [
+      "Dunning",
+      "Payments",
+      "Emails"
+    ],
+    "summary": "Smart decline handling retries what can succeed, pauses what needs the customer, and keeps them informed until it is fixed.",
+    "body": "**Choose how failed payments are handled.** Settings → Dunning has a new **Decline handling**\noption. _Fixed_ follows your retry schedule for every failure. _Smart_ reads the reason the\npayment was declined and acts on it:\n\n- **Temporary problems are retried**, such as insufficient funds or a bank that is briefly\n  unavailable, on your schedule.\n- **Problems only the customer can fix pause the invoice** instead of retrying a card that cannot\n  succeed, such as an expired card or a cancelled mandate. Your customer is asked to update their\n  payment method, and the invoice can be charged the moment they do.\n- **Declines that must not be retried stop straight away**, such as a card reported lost or\n  stolen.\n\n## Customers hear from you while an invoice is paused\n\n- **Reminders through the whole window.** A paused invoice gets a series of reminders spaced by\n  your own retry schedule, each with an **Update payment method** button, so a new card settles\n  this invoice and the next renewal too.\n- **One last attempt before the deadline.** When the window closes, the invoice is charged once\n  more before your final action runs.\n- **Failure emails say when you will try again.** The payment failed email now shows the date of\n  the next attempt.\n\n## Also in this release\n\n- **A customer with no payment method on file is given time to add one** instead of reaching\n  your final action within days.\n- **A problem with your own gateway account never cancels a customer.** Those invoices are paused\n  rather than run to your final action, so you can fix the connection and collect.\n- **Collections recovery rate** is a new measure you can add to any dashboard: of the invoices\n  dunning finished with, the share it recovered. It counts from today."
+  },
+  {
+    "slug": "2026-09-24-reports-you-can-build-on",
+    "title": "Reports you can build on, and a history you can trust",
+    "date": "2026-09-24",
+    "type": "Feature",
+    "tags": [
+      "Reports",
+      "Analytics",
+      "Dashboard",
+      "Currencies"
+    ],
+    "summary": "A full reports section, boards you arrange yourself, saved segments, and past figures stated exactly as they were on the day.",
+    "body": "**Reports** is now its own section: close to a hundred reports across recurring revenue, customers,\nbilling, cash, receivables, tax and collections, with charts, breakdowns and CSV export.\n\n## Boards you arrange\n\n- **Start from a built-in board** — five of them, so the section is useful on day one.\n- **Build your own** by adding widgets: pick a type (a single figure, a ranked breakdown or a\n  table), the measure, and how to split it, over a preset or custom period.\n- **Compare with the previous period** on any figure, in every currency the business bills in.\n\n## Segments\n\n- **Save a group of customers as a segment** and ask MRR, its movements or customer counts\n  for just that group.\n- **Split a figure by country or plan** to see which part of the book moved it.\n\n## A history you can trust\n\n- **Past MRR is what each subscription actually earned that day.** An upgrade, a discount or a\n  reactivation lands on the day it happened, and every earlier day keeps the figure it had.\n- **A trial counts once it converts**, and a cancelled account keeps the rate it was paying\n  until the day it left.\n- **Movements add up.** New, expansion, reactivation, contraction and churn sum exactly to the\n  change in MRR, month after month.\n\n## Every currency, at the rate of the day\n\n- **Converted figures use the exchange rate that applied on the day**, from the European Central\n  Bank's daily reference rates, so a figure from two years ago is stated at that year's rate.\n- **Currency moves have their own line** in the MRR movement report, so a weaker or stronger\n  currency never reads as growth or churn.\n\n## Faster, and easier to find\n\n- **The business home answers one period on every tab**, with eight presets and a custom range.\n- **Subscriptions read as Active, Paying and Renewing** — everything live, what carries revenue,\n  and what is set to renew — side by side on both homes, with a Renewing report of its own.\n- **See collections at a glance**: the business home shows how many invoices are in dunning, and\n  the businesses list has a Dunning column.\n- **Reports and the business home load faster** on large books.\n- **The organization sidebar lists your businesses**, so you can jump straight to one."
+  },
+  {
+    "slug": "2026-09-17-delete-a-subscription",
+    "title": "Delete a subscription",
+    "date": "2026-09-17",
+    "type": "Feature",
+    "tags": [
+      "Subscriptions",
+      "Dashboard"
+    ],
+    "summary": "Remove a subscription that should never have been there, and keep every invoice it raised.",
+    "body": "A subscription created by mistake — a duplicate, a test, an import that went wrong — can now be\ndeleted. Open it and use **Delete subscription** in the actions rail, or call\n`DELETE /v1/businesses/{business}/subscriptions/{subscription}`.\n\n- **The billing stops and the books stay.** The subscription leaves your lists and its page, and\n  nothing renews it again. Its invoices, payments and credit notes are kept exactly as they were and\n  stay on the customer, so your revenue history reads the same after the delete as before it.\n- **Anything still owed is still owed.** An unpaid invoice raised by a deleted subscription remains\n  payable and keeps running through dunning — deleting the subscription does not write off the debt.\n- **Deleting is not cancelling, and the dialog says so.** There is no final invoice, no credit for\n  unused time and no cancellation on the record. If you want the term closed out properly, cancel\n  the subscription instead; delete is for the one that should not exist at all.\n\nDeleting is available to managers and owners, and every delete is recorded in the audit log with who\ndid it. Integrations can listen for the new `subscription_deleted` event."
+  },
+  {
+    "slug": "2026-09-14-open-a-charge-in-your-gateway",
+    "title": "Open a charge in your gateway, from the transaction",
+    "date": "2026-09-14",
+    "type": "Improvement",
+    "tags": [
+      "Payments",
+      "Dashboard"
+    ],
+    "summary": "The gateway transaction id on a transaction is now a link straight to that charge on Stripe, Razorpay or PayPal, in the right mode.",
+    "body": "Reconciling a payment no longer means copying an id into your gateway's search box.\n\n- **The gateway transaction id links to the charge.**\n  On a transaction, the id the provider gave the charge opens that charge on the provider's own\n  dashboard in a new tab — Stripe, Razorpay and PayPal.\n- **The transactions list carries it too.**\n  A new **Gateway Charge Id** column sits beside Gateway, linked the same way, so you can jump to\n  the provider without opening each transaction first. Hide it from the column chooser if you would\n  rather not see it.\n- **It opens in the right mode.**\n  A test charge opens the provider's test dashboard or sandbox and a live one opens live, so the\n  link never lands on an account where the charge does not exist.\n- **Ids with nowhere to go stay plain text.**\n  Simulated and offline payments have no gateway page, and a refund is reached through the payment\n  it reverses — those ids are shown as before rather than as links that would go nowhere."
+  },
+  {
+    "slug": "2026-09-14-know-the-card-before-you-charge-it",
+    "title": "Know the card before you charge it",
+    "date": "2026-09-14",
+    "type": "Improvement",
+    "tags": [
+      "Payments",
+      "Dashboard",
+      "India"
+    ],
+    "summary": "Every payment method now shows where it was issued, who issued it and what it can do — the same way on the customer and the subscription.",
+    "body": "A saved payment method now tells you everything the gateway knows about it, and it tells you the\nsame story wherever you open it.\n\n- **Where the card was issued, and by whom.** The issuing country and the issuing bank sit on the\n  instrument. For Indian-issued cards that is what decides whether a renewal has to ask the payer\n  to authenticate, so it is worth seeing before the renewal runs rather than after.\n- **What the instrument can actually do.** Funding type (credit, debit, prepaid), consumer or\n  business, 3D Secure support, international use, and whether it can be debited off-session at\n  all. A card that cannot take recurring debits says so next to the mandate riding on it.\n- **A fingerprint, where the gateway provides one.** The same underlying card can be saved twice\n  under different tokens; the fingerprint is how you tell that a backup is really a second card.\n\n## One card, both screens\n\nThe payment method on a customer and the payment method on a subscription are drawn by the same\ncomponent now, so they carry the same rows in the same order and read the same at a glance.\n\n- **A subscription that charges its own card says so in words.** The line under the heading tells\n  you whether the instrument is set on this subscription or is the customer's primary, and the\n  badge beside it keeps its plain meaning: the customer's primary card.\n- **UPI Autopay looks like UPI.** A mandate with no card brand now carries its own mark instead of\n  a generic card.\n- **The detail grid follows the space it is given**, so a long gateway reference stays readable in\n  a narrow column instead of breaking across half a dozen lines.\n\n## Two roles, one word for each\n\nA saved card had three words — primary, backup and default — for two roles, and which word you saw\ndepended on which screen you were on. There are two roles, and they are now called the same thing\neverywhere: in your dashboard, in your customer's billing portal, at checkout, and in the API.\n\n- **The primary card is charged first.** What used to read _default_ in the portal and at checkout\n  now reads _primary_, matching your dashboard and the `role` field on the API.\n- **The backup is tried only when the primary fails**, and only when it is genuinely a different\n  card. It now pairs with a word that has an opposite.\n- The customer's payment methods panel says this once, above the cards, so the roles need no\n  explanation — and a support conversation no longer needs translating between two screens.\n\nNothing changed about how collection behaves, and the API keeps `is_default` and the\n`/payment_methods/:id/default` route exactly as they were, so existing integrations are unaffected.\n\nInstruments saved before we began asking gateways for these details will show _Not reported_ for\nthe issuing country — an honest blank rather than a guess."
+  },
+  {
+    "slug": "2026-09-14-a-customers-whole-history",
+    "title": "A customer's whole history, on the customer",
+    "date": "2026-09-14",
+    "type": "Improvement",
+    "tags": [
+      "Customers",
+      "Dashboard"
+    ],
+    "summary": "The customer page now shows everything that happened to that customer — renewals, invoices, payments, credit notes — as well as the raw event stream.",
+    "body": "Open a customer and you can see their whole life with you, not just the edits made to their\nrecord.\n\n- **The Activity log covers everything the customer owns.**\n  Renewals, invoices raised and paid, payments and refunds, credit notes and payment-method\n  changes all appear alongside the changes made to the customer itself — each row naming the\n  record it is about, who did it, and where from.\n- **The Events tab is back, scoped the same way.**\n  The developer's view of the same history: event id, type, the record it names, its source and\n  when it happened — the list you reach for when you are matching a webhook to what the engine\n  actually did.\n- **Both read the whole footprint.**\n  Subscriptions, invoices, credit notes, transactions, payments, refunds and saved payment\n  methods — one customer, one history.\n\n## For API users\n\n`GET /v1/businesses/:business/events` and `GET /v1/businesses/:business/audit_logs` take a\n`customer=<id>` parameter that scopes either stream to everything that customer owns, so you no\nlonger have to fan out over their records and merge the results yourself."
+  },
+  {
+    "slug": "2026-09-11-pay-another-way-safely",
+    "title": "Pay another way, without the risk of paying twice",
+    "date": "2026-09-12",
+    "type": "Improvement",
+    "tags": [
+      "Payments",
+      "India",
+      "Portal"
+    ],
+    "summary": "The portal offers a second way to pay only where the first attempt can actually be stopped, and payment records now say what the gateway said.",
+    "body": "A customer waiting on a bank approval can pay another way — where we can safely stop the\nfirst attempt.\n\n- **\"Pay now\" appears only when the first attempt can be cancelled.**\n  Some banks can authorise a payment retroactively, for up to three days, with nothing for\n  the cardholder to decline. Where that is possible, we no longer offer a second route that\n  could take the money twice; the invoice waits instead.\n- **The confirmation says what will happen.**\n  Before anything is released, your customer is told plainly that we will cancel the bank's\n  request, and to decline it if it still reaches them.\n- **Payment records carry the gateway's own answer.**\n  Whether a payment is waiting on the cardholder is taken from what the gateway states, and\n  a later statement replaces an earlier one — so a record never keeps saying \"no approval\n  needed\" after the gateway has asked for approval.\n- **A quiet payment is no longer read as a stalled one.**\n  Time alone never decides that a customer has been asked to authenticate.\n- **Approval is asked for on Indian cards, where the rule applies.**\n  The RBI mandate rules follow the card's issuing country, not the currency, so a foreign\n  card paying in rupees is treated as what it is.\n\n## Payment methods know more about themselves\n\n- **Every saved method records its issuing country, funding type, bank and capabilities.**\n  Cards, netbanking, UPI, wallets and direct debits all carry the same facts, so routing and\n  retries can use them. Card numbers are never stored.\n- **Re-adding a card updates the one you already have.**\n  Saving the same card again keeps the existing method and its history instead of leaving a\n  duplicate behind.\n- **A backup payment method has to be a different card.**\n  If your backup turns out to be the same card as the primary, it is no longer used as a\n  fallback — retrying the same card against the same decline never helped anyone."
+  },
+  {
+    "slug": "2026-09-10-refresh-without-losing-your-place",
+    "title": "Refresh a screen without losing your place",
+    "date": "2026-09-10",
+    "type": "Improvement",
+    "tags": [
+      "Dashboard",
+      "Invoicing",
+      "Payments",
+      "Subscriptions"
+    ],
+    "summary": "Every list and the invoice, subscription, transaction and customer screens now reload the numbers on demand — keeping your filters, your sort and your scroll exactly as they were.",
+    "body": "Billing moves while you are looking at it: the clock issues invoices, gateways answer\nminutes later, and payers act in their own portal. Every screen that shows that kind of\nstate now has a Refresh control that fetches the current answer on the spot.\n\n- **Your view survives a refresh.** Refresh re-runs the search, filters, segment and sort\n  you already have applied, so a narrowed list comes back narrowed. It reloads the rows\n  and nothing else — the page does not reload and you do not return to the top.\n- **On a list, one control covers everything you monitor.** Invoices, Transactions,\n  Subscriptions, Customers, Credit notes, Payment intents, Events, Retries, Emails,\n  Gateway requests, Gateway webhooks, the Audit log and Ops due-work all carry it.\n- **On a record, only what moves gets fetched.** Open an invoice and Refresh brings its\n  status, amount due, payments, credits and retry schedule up to date; the line items,\n  addresses and tax stay put. Subscriptions refresh their status, term and next billing;\n  transactions their settlement and refunds; customers their balance, credits and payment\n  methods.\n- **On a transaction, Refresh and Sync are different questions.** Refresh shows what we\n  already know. Sync goes and asks the gateway. Both are available and neither pretends to\n  be the other.\n- **The business dashboard says when it last synced, and lets you do something about it.**\n  The freshness of the figures is now next to the control that updates them."
+  },
+  {
+    "slug": "2026-09-10-india-autodebits-ask-only-when-asked",
+    "title": "India auto-debits ask only when the bank asks",
+    "date": "2026-09-10",
+    "type": "Fix",
+    "tags": [
+      "Payments",
+      "India",
+      "Subscriptions"
+    ],
+    "summary": "A recurring payment that is only waiting on its pre-debit notification now reads as in progress, not as something your customer has to approve.",
+    "body": "An India e-mandate payment now says exactly what it is waiting for.\n\nUnder RBI rules every e-mandate debit pauses briefly while the pre-debit notification goes\nout to the cardholder. Most of those debits need nothing from anyone — the notification is\nserved, the charge presents itself, and the money arrives. Some genuinely do need the\ncardholder to authenticate. Your customers now only hear from us about the second kind.\n\n- **The portal asks for approval only when approval is actually required.**\n  A payment waiting on nothing but its notification window shows as in progress, so nobody\n  is prompted to act on a charge that will complete on its own.\n- **Payment records name the kind of wait.**\n  Whether an attempt is waiting on the bank's notification or on the cardholder is taken\n  from what the gateway states, not inferred from the amount — so the Retries and payment\n  screens agree with the gateway.\n- **Every amount is treated the same way.**\n  An auto-debit is not assumed to be unattended just because it is small, and not assumed\n  to need authentication just because it is large.\n- **A charge above the approved limit can now be authorised in one step.**\n  When a renewal exceeds the per-charge limit on an Indian card mandate, the bank offers the\n  cardholder a link to approve that single payment. They now get it, instead of being asked\n  to set up their auto-debit again from scratch.\n- **When a bank asks us to wait, we wait.**\n  A decline that comes back with \"try again in 24 hours\" no longer spends a retry the same\n  night on an attempt the network has already said it will refuse."
+  },
+  {
+    "slug": "2026-09-09-transaction-intent-and-fraud",
+    "title": "A transaction says where it came from",
+    "date": "2026-09-09",
+    "type": "Improvement",
+    "tags": [
+      "Payments",
+      "Ops"
+    ],
+    "summary": "Open a charge and you can see the authentication it came through and whatever the gateway has said about fraud.",
+    "body": "A transaction now names the authorization behind it, and carries the gateway's own fraud verdict — both on the page you were already looking at.\n\n- **Follow a charge back to its payment intent.** Where a customer authenticated — a checkout, a portal payment, an operator collecting an invoice — the transaction links straight to that intent and its attempts. You could always walk from the intent to the charge; now it goes both ways.\n  Renewals show no link, and that is the honest answer: nobody is present to authenticate an automatic renewal, so no intent is ever created for one.\n- **See a fraud warning where the money is.** If the card network flags a charge as probably fraudulent, or the gateway puts it under manual review, the transaction says so and when it was reported.\n  It sits alongside the charge's own status rather than replacing it, so you can always still tell whether the money settled.\n\n## Developers\n\n`payment_intent` and `fraud_signal` are new on the transaction object. Both are nullable, `fraud_signal` is served on the single-transaction read, and both are in the OpenAPI spec and the generated SDK."
+  },
+  {
+    "slug": "2026-09-09-retries-and-disputes-in-the-open",
+    "title": "Retries and Disputes sit with your work, not your logs",
+    "date": "2026-09-09",
+    "type": "Improvement",
+    "tags": [
+      "Dashboard",
+      "Dunning",
+      "Payments"
+    ],
+    "summary": "Money at risk is on the sidebar with a live count, Billing LogIQ is now Billing rules, and a payment intent links to the transactions it produced.",
+    "body": "The two screens that track money you can still lose now sit in the sidebar alongside\nCustomers and Subscriptions.\n\n- **Retries carries a live count.** The number of invoices the billing clock is still\n  working on shows on the sidebar from every page, so revenue in dunning is something you\n  see rather than something you go looking for.\n- **Disputes has its own place.** A chargeback runs against an evidence deadline, so it is\n  no longer filed with webhook payloads.\n- **Every dispute is reachable.** The disputes API now reports how many there are and pages\n  through all of them, and the screen says so plainly when it is showing only the most\n  recent ones.\n- **\"Billing LogIQ\" is now \"Billing rules.\"** The same nine settings — billing mode,\n  payment terms, proration, round-off and the subscription-change rules — under a name that\n  says what they do. Existing links and bookmarks redirect on their own.\n- **A payment intent links to the money it moved.** Open an intent and jump straight to its\n  transactions, so an authentication step and the charge that followed read as one story."
+  },
+  {
+    "slug": "2026-09-09-choose-what-customers-can-do",
+    "title": "Choose what customers can do in the portal",
+    "date": "2026-09-09",
+    "type": "Feature",
+    "tags": [
+      "Settings",
+      "Portal",
+      "Accounts"
+    ],
+    "summary": "Three new switches on Hosted pages decide whether customers can download invoices, pay them, and remove a saved payment method.",
+    "body": "Settings → Hosted pages has a new section: **What customers can do in the portal**. Three\nswitches, all on unless you turn them off, so nothing changes until you decide it should.\n\n- **Let customers download their invoices.** Turning it off keeps the invoice visible — a\n  customer still sees what they were billed — but removes the PDF download.\n- **Let customers pay an unpaid invoice.** This removes the customer's own Pay now only. We\n  still collect on your schedule and dunning still runs, so turning it off does not stop the\n  money arriving. Useful if you collect strictly by mandate or bank transfer and a second,\n  manual path would muddle your reconciliation.\n- **Let customers remove a payment method.** Adding one is always allowed; this governs\n  removal. Worth turning off where a live subscription depends on the card or mandate on\n  file — nothing else prevents a customer removing it.\n- **Let customers pause or resume their own subscription.** Turning it off keeps the subscription active\n  even if the customer would like to cancel. Worth turning off where a live subscription depends on\n  the customer's subscription — nothing else prevents a customer canceling it.\n- **Let customers cancel their own subscription.** Turning it off keeps the subscription active\n  even if the customer would like to cancel. Worth turning off where a live subscription depends on\n  the customer's subscription — nothing else prevents a customer canceling it.\n\nEach switch applies to the self-serve portal only, and takes effect immediately for every\ncustomer of that business."
+  },
+  {
+    "slug": "2026-09-09-brand-image-uploads",
+    "title": "Upload your logo instead of hosting it",
+    "date": "2026-09-09",
+    "type": "Feature",
+    "tags": [
+      "Dashboard",
+      "Invoicing",
+      "Accounts"
+    ],
+    "summary": "Pick a file on Brand styles or Documents and we store it — no public URL to arrange first.",
+    "body": "Your logo, icon, favicon and invoice signature can now be uploaded straight from settings. Choose\na file and it is stored and served for you, so branding your invoices, checkout, portal and email\nno longer waits on somewhere to host an image.\n\n- **Upload or paste — both still work.** The URL field stays exactly where it was, so an image you\n  already host anywhere public needs no change.\n- **PNG or JPEG for anything that prints, up to 5 MB.** Your logo and signature are embedded in\n  invoice PDFs, so those two take PNG or JPEG; icons and favicons also take GIF and WebP. We read\n  the file itself to decide what it is rather than trusting its name, so a mislabelled file is\n  caught before it reaches your customers.\n- **Two places to do it.** Your logo, icon and favicon live on Settings → Brand styles; the\n  signature that prints on invoices and credit notes lives on Settings → Documents.\n- **Using an SVG today? Upload a PNG or JPEG to see it on your invoices.** Invoice PDFs carry\n  PNG and JPEG; an SVG still shows on your portal, checkout and email, but the PDF prints your\n  business name in place of the mark. Uploading takes a few seconds and fixes it everywhere.\n\nEvery surface that shows your brand — the self-serve portal, hosted checkout, invoice PDFs and\nbilling email — picks up the new image as soon as you save."
+  },
+  {
+    "slug": "2026-09-08-customize-your-invoices",
+    "title": "Decide what goes on your invoices",
+    "date": "2026-09-08",
+    "type": "Feature",
+    "tags": [
+      "Invoices",
+      "Credit notes",
+      "Settings"
+    ],
+    "summary": "Line items now show units and unit price, and you choose your invoice title, number format, which fields appear, your address layout and a signature.",
+    "body": "Your invoices and credit notes now follow your rules. Pick what they're called, how they're\nnumbered, which fields they carry, and sign them off.\n\n- **Call it what your tax authority expects.** Invoices can print as `INVOICE` or `TAX INVOICE`;\n  credit notes as `CREDIT NOTE` or `REFUND`. Settings → Invoices, and Settings → Credit notes.\n- **Number them your way.** Add a date stamp to the number — the year, the fiscal year, a month or\n  a full date, in thirteen formats — choose the separators, and set how far the counter steps. The\n  screen shows you the actual next number as you type, so you can see the result before you save.\n  The counter always moves forward, so changing the format is safe.\n- **Show only the fields you want.** Customer ID, subscription ID, billing address and tax number,\n  invoice status, billing period, next billing date. Plus three you can now switch **on**: the\n  shipping address, the credit notes raised against an invoice, and up to three of your own custom\n  fields.\n- **Lay out your address to suit your letterhead.** Expanded over several lines, collapsed to one,\n  or a template you write yourself — previewed with your own address in it.\n- **Sign your documents.** Add a signature line and an image, and choose which bottom corner they\n  sit in — bottom right or bottom left. The block is pinned to the foot of the page, so it lands in\n  the same place whether the invoice has two lines or twenty. Settings → Documents.\n- **Tell offline payers where to send the money.** Build bank transfer or PayPal blocks with your\n  own labels and values, and print them on your invoices. You can match them to the invoice\n  currency or the customer's country, so a customer paying in euros isn't shown your rupee account.\n  Settings → Payment instructions.\n\n**Your line items now show their maths.** Every invoice gains a **Units** and a **Unit price**\ncolumn, so a line reads `5 × ₹940.00 = ₹4,700.00` instead of just the total. Nothing to switch on —\nit is on every invoice and credit note from now on.\n\nEverything else about your existing documents is untouched until you change something. Every setting starts at exactly\nwhat your invoices already do, so nothing shifts under you the day this arrives.\n\nOne correction worth calling out: a tax registration number was previously labelled \"GSTIN\" on\nevery invoice, whichever country you sell from. It now says GSTIN in India, VAT across the EU and\nthe UK, and \"Tax ID\" elsewhere — so if you sell outside India, that caption on your documents is\nnow the right one."
+  },
+  {
+    "slug": "2026-09-07-quick-search-finds-it",
+    "title": "⌘K finds a customer by phone or company",
+    "date": "2026-09-07",
+    "type": "Fix",
+    "tags": [
+      "Dashboard",
+      "Accounts",
+      "Invoicing"
+    ],
+    "summary": "Quick search matches every field it says it does, across every row — not just the page in front of it.",
+    "body": "Press ⌘K inside a business, type whatever you remember about a record, and it comes back.\n\n- **Phone and company find a customer.** Quick search matches the same fields the customer\n  list does — id, email, first and last name, company and phone — so the thing you happen to\n  have in front of you is enough to find the account.\n- **Subscriptions and invoices search the whole list**, however long it has grown, and return\n  the closest five of each alongside the customers.\n- **A search in progress says so.** The palette reads \"Searching…\" while it is looking, and\n  only reports nothing found once it knows."
+  },
+  {
+    "slug": "2026-09-07-payments-on-the-record",
+    "title": "Every payment attempt is on the record",
+    "date": "2026-09-07",
+    "type": "Fix",
+    "tags": [
+      "Payments",
+      "Reliability"
+    ],
+    "summary": "Whatever the gateway answers, the attempt and its reason land in tmbilling where you can see them.",
+    "body": "Every charge now leaves a trail you can read, whichever way it was started — the billing clock\nrenewing, an operator pressing **Collect now**, or the payer pressing **Pay now** in the portal.\n\n- A charge the gateway turns down writes a **payment attempt** carrying the gateway's own wording,\n  so the reason an invoice is still unpaid is on the screen next to it.\n- Attempts appear in the customer's **Transactions** and on the invoice itself.\n- Charges the gateway accepts but that never complete are picked up by the sweep, across every\n  gateway you have connected.\n- An instrument that is not authorised for the amount is caught before the charge goes out, so the\n  payer gets a clear answer instead of a gateway error.\n\n## Your gateway statement says which flow charged\n\nA renewal, an operator collecting early, and a payer paying themselves all reach the gateway the\nsame way. Every charge tmbilling sends now carries a description naming the flow it came from, so a\nline in your Stripe or RazorPay dashboard can be explained without opening tmbilling beside it."
+  },
+  {
+    "slug": "2026-09-07-dunning-and-open-checkouts",
+    "title": "Two dunning settings, and open checkouts on the invoice",
+    "date": "2026-09-07",
+    "type": "Feature",
+    "tags": [
+      "Dunning",
+      "Invoicing"
+    ],
+    "summary": "Retry behaviour and end-of-dunning behaviour are set separately, and an invoice shows the checkout waiting at the gateway.",
+    "body": "**Dunning is two settings now.** What happens while an invoice is being retried and what happens\nwhen retries run out are separate choices, so you can keep collecting without committing to what\nhappens at the end — and change one without disturbing the other.\n\n**An invoice shows the checkout that is open at the gateway.** When a payer has a hosted checkout\nsession waiting, the invoice says so, so you can tell \"nobody has tried\" apart from \"somebody is\npart-way through\". A payment intent that is no longer wanted can be voided from the same place.\n\n**The dunning card names the final attempt.** Before it happens, the screen tells you what the last\nattempt will do, so the end of a dunning cycle holds no surprises."
+  },
+  {
+    "slug": "2026-09-07-dashboard-polish",
+    "title": "Forms, search and loading states",
+    "date": "2026-09-07",
+    "type": "Fix",
+    "tags": [
+      "Dashboard"
+    ],
+    "summary": "Saved values stay saved, search keeps up on long lists, and each page's loading state matches the page.",
+    "body": "- **A saved form shows the saved values.** Save a form and what you see is what was written, straight\n  away.\n- **Search keeps up.** Typing in a list filter now only re-renders what actually changed, so long\n  tables stay responsive as you type.\n- **Loading states match their page.** Each screen's placeholder now has the shape of the screen that\n  is coming — a table where a table is coming, sections where sections are coming — so it tells you\n  where to look.\n- **Organization screens follow your time zone.** System, Audit Log and Developers render timestamps\n  in the display time zone you set, alongside every other date.\n- **Reason codes, custom fields and error handling** read cleanly, and the decline-rules table now\n  matches the density of every other list."
+  },
+  {
+    "slug": "2026-09-07-a-new-look",
+    "title": "A new look for the dashboard",
+    "date": "2026-09-07",
+    "type": "Improvement",
+    "tags": [
+      "Dashboard"
+    ],
+    "summary": "Cards on a tinted ground, one accent colour, and colour reserved for the rows that need you.",
+    "body": "The dashboard has a visual direction of its own.\n\n- **Cards sit on a tinted ground.** Every panel, table and form reads as a distinct surface, which\n  makes a long page much easier to scan.\n- **One accent colour** carries both links and the primary action on a screen, so what to do next is\n  always obvious.\n- **Colour means something.** A state that needs a human — payment due, failed — keeps a filled\n  badge. Healthy and finished states render quiet, so a list of mostly-cancelled subscriptions reads\n  calm rather than alarming.\n- **Softer corners, roomier rows, and a 12px floor on type**, so nothing on a screen you read all day\n  is smaller than that.\n- **Charts follow the theme**, in light and dark.\n\n## The sidebar collapses\n\nThe navigation rail shrinks to an icon strip and remembers your choice, giving wide tables back\naround 240px. Press the handle on its edge to switch."
+  },
+  {
+    "slug": "2026-09-06-retries-that-matter",
+    "title": "The Retries screen shows what will actually be retried",
+    "date": "2026-09-06",
+    "type": "Improvement",
+    "tags": [
+      "Invoicing",
+      "Ops"
+    ],
+    "summary": "Only invoices with a live retry schedule appear, and an invariant watches for bills nobody will collect.",
+    "body": "The **Retries** screen lists the invoices the billing clock is genuinely still working on, so its\ncount is a number you can act on rather than a backlog to interpret.\n\nAlongside it, a new invariant watches for the opposite case — an invoice that will never be\ncollected by anyone — and surfaces it rather than leaving it to be discovered.\n\nBoth feed the same goal: the screens that say \"money is still coming\" should only ever list money\nthat is still coming."
+  },
+  {
+    "slug": "2026-09-06-invoice-document",
+    "title": "The invoice document, rebuilt",
+    "date": "2026-09-06",
+    "type": "Improvement",
+    "tags": [
+      "Invoicing"
+    ],
+    "summary": "Clearer hierarchy, a readable line-item table, correct billing periods, and the invoice can be issued by the organization.",
+    "body": "The invoice PDF and its on-screen version were rebuilt: clearer hierarchy, a readable line-item\ntable, totals that add up in front of you, and tax presented the way the place of supply requires.\n\n- **Every invoice states the period it covers**, read from the lines it was billed for — so a\n  historical invoice reads as a record of its own period.\n- **An invoice can be issued by the organization** rather than a single business, for merchants who\n  bill under one legal entity.\n- **Countries print as names**, and the document offers what a finance team expects to find on it.\n- **Logos reach the PDF**, including SVG."
+  },
+  {
+    "slug": "2026-09-06-decline-rules",
+    "title": "Decide how each gateway decline behaves",
+    "date": "2026-09-06",
+    "type": "Feature",
+    "tags": [
+      "Payments",
+      "Dunning"
+    ],
+    "summary": "A screen for every decline code your gateways can return — what it means, whether we retry it, and what the payer is told.",
+    "body": "Gateways speak in error codes, and each one deserves a different answer: retry this one tomorrow,\nnever retry that one, tell the payer to call their bank. **Error handling** is a screen for exactly\nthat.\n\n- **Every code we recognise is listed**, not only the ones you have already seen, so you can decide\n  in advance rather than after a failed renewal.\n- **Codes are grouped**, with the wording the payer will read shown beside each.\n- **A business can override any rule** — set an error code's behaviour once and it applies to every\n  future decline of that code.\n- **RazorPay merchants see RazorPay's codes**, and the network's own do-not-retry instruction is\n  respected where the network sends one.\n- The same rules are available on the API: list them, and change how one decline behaves for a\n  business."
+  },
+  {
+    "slug": "2026-09-06-card-marks",
+    "title": "Payment methods show their own card marks",
+    "date": "2026-09-06",
+    "type": "Improvement",
+    "tags": [
+      "Payments",
+      "Dashboard"
+    ],
+    "summary": "Operator screens show the real network mark — the same one the payer sees in the portal.",
+    "body": "A payer finds their card by its logo, not by re-reading four digits. Operator screens now do the\nsame: a Visa, a RuPay card, a UPI Autopay mandate and a bank debit are each recognisable at a\nglance — which is exactly what you want on the screens where a failed payment gets triaged.\n\nThe mark comes from the same place the storefront uses, so the payer and the operator are always\nlooking at the same thing.\n\n**Pay now works for cards vaulted on any gateway.** Routing follows the instrument that will actually\nbe charged, so a customer paying in INR with a card vaulted on Stripe pays without a detour."
+  },
+  {
+    "slug": "2026-09-06-ask-the-gateway",
+    "title": "Ask the gateway about a stuck payment",
+    "date": "2026-09-06",
+    "type": "Feature",
+    "tags": [
+      "Payments",
+      "Ops"
+    ],
+    "summary": "A read-only check that fetches what the gateway currently knows, and shows you the answer.",
+    "body": "When a payment has been sitting in an unclear state, you can now ask the gateway directly. The\ntransaction shows a **check now** control that fetches the gateway's current view and displays it\nbeside ours.\n\n- It is a **read**. Checking never moves money and never spends a retry.\n- The panel names the actual gateway, and says plainly when nothing has changed yet rather than\n  implying a result.\n- The gateway's answer is shown as the gateway gave it, so there is nothing to take on trust."
+  },
+  {
+    "slug": "2026-09-05-reactivation-and-mandate-limits",
+    "title": "Reactivation rules, and a mandate warning before you commit",
+    "date": "2026-09-05",
+    "type": "Feature",
+    "tags": [
+      "Subscriptions"
+    ],
+    "summary": "Choose whether reactivation requires a payment, and see at create time whether the mandate can carry the amount.",
+    "body": "**Reactivation is configurable.** Whether bringing a cancelled subscription back requires a successful\npayment first is now a setting, so the rule can match how you actually sell.\n\n**A mandate limit is flagged at create time.** When a subscription's amount would exceed what the\ncustomer's mandate is authorised to carry, the create screen says so — while it is still a decision,\nrather than at the first renewal.\n\nThe reactivation preview also shows the same totals the invoice will carry, so the number you approve\nis the number that gets billed."
+  },
+  {
+    "slug": "2026-09-05-mandates-and-pending-debits",
+    "title": "Pending debits stay pending, and mandates travel with the card",
+    "date": "2026-09-05",
+    "type": "Fix",
+    "tags": [
+      "Payments",
+      "Reliability"
+    ],
+    "summary": "An off-session bank debit is reported as in-flight until it settles, and the stored mandate is sent with the charge.",
+    "body": "- **An off-session debit that is still in flight is reported as pending**, not as a failure — so it\n  is left to settle, and the payer is charged exactly once.\n- **A stored mandate is sent with the charge.** Where the gateway issued one, tmbilling presents it,\n  which is what keeps recurring debits authorised.\n- **Voiding an invoice returns its credit**, and a parked invoice can close, so nothing stays\n  reserved against a bill that no longer exists.\n- **Cancellation credit is calculated from the current term**, so the amount you are shown at cancel\n  time is the amount that is issued."
+  },
+  {
+    "slug": "2026-09-05-direct-debit-and-wallets",
+    "title": "Direct debit and wallets on Stripe",
+    "date": "2026-09-05",
+    "type": "Feature",
+    "tags": [
+      "Payments"
+    ],
+    "summary": "Bank debit rails and wallet payments are reachable, with recovery paths of their own.",
+    "body": "Stripe **direct debit** and **wallet** payments are now reachable from checkout and the portal, so\nbuyers who do not want to hand over a card have a route that works.\n\n- **Direct-debit rails have their own failure and recovery handling**, because a bank debit fails\n  differently from a card and deserves a different answer.\n- **A paused mandate is re-asked.** When a mandate can no longer carry a charge, the payer is invited\n  to re-authorise rather than the payment simply not happening.\n- **A vaulted method's mandate can be recovered from the gateway**, so a method that arrived through\n  a migration is as usable as one created here."
+  },
+  {
+    "slug": "2026-09-04-india-mandates-and-credit",
+    "title": "India mandate ceilings, and credit that stays visible",
+    "date": "2026-09-04",
+    "type": "Fix",
+    "tags": [
+      "Payments",
+      "India",
+      "Customers"
+    ],
+    "summary": "The mandate ceiling is set where the gateway reads it, and a customer's credit stays visible after cancellation.",
+    "body": "- **The India card-mandate ceiling is set on the intent**, which is where the gateway reads it — so\n  the amount a mandate is authorised for is the amount that gets registered, and the same card gets\n  the same answer every time.\n- **Credit stays visible after a cancellation.** Money you owe a customer remains on their page\n  whatever happened to the subscription that produced it.\n- **PayPal refunds are tagged**, so a refund can be traced back to the payment it reverses.\n- **Holds that never captured no longer book a reversal**, keeping the ledger a record of money that\n  actually moved."
+  },
+  {
+    "slug": "2026-09-04-alerts-that-name-the-rows",
+    "title": "Alerts that name the rows they counted",
+    "date": "2026-09-04",
+    "type": "Improvement",
+    "tags": [
+      "Ops"
+    ],
+    "summary": "Every alert links to the exact rows behind its number, and operational noise is separated from correctness.",
+    "body": "An alert that says \"37\" and stops there costs you the next ten minutes. Every alert now **names the\nrows it counted** and links straight to them, with the filters already applied.\n\n- **Operations and correctness are separate.** Something slow or retrying is a different kind of news\n  from something that does not add up, and they no longer share a list.\n- **A warning that will not clear escalates.** A condition that persists gets louder instead of\n  staying at the same level indefinitely.\n- **Gateway money is legible.** The screens that reconcile what the gateway holds against what we\n  booked now show which captures are ours and what each one belongs to.\n- **A possible double charge is called what it is**, so the most expensive thing to miss is the\n  clearest thing on the screen."
+  },
+  {
+    "slug": "2026-09-02-sign-in-and-webhooks",
+    "title": "Simpler sign-in, and a webhook resend that shows its exchange",
+    "date": "2026-09-02",
+    "type": "Improvement",
+    "tags": [
+      "Accounts",
+      "Developers"
+    ],
+    "summary": "Fewer password prompts, Google sign-in on an invite, and a resend that shows the request and response live.",
+    "body": "## Signing in\n\n- **Fewer password re-prompts.** Being signed in is enough for the things that only needed proof you\n  were signed in.\n- **Google sign-in works from an invite**, so a new teammate can accept and be working in one step.\n- **A signed-in visitor who lands on the sign-in page is sent onward**, and signing in returns you to\n  the page you were heading for rather than the home page.\n\n## Webhooks\n\n**Resend calls your endpoint immediately and shows the exchange** — the request we sent and the\nresponse you returned, on screen, while you watch. Endpoints can be named when you create them, and\nthe delivery log groups one card per endpoint so a noisy endpoint is easy to find."
+  },
+  {
+    "slug": "2026-09-02-faster-billing-clock",
+    "title": "The billing clock got faster",
+    "date": "2026-09-02",
+    "type": "Performance",
+    "tags": [
+      "Ops",
+      "Payments"
+    ],
+    "summary": "Settlement sweeps were the bulk of every cycle; they are now a small part of it.",
+    "body": "Settlement sweeps accounted for the overwhelming majority of each billing tick. They have been\nscoped to the work that actually needs doing, which gives every cycle back to the work you care\nabout — renewals, retries and invoicing.\n\nThe practical effect: the clock keeps up comfortably at your current book size, with room as it\ngrows."
+  },
+  {
+    "slug": "2026-09-02-exchange-rates",
+    "title": "Exchange rates refresh themselves",
+    "date": "2026-09-02",
+    "type": "Feature",
+    "tags": [
+      "Invoicing",
+      "Currencies",
+      "Subscriptions"
+    ],
+    "summary": "Daily rates from the ECB, stamped onto each invoice at issue time — and next renewal's tax on the subscription.",
+    "body": "**Rates refresh daily from the European Central Bank**, so a multi-currency book converts at\nsomething current without anyone maintaining a table.\n\n**Each invoice stamps the rate it was issued at.** A converted amount on an invoice stays the amount\nthat was invoiced, whatever rates do afterwards — which is what makes the document a record rather\nthan a live calculation.\n\n**The subscription page shows next renewal's tax**, so the amount the customer will be charged is\nvisible before it happens rather than after."
+  },
+  {
+    "slug": "2026-09-02-billing-clock-diary",
+    "title": "The billing clock has a diary",
+    "date": "2026-09-02",
+    "type": "Feature",
+    "tags": [
+      "Ops"
+    ],
+    "summary": "A due-date index you can read, maintained as work is scheduled — plus fair scheduling across tenants.",
+    "body": "**`/ops/due-work` is the billing clock's diary.** Everything the clock is going to do, when it is\ngoing to do it, and what is overdue — on one screen, readable at a glance.\n\n- The diary is **maintained as work is written**, so it is accurate the moment you open it rather\n  than as of the last sweep.\n- **The tick's pass list is declared and enforced**, so what the clock does each cycle is a stated\n  contract rather than an emergent one.\n- **No tenant can starve another.** Work is scheduled fairly across businesses, so one large book\n  does not delay everyone else's renewals.\n- A healthy tick is reported as healthy, so the alerts that fire are the ones worth reading."
+  }
+]

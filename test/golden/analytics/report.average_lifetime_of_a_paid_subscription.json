@@ -1,0 +1,83 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "How long a subscription lasted, on average, among those that ended.",
+  "dimensions": [],
+  "granularities": ["day", "week", "month"],
+  "granularity": "month",
+  "headline": 5.3,
+  "key": "average_lifetime_of_a_paid_subscription",
+  "kind": "count",
+  "name": "Average Lifetime of a Paid Subscription",
+  "object": "report",
+  "points": [
+    {
+      "label": "Sep 2025",
+      "t": "2025-09-01",
+      "v": 5.3
+    },
+    {
+      "label": "Oct 2025",
+      "t": "2025-10-01",
+      "v": 5.3
+    },
+    {
+      "label": "Nov 2025",
+      "t": "2025-11-01",
+      "v": 5.3
+    },
+    {
+      "label": "Dec 2025",
+      "t": "2025-12-01",
+      "v": 5.3
+    },
+    {
+      "label": "Jan 2026",
+      "t": "2026-01-01",
+      "v": 5.3
+    },
+    {
+      "label": "Feb 2026",
+      "t": "2026-02-01",
+      "v": 5.3
+    },
+    {
+      "label": "Mar 2026",
+      "t": "2026-03-01",
+      "v": 5.3
+    },
+    {
+      "label": "Apr 2026",
+      "t": "2026-04-01",
+      "v": 5.3
+    },
+    {
+      "label": "May 2026",
+      "t": "2026-05-01",
+      "v": 5.3
+    },
+    {
+      "label": "Jun 2026",
+      "t": "2026-06-01",
+      "v": 5.3
+    },
+    {
+      "label": "Jul 2026",
+      "t": "2026-07-01",
+      "v": 5.3
+    },
+    {
+      "label": "Aug 2026",
+      "t": "2026-08-01",
+      "v": 5.3
+    }
+  ],
+  "range": "12m",
+  "shape": "flow",
+  "tags": []
+}

@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "What an account is worth over its life: its average monthly recurring revenue times the average life of an account that ended.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 29927,
+  "key": "lifetime_value_of_a_customer",
+  "kind": "money",
+  "name": "Lifetime Value of a Customer",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "stock",
+  "tags": ["customers"],
+  "window_label": "Jul 2026"
+}

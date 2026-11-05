@@ -1,0 +1,13 @@
+# Copy to deploy/docs-deploy.local (gitignored) and fill in. Read by deploy/docs-deploy.sh.
+DOCS_DEPLOY_HOST="deploy-user@server.example"
+DOCS_DEPLOY_PORT="22"
+DOCS_DEPLOY_PATH="/var/www/html/projects/tmbilling"
+# Build-time public settings, baked into prerendered pages (optional). The server's root .env
+# holds the runtime NUXT_* settings; keep NUXT_PUBLIC_APP_URL the same in both.
+# NUXT_PUBLIC_APP_URL="https://app.example.com"
+# The plan catalogue the Cloud build prerenders the Free band from (required for cloud). Use the
+# API's public base: the build runs on this machine, not the server.
+# NUXT_PRICING_API_URL="https://api.example.com"
+# NUXT_PRICING_BUSINESS="biz_XXXXXXXXXXXXXXXXXXXXXXXX"
+# Google Analytics on the production site only; dev and test builds leave it unset.
+# NUXT_PUBLIC_GA_ID="G-XXXXXXXXXX"

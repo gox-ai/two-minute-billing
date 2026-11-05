@@ -1,0 +1,127 @@
+{
+  "gateways": [
+    {
+      "key": "stripe",
+      "name": "Stripe",
+      "guide": "/help/guides/connect-a-payment-gateway/stripe",
+      "regions": "Where Stripe serves your business. ACH in the US, SEPA in the EU",
+      "currencies": "132 currencies. Direct Debit (ACH): USD. Direct Debit (SEPA): EUR",
+      "methods": ["Cards", "Direct Debit (ACH)", "Direct Debit (SEPA)"],
+      "payNowWallets": ["Apple Pay", "Google Pay"]
+    },
+    {
+      "key": "paypal",
+      "name": "PayPal",
+      "guide": "/help/guides/connect-a-payment-gateway/paypal",
+      "regions": "Where PayPal serves your business",
+      "currencies": "25 currencies",
+      "methods": ["PayPal wallet"],
+      "payNowWallets": []
+    },
+    {
+      "key": "razorpay",
+      "name": "Razorpay",
+      "guide": "/help/guides/connect-a-payment-gateway/razorpay",
+      "regions": "India",
+      "currencies": "124 currencies",
+      "methods": ["Cards", "UPI Autopay", "Netbanking (eMandate)"],
+      "payNowWallets": []
+    },
+    {
+      "key": "square",
+      "name": "Square",
+      "guide": "/help/guides/connect-a-payment-gateway/square",
+      "regions": "The country of each Square location",
+      "currencies": "AUD, CAD, EUR, GBP, JPY, USD",
+      "methods": ["Cards", "Afterpay (pay now)", "ACH (pay now)"],
+      "payNowWallets": ["Google Pay", "Cash App Pay"]
+    },
+    {
+      "key": "braintree",
+      "name": "Braintree",
+      "guide": "/help/guides/connect-a-payment-gateway/braintree",
+      "regions": "Where Braintree serves your business. Venmo in the US",
+      "currencies": "126 currencies. Venmo: USD",
+      "methods": ["Cards", "PayPal", "Venmo"],
+      "payNowWallets": []
+    },
+    {
+      "key": "checkoutcom",
+      "name": "Checkout.com",
+      "guide": "/help/guides/connect-a-payment-gateway/checkoutcom",
+      "regions": "Where Checkout.com serves your business",
+      "currencies": "141 currencies",
+      "methods": ["Cards"],
+      "payNowWallets": ["Google Pay"]
+    },
+    {
+      "key": "adyen",
+      "name": "Adyen",
+      "guide": "/help/guides/connect-a-payment-gateway/adyen",
+      "regions": "Where Adyen serves your business",
+      "currencies": "135 currencies",
+      "methods": ["Cards"],
+      "payNowWallets": ["Apple Pay", "Google Pay"]
+    },
+    {
+      "key": "mollie",
+      "name": "Mollie",
+      "guide": "/help/guides/connect-a-payment-gateway/mollie",
+      "regions": "Where Mollie serves your business",
+      "currencies": "27 currencies. Direct Debit (SEPA): EUR",
+      "methods": [
+        "Cards",
+        "Direct Debit (SEPA)",
+        "PayPal",
+        "Other methods that you activate in Mollie (pay now)"
+      ],
+      "payNowWallets": ["Apple Pay", "Google Pay"]
+    },
+    {
+      "key": "authorizenet",
+      "name": "Authorize.net",
+      "guide": "/help/guides/connect-a-payment-gateway/authorizenet",
+      "regions": "Where Authorize.net serves your business. eCheck for US bank accounts",
+      "currencies": "AUD, CAD, EUR, GBP, NZD, USD. eCheck (ACH): USD",
+      "methods": ["Cards", "eCheck (ACH)"],
+      "payNowWallets": []
+    },
+    {
+      "key": "gocardless",
+      "name": "GoCardless",
+      "guide": "/help/guides/connect-a-payment-gateway/gocardless",
+      "regions": "UK, euro area, US, Australia, New Zealand, Canada, Sweden and Denmark",
+      "currencies": "GBP, EUR, USD, AUD, NZD, CAD, SEK, DKK",
+      "methods": [
+        "Direct Debit (Bacs)",
+        "Direct Debit (SEPA)",
+        "Direct Debit (ACH)",
+        "Direct Debit (BECS)",
+        "Direct Debit (BECS NZ)",
+        "Pre-authorized debit (PAD)",
+        "Direct Debit (Autogiro)",
+        "Direct Debit (Betalingsservice)",
+        "PayTo"
+      ],
+      "payNowWallets": []
+    },
+    {
+      "key": "cashfree",
+      "name": "Cashfree",
+      "guide": "/help/guides/connect-a-payment-gateway/cashfree",
+      "regions": "India",
+      "currencies": "AED, EUR, GBP, INR, JPY, USD. Saved payment methods: INR, USD, EUR. UPI Autopay: INR. eNACH: INR",
+      "methods": ["Cards", "UPI Autopay", "eNACH"],
+      "payNowWallets": []
+    },
+    {
+      "key": "payu",
+      "name": "PayU",
+      "guide": "/help/guides/connect-a-payment-gateway/payu",
+      "regions": "India",
+      "currencies": "INR",
+      "methods": ["Cards", "UPI Autopay"],
+      "payNowWallets": []
+    }
+  ]
+}

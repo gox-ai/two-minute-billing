@@ -1,0 +1,100 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "transactions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Every month on one row: what was billed, what discounts and taxes it carried, what was credited or written off, and what that leaves. Net is the billed document totals less credit notes and write-offs.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "account_summary",
+  "kind": "money",
+  "name": "Account Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "periodic",
+  "table": {
+    "columns": [
+      {
+        "key": "gross_billing",
+        "label": "Gross billing"
+      },
+      {
+        "key": "discounts",
+        "label": "Discounts"
+      },
+      {
+        "key": "taxes",
+        "label": "Taxes"
+      },
+      {
+        "key": "credit_notes",
+        "label": "Credit notes"
+      },
+      {
+        "key": "written_off",
+        "label": "Written off"
+      },
+      {
+        "key": "net",
+        "label": "Net"
+      }
+    ],
+    "rows": [
+      {
+        "period": "Aug 2026",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Jul 2026",
+        "values": [7500, 0, 0, 0, 0, 7500]
+      },
+      {
+        "period": "Jun 2026",
+        "values": [5000, 0, 0, 0, 0, 5000]
+      },
+      {
+        "period": "May 2026",
+        "values": [12500, 0, 0, 0, 0, 12500]
+      },
+      {
+        "period": "Apr 2026",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Mar 2026",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Feb 2026",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Jan 2026",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Dec 2025",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Nov 2025",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Oct 2025",
+        "values": [0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Sep 2025",
+        "values": [0, 0, 0, 0, 0, 0]
+      }
+    ]
+  },
+  "tags": ["billing_and_taxes", "leakage"]
+}

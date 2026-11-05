@@ -1,0 +1,69 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": ["standard", "7", "15", "30", "60"],
+  "as_of": "<timestamp>",
+  "category": "receivables",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "What is owed, by the age of the debt.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 20000,
+  "key": "receivables_aging_summary",
+  "kind": "money",
+  "name": "Receivables Aging Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Current",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "1–30 days",
+      "group_id": null,
+      "value": 7500
+    },
+    {
+      "group": "31–60 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "61–90 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "91–120 days",
+      "group_id": null,
+      "value": 12500
+    },
+    {
+      "group": "121–150 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "151–180 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "181–365 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "365+ days",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["collections"]
+}

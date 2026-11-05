@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Every subscription on the book, whatever its state. Unpaid subscriptions are included.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 8,
+  "key": "<id:1>",
+  "kind": "count",
+  "name": "Total Subscriptions",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": []
+}

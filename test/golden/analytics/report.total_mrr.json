@@ -1,0 +1,95 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "comparison": {
+    "basis": "point_in_time",
+    "change_bps": null,
+    "prev_label": "Aug 14, 2025",
+    "prev_value": 0
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "The predictable monthly revenue earned from subscriptions.",
+  "dimensions": [
+    "country"
+  ],
+  "granularities": [
+    "day",
+    "week",
+    "month"
+  ],
+  "granularity": "month",
+  "headline": 28233,
+  "key": "total_mrr",
+  "kind": "money",
+  "name": "Total MRR",
+  "object": "report",
+  "points": [
+    {
+      "label": "Sep 2025",
+      "t": "2025-09-01",
+      "v": 0
+    },
+    {
+      "label": "Oct 2025",
+      "t": "2025-10-01",
+      "v": 0
+    },
+    {
+      "label": "Nov 2025",
+      "t": "2025-11-01",
+      "v": 0
+    },
+    {
+      "label": "Dec 2025",
+      "t": "2025-12-01",
+      "v": 0
+    },
+    {
+      "label": "Jan 2026",
+      "t": "2026-01-01",
+      "v": 8644
+    },
+    {
+      "label": "Feb 2026",
+      "t": "2026-02-01",
+      "v": 13644
+    },
+    {
+      "label": "Mar 2026",
+      "t": "2026-03-01",
+      "v": 24044
+    },
+    {
+      "label": "Apr 2026",
+      "t": "2026-04-01",
+      "v": 34044
+    },
+    {
+      "label": "May 2026",
+      "t": "2026-05-01",
+      "v": 37378
+    },
+    {
+      "label": "Jun 2026",
+      "t": "2026-06-01",
+      "v": 31678
+    },
+    {
+      "label": "Jul 2026",
+      "t": "2026-07-01",
+      "v": 28233
+    },
+    {
+      "label": "Aug 2026",
+      "t": "2026-08-01",
+      "v": 28233
+    }
+  ],
+  "range": "12m",
+  "shape": "stock",
+  "tags": []
+}

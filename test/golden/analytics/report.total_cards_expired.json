@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "receivables",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Saved cards that can no longer be charged.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "count",
+  "name": "Total Cards Expired",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "stock",
+  "tags": ["collections"]
+}

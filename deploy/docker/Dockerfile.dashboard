@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# The dashboard image: Next's standalone server and nothing else. It holds no credential and
+# never sees the database; it reaches the API at TMBILLING_API_URL.
+#
+#   docker build -f deploy/docker/Dockerfile.dashboard -t two-minute-billing-dashboard .
+#
+# Built self-hosted, with no NEXT_PUBLIC_* value: nothing here needs an operator setting.
+ARG NODE_IMAGE=node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /app
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY dashboard/package.json dashboard/package.json
+COPY docs-site/package.json docs-site/package.json
+# The root too: the dashboard imports one engine module (lib/metadata-rules-check.ts).
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter tmbilling-dashboard --filter tmbilling
+COPY tsconfig.json ./
+COPY src ./src
+COPY db ./db
+COPY sdk ./sdk
+COPY dashboard ./dashboard
+RUN NEXT_OUTPUT=standalone pnpm --filter tmbilling-dashboard build
+
+FROM ${NODE_IMAGE}
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tini \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4100 HOSTNAME=0.0.0.0
+COPY --from=build /app/dashboard/.next/standalone ./
+COPY --from=build /app/dashboard/.next/static ./dashboard/.next/static
+COPY --from=build /app/dashboard/public ./dashboard/public
+COPY --from=build /app/dashboard/content ./dashboard/content
+USER node
+EXPOSE 4100
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "dashboard/server.js"]

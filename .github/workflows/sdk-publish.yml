@@ -1,0 +1,63 @@
+# Publish the TypeScript SDK (sdk/) to the npm registry as @two-minute-billing/sdk.
+#
+# Runs on a release tag of the PUBLIC repository only (`pnpm release:oss` pushes it), so the
+# package version is always the release it was built from. Skipped in a private repository.
+# A tag with a pre-release suffix (v0.2.0-rc.1) publishes under the `next` dist-tag.
+#
+# Needs the repository secret NPM_TOKEN: an automation token of the `two-minute-billing`
+# npm organization. `id-token: write` lets the registry attach provenance that links each
+# version to this workflow run and commit.
+name: Publish SDK
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.event.repository.private == false && github.repository == 'gox-ai/two-minute-billing'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Pack, install into an empty project, run and typecheck it, as a user would.
+      - run: pnpm verify:sdk-package
+
+      - name: Version from the tag
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const p = JSON.parse(fs.readFileSync("sdk/package.json", "utf8"));
+            p.version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            fs.writeFileSync("sdk/package.json", JSON.stringify(p, null, 2) + "\n");
+            console.log("version", p.version);
+          '
+
+      - run: pnpm sdk:build
+
+      - name: Publish
+        working-directory: sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          pnpm publish --access public --provenance --no-git-checks --tag "$dist_tag"

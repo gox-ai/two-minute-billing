@@ -1,0 +1,702 @@
+/* ---------------------------------------------------------------------------
+   Type for the whole site, and the marketing pages' own surface.
+
+   Inter's variable file, pinned to its text cut (opsz 14) at every size: the look the site has
+   always shown (headings included; the display cut with our -0.04em tracking was cramped). A
+   fixed cut has one width at every size, so a fallback stretched to match it makes the swap to
+   Inter move nothing; automatic optical sizing changes the width with the size, which no
+   fallback can follow.
+
+   Colour follows meaning, never position (the same rule as the dashboard):
+   - Indigo #4e4eda (`--ui-primary`, `--mk-accent`): you can act on it, or it is selected.
+     Buttons, links, selected rows, focus. Nothing else.
+   - Cyan (`--mk-cyan`, class `mk-billing`): running billing. Subscriptions, invoicing, checkout
+     and portal, payments, tax, the billing engine; chart series that count billing operations.
+     3.66:1 on white, so graphics only, never text in light mode.
+   - Lime (class `mk-growth`): money won and growth. Recovery, reporting, MRR, revenue and their
+     chart series, "new" badges, at most one highlight per view. Light mode uses the deep shade
+     #4d7c0f for icons and lines and `--mk-lime-soft` for stages. On a dark ground, small marks
+     (icons, dots, the badge fill with ink `--mk-lime-ink`) use the bright #bef264; large marks
+     (bars, lines, areas, stage tints) use the softer `--mk-lime-data` #9ccb4f.
+   - Neutral (the default): everything else. Long feature lists, benefit rows, process steps,
+     generic and tool icons, other chart series.
+   - Green, amber, red and blue are status only. Lime is never a success or paid state.
+--------------------------------------------------------------------------- */
+
+:root {
+  --font-sans:
+    "Inter Variable", "Inter Text: Arial", "Inter Text: Segoe UI", "Inter Text: Helvetica Neue",
+    "Inter Text: Noto Sans", ui-sans-serif, system-ui, sans-serif;
+  --mk-accent: #4e4eda;
+  --mk-accent-soft: #f1f1fd;
+  --mk-accent-line: #e1e2f8;
+  --mk-canvas: #ffffff;
+  --mk-tint: #f6f8fb;
+  --mk-card: #ffffff;
+  --mk-ring: var(--ui-border);
+  --mk-shadow: 0 1px 2px rgb(16 24 40 / 0.04), 0 20px 50px -30px rgb(16 24 40 / 0.25);
+  --mk-glow: rgb(130 145 166 / 0.09);
+  --mk-ok: #15803d;
+  --mk-bad: #c2410c;
+  --mk-band: #0b1220;
+  --mk-band-text: #e6edf7;
+  --mk-band-muted: #93a4bd;
+  --mk-band-line: rgb(255 255 255 / 0.12);
+  /* The neutral wash behind the homepage's product and how-it-works sections. */
+  --mk-wash: #f6f8fb;
+  /* A linked card's hover border. */
+  --mk-spoke: #c3cddb;
+  /* Supporting colours (see the header). Tints are near-white: the mark carries the meaning. */
+  --mk-cyan: #0893a6;
+  --mk-cyan-soft: #dff5f8;
+  --mk-cyan-line: #b6e4ea;
+  --mk-lime: #bef264;
+  --mk-lime-ink: #1a2e05;
+  --mk-lime-deep: #4d7c0f;
+  /* Lime for large marks (bars, lines, areas, stage tints). Dark mode softens it. */
+  --mk-lime-data: #4d7c0f;
+  --mk-lime-soft: #eef8d6;
+  --mk-lime-line: #d2e9a8;
+  /* The closing call to action: a soft indigo band (us, and the next action), not a fill. */
+  --mk-indigo-wash: color-mix(in oklab, #4e4eda 9%, #fff);
+  --mk-indigo-line: color-mix(in oklab, #4e4eda 26%, #fff);
+  /* Neutral marks: slate icon ink on a neutral tile. */
+  --mk-plain: #475569;
+  --mk-plain-soft: #eef2f7;
+  --mk-plain-line: #e2e9f2;
+  /* Text in a meaning colour (a category chip, a cover label): the deep shades, 4.5:1 or better
+     on their tint. Cyan itself never carries light-mode text. */
+  --mk-cyan-text: #06606d;
+  --mk-lime-text: #3f6212;
+  --mk-plain-text: #344054;
+  /* The mark colour an icon, tile or picture stage takes: neutral unless an ancestor says what
+     it means (`mk-billing`, `mk-growth`). */
+  --mk-mark: var(--mk-plain);
+  --mk-mark-soft: var(--mk-plain-soft);
+  --mk-mark-line: var(--mk-plain-line);
+  --mk-mark-text: var(--mk-plain-text);
+}
+.dark {
+  --mk-accent: #a9a9f4;
+  --mk-accent-soft: rgb(78 78 218 / 0.12);
+  --mk-accent-line: rgb(169 169 244 / 0.3);
+  --mk-canvas: #0b1220;
+  --mk-tint: #0f1729;
+  --mk-card: #111a2b;
+  --mk-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 20px 50px -24px rgb(0 0 0 / 0.7);
+  --mk-glow: rgb(133 147 168 / 0.08);
+  --mk-ok: #4ade80;
+  --mk-bad: #fb923c;
+  --mk-band: #050a14;
+  --mk-wash: #0f1729;
+  --mk-spoke: #3a4a62;
+  --mk-cyan: #5ed6e0;
+  --mk-cyan-soft: #0b2a31;
+  --mk-cyan-line: rgb(94 214 224 / 0.28);
+  --mk-lime-deep: #bef264;
+  --mk-lime-data: #9ccb4f;
+  --mk-lime-soft: color-mix(in oklab, var(--mk-lime-data) 14%, #0b1220);
+  --mk-lime-line: rgb(156 203 79 / 0.26);
+  --mk-indigo-wash: color-mix(in oklab, #4e4eda 16%, #0b1220);
+  --mk-indigo-line: rgb(147 147 243 / 0.3);
+  --mk-plain: #aebbcc;
+  --mk-plain-soft: #161f2c;
+  --mk-plain-line: #1e2836;
+  --mk-cyan-text: #5ed6e0;
+  --mk-lime-text: #bef264;
+  --mk-plain-text: #c7d3e6;
+}
+
+html {
+  font-optical-sizing: none;
+  font-variation-settings: "opsz" 14;
+}
+
+/* A system font stretched to each Inter cut, one face per font so each gets its own metrics
+   (the way next/font and @nuxt/fonts build fallbacks; @nuxt/fonts is off because it emitted a
+   second, wrong set: Helvetica Neue at 133%, Noto Sans at 126%). Text-cut values are
+   @nuxt/fonts' correct set, which matches a Chrome measurement of Inter against Arial (107.09%).
+   Each font has a regular face (to 549) and a bold face (550 up): Arial measured 107.09 / 101.05
+   (400 / 600); the other fonts' bold values are scaled by the same ratio, and the ascent/descent
+   overrides by the inverse. */
+@font-face {
+  font-family: "Inter Text: Arial";
+  font-weight: 100 549;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans");
+  size-adjust: 107.119%;
+  ascent-override: 90.436%;
+  descent-override: 22.518%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Arial";
+  font-weight: 550 900;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold");
+  size-adjust: 101.077%;
+  ascent-override: 95.842%;
+  descent-override: 23.864%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Segoe UI";
+  font-weight: 100 549;
+  src: local("Segoe UI");
+  size-adjust: 107.709%;
+  ascent-override: 89.941%;
+  descent-override: 22.395%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Segoe UI";
+  font-weight: 550 900;
+  src: local("Segoe UI Bold"), local("SegoeUI-Bold");
+  size-adjust: 101.634%;
+  ascent-override: 95.317%;
+  descent-override: 23.733%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Helvetica Neue";
+  font-weight: 100 549;
+  src: local("Helvetica Neue");
+  size-adjust: 106.12%;
+  ascent-override: 91.288%;
+  descent-override: 22.73%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Helvetica Neue";
+  font-weight: 550 900;
+  src: local("Helvetica Neue Bold"), local("HelveticaNeue-Bold");
+  size-adjust: 100.135%;
+  ascent-override: 96.745%;
+  descent-override: 24.089%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Noto Sans";
+  font-weight: 100 549;
+  src: local("Noto Sans");
+  size-adjust: 100.747%;
+  ascent-override: 96.157%;
+  descent-override: 23.942%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Inter Text: Noto Sans";
+  font-weight: 550 900;
+  src: local("Noto Sans Bold"), local("NotoSans-Bold");
+  size-adjust: 95.065%;
+  ascent-override: 101.905%;
+  descent-override: 25.373%;
+  line-gap-override: 0%;
+}
+
+/* The label voice's face, self-hosted (Latin, variable weight; OFL licence beside it). */
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-mono-latin-wght.woff2") format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Marketing pages sit on an 82rem container: 1248px of content inside its 32px padding. */
+.mk {
+  --ui-container: 82rem;
+  /* Text greys of the other Two Minute sites: neutral gray, not Nuxt UI's blue-tinted slate. */
+  --ui-text-highlighted: #212121;
+  --ui-text-toned: #374151;
+  --ui-text-muted: #4b5563;
+  --ui-text-dimmed: #6b7280;
+}
+.dark .mk {
+  --ui-text-highlighted: #f9fafb;
+  --ui-text-toned: #e5e7eb;
+  --ui-text-muted: #d1d5db;
+  --ui-text-dimmed: #9ca3af;
+}
+
+.mk h1,
+.mk h2,
+.mk h3 {
+  letter-spacing: -0.02em;
+}
+.mk h1 {
+  font-weight: 500;
+}
+.mk h2 {
+  font-weight: 400;
+}
+
+/* One heading scale for every page: a page title, a section heading, a block heading. Set the
+   class, never a size: hard-coded sizes drifted into six display sizes within 16px. */
+.mk-h1 {
+  font-size: 2.5rem;
+  line-height: 1.08;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.mk-h2 {
+  font-size: 1.875rem;
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.mk-h3 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+@media (min-width: 640px) {
+  .mk-h1 {
+    font-size: 3.5rem;
+  }
+  .mk-h2 {
+    font-size: 2.25rem;
+  }
+  .mk-h3 {
+    font-size: 1.5rem;
+  }
+}
+
+.mk-accent {
+  color: var(--mk-accent);
+}
+/* Headings stay one colour: a word in brand colour inside a heading reads as a template.
+   A heading's second half may drop to the muted tone instead (`mk-tone`). */
+.mk :is(h1, h2, h3) .mk-accent {
+  color: inherit;
+}
+.mk-tone {
+  color: var(--ui-text-dimmed);
+}
+
+/* The label voice: small monospace caps, for data only (step numbers, table heads, facts). */
+.mk-label {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--ui-text-dimmed);
+}
+
+/* The mark on its own: the indigo receipt (the favicon). Illustrations and inline brand labels
+   use it; the header and footer use the full logo (MkLogo). */
+.mk-mark {
+  display: inline-block;
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: url("/brand/mark.svg") center / contain no-repeat;
+  color: transparent;
+  overflow: hidden;
+}
+
+/* The horizontal logo has one file per theme. */
+.mk-logo {
+  display: inline-flex;
+  flex: none;
+}
+.mk-logo-dark,
+.dark .mk-logo-light {
+  display: none;
+}
+.dark .mk-logo-dark {
+  display: block;
+}
+
+.mk-tint {
+  background: var(--mk-tint);
+  border-block: 1px solid var(--ui-border-muted);
+}
+
+/* A raised surface: product UI, an illustration panel. A soft 1px border, both themes. */
+.mk-surface {
+  background: var(--mk-card);
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px var(--mk-ring);
+}
+
+/* A card that links somewhere: a hairline border that darkens on hover. */
+.mk-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: var(--mk-card);
+  border: 1px solid var(--ui-border);
+  transition: border-color 0.15s ease;
+}
+a.mk-card:hover {
+  border-color: var(--mk-spoke);
+}
+
+/* A large frame around product UI: a hairline and a soft neutral shadow. `mk-fade` fades its foot out. */
+.mk-frame {
+  padding: 0.625rem;
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--mk-card) 70%, transparent);
+  border: 1px solid var(--ui-border);
+  box-shadow:
+    0 24px 60px -36px rgb(16 24 40 / 0.22),
+    0 1px 2px rgb(16 24 40 / 0.04);
+}
+.mk-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+}
+
+/* A dark rounded card inside a light page: developers, the final call. */
+.mk-dark {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  background: #0b1220;
+  color: var(--mk-band-text);
+}
+.dark .mk-dark {
+  background: #070c17;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+.mk-dark .mk-muted {
+  color: var(--mk-band-muted);
+}
+.mk-dark .mk-kicker,
+.mk-band .mk-kicker {
+  color: #8f9bb3;
+}
+.mk-dark .mk-accent {
+  color: #a9a9f4;
+}
+
+/* A full-width dark band: security, integrations, the developers page. */
+.mk-band {
+  background: var(--mk-band);
+  color: var(--mk-band-text);
+}
+.mk-band .mk-muted {
+  color: var(--mk-band-muted);
+}
+
+/* A page hero sits on the flat page ground: no glow. */
+.mk-hero {
+  position: relative;
+  isolation: isolate;
+  background: var(--mk-canvas);
+}
+
+/* The label above a section heading: a chapter name in sentence case, never a restatement of
+   the heading (those were removed). */
+.mk-kicker {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ui-text-dimmed);
+}
+[data-slot="headline"].mk-kicker {
+  display: flex;
+  width: fit-content;
+}
+section[data-orientation="vertical"] [data-slot="headline"].mk-kicker {
+  margin-inline: 0;
+}
+
+/* The primary filled button (app.config maps UButton primary/solid here): solid, a thin
+   edge, no glow. White on #4e4eda is 4.63:1. */
+.mk-btn {
+  color: #fff;
+  background: #4e4eda;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 0 0 1px #3f3fc9;
+}
+.mk-btn:hover,
+.mk-btn:active {
+  color: #fff;
+  background: #3939d6;
+}
+/* The ink button: the self-hosted door, beside the orange one. */
+.mk-btn-ink {
+  color: #fff;
+  background: #0b1220;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 0 0 1px #0b1220;
+}
+.mk-btn-ink:hover {
+  color: #fff;
+  background: #1e293b;
+}
+.dark .mk-btn-ink {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 0 0 1px #334155;
+}
+
+/* Meaning classes: set on any ancestor; icons, tiles and stages inside take its colour. */
+.mk-billing {
+  --mk-mark: var(--mk-cyan);
+  --mk-mark-soft: var(--mk-cyan-soft);
+  --mk-mark-line: var(--mk-cyan-line);
+  --mk-mark-text: var(--mk-cyan-text);
+}
+.mk-growth {
+  --mk-mark: var(--mk-lime-deep);
+  --mk-mark-soft: var(--mk-lime-soft);
+  --mk-mark-line: var(--mk-lime-line);
+  --mk-mark-text: var(--mk-lime-text);
+}
+.mk-plain {
+  --mk-mark: var(--mk-plain);
+  --mk-mark-soft: var(--mk-plain-soft);
+  --mk-mark-line: var(--mk-plain-line);
+  --mk-mark-text: var(--mk-plain-text);
+}
+.mk-ico {
+  color: var(--mk-mark);
+}
+
+/* Icon tile: the mark colour on its tint (neutral unless a meaning class says otherwise).
+   `mk-tile-ink` is the dark one. */
+.mk-tile {
+  display: inline-flex;
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  color: var(--mk-mark);
+  background: var(--mk-mark-soft);
+  box-shadow: inset 0 0 0 1px var(--mk-mark-line);
+}
+.mk-tile-ink {
+  color: #fff;
+  background: #0f172a;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14);
+}
+.dark .mk-tile-ink {
+  background: #1e293b;
+}
+
+/* A "new" badge: the lime fill with dark ink (11.19:1), the same in both themes. */
+.mk-badge-new {
+  color: var(--mk-lime-ink);
+  background: var(--mk-lime);
+  box-shadow: none;
+}
+
+/* A category chip: the mark's deep text on its tint (neutral unless a meaning class says). */
+.mk-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0.1875rem 0.625rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--mk-mark-text);
+  background: var(--mk-mark-soft);
+}
+
+/* FAQ rows: ruled rows, no boxes. */
+.mk-faq [data-slot="item"] {
+  border-bottom: 1px solid var(--ui-border);
+  background: transparent;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+.mk-faq [data-slot="item"]:first-child {
+  border-top: 1px solid var(--ui-border);
+}
+
+/* Code shown as product, not as documentation. */
+.mk-code {
+  background: #0d1526;
+  color: #c7d3e6;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  overflow-x: auto;
+}
+.mk-dark .mk-code {
+  background: rgb(255 255 255 / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+/* Keys cyan (the API is running billing), values neutral. */
+.mk-code .k {
+  color: #5ed6e0;
+}
+.mk-code .s {
+  color: #c7d3e6;
+}
+.mk-code .c {
+  color: #6b7f9c;
+}
+
+/* A secondary button on a dark band: the neutral outline paints white in light mode. */
+.mk-band-btn {
+  color: var(--mk-band-text);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.2);
+}
+.mk-band-btn:hover {
+  color: #fff;
+  background: rgb(255 255 255 / 0.08);
+}
+
+/* Inline code is 0.85em in the docs; inside 12px marketing copy that lands at 10px. */
+.mk :not(pre) > code {
+  font-size: max(0.85em, 12px);
+}
+
+/* ── Rhythm ────────────────────────────────────────────────────────────────
+   Nuxt UI's page sections are built for a landing page with three screens of air. Ours
+   tell a story section by section, so the padding and the heading-to-body gap are
+   tightened here, for the marketing layout only. Unlayered, so it wins over utilities. */
+.mk section[data-orientation] > [data-slot="container"] {
+  padding-block: 4rem;
+  gap: 2rem;
+}
+.mk
+  section[data-orientation]
+  > [data-slot="container"]
+  > [data-slot="wrapper"]
+  > [data-slot="header"]
+  > [data-slot="title"] {
+  font-size: clamp(1.875rem, 1.5rem + 1vw, 2.25rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+/* Section headings sit on the page's left axis; only a page hero is centred. */
+.mk
+  section[data-orientation]
+  > [data-slot="container"]
+  > [data-slot="wrapper"]
+  > [data-slot="header"] {
+  text-align: left;
+  align-items: flex-start;
+}
+.mk
+  section[data-orientation]
+  > [data-slot="container"]
+  > [data-slot="wrapper"]
+  > [data-slot="header"]
+  > [data-slot="description"] {
+  margin-top: 0.75rem;
+  max-width: 44rem;
+  margin-inline: 0;
+}
+.mk
+  section[data-orientation="horizontal"]
+  > [data-slot="container"]
+  > [data-slot="wrapper"]
+  > [data-slot="header"]
+  > [data-slot="description"] {
+  margin-inline: 0;
+}
+.mk
+  section[data-orientation]
+  > [data-slot="container"]
+  > [data-slot="wrapper"]
+  > [data-slot="footer"] {
+  margin-top: 1.25rem;
+}
+@media (min-width: 1024px) {
+  .mk section[data-orientation] > [data-slot="container"] {
+    padding-block: 6rem;
+    gap: 2.5rem;
+  }
+}
+/* Plan features wrap instead of ending in an ellipsis. */
+.mk [data-slot="featureTitle"] {
+  white-space: normal;
+  overflow: visible;
+}
+/* Two tinted sections in a row share one hairline. */
+.mk-tint + .mk-tint {
+  border-top: 0;
+}
+
+/* ── Motion ────────────────────────────────────────────────────────────── */
+@keyframes mk-flow {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+@keyframes mk-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes mk-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+@keyframes mk-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes mk-draw-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes mk-draw-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes mk-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes mk-panel {
+  from {
+    opacity: 0.4;
+    transform: translateY(8px);
+  }
+}
+[data-reveal="armed"] .mk-r {
+  opacity: 0;
+}
+[data-reveal="go"] .mk-r {
+  animation: mk-in 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 220ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mk [data-motion] {
+    animation: none !important;
+    transition: none !important;
+  }
+}

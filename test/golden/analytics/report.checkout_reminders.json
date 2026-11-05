@@ -1,0 +1,35 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Checkouts that we reminded by email in the period, and how many of them completed after the reminder.",
+  "dimensions": [],
+  "funnel": true,
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "checkout_reminders",
+  "kind": "count",
+  "name": "Checkout Reminders",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Reminded",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Completed after a reminder",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

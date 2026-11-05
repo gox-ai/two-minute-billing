@@ -1,0 +1,74 @@
+{
+  "_comment_purpose": [
+    "OPT-IN replacement for tmbilling-worker.json: a restart starts the NEW worker first and",
+    "only then stops the old one, so the old process can finish long jobs without the billing",
+    "clock ever being unowned.",
+    "",
+    "Why: a fork app's `pm2 reload` is stop-then-start, so the drain IS a billing gap and has",
+    "to stay short (25s). Jobs outrun that — measured on production 2026-09-11..27:",
+    "metric_windows_refresh 46 s p50 (every run), metrics_daily_snapshot ~60 s, drift scan",
+    "~100 s, hubspot_sync_connection ~10 min, metric_daily_recompute 24 min.",
+    "",
+    "Safe to overlap: graphile serializes a named queue with a row lock, so the new worker",
+    "cannot claim a queue the draining one still holds, and its cron is multi-worker safe.",
+    "The draining worker keeps heartbeating, so the stranded-lock sweep never mistakes it",
+    "for dead (src/worker.ts, finalize)."
+  ],
+  "_comment_script": [
+    "Same cluster rules as tmbilling-api-cluster.json: `node_args` MUST be an array (the",
+    "string form is silently ignored), and pm2 forks the worker itself, so the tracked pid",
+    "is the process doing the draining. WORKER_ROLE is set in env as well as --role, since",
+    "the cluster wrapper owns argv.",
+    "",
+    "`node_args` loads deploy/pm2/tsx-preload.mjs by ABSOLUTE path, not `--import tsx`. A cluster",
+    "child starts in the pm2 DAEMON's cwd and gets this file's `env` only later, so a bare",
+    "`--import tsx` failed (ERR_MODULE_NOT_FOUND, exit 1, crash loop, no app log) and tsx lost",
+    "tsconfig's `@/` alias for dynamic imports. First prod switch, 2026-09-27: rolled back."
+  ],
+  "name": "tmbilling-worker",
+  "script": "src/worker.ts",
+  "node_args": ["--import", "file:///var/www/html/projects/tmbilling/deploy/pm2/tsx-preload.mjs"],
+  "args": "--role=billing",
+  "cwd": "/var/www/html/projects/tmbilling",
+  "exec_mode": "cluster",
+  "instances": 1,
+  "_comment_ready": [
+    "wait_ready: pm2 stops the old instance only after the new one sends 'ready', which",
+    "worker.ts does once the queue is running and the health listener is up."
+  ],
+  "wait_ready": true,
+  "listen_timeout": 120000,
+  "_comment_kill_timeout": [
+    "Strictly greater than WORKER_SHUTDOWN_TIMEOUT_MS below (30 min), with headroom for the",
+    "post-drain stamping and log flush. A job still running at the budget is cut off and its",
+    "lock is recovered by the 5-minute stranded-lock sweep."
+  ],
+  "kill_timeout": 1860000,
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "_comment_malloc": [
+    "MALLOC_ARENA_MAX below does NOTHING in cluster mode: glibc reads it at exec, and a cluster",
+    "child gets this env only afterwards, copied into process.env from JS (pm2 ProcessContainer).",
+    "It must be set on the pm2 daemon, whose env the child inherits: deploy/README.md §7. Kept",
+    "here so the fork config and this one stay in step."
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "GOOGLE_CLOUD_SERVICE_CONTEXT": "tmbilling-worker",
+    "WORKER_ROLE": "billing",
+    "WORKER_HEALTH_PORT": "4002",
+    "WORKER_HEALTH_HOST": "127.0.0.1",
+    "PG_STATEMENT_TIMEOUT_MS": "60000",
+    "WORKER_SHUTDOWN_TIMEOUT_MS": "1800000",
+    "MALLOC_ARENA_MAX": "2"
+  },
+  "_comment_switching": [
+    "exec_mode cannot be changed by a reload, so the switch is a one-time manual step, in a",
+    "quiet window (the delete is a real stop — it drains with the fork budget):",
+    "  pm2 delete tmbilling-worker",
+    "  pm2 start  deploy/pm2/tmbilling-worker-cluster.json",
+    "  pm2 save",
+    "That renumbers the worker's pm2 id once; every later deploy is `pm2 reload` and keeps it.",
+    "",
+    "To go back: pm2 delete tmbilling-worker && pm2 start deploy/pm2/tmbilling-worker.json"
+  ]
+}

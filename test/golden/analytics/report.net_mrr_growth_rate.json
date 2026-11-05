@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "comparison": {
+    "basis": "complete_month",
+    "change_bps": null,
+    "prev_label": "Jun 2026",
+    "prev_value": -1525
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Net growth as a share of the recurring revenue the window opened with.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": -1087,
+  "key": "<id:1>",
+  "kind": "rate",
+  "name": "Net MRR Growth Rate",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

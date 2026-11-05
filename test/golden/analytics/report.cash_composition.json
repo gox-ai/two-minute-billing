@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "transactions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "How the money collected in the period splits across what it paid for.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 5000,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Cash Composition",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "One-off charges",
+      "group_id": "one_time",
+      "value": 5000
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tmbilling · architecture</title>
+<style>
+  :root {
+    --bg: #0d1017;
+    --panel: #151a24;
+    --panel-2: #1b2230;
+    --line: #26303f;
+    --ink: #e6ebf2;
+    --muted: #8b97a8;
+    --faint: #5a6675;
+    --accent: #38bdf8;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 14px; line-height: 1.5; overflow: hidden;
+  }
+  a { color: var(--accent); }
+
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    background: linear-gradient(180deg, #10151f, #0d1017);
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .3px; font-weight: 650; }
+  header h1 .dim { color: var(--faint); font-weight: 400; }
+  .hier { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .hier b { color: var(--ink); font-weight: 600; }
+  .hier .sep { color: var(--faint); }
+  .spacer { flex: 1; }
+  .meta { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lbl { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; margin-right: 2px; }
+  .chip {
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+    padding: 5px 11px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    font-family: var(--sans); transition: all .12s ease;
+  }
+  .chip:hover { color: var(--ink); border-color: #3a4657; }
+  .chip[aria-pressed="true"] { background: var(--accent); color: #04121c; border-color: var(--accent); font-weight: 600; }
+
+  .stage { position: relative; display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+  .canvas { position: relative; overflow: auto; padding: 22px 24px 60px; }
+  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+
+  .band { position: relative; z-index: 2; margin-bottom: 26px; }
+  .band-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px 2px; }
+  .band-dot { width: 9px; height: 9px; border-radius: 3px; align-self: center; }
+  .band-name { font-size: 12px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+  .band-note { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .node {
+    position: relative; width: 210px; background: var(--panel); border: 1px solid var(--line);
+    border-left-width: 3px; border-radius: 8px; padding: 10px 12px; cursor: pointer;
+    transition: transform .1s ease, box-shadow .1s ease, opacity .15s ease, border-color .1s ease;
+  }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .node .id { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .node .resp {
+    color: var(--muted); font-size: 11.5px; line-height: 1.45; margin-top: 4px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .node .tags { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
+  }
+  .node.dim { opacity: .22; }
+  .node.hot { box-shadow: 0 0 0 2px currentColor; }
+  .node.dep { box-shadow: 0 0 0 1.5px var(--accent); }
+  .node.selected { box-shadow: 0 0 0 2px var(--accent), 0 6px 20px rgba(0,0,0,.5); }
+  .node .seq {
+    position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #04121c; font-size: 11px; font-weight: 700;
+    display: none; align-items: center; justify-content: center; font-family: var(--mono);
+  }
+  .node.instep .seq { display: flex; }
+
+  /* detail panel */
+  aside {
+    border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 18px;
+  }
+  aside .empty { color: var(--faint); font-size: 13px; margin-top: 40px; text-align: center; }
+  aside h2 { font-family: var(--mono); font-size: 17px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+  aside .layer-pill { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; padding: 2px 8px; border-radius: 999px; font-weight: 700; }
+  aside .resp-full { color: var(--muted); font-size: 13px; margin: 10px 0 16px; }
+  aside section { margin-bottom: 16px; }
+  aside .h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); margin-bottom: 6px; }
+  aside .list { display: flex; flex-direction: column; gap: 4px; }
+  aside code { font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); }
+  aside .chips-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  aside .dep-link { cursor: pointer; }
+  aside .dep-link:hover { border-color: var(--accent); color: var(--ink); }
+  aside .emit { color: #f0abfc; }
+
+  .legend { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center; }
+  .legend .item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+  .legend .sw { width: 10px; height: 10px; border-radius: 3px; }
+
+  .hint { position: absolute; bottom: 12px; left: 24px; color: var(--faint); font-size: 11px; z-index: 3; font-family: var(--mono); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a3444; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>tmbilling <span class="dim">/ architecture</span></h1>
+    <div class="hier" id="hier"></div>
+    <div class="spacer"></div>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div style="padding:10px 20px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:16px; align-items:center; background:var(--panel);">
+    <div class="controls">
+      <span class="lbl">Flows</span>
+      <span id="flowChips"></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="stage">
+    <div class="canvas" id="canvas">
+      <svg class="edges" id="edges"><defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"></path>
+        </marker>
+      </defs></svg>
+      <div id="bands"></div>
+      <div class="hint">Hover a module to trace its dependencies · click to pin details · pick a flow to trace a path</div>
+    </div>
+    <aside id="detail"><div class="empty">Select a module to see tables, key functions,<br>emitted events and dependencies.</div></aside>
+  </div>
+</div>
+
+<script>
+const DATA = {"$schema": "https://tmbilling.dev/architecture.schema.json", "name": "tmbilling", "description": "Module dependency + data-flow graph for the tmbilling billing platform. Machine-readable backbone for the flow visualization and the per-module docs in docs/modules/.", "generated": "2026-07-06", "hierarchy": ["Organization", "Business", "Customer", "Subscription"], "layers": [{"id": "kernel", "name": "Platform kernel", "color": "#64748b", "note": "src/platform/* \u2014 cross-cutting; no domain logic"}, {"id": "foundation", "name": "Foundation modules", "color": "#0ea5e9", "note": "tenancy, auth, ledger, events, webhooks, audit, ops"}, {"id": "catalog", "name": "Catalog & pricing", "color": "#8b5cf6", "note": "what you sell"}, {"id": "customer", "name": "Customers & balances", "color": "#ec4899", "note": "the payer + wallet"}, {"id": "billing", "name": "Subscriptions & billing", "color": "#f59e0b", "note": "the engine loop"}, {"id": "payments", "name": "Payments & gateway", "color": "#10b981", "note": "money movement"}, {"id": "tooling", "name": "Ops tooling", "color": "#ef4444", "note": "migration, transfer, time travel"}], "kernel": [{"id": "platform.db", "file": "src/platform/db.ts", "role": "withTenant() RLS transaction; raw db for clock scans"}, {"id": "platform.auth", "file": "src/platform/auth.ts", "role": "Bearer auth, org resolution, test/live partition"}, {"id": "platform.idempotency", "file": "src/platform/idempotency.ts", "role": "Idempotency-Key middleware (fingerprint + replay)"}, {"id": "platform.clock", "file": "src/platform/clock.ts + jobs.ts", "role": "durable billing clock (graphile-worker)"}, {"id": "platform.ids", "file": "src/platform/ids.ts", "role": "publicId(prefix) for transactional resources"}, {"id": "platform.secrets", "file": "src/platform/secrets.ts", "role": "AES-256-GCM encrypt/decrypt for gateway creds"}, {"id": "platform.event-context", "file": "src/platform/event-context.ts", "role": "request-scoped source/actor for events + audit"}], "providers": {"contract": "src/providers/types.ts", "registry": "src/providers/registry.ts", "adapters": ["tmtest", "stripe", "paypal", "razorpay", "mock"], "note": "The engine never imports an adapter directly \u2014 it resolves one from a gateway_accounts row via the registry."}, "nodes": [{"id": "tenancy", "layer": "foundation", "responsibility": "Organizations, businesses, API keys \u2014 the tenant + isolation boundary.", "tables": ["tenancy"], "routeFile": "(auth/ops)", "keyFunctions": ["createBusiness", "updateBusiness", "listBusinesses", "createApiKey", "authenticateApiKey"], "emits": [], "dependsOn": ["audit", "gateway"]}, {"id": "auth", "layer": "foundation", "responsibility": "Dashboard login, sessions, RBAC, invites.", "tables": ["users"], "routeFile": "auth-routes.ts", "routes": 6, "keyFunctions": ["login", "signup", "resolveSession", "can", "inviteUser"], "emits": [], "dependsOn": ["tenancy"]}, {"id": "ledger", "layer": "foundation", "responsibility": "Append-only double-entry postings; the money truth. Balances derived, never mutated.", "tables": ["ledger"], "routeFile": "-", "keyFunctions": ["postEntries", "accountBalance"], "emits": [], "dependsOn": []}, {"id": "events", "layer": "foundation", "responsibility": "Typed ~67-event registry, payload builders, events list API.", "tables": ["platform(events)"], "routeFile": "events-routes.ts", "routes": 3, "keyFunctions": ["listEventsFiltered", "getEventWithDeliveries", "buildEventData"], "emits": [], "dependsOn": []}, {"id": "webhooks", "layer": "foundation", "responsibility": "Outbox: emitEvent (event+deliveries in one tx), endpoints, delivery, redeliver, test-send, inbound provider events.", "tables": ["platform(webhook_endpoints, webhook_deliveries)"], "routeFile": "webhook-routes.ts", "keyFunctions": ["emitEvent", "deliverPending", "createEndpoint", "redeliverDelivery", "testSendEndpoint", "handleProviderEvent"], "emits": ["payment.failed", "transaction.late_failure"], "dependsOn": ["events", "invoicing", "ledger", "payments", "subscriptions", "transactions"]}, {"id": "audit", "layer": "foundation", "responsibility": "Append-only actor/diff log of writes (who did what).", "tables": ["audit-logs"], "routeFile": "audit-routes.ts", "routes": 2, "keyFunctions": ["writeAuditLog", "listAuditLogs"], "emits": [], "dependsOn": []}, {"id": "ops", "layer": "foundation", "responsibility": "Billing-clock observability \u2014 tick history, counters, per-item errors, overrun guard.", "tables": ["platform(clock_ticks)"], "routeFile": "ops-routes.ts", "routes": 2, "keyFunctions": ["startClockTick", "finishClockTick", "listClockTicks"], "emits": [], "dependsOn": ["subscriptions"]}, {"id": "catalog", "layer": "catalog", "responsibility": "Product groups, products (plan/addon/charge), prices (all models), differential + attached items, price snapshots.", "tables": ["catalog"], "routeFile": "catalog-routes.ts", "routes": 19, "keyFunctions": ["createProduct", "createPrice", "snapshotPrice", "resolveDifferential", "resolveMandatoryAddonItems", "setDifferentialPrice"], "emits": ["product.created", "product.updated", "price.created", "price.updated", "product_group.created", "attached_item.created", "differential_price.set"], "dependsOn": ["audit", "events", "webhooks"]}, {"id": "coupons", "layer": "catalog", "responsibility": "Coupons, sets, codes; stacked discount computation; item constraints.", "tables": ["coupons"], "routeFile": "coupon-routes.ts", "routes": 12, "keyFunctions": ["createCoupon", "computeStackedDiscounts", "applyCouponToSubscription", "addCouponSetCodes", "couponStatus"], "emits": ["coupon.created", "coupon.updated", "coupon.applied", "coupon.removed", "coupon_set.created"], "dependsOn": ["catalog", "events", "webhooks"]}, {"id": "tax", "layer": "catalog", "responsibility": "Manual tax-rate table, per-line tax computation, pluggable tax providers.", "tables": ["tax"], "routeFile": "tax-routes.ts", "routes": 4, "keyFunctions": ["computeInvoiceTax", "allocateTaxAcrossLines", "createTaxRate", "getTaxProvider"], "emits": [], "dependsOn": []}, {"id": "entitlements", "layer": "catalog", "responsibility": "Features + plan/subscription grants + runtime checks.", "tables": ["entitlements"], "routeFile": "entitlement-routes.ts", "routes": 6, "keyFunctions": ["createFeature", "setPlanEntitlement", "setSubscriptionEntitlement", "checkEntitlement"], "emits": [], "dependsOn": []}, {"id": "customers", "layer": "customer", "responsibility": "Customer records, contacts, 3-balance wallet (promotional/refundable/excess), VAT status, GDPR clear, ad-hoc collect.", "tables": ["customers"], "routeFile": "customer-routes.ts", "routes": 15, "keyFunctions": ["createCustomer", "getCustomerBalances", "addPromotionalCredits", "recordExcessPayment", "collectPayment", "clearPersonalData", "planCreditApplication"], "emits": ["customer.created", "customer.updated", "customer.promotional_credits_added", "customer.excess_payment_recorded", "invoice.paid"], "dependsOn": ["events", "invoicing", "ledger", "payment-methods", "webhooks"]}, {"id": "wallet", "layer": "customer", "responsibility": "Legacy top-up audit trail (folded into customer balances).", "tables": ["wallet"], "routeFile": "wallet-routes.ts", "routes": 2, "keyFunctions": ["topUpWallet", "walletBalance"], "emits": ["wallet.topped_up"], "dependsOn": ["customers", "events", "ledger", "webhooks"]}, {"id": "credit-notes", "layer": "customer", "responsibility": "Adjustment + refundable credit notes, allocations, refunds, void; routes write-off.", "tables": ["credit-notes"], "routeFile": "credit-note-routes.ts", "routes": 4, "keyFunctions": ["issueAdjustmentCreditNote", "issueRefundableCreditNote", "refundCreditNote", "voidCreditNote", "allocateRefundableDraw"], "emits": ["credit_note.created", "credit_note.allocated", "credit_note.refunded", "credit_note.voided", "invoice.written_off"], "dependsOn": ["customers", "events", "invoicing", "ledger", "refunds", "webhooks"]}, {"id": "subscriptions", "layer": "billing", "responsibility": "The subscription engine + billing clock: create/change/cancel/pause/resume option sets, scheduled changes, dunning, estimates, ad-hoc/unbilled charges, renewals.", "tables": ["subscriptions", "scheduled-changes", "unbilled-charges"], "routeFile": "subscription-routes.ts", "routes": 18, "keyFunctions": ["createSubscription", "changeSubscription", "runBillingClockTick", "runDunningPass", "cancelSubscriptionWithOptions", "estimateChange", "scheduleChange", "addAdHocCharge"], "emits": ["subscription.created", "subscription.started", "subscription.activated", "subscription.changed", "subscription.renewed", "subscription.canceled", "subscription.paused", "subscription.resumed", "subscription.trial_ending"], "dependsOn": ["audit", "catalog", "coupons", "credit-notes", "customers", "events", "invoicing", "ledger", "metering", "metrics", "tax", "webhooks"]}, {"id": "invoicing", "layer": "billing", "responsibility": "Invoice generation + lifecycle (pending/posted/payment_due/not_paid/paid/voided), dunning transitions, close/void/write-off/regenerate/collect, offline payments, HTML render.", "tables": ["invoices"], "routeFile": "invoice-routes.ts", "routes": 11, "keyFunctions": ["billSubscriptionPeriod", "createManualInvoice", "closeInvoice", "writeOffInvoice", "collectInvoiceNow", "recordOfflinePayment", "renderInvoiceHtml", "runInvoiceDueTransitions"], "emits": ["invoice.generated", "invoice.paid", "invoice.payment_due", "invoice.not_paid", "invoice.voided", "invoice.closed", "invoice.dunning_started", "invoice.dunning_exhausted", "payment.succeeded", "payment.failed"], "dependsOn": ["audit", "catalog", "coupons", "credit-notes", "customers", "events", "gateway", "ledger", "metering", "payment-methods", "subscriptions", "tax", "transactions", "webhooks"]}, {"id": "metering", "layer": "billing", "responsibility": "Usage ingestion (idempotent) + aggregation (sum/max/last/count/min/avg/unique).", "tables": ["usage"], "routeFile": "(subscription/usage)", "keyFunctions": ["recordUsage", "aggregateUsage"], "emits": ["usage.recorded"], "dependsOn": []}, {"id": "metrics", "layer": "billing", "responsibility": "MRR/ARR/ARPU/churn per currency + converted-to-base FX roll-up.", "tables": ["(derived)"], "routeFile": "metrics-routes.ts", "routes": 2, "keyFunctions": ["computeBusinessMetrics"], "emits": [], "dependsOn": ["catalog"]}, {"id": "gateway", "layer": "payments", "responsibility": "Gateway accounts (encrypted creds), currency\u00d7method router, inbound webhook ingestion + reconciliation.", "tables": ["gateway"], "routeFile": "gateway-routes.ts", "routes": 8, "keyFunctions": ["selectGatewayAccount", "ingestGatewayWebhook", "listGatewayWebhooks"], "emits": ["gateway_account.created", "gateway_account.updated", "gateway_account.deleted"], "dependsOn": ["events", "webhooks"]}, {"id": "payment-methods", "layer": "payments", "responsibility": "Vaulted payment sources, roles (primary/backup), status lifecycle + expiry sweep.", "tables": ["payment-methods"], "routeFile": "payment-method-routes.ts", "routes": 6, "keyFunctions": ["vaultPaymentMethod", "assignPaymentMethodRole", "paymentSourceSweep", "detachPaymentMethod"], "emits": ["payment_source.added", "payment_source.deleted", "payment_source.role_changed"], "dependsOn": ["events", "webhooks"]}, {"id": "payment-intents", "layer": "payments", "responsibility": "On-session 3DS/SCA intents: create \u2192 authorize \u2192 consume; expiry sweep.", "tables": ["payment-intents"], "routeFile": "payment-intent-routes.ts", "routes": 4, "keyFunctions": ["createPaymentIntent", "authorizePaymentIntent", "consumePaymentIntent", "expirePaymentIntents"], "emits": ["payment_intent.created", "payment_intent.authorized", "payment_intent.expired", "payment.succeeded", "invoice.paid"], "dependsOn": ["events", "gateway", "invoicing", "ledger", "transactions", "webhooks"]}, {"id": "transactions", "layer": "payments", "responsibility": "Gateway-facing money log (auth/payment/refund; needs_attention/timeout/late_failure) + reconcile op.", "tables": ["transactions"], "routeFile": "transaction-routes.ts", "routes": 2, "keyFunctions": ["recordTransaction", "reconcileTransaction", "listTransactions", "findTransactionByGatewayCharge"], "emits": ["payment.initiated", "transaction.needs_attention", "transaction.reconciled"], "dependsOn": ["events", "payments", "webhooks"]}, {"id": "payments", "layer": "payments", "responsibility": "Charge-outcome settlement: apply gateway success/failure to invoice + ledger + dunning.", "tables": ["payments"], "routeFile": "(via invoicing/gateway)", "keyFunctions": ["settlePaymentSucceeded", "settlePaymentFailed", "settleTransactionOutcome"], "emits": ["payment.succeeded", "payment.failed", "invoice.paid", "invoice.payment_due"], "dependsOn": ["events", "invoicing", "ledger", "subscriptions", "webhooks"]}, {"id": "refunds", "layer": "payments", "responsibility": "Refund execution (full/partial) through the adapter; ledger + transaction record.", "tables": ["payments"], "routeFile": "refund-routes.ts", "routes": 1, "keyFunctions": ["refundPayment", "listRefunds"], "emits": ["refund.created", "refund.failed"], "dependsOn": ["events", "ledger", "transactions", "webhooks"]}, {"id": "migration", "layer": "tooling", "responsibility": "Import from another billing system or generic JSON (idempotent, no double-charge) + reconcile \u2014 CLI only.", "tables": ["migration"], "routeFile": "(CLI)", "keyFunctions": ["importFromSource"], "emits": [], "dependsOn": ["catalog", "coupons", "customers", "invoicing", "ledger", "metrics", "subscriptions", "wallet"]}, {"id": "transfer", "layer": "tooling", "responsibility": "Transfer Configurations (catalog+settings copy test\u2194live, live=merge-only) + sample data.", "tables": ["transfer"], "routeFile": "transfer-routes.ts", "routes": 5, "keyFunctions": ["runTransfer", "createSampleData", "deleteSampleData", "getTransfer"], "emits": [], "dependsOn": ["audit", "catalog", "coupons", "customers"]}, {"id": "time-travel", "layer": "tooling", "responsibility": "Test-business virtual clock: start_afresh + travel_forward; businessNow() seam.", "tables": ["time-travels"], "routeFile": "time-travel-routes.ts", "routes": 4, "keyFunctions": ["startTimeTravel", "travelForward", "stopTimeTravel", "timeTravelledBusinessIds"], "emits": [], "dependsOn": []}], "flows": [{"name": "Renewal (billing clock tick)", "steps": ["platform.clock", "subscriptions", "invoicing", "tax", "coupons", "customers", "gateway", "payments", "transactions", "ledger", "webhooks"]}, {"name": "Subscribe", "steps": ["auth", "customers", "payment-methods", "catalog", "coupons", "subscriptions", "invoicing", "gateway", "payments", "ledger", "webhooks"]}, {"name": "Refund", "steps": ["refunds", "gateway", "transactions", "ledger", "credit-notes", "webhooks"]}, {"name": "Import (migration)", "steps": ["migration", "catalog", "coupons", "customers", "subscriptions", "invoicing", "ledger"]}]};
+
+const layerById = Object.fromEntries(DATA.layers.map(l => [l.id, l]));
+const nodeById  = Object.fromEntries(DATA.nodes.map(n => [n.id, n]));
+// flows reference some ids that aren't domain nodes (e.g. platform.clock); keep them harmless.
+
+const $ = (s, r=document) => r.querySelector(s);
+const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt!=null) e.textContent = txt; return e; };
+
+// ---- hierarchy + meta ----
+const hier = $("#hier");
+DATA.hierarchy.forEach((h, i) => {
+  if (i) hier.append(Object.assign(el("span","sep"),{textContent:"›"}));
+  hier.append(el("b", null, h));
+});
+$("#meta").textContent = DATA.nodes.length + " modules · " + DATA.layers.length + " layers · generated " + DATA.generated;
+
+// ---- legend ----
+const legend = $("#legend");
+DATA.layers.forEach(l => {
+  const item = el("div","item");
+  const sw = el("span","sw"); sw.style.background = l.color; item.append(sw, el("span",null,l.name));
+  legend.append(item);
+});
+
+// ---- render bands + nodes ----
+const bands = $("#bands");
+const nodeEls = {};
+for (const layer of DATA.layers) {
+  const nodes = DATA.nodes.filter(n => n.layer === layer.id);
+  if (!nodes.length) continue;
+  const band = el("div","band");
+  const head = el("div","band-head");
+  const dot = el("span","band-dot"); dot.style.background = layer.color;
+  head.append(dot, Object.assign(el("span","band-name",layer.name),{style:`color:${layer.color}`}), el("span","band-note", layer.note||""));
+  band.append(head);
+  const row = el("div","row");
+  for (const n of nodes) {
+    const card = el("div","node");
+    card.style.borderLeftColor = layer.color;
+    card.style.color = layer.color; // used by .hot glow
+    card.dataset.id = n.id;
+    card.append(el("div","id", n.id));
+    card.append(el("div","resp", n.responsibility || ""));
+    const tags = el("div","tags");
+    if (n.routes) tags.append(el("span","tag", n.routes + " routes"));
+    if (n.emits && n.emits.length) tags.append(el("span","tag", n.emits.length + " events"));
+    if (n.dependsOn && n.dependsOn.length) tags.append(el("span","tag", "→ " + n.dependsOn.length + " deps"));
+    card.append(tags);
+    const seq = el("div","seq"); card.append(seq);
+    card.addEventListener("mouseenter", () => { if (!pinned) traceDeps(n.id); });
+    card.addEventListener("mouseleave", () => { if (!pinned) clearTrace(); });
+    card.addEventListener("click", () => { pinned = (pinned===n.id)?null:n.id; select(n.id); });
+    row.append(card);
+    nodeEls[n.id] = card;
+  }
+  band.append(row);
+  bands.append(band);
+}
+
+// ---- edge drawing ----
+const svg = $("#edges");
+const canvas = $("#canvas");
+function centerBottom(r, base) { return { x: r.left - base.left + r.width/2, y: r.top - base.top + r.height }; }
+function centerTop(r, base)    { return { x: r.left - base.left + r.width/2, y: r.top - base.top }; }
+
+function drawEdges(pairs, color) {
+  // remove old paths (keep defs)
+  [...svg.querySelectorAll("path.edge")].forEach(p => p.remove());
+  const base = svg.getBoundingClientRect();
+  for (const [from, to] of pairs) {
+    const a = nodeEls[from], b = nodeEls[to];
+    if (!a || !b) continue;
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const p1 = { x: ra.left - base.left + ra.width/2, y: ra.top - base.top + ra.height/2 };
+    const p2 = { x: rb.left - base.left + rb.width/2, y: rb.top - base.top + rb.height/2 };
+    const dx = (p2.x - p1.x) * 0.3, dy = (p2.y - p1.y) * 0.5;
+    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+    path.setAttribute("class","edge");
+    path.setAttribute("d", `M ${p1.x} ${p1.y} C ${p1.x+dx} ${p1.y+dy}, ${p2.x-dx} ${p2.y-dy}, ${p2.x} ${p2.y}`);
+    path.setAttribute("fill","none");
+    path.setAttribute("stroke", color);
+    path.setAttribute("stroke-width","1.6");
+    path.setAttribute("opacity","0.8");
+    path.setAttribute("marker-end","url(#arrow)");
+    svg.append(path);
+  }
+}
+function clearEdges(){ [...svg.querySelectorAll("path.edge")].forEach(p => p.remove()); }
+
+// ---- trace dependencies of one node ----
+let pinned = null;
+function traceDeps(id) {
+  const n = nodeById[id]; if (!n) return;
+  const deps = new Set(n.dependsOn || []);
+  Object.entries(nodeEls).forEach(([k,c]) => {
+    c.classList.remove("hot","dep","instep","selected");
+    c.classList.toggle("dim", !(k===id || deps.has(k)));
+    if (k===id) c.classList.add("hot");
+    if (deps.has(k)) c.classList.add("dep");
+  });
+  drawEdges([...deps].map(d => [id, d]), "#38bdf8");
+}
+function clearTrace() {
+  Object.values(nodeEls).forEach(c => c.classList.remove("dim","hot","dep","instep","selected"));
+  clearEdges();
+  if (activeFlow) applyFlow(activeFlow);
+}
+
+// ---- detail panel ----
+function select(id) {
+  const n = nodeById[id];
+  if (!n) return;
+  traceDeps(id);
+  nodeEls[id].classList.add("selected");
+  const layer = layerById[n.layer];
+  const d = $("#detail"); d.innerHTML = "";
+  const h = el("h2", null); h.append(el("span",null,n.id));
+  const pill = el("span","layer-pill", layer.name); pill.style.background = layer.color + "22"; pill.style.color = layer.color;
+  h.append(pill); d.append(h);
+  d.append(el("div","resp-full", n.responsibility || ""));
+
+  const sec = (title, build) => { const s = el("section"); s.append(el("div","h", title)); build(s); d.append(s); };
+
+  if (n.tables && n.tables.length) sec("Tables / schema", s => {
+    const w = el("div","chips-wrap"); n.tables.forEach(t => w.append(el("code",null,t))); s.append(w);
+  });
+  if (n.routeFile) sec("Routes", s => {
+    const w = el("div","chips-wrap"); w.append(el("code",null, n.routeFile + (n.routes?` · ${n.routes}`:""))); s.append(w);
+  });
+  if (n.keyFunctions && n.keyFunctions.length) sec("Key functions", s => {
+    const w = el("div","list"); n.keyFunctions.forEach(f => w.append(el("code",null, f+"()"))); s.append(w);
+  });
+  if (n.emits && n.emits.length) sec("Emits events", s => {
+    const w = el("div","chips-wrap"); n.emits.forEach(e => { const c = el("code","emit", e); w.append(c); }); s.append(w);
+  });
+  if (n.dependsOn && n.dependsOn.length) sec("Depends on", s => {
+    const w = el("div","chips-wrap");
+    n.dependsOn.forEach(dep => {
+      const c = el("code", "dep-link", dep);
+      if (nodeById[dep]) c.addEventListener("click", () => { pinned = dep; nodeEls[dep].scrollIntoView({block:"center",behavior:"smooth"}); select(dep); });
+      w.append(c);
+    });
+    s.append(w);
+  });
+  // dependents (reverse edges)
+  const dependents = DATA.nodes.filter(m => (m.dependsOn||[]).includes(id)).map(m => m.id);
+  if (dependents.length) sec("Depended on by", s => {
+    const w = el("div","chips-wrap");
+    dependents.forEach(dep => { const c = el("code","dep-link", dep); c.addEventListener("click",()=>{pinned=dep;nodeEls[dep].scrollIntoView({block:"center",behavior:"smooth"});select(dep);}); w.append(c); });
+    s.append(w);
+  });
+}
+
+// ---- flows ----
+let activeFlow = null;
+const flowChips = $("#flowChips");
+const allChip = el("button","chip","All modules"); allChip.setAttribute("aria-pressed","true");
+allChip.addEventListener("click", () => setFlow(null));
+flowChips.append(allChip);
+DATA.flows.forEach(f => {
+  const c = el("button","chip", f.name); c.setAttribute("aria-pressed","false");
+  c.addEventListener("click", () => setFlow(f.name));
+  flowChips.append(c);
+});
+function setFlow(name) {
+  activeFlow = name; pinned = null;
+  [...flowChips.children].forEach(c => c.setAttribute("aria-pressed", String((c===allChip && !name) || c.textContent===name)));
+  clearTrace();
+  if (name) applyFlow(name); else { clearEdges(); Object.values(nodeEls).forEach(c=>c.classList.remove("dim","instep")); }
+}
+function applyFlow(name) {
+  const flow = DATA.flows.find(f => f.name===name); if (!flow) return;
+  const steps = flow.steps;
+  const inFlow = new Set(steps);
+  Object.entries(nodeEls).forEach(([k,c]) => {
+    c.classList.remove("hot","dep","selected");
+    c.classList.toggle("dim", !inFlow.has(k));
+    c.classList.remove("instep");
+    $(".seq", c).textContent = "";
+  });
+  // number the steps that map to real nodes
+  steps.forEach((s, i) => { const c = nodeEls[s]; if (c) { c.classList.add("instep"); $(".seq", c).textContent = i+1; } });
+  // draw path edges between consecutive real nodes
+  const pairs = [];
+  let prev = null;
+  for (const s of steps) { if (nodeEls[s]) { if (prev) pairs.push([prev, s]); prev = s; } }
+  drawEdges(pairs, "#fbbf24");
+}
+
+// redraw edges on resize / scroll (positions shift)
+let raf;
+function refresh(){ cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (activeFlow) applyFlow(activeFlow); else if (pinned) traceDeps(pinned); }); }
+window.addEventListener("resize", refresh);
+canvas.addEventListener("scroll", refresh);
+</script>
+</body>
+</html>

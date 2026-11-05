@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "churn",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Recurring revenue already booked to be lost to plan changes. Same estimate and the same limits as the upgrade figure.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Total Scheduled Downgrade MRR",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "forward",
+  "tags": ["committed", "plans"]
+}

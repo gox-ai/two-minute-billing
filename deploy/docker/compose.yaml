@@ -1,0 +1,198 @@
+# Two Minute Billing, self-hosted. Run `./init-env.sh` once, then `docker compose up -d`.
+#
+#   .env       compose's own values: version, hosts, database passwords (written by init-env.sh)
+#   app.env    the engine's settings: keys, URLs, mail, storage (written by init-env.sh)
+#
+# Order: postgres → init (migrations + first org, then exits) → api → worker and dashboard
+# → proxy. An upgrade is a new TMBILLING_VERSION and `docker compose up -d`: init migrates
+# while the old api/worker still serve, then they are replaced, the worker last.
+name: two-minute-billing
+
+x-engine: &engine
+  image: ${TMBILLING_IMAGE_PREFIX:-ghcr.io/gox-ai/two-minute-billing}-engine:${TMBILLING_VERSION:?set TMBILLING_VERSION in .env}
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile.engine
+  env_file: app.env
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  stop_signal: SIGTERM
+  logging: &logging
+    driver: json-file
+    options: { max-size: 10m, max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.22@sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tmbilling
+      POSTGRES_DB: tmbilling
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run init-env.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tmbilling -d tmbilling"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  # One-shot: roles, schema, grants, reference data, first organization. Exits 0 or the
+  # stack does not start.
+  init:
+    <<: *engine
+    command: ["node", "--import", "tsx", "src/platform/selfhost/init.ts"]
+    restart: "no"
+    environment:
+      MIGRATION_DATABASE_URL: postgres://tmbilling:${POSTGRES_PASSWORD}@postgres:5432/tmbilling
+      DATABASE_URL: postgres://tmbilling_system:${APP_DB_PASSWORD:?run init-env.sh}@postgres:5432/tmbilling
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      # Used only when the database has no users yet; see bootstrap-org.ts.
+      TMBILLING_INIT_ADMIN_EMAIL: ${TMBILLING_INIT_ADMIN_EMAIL:-}
+      TMBILLING_INIT_ORG_NAME: ${TMBILLING_INIT_ORG_NAME:-}
+      TMBILLING_INIT_ADMIN_PASSWORD: ${TMBILLING_INIT_ADMIN_PASSWORD:-}
+      TMBILLING_INIT_API_KEY: ${TMBILLING_INIT_API_KEY:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [db, egress]
+
+  api:
+    <<: *engine
+    command: ["node", "--import", "tsx", "src/index.ts"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://tmbilling_system:${APP_DB_PASSWORD}@postgres:5432/tmbilling
+      HOST: 0.0.0.0
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      init: { condition: service_completed_successfully }
+    networks: [db, edge, egress]
+
+  worker:
+    <<: *engine
+    command: ["node", "--import", "tsx", "src/worker.ts", "--role=billing"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://tmbilling_system:${APP_DB_PASSWORD}@postgres:5432/tmbilling
+      PG_STATEMENT_TIMEOUT_MS: "60000"
+      WORKER_HEALTH_HOST: 127.0.0.1
+    # The lock rule: grace >= 2 x WORKER_SHUTDOWN_TIMEOUT_MS (25 s runner drain + 25 s pump
+    # drain) + 20 s for the heartbeat stamp and log flush. A SIGKILL mid-drain strands the
+    # job queue's lock until the next worker's sweep proves the holder dead (5 min or more).
+    stop_grace_period: 70s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4002/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # Last, as in deploy/reload.sh: the API is serving before the clock starts.
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [db, egress]
+
+  dashboard:
+    image: ${TMBILLING_IMAGE_PREFIX:-ghcr.io/gox-ai/two-minute-billing}-dashboard:${TMBILLING_VERSION:?set TMBILLING_VERSION in .env}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.dashboard
+    restart: unless-stopped
+    environment:
+      TMBILLING_API_URL: http://api:4000
+      TMBILLING_PUBLIC_API_URL: ${TMBILLING_PUBLIC_API_URL:?run init-env.sh}
+      ALLOW_INSECURE_COOKIES: ${ALLOW_INSECURE_COOKIES:-FALSE}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4100/login').then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [edge]
+    logging: *logging
+
+  # TLS for APP_HOST and API_HOST (Let's Encrypt). The only service with published ports.
+  proxy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    environment:
+      APP_HOST: ${APP_HOST:?run init-env.sh}
+      API_HOST: ${API_HOST:?run init-env.sh}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [dashboard, api]
+    networks: [edge]
+    logging: *logging
+
+  # docker compose --profile backup run --rm backup
+  backup:
+    image: postgres:17.10-alpine3.22@sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+    profiles: [backup]
+    restart: "no"
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - sh
+      - -c
+      - pg_dump -h postgres -U tmbilling -d tmbilling -Fc -f /backups/tmbilling-$$(date -u +%Y%m%dT%H%M%SZ).dump && ls -l /backups
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [db]
+
+networks:
+  # The database network has no route out; the dashboard is never on it.
+  db:
+    internal: true
+  edge: {}
+  # Gateways, mail and webhooks.
+  egress: {}
+
+volumes:
+  pgdata: {}
+  caddy_data: {}
+  caddy_config: {}

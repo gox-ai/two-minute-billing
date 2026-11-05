@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "What buyers paid on checkouts that completed after a reminder email. The first invoice of a subscription, or the purchase.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "checkout_recovered_revenue",
+  "kind": "money",
+  "name": "Recovered Checkout Revenue",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Recovered revenue",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

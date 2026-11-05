@@ -1,0 +1,29 @@
+{
+  "name": "tmbilling-docs",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 4210",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 nuxt build",
+    "generate": "NODE_OPTIONS=--max-old-space-size=4096 nuxt generate",
+    "start": "nuxt preview",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "5.2.8",
+    "@nuxt/content": "3.16.2",
+    "@nuxt/vite-builder": "4.6.3",
+    "docus": "5.15.0",
+    "dotenv": "^16.4.7",
+    "nodemailer": "10.2.1",
+    "nuxt": "4.6.3",
+    "nuxt-studio": "1.8.0",
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "8.0.1",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.2.0"
+  }
+}

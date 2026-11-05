@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Live subscriptions divided by the customers who hold them. This is the factor between per-subscription and per-customer revenue.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 1,
+  "key": "average_subscriptions_per_customer",
+  "kind": "count",
+  "name": "Average Subscriptions per Customer",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": ["customers"]
+}

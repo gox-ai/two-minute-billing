@@ -1,0 +1,33 @@
+# tmbilling is a three-package pnpm workspace.
+#
+#   .          the billing engine (Fastify API + worker + scripts + sdk + db)
+#   dashboard  the Next.js admin UI
+#   docs-site  the public documentation site (Nuxt 4 + Docus)
+#
+# Before this file the dashboard was an island: its own pnpm-lock.yaml, its own
+# `pnpm install`, its own copy of every shared dep (typescript, zod, @types/node)
+# resolved independently of the engine's. Two lockfiles meant CI installed twice
+# and the two halves could silently drift onto different versions of the same
+# package. One workspace, one lockfile, one install.
+#
+# sdk/ is deliberately NOT a package — it is plain source (index.ts + the
+# generated schema.d.ts) compiled by the root tsconfig, and giving it a
+# package.json would mean versioning and publishing something we import by path.
+packages:
+  - dashboard
+  - docs-site
+
+# Hoisting note: keep pnpm's default strict node_modules. Next.js, Tailwind 4 and
+# the Radix packages all resolve correctly under it, and the strictness is what
+# stops the dashboard from accidentally importing an engine-only dependency that
+# was never declared in dashboard/package.json.
+
+# Docus brings native dependencies (the content database, the image pipeline, the
+# file watcher). pnpm refuses to run their install scripts unless they are named
+# here — without this the docs site installs "successfully" and fails at build.
+allowBuilds:
+  "@parcel/watcher": true
+  better-sqlite3: true
+  esbuild: true
+  sharp: true
+  vue-demi: true

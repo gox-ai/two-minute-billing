@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "churn",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Recurring revenue on subscriptions already booked to cancel. CMRR excludes this revenue and MRR still includes it.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 5300,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Total Scheduled Cancellation MRR",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "forward",
+  "tags": ["committed"]
+}

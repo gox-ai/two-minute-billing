@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/gox-ai/two-minute-billing/security/advisories/new
+    about: Report it privately. Never open a public issue for a security problem.
+  - name: Documentation
+    url: https://twominutebilling.com/help
+    about: Guides for operators, the API reference and the self-hosting guides.
+  - name: Cloud support
+    url: https://twominutebilling.com/contact
+    about: For a business on our Cloud, contact us here.

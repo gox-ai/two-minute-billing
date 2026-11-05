@@ -1,0 +1,20 @@
+# Second fence: images build from the published tree, which has none of these.
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+backoffice
+docs
+**/node_modules
+**/.next
+**/.nuxt
+**/.output
+**/.data
+.parity
+.reference
+.tokensave
+coverage
+cloudlogging.json
+**/app.env
+deploy/docker/backups

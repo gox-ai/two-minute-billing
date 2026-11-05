@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Customers with at least one live subscription. A customer with three counts once.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 6,
+  "key": "<id:1>",
+  "kind": "count",
+  "name": "Total Active Customers",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": ["customers"]
+}

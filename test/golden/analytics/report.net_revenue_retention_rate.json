@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "retention",
+  "comparison": {
+    "basis": "complete_month",
+    "change_bps": 517,
+    "prev_label": "Jun 2026",
+    "prev_value": 8475
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "What the revenue you started with is worth now, expansion included. Above 100% means that the base grew without new customers.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 8913,
+  "key": "<id:1>",
+  "kind": "rate",
+  "name": "Net Revenue Retention Rate",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

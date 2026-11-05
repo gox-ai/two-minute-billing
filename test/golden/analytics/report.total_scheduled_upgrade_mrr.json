@@ -1,0 +1,22 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Recurring revenue from plan changes already booked to take effect. An estimate taken when the change was scheduled: gross of discounts, and not restated if the catalog moves before it lands.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Total Scheduled Upgrade MRR",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "forward",
+  "tags": ["committed", "plans"]
+}

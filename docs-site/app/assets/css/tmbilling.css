@@ -1,0 +1,150 @@
+/* ---------------------------------------------------------------------------
+   tmbilling docs — our visual identity on top of Docus.
+
+   Docus gives the shell (nav, search, content pipeline); the look is ours: GoX indigo
+   (#4E4EDA) on the dashboard's ink and neutrals.
+
+   Everything here is a Nuxt UI variable override or a content-scoped rule. No
+   component is restyled by class name — those are Docus's internals and would
+   break on upgrade.
+--------------------------------------------------------------------------- */
+
+:root {
+  /* GoX indigo as a ramp; app.config `primary: "tmb"` maps Nuxt UI's primary onto it.
+     500 is the fill and the link text (6.13:1 on white). */
+  --color-tmb-50: #f3f3fd;
+  --color-tmb-100: #e8e8fb;
+  --color-tmb-200: #d3d3f7;
+  --color-tmb-300: #b4b4f2;
+  --color-tmb-400: #9393f3;
+  --color-tmb-500: #4e4eda;
+  --color-tmb-600: #3939d6;
+  --color-tmb-700: #2a2aca;
+  --color-tmb-800: #2323a6;
+  --color-tmb-900: #1f1f82;
+  --color-tmb-950: #12124a;
+  --ui-primary: var(--color-tmb-500);
+
+  /* R2's cool tinted ground with white cards — the single decision that makes a
+     card read as a surface without needing a shadow. */
+  --ui-bg: #ffffff;
+  --ui-bg-muted: #f5f8fc;
+  --ui-bg-elevated: #eef3f9;
+  --ui-border: #e2e9f2;
+  --ui-border-muted: #eef3f9;
+  --ui-text: #101828;
+  --ui-text-toned: #334155;
+  --ui-text-muted: #64748b;
+  --ui-text-dimmed: #8296b0;
+
+  /* HTTP verbs. Semantic, and the only colour in an endpoint list. */
+  --verb-get: #067647;
+  --verb-post: #2563eb;
+  --verb-put: #b54708;
+  --verb-patch: #b54708;
+  --verb-delete: #b42318;
+
+  --tm-code-bg: #f8fafc;
+}
+
+.dark {
+  /* On the dark ground the light shade carries text at 8:1. */
+  --ui-primary: var(--color-tmb-400);
+  --ui-bg: #0b1220;
+  --ui-bg-muted: #111a2b;
+  --ui-bg-elevated: #172236;
+  --ui-border: #1f2d44;
+  --ui-border-muted: #16203a;
+  --ui-text: #e6edf7;
+  --ui-text-toned: #c7d3e6;
+  --ui-text-muted: #93a4bd;
+  --ui-text-dimmed: #6f819c;
+
+  --verb-get: #5fd69b;
+  --verb-post: #7aa7ff;
+  --verb-put: #f0b071;
+  --verb-patch: #f0b071;
+  --verb-delete: #f58a80;
+
+  --tm-code-bg: #0d1526;
+}
+
+/* ── Type. Six steps, 12px floor, tightened headings ─────────────────────── */
+
+/* Docs only: the marketing layout (`.mk`) sets its own heading scale. */
+.tm-prose h1,
+main h1:not(.mk *) {
+  letter-spacing: -0.022em;
+  font-weight: 650;
+}
+main h2:not(.mk *) {
+  letter-spacing: -0.015em;
+  font-weight: 620;
+  /* Docus sets these tight; a section needs air above it more than below. */
+  margin-top: 2.75rem;
+}
+main h3:not(.mk *) {
+  letter-spacing: -0.01em;
+  font-weight: 620;
+  margin-top: 2rem;
+}
+
+/* ── Tables. Docus boxes every cell; a reference table is read in rows ───── */
+/* Docs tables only; a marketing illustration lays out its own. */
+
+main table:not(.mk *) {
+  font-size: 0.875rem;
+  border-collapse: collapse;
+}
+main table:not(.mk *) :is(th, td) {
+  border-left: 0;
+  border-right: 0;
+  padding-block: 0.6rem;
+}
+main table:not(.mk *) thead th {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ui-text-muted);
+  background: transparent;
+  border-bottom: 1px solid var(--ui-border);
+}
+main table:not(.mk *) tbody tr {
+  border-bottom: 1px solid var(--ui-border-muted);
+}
+main table:not(.mk *) tbody tr:last-child {
+  border-bottom: 0;
+}
+/* A field name is the row's subject — it should not wrap mid-identifier. */
+main table:not(.mk *) tbody td:first-child code {
+  white-space: nowrap;
+}
+/* Nor should a type: "array of object" was breaking across three lines and
+   turning a 40px row into a 90px one. The LAST column is the description and always wraps:
+   a response table has only three columns, and holding its third on one line made it 4,000px. */
+main table:not(.mk *) tbody td:nth-child(2):not(:last-child) code,
+main table:not(.mk *) tbody td:nth-child(3):not(:last-child) {
+  white-space: nowrap;
+}
+main table:not(.mk *) :is(th, td):last-child {
+  width: 55%;
+}
+
+/* ── Code ────────────────────────────────────────────────────────────────── */
+
+main pre:not(.mk-code) {
+  background: var(--tm-code-bg) !important;
+  border: 1px solid var(--ui-border);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+main :not(pre) > code {
+  font-size: 0.85em;
+}
+
+/* ── The sidebar carries 274 endpoints; the verb prefix is the scan target ─ */
+
+nav a code,
+aside a code {
+  font-size: 0.72rem;
+}

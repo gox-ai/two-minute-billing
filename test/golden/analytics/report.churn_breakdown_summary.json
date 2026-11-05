@@ -1,0 +1,54 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "churn",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "How long cancelled subscriptions lasted before they left.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 2,
+  "key": "<id:1>",
+  "kind": "count",
+  "name": "Churn Breakdown Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Under 30 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "30–90 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "91–180 days",
+      "group_id": null,
+      "value": 2
+    },
+    {
+      "group": "181–365 days",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "1–2 years",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Over 2 years",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

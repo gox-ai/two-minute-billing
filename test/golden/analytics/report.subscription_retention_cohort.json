@@ -1,0 +1,53 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "retention",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "The same question about subscriptions rather than money: how many of each month's intake are still live.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 1,
+  "key": "subscription_retention_cohort",
+  "kind": "rate",
+  "matrix": {
+    "base_kind": "count",
+    "columns": ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"],
+    "rows": [
+      {
+        "base": 2,
+        "group": "Jan 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, 5000, 0, 0, null, null, null, null]
+      },
+      {
+        "base": 1,
+        "group": "Feb 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, 10000, 10000, null, null, null, null, null]
+      },
+      {
+        "base": 2,
+        "group": "Mar 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, 10000, null, null, null, null, null, null]
+      },
+      {
+        "base": 1,
+        "group": "Apr 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, null, null, null, null, null, null, null]
+      },
+      {
+        "base": 1,
+        "group": "May 2026",
+        "values": [10000, 10000, 10000, 10000, null, null, null, null, null, null, null, null]
+      }
+    ]
+  },
+  "name": "Subscription Retention Cohort",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "cohort",
+  "tags": ["cohorts"]
+}

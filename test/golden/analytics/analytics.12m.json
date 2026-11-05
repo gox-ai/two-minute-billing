@@ -1,0 +1,1362 @@
+{
+  "as_of": "<timestamp>",
+  "available_currencies": [
+    "EUR",
+    "USD"
+  ],
+  "converted": true,
+  "currency": "USD",
+  "granularity": "month",
+  "kpis": {
+    "active_subscriptions": {
+      "change_bps": 0,
+      "prev_value": 5,
+      "value": 5
+    },
+    "cmrr": {
+      "value": 22933
+    },
+    "mrr": {
+      "change_bps": 0,
+      "prev_value": 28233,
+      "value": 28233
+    },
+    "net_billing_minor": 25000,
+    "net_payments_minor": 42133,
+    "paying_subscriptions": {
+      "change_bps": 0,
+      "prev_value": 5,
+      "value": 5
+    },
+    "renewing_subscriptions": {
+      "change_bps": -2000,
+      "prev_value": 5,
+      "value": 4
+    },
+    "retention": {
+      "churn_mrr_minor": 3444,
+      "contraction_mrr_minor": 0,
+      "expansion_mrr_minor": 0,
+      "gross_retention_bps": 8913,
+      "net_retention_bps": 8913,
+      "new_mrr_minor": 0,
+      "quick_ratio_bps": 0,
+      "reactivation_mrr_minor": 0,
+      "starting_mrr_minor": 31678,
+      "window_label": "Jul"
+    },
+    "revenue_this_month": {
+      "expected_minor": 0,
+      "last_month_minor": 32133,
+      "received_minor": 0
+    },
+    "revenue_today": {
+      "expected_minor": 0,
+      "received_minor": 0,
+      "yesterday_minor": 0
+    },
+    "signups_this_month": {
+      "count": 1,
+      "last_month": 0
+    },
+    "signups_today": {
+      "count": 0,
+      "yesterday": 0
+    },
+    "unpaid_invoices": {
+      "amount_minor": 20000,
+      "count": 2
+    }
+  },
+  "missing_rates": [],
+  "mrr_movement_by_plan": [
+    {
+      "churn_mrr_minor": 3444,
+      "contraction_mrr_minor": 0,
+      "expansion_mrr_minor": 0,
+      "net_mrr_minor": -3444,
+      "new_mrr_minor": 0,
+      "plan": "Starter",
+      "plan_id": "starter",
+      "reactivation_mrr_minor": 0
+    }
+  ],
+  "range": "12m",
+  "series": [
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 7500,
+        "value": 25000
+      },
+      "key": "total_billing",
+      "kind": "money",
+      "label": "Total Billing",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 12500
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 5000
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 7500
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 7500,
+        "value": 25000
+      },
+      "key": "<id:1>",
+      "kind": "money",
+      "label": "Total New Billing",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 12500
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 5000
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 7500
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 5200
+      },
+      "key": "voluntary_cancellation_mrr",
+      "kind": "money",
+      "label": "Voluntary Cancellation MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 5200
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 3444,
+        "value": 3444
+      },
+      "key": "involuntary_cancellation_mrr",
+      "kind": "money",
+      "label": "Involuntary Cancellation MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 3444
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 33333,
+        "value": 38333
+      },
+      "key": "<id:2>",
+      "kind": "money",
+      "label": "Total Payments",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 5000
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 33333
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 1200,
+        "value": 1200
+      },
+      "key": "total_refunds",
+      "kind": "money",
+      "label": "Total Refunds",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 1200
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 28233,
+        "value": 28233
+      },
+      "key": "total_mrr",
+      "kind": "money",
+      "label": "Total MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 8644
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 13644
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 24044
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 34044
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 37378
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 31678
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 28233
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 28233
+        }
+      ]
+    },
+    {
+      "forward": true,
+      "headline": {
+        "kind": "money",
+        "prev_label": "Sep",
+        "prev_value": 22933,
+        "value": 22933
+      },
+      "key": "total_cmrr",
+      "kind": "money",
+      "label": "Total CMRR",
+      "points": [
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 22933
+        },
+        {
+          "label": "Sep 2026",
+          "t": "2026-09-01",
+          "v": 22933
+        },
+        {
+          "label": "Oct 2026",
+          "t": "2026-10-01",
+          "v": 22933
+        },
+        {
+          "label": "Nov 2026",
+          "t": "2026-11-01",
+          "v": 22933
+        },
+        {
+          "label": "Dec 2026",
+          "t": "2026-12-01",
+          "v": 22933
+        },
+        {
+          "label": "Jan 2027",
+          "t": "2027-01-01",
+          "v": 22933
+        },
+        {
+          "label": "Feb 2027",
+          "t": "2027-02-01",
+          "v": 22933
+        },
+        {
+          "label": "Mar 2027",
+          "t": "2027-03-01",
+          "v": 22933
+        },
+        {
+          "label": "Apr 2027",
+          "t": "2027-04-01",
+          "v": 22933
+        },
+        {
+          "label": "May 2027",
+          "t": "2027-05-01",
+          "v": 22933
+        },
+        {
+          "label": "Jun 2027",
+          "t": "2027-06-01",
+          "v": 22933
+        },
+        {
+          "label": "Jul 2027",
+          "t": "2027-07-01",
+          "v": 22933
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 37377
+      },
+      "key": "total_new_mrr",
+      "kind": "money",
+      "label": "Total New MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 8644
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 5000
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 10400
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 10000
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 3333
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 0
+      },
+      "key": "<id:3>",
+      "kind": "money",
+      "label": "Total Expansion MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 0
+      },
+      "key": "<id:4>",
+      "kind": "money",
+      "label": "Total Reactivation MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 500
+      },
+      "key": "<id:5>",
+      "kind": "money",
+      "label": "Total Contraction MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 500
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 3444,
+        "value": 8644
+      },
+      "key": "<id:6>",
+      "kind": "money",
+      "label": "Total Churn MRR",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 5200
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 3444
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "count",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 8
+      },
+      "key": "total_signups",
+      "kind": "count",
+      "label": "Total Signups",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 2
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 1
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 2
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 1
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 1
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 1
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "count",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 7
+      },
+      "key": "<id:7>",
+      "kind": "count",
+      "label": "Total Activations",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 2
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 1
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 2
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 1
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 1
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "percent",
+        "prev_label": "Jul",
+        "prev_value": 1667,
+        "value": 2500
+      },
+      "key": "subscription_churn_rate",
+      "kind": "count",
+      "label": "Total Subscription Churn Rate",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 1
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 1
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    },
+    {
+      "headline": {
+        "kind": "money",
+        "prev_label": "Jul",
+        "prev_value": 0,
+        "value": 0
+      },
+      "key": "<id:8>",
+      "kind": "money",
+      "label": "Total Credit Notes Amount",
+      "points": [
+        {
+          "label": "Sep 2025",
+          "t": "2025-09-01",
+          "v": 0
+        },
+        {
+          "label": "Oct 2025",
+          "t": "2025-10-01",
+          "v": 0
+        },
+        {
+          "label": "Nov 2025",
+          "t": "2025-11-01",
+          "v": 0
+        },
+        {
+          "label": "Dec 2025",
+          "t": "2025-12-01",
+          "v": 0
+        },
+        {
+          "label": "Jan 2026",
+          "t": "2026-01-01",
+          "v": 0
+        },
+        {
+          "label": "Feb 2026",
+          "t": "2026-02-01",
+          "v": 0
+        },
+        {
+          "label": "Mar 2026",
+          "t": "2026-03-01",
+          "v": 0
+        },
+        {
+          "label": "Apr 2026",
+          "t": "2026-04-01",
+          "v": 0
+        },
+        {
+          "label": "May 2026",
+          "t": "2026-05-01",
+          "v": 0
+        },
+        {
+          "label": "Jun 2026",
+          "t": "2026-06-01",
+          "v": 0
+        },
+        {
+          "label": "Jul 2026",
+          "t": "2026-07-01",
+          "v": 0
+        },
+        {
+          "label": "Aug 2026",
+          "t": "2026-08-01",
+          "v": 0
+        }
+      ]
+    }
+  ],
+  "subscriptions_by_plan": {
+    "rows": [
+      {
+        "count": 4,
+        "pct_bps": 8000,
+        "plan": "Starter",
+        "plan_id": "starter"
+      },
+      {
+        "count": 1,
+        "pct_bps": 2000,
+        "plan": "Pro",
+        "plan_id": "pro"
+      }
+    ],
+    "total": 5
+  },
+  "windows": {
+    "last_month": {
+      "after": "2026-06-30",
+      "before": "2026-08-01"
+    },
+    "this_month": {
+      "after": "2026-07-31",
+      "before": "2026-09-01"
+    },
+    "today": {
+      "on": "2026-08-14"
+    },
+    "yesterday": {
+      "on": "2026-08-13"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "_comment_purpose": [
+    "OPT-IN replacement for tmbilling-api.json that makes `pm2 reload` a REAL 0-downtime",
+    "handover. Not the shipped default — switching costs a one-time pm2 id renumbering",
+    "(see _comment_switching).",
+    "",
+    "Measured on this codebase, hammering /healthz sequentially through one `pm2 reload`:",
+    "  fork, 1 instance   → 1736 requests, 784 connection-refused (~3s window)",
+    "  cluster, 2 instances → 2277 requests, 0 failures",
+    "",
+    "pm2 only does a rolling handover for cluster_mode: God.reloadProcessId (lib/God/",
+    "Reload.js) falls through to restartProcessId for anything else, so a fork app gets a",
+    "stop-then-start no matter which verb you type."
+  ],
+  "_comment_script": [
+    "`src/server.ts`, NOT `src/index.ts`. index.ts auto-starts only when it owns argv[1],",
+    "and under pm2's cluster wrapper argv[1] is pm2's own ProcessContainer.js — measured:",
+    "the app loads, logs nothing, listens on nothing, and pm2 still reports it online with",
+    "zero restarts. server.ts calls start() outright.",
+    "",
+    "`node_args` MUST be an ARRAY. ClusterMode.js line 36 is",
+    "`if (env_copy.node_args && Array.isArray(env_copy.node_args))` — the string form",
+    "\"--import tsx\" is silently ignored, which loses the TypeScript loader with no error.",
+    "",
+    "This does NOT reintroduce the launcher bug the other configs warn about: in cluster",
+    "mode pm2 forks the worker itself and requires the app in-process, so the pid pm2",
+    "tracks is the pid running the app. Verified: pgrep -P on it is empty.",
+    "",
+    "`node_args` loads deploy/pm2/tsx-preload.mjs by ABSOLUTE path: a cluster child starts in the",
+    "pm2 daemon's cwd, so a bare `--import tsx` (and tsx's tsconfig lookup) resolved from wherever",
+    "the daemon was launched — the worker's first cluster switch crash-looped on it (2026-09-27)."
+  ],
+  "name": "tmbilling-api",
+  "script": "src/server.ts",
+  "node_args": ["--import", "file:///var/www/html/projects/tmbilling/deploy/pm2/tsx-preload.mjs"],
+  "cwd": "/var/www/html/projects/tmbilling",
+  "exec_mode": "cluster",
+  "_comment_instances": [
+    "2 is the minimum that buys anything: a rolling reload needs one instance still serving",
+    "while the other restarts. More is available capacity, not more billing throughput — the",
+    "clock is a separate process and is single-flight by construction.",
+    "",
+    "Two instances are safe for the two pieces of state the API keeps, both checked rather",
+    "than assumed: rate-limit counters live in Postgres (platform/rate-limit.ts is all",
+    "db.execute), so a second instance does not double anyone's allowance; and ops_http_stats",
+    "has no unique index while its reader ACCUMULATES (`acc.requests += r.requests`, buckets",
+    "merged), so two processes flushing the same (process, minute, route) cell sum correctly",
+    "instead of colliding."
+  ],
+  "instances": 2,
+  "wait_ready": false,
+  "kill_timeout": 10000,
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "_comment_switching": [
+    "exec_mode cannot be changed by a reload, so the switch is:",
+    "  pm2 delete tmbilling-api",
+    "  pm2 start  deploy/pm2/tmbilling-api-cluster.json",
+    "  pm2 save",
+    "That RENUMBERS the app's pm2 id, once, and the list then shows two rows named",
+    "tmbilling-api. Every subsequent deploy is `pm2 reload` and keeps those ids.",
+    "Do it during a window; the delete is a real stop.",
+    "",
+    "To go back: pm2 delete tmbilling-api && pm2 start deploy/pm2/tmbilling-api.json"
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": "4001",
+    "HOST": "127.0.0.1",
+    "GOOGLE_CLOUD_SERVICE_CONTEXT": "tmbilling-api"
+  }
+}

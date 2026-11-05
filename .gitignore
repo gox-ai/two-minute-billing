@@ -1,0 +1,85 @@
+node_modules/
+dist/
+# Env files by PATTERN, not by name. These were the exact names `.env` and `.env.local`,
+# so `scripts/setup.sh`'s `dashboard/.env.local.bak` matched NEITHER and was committed in
+# 949b449 carrying a TMBILLING_API_KEY. An exact-name rule only ever covers the names
+# somebody thought of; a backup, an editor swap file or a `.orig` from a merge all walk
+# straight past it. `.env.example` is the one that must stay committed, so it is
+# re-included explicitly (at any depth — dashboard/ has one too).
+.env
+.env.*
+!.env.example
+# Backups of ANY file, same reasoning one level up: whatever is being backed up is
+# usually the thing worth not committing.
+*.bak
+*.orig
+# Google Cloud service-account key. deploy/README.md § Logs tells operators to put
+# this exact file at the project root, so it must never be committable.
+cloudlogging.json
+# Self-host settings and backups written by deploy/docker (`.env` is covered above).
+deploy/docker/app.env
+deploy/docker/backups/
+*.log
+.DS_Store
+coverage/
+.drizzle/
+# Next.js (dashboard)
+.next/
+.nuxt/
+.output/
+# Nuxt Content's local SQLite cache.
+.data/
+.next.staging/
+.next.prev/
+next-env.d.ts
+*.tsbuildinfo
+# Local research material captured from third-party product UIs. ENTIRELY local — it is
+# large, re-capturable, and not ours to redistribute. Nothing under here is committed:
+# the README/MANIFEST re-includes that used to live here were removed deliberately.
+.reference/
+.tokensave
+# parity-loop run artifacts (fixtures/ and accepted-divergences.json ARE committed)
+.parity/
+bun.lock
+
+# Claude Code local files (machine-specific; settings.json/skills/hooks/MEMORY.md ARE committed)
+.claude/settings.local.json
+.claude/current.md
+.claude/scheduled_tasks.lock
+
+scratchpad/*
+# Cached upstream geo source files (see scripts/generate-geo-data.ts)
+db/seed-data/.cache/
+
+# Saved vendor pages we PARSE rather than vendor. The useful artifact is committed:
+# the parsed reference under docs/references/. Keep the raw capture locally for re-parsing.
+reason_codes.html
+
+# Cloud Logging exports. These carry IPs and customer email addresses, and this is a
+# shared checkout where one `git add .` would put them in history permanently.
+downloaded-logs-*.csv
+
+# deploy single-flight lock (deploy/reload.sh)
+.deploy.lock
+
+# Cutover scope files — the id list a partial migration is run against
+# (docs/MIGRATION.md §3a-partial). Same reasoning as the log exports above: these name
+# real customers' subscriptions, they live in the project folder so the runbook's paths
+# are stable, and this is a shared checkout where one `git add .` is permanent.
+cutover*.txt
+# Preflight reports. Same reasoning, and they are worse: 263KB of customer emails,
+# subscription ids and amounts per run (measured on the USD book, 2026-09-08).
+preflight-*.txt
+flip-*.sql
+
+# Cached live-source snapshots (production ids — never committed).
+# Written by the migration-source snapshot script; delete to force a re-walk.
+.cache/
+
+# The docs deploy target — a real host, never committed (see deploy/docs-deploy.local.example).
+deploy/docs-deploy.local
+# Real hostnames + the API's obscured prefix for the nginx templates (see deploy/nginx/nginx.local.example).
+deploy/nginx/nginx.local
+
+# Load-test harness output (scripts/loadtest): book metadata, run samples, reports.
+.loadtest/

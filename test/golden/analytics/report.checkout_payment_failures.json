@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Of the payment attempts on checkouts opened in the period, the share the payment provider refused, by page layout and device.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": null,
+  "key": "checkout_payment_failures",
+  "kind": "rate",
+  "name": "Checkout Payment Failures",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": []
+}

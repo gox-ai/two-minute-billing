@@ -1,0 +1,30 @@
+# Git hooks for tmbilling. Installed by `pnpm install` (the `prepare` script runs
+# `lefthook install`), so a fresh clone gets them without a separate step.
+#
+# WHY LEFTHOOK AND NOT HUSKY. The repo had a half-installed husky: git's
+# core.hooksPath pointed at `.husky/_`, but `.husky/` held no hooks and nothing in
+# package.json depended on husky. Every commit for months ran zero checks while
+# looking like it had hooks. lefthook is a single binary with the config in one
+# committed file, so "which hooks exist" is answerable by reading this file.
+#
+# Both hooks are deliberately cheap — sub-second on a normal commit. Typecheck,
+# the vitest suite and the verify:* suites are CI's job (.github/workflows/ci.yml);
+# putting them here would make every commit cost minutes and train everyone to
+# reach for --no-verify, which is worse than having no hook at all.
+
+pre-commit:
+  parallel: false
+  commands:
+    lint-staged:
+      # --allow-empty: a commit whose staged set is entirely files lint-staged
+      # doesn't touch (a .md, a .sql migration) must still be allowed through.
+      run: pnpm exec lint-staged --allow-empty
+
+commit-msg:
+  commands:
+    commitlint:
+      # Conventional Commits, configured under "commitlint" in package.json.
+      # The history already follows this shape — `fix(proration): ...`,
+      # `test(parity): ...`, `docs(security): ...` — so this locks in a
+      # convention the repo chose long ago rather than imposing a new one.
+      run: pnpm exec commitlint --edit {1}

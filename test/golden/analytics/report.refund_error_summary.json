@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "transactions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Failed refunds grouped by the reason the gateway gave.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "refund_error_summary",
+  "kind": "count",
+  "name": "Refund Error Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": ["collections"]
+}

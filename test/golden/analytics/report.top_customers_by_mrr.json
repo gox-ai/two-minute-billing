@@ -1,0 +1,54 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Your largest accounts by recurring revenue, with all other accounts on one row. The rows still sum to total MRR.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 28233,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Top Customers by MRR",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "golden-03@example.test",
+      "group_id": "<id:2>",
+      "value": 10000
+    },
+    {
+      "group": "golden-08@example.test",
+      "group_id": "<id:3>",
+      "value": 5300
+    },
+    {
+      "group": "golden-02@example.test",
+      "group_id": "<id:4>",
+      "value": 5100
+    },
+    {
+      "group": "golden-01@example.test",
+      "group_id": "<id:5>",
+      "value": 4500
+    },
+    {
+      "group": "golden-04@example.test",
+      "group_id": "<id:6>",
+      "value": 3333
+    },
+    {
+      "group": "golden-05@example.test",
+      "group_id": "<id:7>",
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["customers"]
+}

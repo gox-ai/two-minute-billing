@@ -1,0 +1,5710 @@
+{
+  "format": 1,
+  "variant": "small",
+  "capturedAt": "2026-10-04T21:17:34.392Z",
+  "migration": {
+    "idx": 324,
+    "version": "7",
+    "when": 1790758530000,
+    "tag": "0324_attached_item_product",
+    "breakpoints": true
+  },
+  "org": {
+    "id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
+    "publicId": "org_SMrMeUHXgEv04xd4iDTWfE7I",
+    "row": {
+      "id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
+      "public_id": "org_SMrMeUHXgEv04xd4iDTWfE7I",
+      "name": "Demo Org",
+      "status": "active",
+      "created_at": "2026-10-04T21:16:17.200597+00:00",
+      "rate_limit_per_minute": null,
+      "is_platform": true,
+      "timezone": null,
+      "legal_name": null,
+      "address": null,
+      "tax_registration_number": null,
+      "base_currency": null,
+      "exchange_rates": null,
+      "exchange_rate_sources": null,
+      "icon_url": null
+    }
+  },
+  "users": [
+    {
+      "id": "061c5e77-65b7-4772-bd95-8adada3ef5b3",
+      "publicId": "usr_XeKLn22k4IET9OiqpYCfEuMz"
+    }
+  ],
+  "apiKeys": ["31bc1cab-e70d-4ff0-b809-77197a670d16"],
+  "businesses": [
+    {
+      "key": "acme",
+      "id": "4bda85b8-9ff5-47b6-8e84-ce20db6c4124",
+      "publicId": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+      "name": "Acme Analytics",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "row": {
+        "id": "4bda85b8-9ff5-47b6-8e84-ce20db6c4124",
+        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
+        "public_id": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+        "name": "Acme Analytics",
+        "default_currency": "USD",
+        "status": "active",
+        "created_at": "2026-05-31T21:13:19.473+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "America/New_York",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 57,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-10-04T20:11:19.473+00:00",
+        "resource_version": 69,
+        "livemode": "test",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 12,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1
+      },
+      "gatewayAccounts": [
+        {
+          "id": "16485522-9ad9-4b52-81c2-3368621db6c5",
+          "publicId": "gwa_4IctTcAUQW7wSfBg3Ctudg0h",
+          "gatewayKey": "tmtest"
+        }
+      ],
+      "summary": {
+        "name": "Acme Analytics",
+        "publicId": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+        "summary": {
+          "customers": 30,
+          "subs": {
+            "active": 17,
+            "cancelled": 7,
+            "future": 1,
+            "in_trial": 1,
+            "non_renewing": 3
+          },
+          "invoices": {
+            "not_paid": 1,
+            "paid": 50,
+            "pending": 3,
+            "posted": 1,
+            "voided": 1
+          },
+          "payments": 50,
+          "mrr": "2,705.42 USD"
+        },
+        "showcase": [
+          "Maya Okafor (sub_fyt8uydQgoLodN85taexoErC) — WELCOME10 + wallet + added seats",
+          "Priya Raman (sub_NmAF68EPZBKLClSBFI7rJKZw) — multi-item + usage + unbilled charge + scheduled cancel",
+          "Enterprise Co (sub_Aus6kexnYXLqQDG2bgXNh4sA) — custom price override",
+          "Tomas Castell (sub_yca6031L9WJ9KReWzzrTSiAx) — cancelled today (reactivate)",
+          "Globex Corp — manual invoices: paid + credit note · Net-30 partial wire · voided · written off",
+          "Jonas Lindqvist (sub_J3vTlGjHE58wEevEApSpm2ZD) — renewal declined, dunning in progress"
+        ]
+      }
+    },
+    {
+      "key": "fjord",
+      "id": "6cb4c9f7-6375-4d0d-a41d-651aa5caf531",
+      "publicId": "biz_xy7358c36siuUxXnTAcQkezO",
+      "name": "Fjord Tools",
+      "currency": "EUR",
+      "timezone": "Europe/Amsterdam",
+      "row": {
+        "id": "6cb4c9f7-6375-4d0d-a41d-651aa5caf531",
+        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
+        "public_id": "biz_xy7358c36siuUxXnTAcQkezO",
+        "name": "Fjord Tools",
+        "default_currency": "EUR",
+        "status": "active",
+        "created_at": "2026-06-30T21:13:19.473+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "Europe/Amsterdam",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 10,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-10-04T19:43:19.473+00:00",
+        "resource_version": 14,
+        "livemode": "test",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 4,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1
+      },
+      "gatewayAccounts": [
+        {
+          "id": "57457e25-d99f-444b-9f93-32e147aa4276",
+          "publicId": "gwa_qSHBlcEmHmWBJdPe1pTZGZLi",
+          "gatewayKey": "tmtest"
+        }
+      ],
+      "summary": {
+        "name": "Fjord Tools",
+        "publicId": "biz_xy7358c36siuUxXnTAcQkezO",
+        "summary": {
+          "customers": 9,
+          "subs": {
+            "active": 3,
+            "cancelled": 3,
+            "future": 1,
+            "in_trial": 1,
+            "non_renewing": 1
+          },
+          "invoices": {
+            "paid": 9
+          },
+          "payments": 9,
+          "mrr": "265.83 EUR"
+        },
+        "showcase": []
+      }
+    },
+    {
+      "key": "nimbus",
+      "id": "fdfd11b9-4fb3-4f14-b6df-5d1646fe2da2",
+      "publicId": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+      "name": "Nimbus Cloud",
+      "currency": "INR",
+      "timezone": "Asia/Kolkata",
+      "row": {
+        "id": "fdfd11b9-4fb3-4f14-b6df-5d1646fe2da2",
+        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
+        "public_id": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+        "name": "Nimbus Cloud",
+        "default_currency": "INR",
+        "status": "active",
+        "created_at": "2026-06-30T21:13:19.473+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "Asia/Kolkata",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 14,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-10-04T21:13:19.473+00:00",
+        "resource_version": 18,
+        "livemode": "test",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 4,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1
+      },
+      "gatewayAccounts": [
+        {
+          "id": "01db6271-fbf5-43ee-96e5-031b2639ba16",
+          "publicId": "gwa_cwJooGtdKHSf8EskwCNxA095",
+          "gatewayKey": "tmtest"
+        }
+      ],
+      "summary": {
+        "name": "Nimbus Cloud",
+        "publicId": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+        "summary": {
+          "customers": 12,
+          "subs": {
+            "active": 3,
+            "cancelled": 3,
+            "future": 1,
+            "in_trial": 1,
+            "non_renewing": 2
+          },
+          "invoices": {
+            "paid": 11,
+            "payment_due": 2
+          },
+          "payments": 10,
+          "mrr": "16,288.17 INR"
+        },
+        "showcase": [
+          "Chennai Textiles / Bengaluru Cloud — GST intra-state (CGST+SGST) vs inter-state (IGST)"
+        ]
+      }
+    }
+  ],
+  "tables": [
+    {
+      "name": "coupons",
+      "rows": 12,
+      "byScope": {
+        "acme": 4,
+        "fjord": 4,
+        "nimbus": 4
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "percent_off_bps",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_off_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "duration_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "duration_in_periods",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "max_redemptions",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "times_redeemed",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "redeem_by",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "apply_on",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "valid_from",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "max_redemptions_per_customer",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "customers",
+      "rows": 51,
+      "byScope": {
+        "acme": 30,
+        "fjord": 9,
+        "nimbus": 12
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "address_line1",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "address_line2",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "city",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "postal_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "country",
+          "type": "character(2)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_exempt",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "vat_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "withholding_rate_bps",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "first_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "last_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "company",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "phone",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "locale",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "auto_collection",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "net_term_days",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "invoice_notes",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "address_line3",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "state_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_first_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_last_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_company",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_phone",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "shipping_address",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "vat_number_status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "vat_validated_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_date",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_date_mode",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "pii_cleared",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "custom_fields",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_treatment",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_registration_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "payment_methods",
+      "rows": 51,
+      "byScope": {
+        "acme": 32,
+        "fjord": 9,
+        "nimbus": 10
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_customer_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_payment_method_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "brand",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "last4",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exp_month",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exp_year",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_account_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "mandate_max_amount_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_currency",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_rail",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_status",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_expires_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_reference",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "avs_line1_check",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "avs_postal_check",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cvc_check",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "avs_checked_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "issuer_country",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "instrument_funding",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "issuer_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "instrument_fingerprint",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "instrument_sub_type",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "supports_recurring",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "supports_international",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "three_d_secure_supported",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credentials_changed_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "subscriptions",
+      "rows": 48,
+      "byScope": {
+        "acme": 29,
+        "fjord": 9,
+        "nimbus": 10
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "current_period_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "current_period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trial_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "default_payment_method_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cancel_at_period_end",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "canceled_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "start_date",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "activated_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trial_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_period",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_period_unit",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "remaining_billing_cycles",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "auto_collection",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "net_term_days",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "po_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_notes",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cancel_reason",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mrr",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "billing_anchor_day",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "create_pending_invoices",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cancel_reason_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "custom_fields",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cancel_scheduled_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "max_refundable_credits_usage_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "max_excess_payment_usage_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "deleted_by",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "last_earning_mrr",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cancel_booked_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "applied_coupons",
+      "rows": 5,
+      "byScope": {
+        "acme": 3,
+        "fjord": 1,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "coupon_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "remaining_periods",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "manual_kind",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_percent_off_bps",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_amount_off_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_currency",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "total_periods",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_anchor",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_used_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "invoices",
+      "rows": 78,
+      "byScope": {
+        "acme": 56,
+        "fjord": 9,
+        "nimbus": 13
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subtotal_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "total_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "paid_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_due_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "due_date",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "withholding_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "imported",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "promotional_credits_applied_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "refundable_credits_applied_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "excess_payments_applied_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "dunning_status",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "written_off",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "origin_token",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "voided_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "po_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "expected_payment_date",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "channel",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_address",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "shipping_address",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "seller_state_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "place_of_supply_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_treatment",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "collecting_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate",
+          "type": "numeric(20,10)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate_base",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_parked_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_exhausted_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_next_reminder_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "void_reason_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_pause",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "product_groups",
+      "rows": 6,
+      "byScope": {
+        "acme": 2,
+        "fjord": 2,
+        "nimbus": 2
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tax_profiles",
+      "rows": 3,
+      "byScope": {
+        "acme": 1,
+        "fjord": 1,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "products",
+      "rows": 21,
+      "byScope": {
+        "acme": 7,
+        "fjord": 7,
+        "nimbus": 7
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "addon_applies_to_all",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "product_group_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "external_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "unit_of_measure",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "metered",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "enabled_for_checkout",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "enabled_in_portal",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "redirect_url",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_profile_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "prices",
+      "rows": 39,
+      "byScope": {
+        "acme": 13,
+        "fjord": 13,
+        "nimbus": 13
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "product_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "model",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "interval",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "interval_count",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "usage_aggregation",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tiers",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "package_size",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "free_units",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "percentage_bps",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "is_taxable",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_behavior",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "external_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trial_period",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trial_period_unit",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trial_end_action",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_cycles",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "free_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_notes",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "show_description_in_invoices",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "show_description_in_quotes",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "sku",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "accounting_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "accounting_category_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "invoice_line_items",
+      "rows": 180,
+      "byScope": {
+        "acme": 114,
+        "fjord": 26,
+        "nimbus": 40
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "price_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "unit_amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "applied_coupon_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "discount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "seq",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tax_regions",
+      "rows": 7,
+      "byScope": {
+        "acme": 1,
+        "fjord": 5,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_profile_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "country",
+          "type": "character(2)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "regime",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "price_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "home_state_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "registration_label",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "registration_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "collect_registration_number",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "reverse_charge_enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "show_reverse_charge_note",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "reverse_charge_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "sez_igst_enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "sez_igst_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "sez_zero_rated_enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "sez_zero_rated_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "export_igst_enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "export_igst_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "export_zero_rated_enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "export_zero_rated_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tax_rate_components",
+      "rows": 11,
+      "byScope": {
+        "acme": 3,
+        "fjord": 5,
+        "nimbus": 3
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_region_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "state_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "rate_bps",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "applies_to",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "sort_order",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "applied_taxes",
+      "rows": 113,
+      "byScope": {
+        "acme": 67,
+        "fjord": 16,
+        "nimbus": 30
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_line_item_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "rate_bps",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "taxability_reason",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_component_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "attached_items",
+      "rows": 18,
+      "byScope": {
+        "acme": 6,
+        "fjord": 6,
+        "nimbus": 6
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "item_product_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "plan_product_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "applicability",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "charge_on_event",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "charge_once",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "default_quantity",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "billing_cycles",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "audit_logs",
+      "rows": 328,
+      "byScope": {
+        "acme": 179,
+        "fjord": 71,
+        "nimbus": 78
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "before",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "after",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "actor_ip",
+          "type": "inet",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trace_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "audit_log_snapshots",
+      "rows": 251,
+      "byScope": {
+        "acme": 129,
+        "fjord": 58,
+        "nimbus": 64
+      },
+      "columns": [
+        {
+          "name": "audit_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "before_full",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "after_full",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "credit_notes",
+      "rows": 17,
+      "byScope": {
+        "acme": 11,
+        "fjord": 3,
+        "nimbus": 3
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_method",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "total_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "imported",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "reason_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "allocated_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "refunded_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "paid_out_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "voided_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "channel",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subtotal_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payout_attempt_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate",
+          "type": "numeric(20,10)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate_base",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_notes",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "credit_note_allocations",
+      "rows": 5,
+      "byScope": {
+        "acme": 4,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_note_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "credit_note_items",
+      "rows": 24,
+      "byScope": {
+        "acme": 14,
+        "fjord": 5,
+        "nimbus": 5
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_note_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_line_item_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "events",
+      "rows": 921,
+      "byScope": {
+        "acme": 574,
+        "fjord": 157,
+        "nimbus": 190
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "data",
+          "type": "jsonb",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "api_version",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "trace_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "features",
+      "rows": 9,
+      "byScope": {
+        "acme": 3,
+        "fjord": 3,
+        "nimbus": 3
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "unit",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "gateway_request_logs",
+      "rows": 174,
+      "byScope": {
+        "acme": 114,
+        "fjord": 28,
+        "nimbus": 32
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_account_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "method",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "duration_ms",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "request_headers",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "request_body",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "response_headers",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "response_body",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "trace_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "invoice_line_discounts",
+      "rows": 6,
+      "byScope": {
+        "acme": 3,
+        "fjord": 1,
+        "nimbus": 2
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_line_item_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "applied_coupon_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "ledger_entries",
+      "rows": 430,
+      "byScope": {
+        "acme": 288,
+        "fjord": 63,
+        "nimbus": 79
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "transaction_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "account",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "direction",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "memo",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "mrr_movements",
+      "rows": 85,
+      "byScope": {
+        "acme": 44,
+        "fjord": 21,
+        "nimbus": 20
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "previous_mrr_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "new_mrr_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "delta_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "plan_product_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "previous_plan_product_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate",
+          "type": "numeric(20,10)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exchange_rate_base",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "payments",
+      "rows": 72,
+      "byScope": {
+        "acme": 52,
+        "fjord": 9,
+        "nimbus": 11
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_method_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_charge_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "failure_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "failure_message",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "imported",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "plan_entitlements",
+      "rows": 21,
+      "byScope": {
+        "acme": 7,
+        "fjord": 7,
+        "nimbus": 7
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "product_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "feature_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "promotional_credit_movements",
+      "rows": 1,
+      "byScope": {
+        "fjord": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "ledger_transaction_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "reference",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "provider_customers",
+      "rows": 49,
+      "byScope": {
+        "acme": 30,
+        "fjord": 9,
+        "nimbus": 10
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_account_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_customer_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "refunds",
+      "rows": 3,
+      "byScope": {
+        "acme": 1,
+        "fjord": 1,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "provider_refund_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "imported",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "scheduled_changes",
+      "rows": 10,
+      "byScope": {
+        "acme": 5,
+        "fjord": 1,
+        "nimbus": 4
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "effective_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "applied_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "last_error",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "failed_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mrr_delta_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "subscription_items",
+      "rows": 66,
+      "byScope": {
+        "acme": 42,
+        "fjord": 13,
+        "nimbus": 11
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "price_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "price_snapshot",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "free_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "billing_cycles",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cycles_billed",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tax_state_registrations",
+      "rows": 2,
+      "byScope": {
+        "nimbus": 2
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "tax_region_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "state_code",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "state_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "registration_number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tmtest_charges",
+      "rows": 74,
+      "byScope": {
+        "acme": 52,
+        "fjord": 10,
+        "nimbus": 12
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "charge_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "vault_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "parent_charge_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "consume_idempotency_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "checkout_params",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "tmtest_vault",
+      "rows": 51,
+      "byScope": {
+        "org": 51
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "vault_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "token",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "instrument",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "last4",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exp_month",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exp_year",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "transactions",
+      "rows": 75,
+      "byScope": {
+        "acme": 53,
+        "fjord": 10,
+        "nimbus": 12
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_account_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "gateway_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "id_at_gateway",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_method_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "error_text",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "refund_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_note_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "settled_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "retriable",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_intent_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_attempt_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "trace_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "finalised_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "unbilled_charges",
+      "rows": 22,
+      "byScope": {
+        "acme": 6,
+        "fjord": 9,
+        "nimbus": 7
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "price_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "entity_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "usage_records",
+      "rows": 37,
+      "byScope": {
+        "acme": 37
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_item_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "timestamp",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "unique_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "wallet_topups",
+      "rows": 4,
+      "byScope": {
+        "acme": 3,
+        "nimbus": 1
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_type",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        }
+      ]
+    }
+  ],
+  "totalRows": 3380
+}

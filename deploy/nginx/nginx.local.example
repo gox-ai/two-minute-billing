@@ -1,0 +1,5 @@
+# Copy to deploy/nginx/nginx.local (gitignored) and fill in. Read by deploy/nginx/nginx-tool.py.
+DOMAIN="example.com"
+# The API host and its obscured path prefix. Treat both as secrets.
+API_HOST="api.example.com"
+API_PREFIX="change-me"

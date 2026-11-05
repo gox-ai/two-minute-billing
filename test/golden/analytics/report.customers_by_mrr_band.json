@@ -1,0 +1,54 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "How many accounts are in each size band. This shows the shape of the book, not its total.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 6,
+  "key": "customers_by_mrr_band",
+  "kind": "count",
+  "name": "Customers by MRR Band",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "No recurring revenue",
+      "group_id": null,
+      "value": 1
+    },
+    {
+      "group": "1 – 50 USD",
+      "group_id": null,
+      "value": 2
+    },
+    {
+      "group": "51 – 500 USD",
+      "group_id": null,
+      "value": 3
+    },
+    {
+      "group": "501 – 5,000 USD",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "5,001 – 50,000 USD",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Over 50,000 USD",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["customers"]
+}

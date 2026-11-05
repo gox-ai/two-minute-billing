@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "churn",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Recurring revenue currently suspended by a pause. It earns nothing, but it is not lost yet.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Total Paused Subscription MRR",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "stock",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

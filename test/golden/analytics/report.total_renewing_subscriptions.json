@@ -1,0 +1,95 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "comparison": {
+    "basis": "point_in_time",
+    "change_bps": null,
+    "prev_label": "Aug 14, 2025",
+    "prev_value": 0
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Paying subscriptions set to renew. A subscription booked to stop at the end of its current term is not included.",
+  "dimensions": [
+    "country"
+  ],
+  "granularities": [
+    "day",
+    "week",
+    "month"
+  ],
+  "granularity": "month",
+  "headline": 4,
+  "key": "<id:1>",
+  "kind": "count",
+  "name": "Total Renewing Subscriptions",
+  "object": "report",
+  "points": [
+    {
+      "label": "Sep 2025",
+      "t": "2025-09-01",
+      "v": 0
+    },
+    {
+      "label": "Oct 2025",
+      "t": "2025-10-01",
+      "v": 0
+    },
+    {
+      "label": "Nov 2025",
+      "t": "2025-11-01",
+      "v": 0
+    },
+    {
+      "label": "Dec 2025",
+      "t": "2025-12-01",
+      "v": 0
+    },
+    {
+      "label": "Jan 2026",
+      "t": "2026-01-01",
+      "v": 2
+    },
+    {
+      "label": "Feb 2026",
+      "t": "2026-02-01",
+      "v": 3
+    },
+    {
+      "label": "Mar 2026",
+      "t": "2026-03-01",
+      "v": 5
+    },
+    {
+      "label": "Apr 2026",
+      "t": "2026-04-01",
+      "v": 6
+    },
+    {
+      "label": "May 2026",
+      "t": "2026-05-01",
+      "v": 7
+    },
+    {
+      "label": "Jun 2026",
+      "t": "2026-06-01",
+      "v": 6
+    },
+    {
+      "label": "Jul 2026",
+      "t": "2026-07-01",
+      "v": 5
+    },
+    {
+      "label": "Aug 2026",
+      "t": "2026-08-01",
+      "v": 4
+    }
+  ],
+  "range": "12m",
+  "shape": "stock",
+  "tags": []
+}

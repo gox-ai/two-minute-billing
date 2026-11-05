@@ -1,0 +1,77 @@
+name: Bug report
+description: Something does not work as the docs say it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not paste API keys, gateway credentials, `.env` values or
+        your customers' personal data.** Replace them with fakes such as `cus_XXXXXXXXXXXX01`
+        and `name@example.com`.
+
+        A security problem goes to the address in [SECURITY.md](../blob/main/SECURITY.md), not here.
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Where it runs
+      options:
+        - Self-hosted with Docker
+        - Self-hosted from source
+        - Cloud
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag, or the output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - API or SDK
+        - Dashboard
+        - Hosted checkout or customer portal
+        - Subscriptions and renewals
+        - Invoices, credit notes and tax
+        - Payments and payment gateways
+        - Failed payments and dunning
+        - Usage-based or AI billing
+        - Reports and metrics
+        - Install, upgrade or database
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps, API calls or settings that shows the problem.
+      placeholder: |
+        1. Create a plan with ...
+        2. Subscribe a customer with ...
+        3. Advance the test clock to ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include amounts and dates if money or timing is wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or API responses
+      description: Remove keys and personal data first.
+      render: shell

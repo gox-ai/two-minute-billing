@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "transactions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "The same refunds, split by the final status of each one.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 1,
+  "key": "refund_transactions_summary",
+  "kind": "count",
+  "name": "Refund Transactions Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "succeeded",
+      "group_id": null,
+      "value": 1
+    }
+  ],
+  "shape": "buckets",
+  "tags": []
+}

@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "acquisitions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Of the checkouts that buyers opened in the period, the share they completed, by page layout and device.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": null,
+  "key": "checkout_conversion",
+  "kind": "rate",
+  "name": "Checkout Conversion",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": []
+}

@@ -1,0 +1,668 @@
+{
+  "_comment": "Route permission levels on 2026-10-25, before custom roles. A route's key must keep this legacy level. A new route is added in review as {\"key\": \"<resource:action>\"}.",
+  "_changes": "2026-11-03: subscriptions:lifecycle and invoices:collect moved any -> ops; the developer role loses subscription lifecycle and invoice collect/retry.",
+  "routes": {
+    "DELETE /auth/members/:id": "admin",
+    "DELETE /v1/businesses/:biz/comments/:id": "ops",
+    "DELETE /v1/businesses/:biz/coupon_sets/:set": "manager",
+    "DELETE /v1/businesses/:biz/coupon_sets/:set/unused_codes": "manager",
+    "DELETE /v1/businesses/:biz/coupons/:cpn": "manager",
+    "DELETE /v1/businesses/:biz/currencies/:currency": "admin",
+    "DELETE /v1/businesses/:biz/custom_field_definitions/:id": "admin",
+    "DELETE /v1/businesses/:biz/customer_segments/:seg": "any",
+    "DELETE /v1/businesses/:biz/customers/:cus": "ops",
+    "DELETE /v1/businesses/:biz/customers/:cus/contacts/:con": "ops",
+    "DELETE /v1/businesses/:biz/customers/:cus/payment_methods/:pm": "ops",
+    "DELETE /v1/businesses/:biz/customers/:cus/spend_limits/:limit": {
+      "key": "usage_controls:manage"
+    },
+    "DELETE /v1/businesses/:biz/decline_codes/:code": "admin",
+    "DELETE /v1/businesses/:biz/decline_rules/:rule": "admin",
+    "DELETE /v1/businesses/:biz/differential_prices/:id": "manager",
+    "DELETE /v1/businesses/:biz/emails/suppressions/:address": "ops",
+    "DELETE /v1/businesses/:biz/emails/templates/:type": "ops",
+    "DELETE /v1/businesses/:biz/features/:feature": "manager",
+    "DELETE /v1/businesses/:biz/gateway_accounts/:gwa": "admin",
+    "DELETE /v1/businesses/:biz/integrations/:key": "admin",
+    "DELETE /v1/businesses/:biz/integrations/hubspot": "admin",
+    "DELETE /v1/businesses/:biz/metadata_key_rules/:id": "admin",
+    "DELETE /v1/businesses/:biz/payment_instructions/:id": "admin",
+    "DELETE /v1/businesses/:biz/prices/:price": "manager",
+    "DELETE /v1/businesses/:biz/product_groups/:grp": "manager",
+    "DELETE /v1/businesses/:biz/products/:prod": "manager",
+    "DELETE /v1/businesses/:biz/products/:prod/applicable_plans/:plan": "manager",
+    "DELETE /v1/businesses/:biz/products/:prod/image": "manager",
+    "DELETE /v1/businesses/:biz/products/:product/usage_invoice_thresholds/:currency": {
+      "key": "usage_controls:manage"
+    },
+    "DELETE /v1/businesses/:biz/reason_codes/:rsn": "admin",
+    "DELETE /v1/businesses/:biz/sample_data": "admin",
+    "DELETE /v1/businesses/:biz/scheduled_changes/:sch": "ops",
+    "DELETE /v1/businesses/:biz/spend_limit_tiers/:tier": {
+      "key": "usage_controls:manage"
+    },
+    "DELETE /v1/businesses/:biz/subscriptions/:sub": "ops",
+    "DELETE /v1/businesses/:biz/subscriptions/:sub/discount": "ops",
+    "DELETE /v1/businesses/:biz/subscriptions/:sub/items/:item": "ops",
+    "DELETE /v1/businesses/:biz/subscriptions/:sub/usage_invoice_threshold": {
+      "key": "usage_controls:manage"
+    },
+    "DELETE /v1/businesses/:biz/tax_regions/:txg": "manager",
+    "DELETE /v1/businesses/:biz/tax_regions/:txg/state_registrations/:txs": "manager",
+    "DELETE /v1/businesses/:biz/test_data": "admin",
+    "DELETE /v1/businesses/:biz/unbilled_charges/:id": "ops",
+    "DELETE /v1/businesses/:biz/usage_alerts/:alert": {
+      "key": "usage_controls:manage"
+    },
+    "DELETE /v1/businesses/:biz/usages/:id": "ops",
+    "DELETE /v1/list_views/:id": "any",
+    "DELETE /v1/organization/model_cost_overrides/:id": {
+      "key": "model_prices:manage"
+    },
+    "DELETE /v1/report_dashboards/:id": "any",
+    "DELETE /v1/report_dashboards/:id/tiles/:tile": "any",
+    "DELETE /v1/roles/:id": {
+      "key": "roles:manage"
+    },
+    "DELETE /v1/webhook_endpoints/:id": "developer",
+    "GET /auth/members": "admin",
+    "GET /auth/organization/security": "admin",
+    "GET /v1/analytics": "any",
+    "GET /v1/analytics/measures": "any",
+    "GET /v1/analytics/sync": "any",
+    "GET /v1/api_keys": "any",
+    "GET /v1/audit_logs": "any",
+    "GET /v1/brand_images/capability": "any",
+    "GET /v1/businesses": "any",
+    "GET /v1/businesses/:biz": "any",
+    "GET /v1/businesses/:biz/access": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/analytics": "any",
+    "GET /v1/businesses/:biz/applicable_plans": "any",
+    "GET /v1/businesses/:biz/audit_logs": "any",
+    "GET /v1/businesses/:biz/audit_logs/:id": "any",
+    "GET /v1/businesses/:biz/cancellation_analytics": "any",
+    "GET /v1/businesses/:biz/checkout_sessions/:id": "ops",
+    "GET /v1/businesses/:biz/comments": "any",
+    "GET /v1/businesses/:biz/comments/:id": "any",
+    "GET /v1/businesses/:biz/coupon_codes": "any",
+    "GET /v1/businesses/:biz/coupon_codes/:code": "any",
+    "GET /v1/businesses/:biz/coupon_sets": "any",
+    "GET /v1/businesses/:biz/coupon_sets/:set": "any",
+    "GET /v1/businesses/:biz/coupon_sets/:set/codes": "any",
+    "GET /v1/businesses/:biz/coupons": "any",
+    "GET /v1/businesses/:biz/coupons/:cpn": "any",
+    "GET /v1/businesses/:biz/coupons/:cpn/redemptions": "any",
+    "GET /v1/businesses/:biz/coupons/:cpn/stats": "any",
+    "GET /v1/businesses/:biz/credit_holds": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/credit_holds/:hold": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/credit_notes": "any",
+    "GET /v1/businesses/:biz/credit_notes/:cn": "any",
+    "GET /v1/businesses/:biz/credit_notes/:cn/pdf": "any",
+    "GET /v1/businesses/:biz/credit_units": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/credit_units/:unit": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/currencies": "any",
+    "GET /v1/businesses/:biz/currencies/:currency": "any",
+    "GET /v1/businesses/:biz/custom_field_definitions": "any",
+    "GET /v1/businesses/:biz/custom_field_definitions/:id": "any",
+    "GET /v1/businesses/:biz/customer_segments": "any",
+    "GET /v1/businesses/:biz/customer_segments/:seg": "any",
+    "GET /v1/businesses/:biz/customer_segments/:seg/customers": "any",
+    "GET /v1/businesses/:biz/customer_segments/attributes": "any",
+    "GET /v1/businesses/:biz/customer_segments/preview": "any",
+    "GET /v1/businesses/:biz/customers": "any",
+    "GET /v1/businesses/:biz/customers/:cus": "any",
+    "GET /v1/businesses/:biz/customers/:cus/access": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/auto_topup": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/auto_topup/runs": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/contacts": "any",
+    "GET /v1/businesses/:biz/customers/:cus/credit_grants": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_grants/:grant": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_runway": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_transactions": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/current_usage": "any",
+    "GET /v1/businesses/:biz/customers/:cus/excess_payments": "any",
+    "GET /v1/businesses/:biz/customers/:cus/payment_methods": "any",
+    "GET /v1/businesses/:biz/customers/:cus/payment_methods/:pm": "any",
+    "GET /v1/businesses/:biz/customers/:cus/portal_sessions/:id": "any",
+    "GET /v1/businesses/:biz/customers/:cus/promotional_credits": "any",
+    "GET /v1/businesses/:biz/customers/:cus/promotional_credits/:id": "any",
+    "GET /v1/businesses/:biz/customers/:cus/shipping_addresses": "any",
+    "GET /v1/businesses/:biz/customers/:cus/spend_limits": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/spend_limits/:limit": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/usage": {
+      "key": "usage:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/usage_keys": {
+      "key": "customers:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/wallet": "any",
+    "GET /v1/businesses/:biz/decline_rules": "any",
+    "GET /v1/businesses/:biz/differential_prices": "any",
+    "GET /v1/businesses/:biz/differential_prices/:id": "any",
+    "GET /v1/businesses/:biz/disputes": "any",
+    "GET /v1/businesses/:biz/disputes/:id": "any",
+    "GET /v1/businesses/:biz/dunning_policies": "any",
+    "GET /v1/businesses/:biz/dunning_policies/:dpol": "any",
+    "GET /v1/businesses/:biz/emails": "any",
+    "GET /v1/businesses/:biz/emails/:id": "any",
+    "GET /v1/businesses/:biz/emails/activity": "any",
+    "GET /v1/businesses/:biz/emails/reminders": "any",
+    "GET /v1/businesses/:biz/emails/ses": "any",
+    "GET /v1/businesses/:biz/emails/smtp": "any",
+    "GET /v1/businesses/:biz/emails/suppressions": "any",
+    "GET /v1/businesses/:biz/emails/templates": "any",
+    "GET /v1/businesses/:biz/emails/templates/:type": "any",
+    "GET /v1/businesses/:biz/events": "any",
+    "GET /v1/businesses/:biz/features": "any",
+    "GET /v1/businesses/:biz/features/:feature": "any",
+    "GET /v1/businesses/:biz/gateway_accounts": "any",
+    "GET /v1/businesses/:biz/gateway_accounts/:gwa": "any",
+    "GET /v1/businesses/:biz/gateway_accounts/:gwa/webhook_endpoint": "any",
+    "GET /v1/businesses/:biz/gateway_requests": "any",
+    "GET /v1/businesses/:biz/gateway_requests/:id": "any",
+    "GET /v1/businesses/:biz/gateway_webhooks": "any",
+    "GET /v1/businesses/:biz/gateway_webhooks/:id": "any",
+    "GET /v1/businesses/:biz/integrations": "any",
+    "GET /v1/businesses/:biz/integrations/:key": "any",
+    "GET /v1/businesses/:biz/integrations/:key/deliveries": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/conflicts": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/local_fields": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/objects": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/pipelines": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/properties/:object": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/sync_runs": "any",
+    "GET /v1/businesses/:biz/integrations/hubspot/sync_runs/:run": "any",
+    "GET /v1/businesses/:biz/invoices": "any",
+    "GET /v1/businesses/:biz/invoices/:inv": "any",
+    "GET /v1/businesses/:biz/invoices/:inv/dunning_journey": "any",
+    "GET /v1/businesses/:biz/invoices/:inv/html": "any",
+    "GET /v1/businesses/:biz/invoices/:inv/pdf": "any",
+    "GET /v1/businesses/:biz/metadata_key_rules": "any",
+    "GET /v1/businesses/:biz/metadata_key_rules/:id": "any",
+    "GET /v1/businesses/:biz/metadata_observed_keys": "any",
+    "GET /v1/businesses/:biz/metadata_rule_settings": "any",
+    "GET /v1/businesses/:biz/meters": {
+      "key": "catalog:view"
+    },
+    "GET /v1/businesses/:biz/meters/:meter": {
+      "key": "catalog:view"
+    },
+    "GET /v1/businesses/:biz/metrics": "any",
+    "GET /v1/businesses/:biz/payment_instructions": "any",
+    "GET /v1/businesses/:biz/payment_instructions/:id": "any",
+    "GET /v1/businesses/:biz/payment_intents": "any",
+    "GET /v1/businesses/:biz/payment_intents/:pi": "any",
+    "GET /v1/businesses/:biz/payment_intents/:pi/attempts": "any",
+    "GET /v1/businesses/:biz/payment_links": "any",
+    "GET /v1/businesses/:biz/payment_links/:plink": "any",
+    "GET /v1/businesses/:biz/payment_requests": "any",
+    "GET /v1/businesses/:biz/payment_requests/:preq": "any",
+    "GET /v1/businesses/:biz/payments_analytics": "any",
+    "GET /v1/businesses/:biz/prices": "any",
+    "GET /v1/businesses/:biz/prices/:price": "any",
+    "GET /v1/businesses/:biz/prices/:price/applicable_addons": "any",
+    "GET /v1/businesses/:biz/prices/:price/stats": "any",
+    "GET /v1/businesses/:biz/product_groups": "any",
+    "GET /v1/businesses/:biz/product_groups/:grp": "any",
+    "GET /v1/businesses/:biz/product_groups/:grp/stats": "any",
+    "GET /v1/businesses/:biz/products": "any",
+    "GET /v1/businesses/:biz/products/:prod": "any",
+    "GET /v1/businesses/:biz/products/:prod/applicable_plans": "any",
+    "GET /v1/businesses/:biz/products/:prod/applicable_plans/:plan": "any",
+    "GET /v1/businesses/:biz/products/:prod/differential_prices": "any",
+    "GET /v1/businesses/:biz/products/:prod/entitlements": "any",
+    "GET /v1/businesses/:biz/products/:prod/stats": "any",
+    "GET /v1/businesses/:biz/raw_export": "any",
+    "GET /v1/businesses/:biz/raw_export/:dataset": "any",
+    "GET /v1/businesses/:biz/reason_codes": "any",
+    "GET /v1/businesses/:biz/receipts": "any",
+    "GET /v1/businesses/:biz/receipts/:rcpt": "any",
+    "GET /v1/businesses/:biz/receipts/:rcpt/pdf": "any",
+    "GET /v1/businesses/:biz/reports": "any",
+    "GET /v1/businesses/:biz/reports/:key": "any",
+    "GET /v1/businesses/:biz/reports/usage_margin": {
+      "key": "usage_margin:view"
+    },
+    "GET /v1/businesses/:biz/retries": "any",
+    "GET /v1/businesses/:biz/settings/usage_widget": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/spend_limit_tiers": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/spend_limit_tiers/:tier": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/subscriptions": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/commitment": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/current_usage": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/entitlements": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/entitlements/:key/check": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/one_time_charges": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/renewal_estimate": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/renewal_skips": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/scheduled_changes": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/unbilled_charges": "any",
+    "GET /v1/businesses/:biz/subscriptions/:sub/upcoming_renewals": "any",
+    "GET /v1/businesses/:biz/tax_profiles": "any",
+    "GET /v1/businesses/:biz/tax_regions": "any",
+    "GET /v1/businesses/:biz/tax_regions/:txg": "any",
+    "GET /v1/businesses/:biz/team_alert_recipients": {
+      "key": "settings:view"
+    },
+    "GET /v1/businesses/:biz/test_limits": "any",
+    "GET /v1/businesses/:biz/time_travel": "any",
+    "GET /v1/businesses/:biz/transactions": "any",
+    "GET /v1/businesses/:biz/transactions/:txn": "any",
+    "GET /v1/businesses/:biz/transfer_configurations": "admin",
+    "GET /v1/businesses/:biz/transfer_configurations/:job": "any",
+    "GET /v1/businesses/:biz/unbilled_charges": "any",
+    "GET /v1/businesses/:biz/usage_alerts": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/usage_alerts/:alert": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/usage_alerts/:alert/states": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/usage_events": {
+      "key": "usage_events:view"
+    },
+    "GET /v1/businesses/:biz/usage_invoice_thresholds": {
+      "key": "usage_controls:view"
+    },
+    "GET /v1/businesses/:biz/usages": "any",
+    "GET /v1/businesses/:biz/usages/:id": "any",
+    "GET /v1/events": "any",
+    "GET /v1/events/:evt": "any",
+    "GET /v1/gateways": "any",
+    "GET /v1/integrations": "any",
+    "GET /v1/list_views": "any",
+    "GET /v1/me": "any",
+    "GET /v1/metrics": "any",
+    "GET /v1/organization/model_cost_overrides": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_cost_overrides/:id": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_prices": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_prices/:id": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_prices/drift": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_prices/history": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/organization/model_prices/source": {
+      "key": "model_prices:view"
+    },
+    "GET /v1/permissions": {
+      "exempt": true
+    },
+    "GET /v1/report_dashboards": "any",
+    "GET /v1/report_dashboards/:id": "any",
+    "GET /v1/report_dashboards/:id/reports": "any",
+    "GET /v1/request_logs": "developer",
+    "GET /v1/request_logs/:id": "developer",
+    "GET /v1/roles": {
+      "key": "roles:view"
+    },
+    "GET /v1/roles/:id": {
+      "key": "roles:view"
+    },
+    "GET /v1/webhook_endpoints": "any",
+    "GET /v1/webhook_endpoints/:id": "any",
+    "GET /v1/webhook_endpoints/:id/deliveries": "any",
+    "PATCH /auth/members/:id": "admin",
+    "PATCH /v1/api_keys/:id": {
+      "key": "api_keys:manage"
+    },
+    "PATCH /v1/businesses/:biz": "admin",
+    "PATCH /v1/businesses/:biz/comments/:id": "ops",
+    "PATCH /v1/businesses/:biz/coupon_sets/:set": "manager",
+    "PATCH /v1/businesses/:biz/coupons/:cpn": "manager",
+    "PATCH /v1/businesses/:biz/credit_units/:unit": {
+      "key": "credits:manage"
+    },
+    "PATCH /v1/businesses/:biz/custom_field_definitions/:id": "admin",
+    "PATCH /v1/businesses/:biz/customer_segments/:seg": "any",
+    "PATCH /v1/businesses/:biz/customers/:cus": "ops",
+    "PATCH /v1/businesses/:biz/customers/:cus/contacts/:con": "ops",
+    "PATCH /v1/businesses/:biz/customers/:cus/shipping_addresses/:addr": "ops",
+    "PATCH /v1/businesses/:biz/customers/:cus/spend_limits/:limit": {
+      "key": "usage_controls:manage"
+    },
+    "PATCH /v1/businesses/:biz/decline_codes/:code": "admin",
+    "PATCH /v1/businesses/:biz/decline_rules/:rule": "admin",
+    "PATCH /v1/businesses/:biz/dunning_policies/:dpol": "admin",
+    "PATCH /v1/businesses/:biz/emails/ses": "ops",
+    "PATCH /v1/businesses/:biz/emails/smtp": "ops",
+    "PATCH /v1/businesses/:biz/features/:feature": "manager",
+    "PATCH /v1/businesses/:biz/gateway_accounts/:gwa": "admin",
+    "PATCH /v1/businesses/:biz/integrations/:key": "admin",
+    "PATCH /v1/businesses/:biz/integrations/hubspot": "admin",
+    "PATCH /v1/businesses/:biz/invoices/:inv": "ops",
+    "PATCH /v1/businesses/:biz/metadata_key_rules/:id": "admin",
+    "PATCH /v1/businesses/:biz/metadata_rule_settings": "admin",
+    "PATCH /v1/businesses/:biz/meters/:meter": {
+      "key": "meters:manage"
+    },
+    "PATCH /v1/businesses/:biz/payment_instructions/:id": "admin",
+    "PATCH /v1/businesses/:biz/payment_links/:plink": "ops",
+    "PATCH /v1/businesses/:biz/prices/:price": "manager",
+    "PATCH /v1/businesses/:biz/product_groups/:grp": "manager",
+    "PATCH /v1/businesses/:biz/products/:prod": "manager",
+    "PATCH /v1/businesses/:biz/reason_codes/:rsn": "admin",
+    "PATCH /v1/businesses/:biz/spend_limit_tiers/:tier": {
+      "key": "usage_controls:manage"
+    },
+    "PATCH /v1/businesses/:biz/subscriptions/:sub": "ops",
+    "PATCH /v1/businesses/:biz/subscriptions/:sub/items/:item": {
+      "key": "subscriptions:manage"
+    },
+    "PATCH /v1/businesses/:biz/tax_regions/:txg": "manager",
+    "PATCH /v1/businesses/:biz/usage_alerts/:alert": {
+      "key": "usage_controls:manage"
+    },
+    "PATCH /v1/list_views/:id": "any",
+    "PATCH /v1/organization": "admin",
+    "PATCH /v1/report_dashboards/:id": "any",
+    "PATCH /v1/report_dashboards/:id/tiles/:tile": "any",
+    "PATCH /v1/roles/:id": {
+      "key": "roles:manage"
+    },
+    "PATCH /v1/webhook_endpoints/:id": "developer",
+    "POST /auth/invite": "admin",
+    "POST /auth/members/:id/resend_invite": "admin",
+    "POST /auth/organization/security/require_two_factor": "admin",
+    "POST /auth/organization/security/session_policy": "admin",
+    "POST /v1/analytics/query": "any",
+    "POST /v1/api_keys": "developer",
+    "POST /v1/api_keys/:id/revoke": "developer",
+    "POST /v1/api_keys/:id/rotate": "developer",
+    "POST /v1/businesses": "manager",
+    "POST /v1/businesses/:biz/brand_images": "admin",
+    "POST /v1/businesses/:biz/checkout_sessions": "ops",
+    "POST /v1/businesses/:biz/checkout_sessions/:id/revoke": "ops",
+    "POST /v1/businesses/:biz/comments": "ops",
+    "POST /v1/businesses/:biz/coupon_codes/:code/archive": "manager",
+    "POST /v1/businesses/:biz/coupon_sets": "manager",
+    "POST /v1/businesses/:biz/coupon_sets/:set/codes": "manager",
+    "POST /v1/businesses/:biz/coupons": "manager",
+    "POST /v1/businesses/:biz/coupons/copy": "any",
+    "POST /v1/businesses/:biz/credit_holds/:hold/capture": {
+      "key": "credit_holds:manage"
+    },
+    "POST /v1/businesses/:biz/credit_holds/:hold/release": {
+      "key": "credit_holds:manage"
+    },
+    "POST /v1/businesses/:biz/credit_notes": "manager",
+    "POST /v1/businesses/:biz/credit_notes/:cn/record_refund": "manager",
+    "POST /v1/businesses/:biz/credit_notes/:cn/refund": "manager",
+    "POST /v1/businesses/:biz/credit_notes/:cn/resolve_payout": {
+      "key": "credit_notes:manage"
+    },
+    "POST /v1/businesses/:biz/credit_notes/:cn/void": "manager",
+    "POST /v1/businesses/:biz/credit_units": {
+      "key": "credits:manage"
+    },
+    "POST /v1/businesses/:biz/credit_units/:unit/archive": {
+      "key": "credits:manage"
+    },
+    "POST /v1/businesses/:biz/custom_field_definitions": "admin",
+    "POST /v1/businesses/:biz/customer_segments": "any",
+    "POST /v1/businesses/:biz/customers": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/auto_topup/disable": {
+      "key": "usage_controls:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/auto_topup/enable": {
+      "key": "usage_controls:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/change_billing_date": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/clear_personal_data": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/collect_payment": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/contacts": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/credit_grants": {
+      "key": "credits:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/credit_grants/:grant/void": {
+      "key": "credits:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/credit_holds": {
+      "key": "credit_holds:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods/:pm/assign_role": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods/:pm/default": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods/:pm/delete_local": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods/permanent_token": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_methods/setup": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/payment_requests": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/portal_sessions": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/portal_sessions/:id/revoke": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/promotional_credits": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/record_excess_payment": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/shipping_addresses": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/shipping_addresses/:addr/archive": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/shipping_addresses/:addr/restore": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/spend_limits": {
+      "key": "usage_controls:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/subscription_estimate": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/subscriptions": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/usage_keys": {
+      "key": "customers:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/usage_keys/remove": {
+      "key": "customers:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/usage_widget_tokens": {
+      "key": "customers:manage"
+    },
+    "POST /v1/businesses/:biz/customers/:cus/validate_vat": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/wallet/topup": "ops",
+    "POST /v1/businesses/:biz/disputes/:id/outcome": {
+      "key": "payments:refund"
+    },
+    "POST /v1/businesses/:biz/dunning_policies": "admin",
+    "POST /v1/businesses/:biz/dunning_policies/:dpol/archive": "admin",
+    "POST /v1/businesses/:biz/emails/:id/resend": "ops",
+    "POST /v1/businesses/:biz/emails/send": "ops",
+    "POST /v1/businesses/:biz/emails/smtp/test-connection": "ops",
+    "POST /v1/businesses/:biz/emails/templates/:type/preview": "ops",
+    "POST /v1/businesses/:biz/emails/test": "ops",
+    "POST /v1/businesses/:biz/features": "manager",
+    "POST /v1/businesses/:biz/features/:feature/archive": "manager",
+    "POST /v1/businesses/:biz/features/:feature/reactivate": "manager",
+    "POST /v1/businesses/:biz/gateway_accounts": "admin",
+    "POST /v1/businesses/:biz/gateway_accounts/:gwa/verify": "admin",
+    "POST /v1/businesses/:biz/gateway_accounts/:gwa/wallet_domains": "admin",
+    "POST /v1/businesses/:biz/gateway_accounts/:gwa/webhook_endpoint": "admin",
+    "POST /v1/businesses/:biz/gateway_webhooks/:id/replay": "ops",
+    "POST /v1/businesses/:biz/integrations/:key/connect": "admin",
+    "POST /v1/businesses/:biz/integrations/:key/deliveries/:delivery/redeliver": "admin",
+    "POST /v1/businesses/:biz/integrations/:key/redeliver_failed": "admin",
+    "POST /v1/businesses/:biz/integrations/hubspot/conflicts/:id/resolve": "admin",
+    "POST /v1/businesses/:biz/integrations/hubspot/connect": "admin",
+    "POST /v1/businesses/:biz/integrations/hubspot/start": "admin",
+    "POST /v1/businesses/:biz/integrations/hubspot/sync": "manager",
+    "POST /v1/businesses/:biz/invoices": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/apply_credits": "manager",
+    "POST /v1/businesses/:biz/invoices/:inv/close": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/collect": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/pause_dunning": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/pay": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/regenerate": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/resume_dunning": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/retry": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/stop_dunning": "ops",
+    "POST /v1/businesses/:biz/invoices/:inv/void": "manager",
+    "POST /v1/businesses/:biz/invoices/:inv/write_off": "manager",
+    "POST /v1/businesses/:biz/metadata_key_rules": "admin",
+    "POST /v1/businesses/:biz/meters": {
+      "key": "meters:manage"
+    },
+    "POST /v1/businesses/:biz/meters/:meter/archive": {
+      "key": "meters:manage"
+    },
+    "POST /v1/businesses/:biz/payment_instructions": "admin",
+    "POST /v1/businesses/:biz/payment_intents": "ops",
+    "POST /v1/businesses/:biz/payment_intents/:pi/authorize": "ops",
+    "POST /v1/businesses/:biz/payment_intents/:pi/consume": "ops",
+    "POST /v1/businesses/:biz/payment_intents/:pi/retry": "ops",
+    "POST /v1/businesses/:biz/payment_intents/:pi/void": "manager",
+    "POST /v1/businesses/:biz/payment_links": "ops",
+    "POST /v1/businesses/:biz/payment_requests/:preq/cancel": "ops",
+    "POST /v1/businesses/:biz/payment_requests/:preq/charge": "ops",
+    "POST /v1/businesses/:biz/payment_requests/:preq/record_payment": "ops",
+    "POST /v1/businesses/:biz/payment_requests/:preq/send": "ops",
+    "POST /v1/businesses/:biz/payments/:pay/cancel_pending_debit": {
+      "key": "payments:refund"
+    },
+    "POST /v1/businesses/:biz/payments/:pay/disputes": {
+      "key": "payments:refund"
+    },
+    "POST /v1/businesses/:biz/payments/:pay/refund": "manager",
+    "POST /v1/businesses/:biz/prices": "manager",
+    "POST /v1/businesses/:biz/prices/:price/rate_change_preview": {
+      "key": "usage_controls:view"
+    },
+    "POST /v1/businesses/:biz/product_groups": "manager",
+    "POST /v1/businesses/:biz/products": "manager",
+    "POST /v1/businesses/:biz/products/:prod/entitlements": "manager",
+    "POST /v1/businesses/:biz/products/:prod/image": "manager",
+    "POST /v1/businesses/:biz/products/copy": "any",
+    "POST /v1/businesses/:biz/reason_codes": "admin",
+    "POST /v1/businesses/:biz/sample_data": "admin",
+    "POST /v1/businesses/:biz/spend_limit_tiers": {
+      "key": "usage_controls:manage"
+    },
+    "POST /v1/businesses/:biz/subscriptions/:sub/cancel": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/cancel_estimate": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/change": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/change_term_end": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/charges": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/commitment": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/discount": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/edit_trial_end": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/entitlements": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/estimate": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/items": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/manual_discount": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/pause": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/reactivate": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/reactivate_estimate": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/remove_scheduled_cancellation": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/resume": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/schedule": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/skip_renewal": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/trigger_charge": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/unskip_renewal": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/update_for_items": "ops",
+    "POST /v1/businesses/:biz/subscriptions/:sub/usage": "ops",
+    "POST /v1/businesses/:biz/subscriptions/count": "any",
+    "POST /v1/businesses/:biz/tax_profiles": "manager",
+    "POST /v1/businesses/:biz/tax_regions": "manager",
+    "POST /v1/businesses/:biz/team_alert_recipients/resend": {
+      "key": "settings:manage"
+    },
+    "POST /v1/businesses/:biz/test_mode": "manager",
+    "POST /v1/businesses/:biz/time_travel/advance": "admin",
+    "POST /v1/businesses/:biz/time_travel/start": "admin",
+    "POST /v1/businesses/:biz/time_travel/stop": "admin",
+    "POST /v1/businesses/:biz/transactions/:txn/sync": "ops",
+    "POST /v1/businesses/:biz/transfer_configurations": "admin",
+    "POST /v1/businesses/:biz/transfer_configurations/preview": "admin",
+    "POST /v1/businesses/:biz/unbilled_charges/invoice_now": "ops",
+    "POST /v1/businesses/:biz/unbilled_charges/invoice_now_estimate": "any",
+    "POST /v1/businesses/:biz/usage_alerts": {
+      "key": "usage_controls:manage"
+    },
+    "POST /v1/businesses/:biz/usage_events": {
+      "key": "usage_events:manage"
+    },
+    "POST /v1/businesses/:biz/usage_events/batch": {
+      "key": "usage_events:manage"
+    },
+    "POST /v1/businesses/:biz/usage_events/void": {
+      "key": "usage_events:manage"
+    },
+    "POST /v1/list_views": "any",
+    "POST /v1/list_views/:id/duplicate": "any",
+    "POST /v1/organization/brand_images": "admin",
+    "POST /v1/organization/model_cost_overrides": {
+      "key": "model_prices:manage"
+    },
+    "POST /v1/organization/model_cost_overrides/:id/end": {
+      "key": "model_prices:manage"
+    },
+    "POST /v1/report_dashboards": "any",
+    "POST /v1/report_dashboards/:id/tiles": "any",
+    "POST /v1/report_dashboards/:id/tiles/reorder": "any",
+    "POST /v1/roles": {
+      "key": "roles:manage"
+    },
+    "POST /v1/tmtest/advance": "ops",
+    "POST /v1/transactions/:txn/reconcile": "ops",
+    "POST /v1/webhook_endpoints": "developer",
+    "POST /v1/webhook_endpoints/:id/deliveries/:del/redeliver": "developer",
+    "POST /v1/webhook_endpoints/:id/redeliver_failed": "developer",
+    "POST /v1/webhook_endpoints/:id/redeliver_latest": "developer",
+    "POST /v1/webhook_endpoints/:id/rotate_secret": "developer",
+    "POST /v1/webhook_endpoints/:id/test": "developer",
+    "PUT /v1/businesses/:biz/currencies/:currency": "admin",
+    "PUT /v1/businesses/:biz/customers/:cus/auto_topup": {
+      "key": "usage_controls:manage"
+    },
+    "PUT /v1/businesses/:biz/emails/templates/:type": "ops",
+    "PUT /v1/businesses/:biz/products/:prod/applicable_plans": "manager",
+    "PUT /v1/businesses/:biz/products/:prod/differential_prices": "manager",
+    "PUT /v1/businesses/:biz/products/:product/usage_invoice_thresholds/:currency": {
+      "key": "usage_controls:manage"
+    },
+    "PUT /v1/businesses/:biz/settings/usage_widget": {
+      "key": "usage_controls:manage"
+    },
+    "PUT /v1/businesses/:biz/subscriptions/:sub/usage_invoice_threshold": {
+      "key": "usage_controls:manage"
+    },
+    "PUT /v1/businesses/:biz/tax_regions/:txg/components": "manager",
+    "PUT /v1/businesses/:biz/tax_regions/:txg/state_registrations": "manager"
+  }
+}

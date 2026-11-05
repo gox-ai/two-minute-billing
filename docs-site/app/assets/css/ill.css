@@ -1,0 +1,443 @@
+/* ---------------------------------------------------------------------------
+   Product illustrations: real dashboard pieces, drawn with the dashboard's own
+   tokens (dashboard/app/globals.css) and the look of its primitives
+   (components/ui/*, patterns/chip.tsx). Everything is scoped under `.ill`, so a
+   board never styles the page around it. MkIll.vue sizes and scales each board.
+
+   Light values on `.ill`, dark values under `.dark .ill`. Board-specific rules
+   live in each board component and use only these tokens, never a literal grey.
+--------------------------------------------------------------------------- */
+
+.ill {
+  --d-bg: #f2f6fb;
+  --d-fg: #101828;
+  --d-card: #ffffff;
+  --d-primary: #4e4eda;
+  --d-solid: #4e4eda;
+  --d-solid-edge: #3d3dab;
+  --d-muted: #eef2f7;
+  --d-muted-fg: #64748b;
+  --d-border: #e2e9f2;
+  --d-input: #8296b0;
+  --d-raised: #ffffff;
+  --d-head: #f7f9fc;
+  --d-seg: #f4f7fa;
+  --d-well: #f6f8fb;
+  --d-stage-top: #f8fafd;
+  --d-success: #067647;
+  --d-success-soft: #e7f6ee;
+  --d-success-line: rgb(6 118 71 / 0.25);
+  --d-warning: #854d0e;
+  --d-warning-soft: #fef7e6;
+  --d-warning-line: rgb(133 77 14 / 0.25);
+  --d-destructive: #b42318;
+  --d-destructive-soft: #fdeceb;
+  --d-destructive-line: rgb(180 35 24 / 0.25);
+  --d-info: #0369a1;
+  --d-info-soft: #e8f4fb;
+  --d-info-line: rgb(3 105 161 / 0.25);
+  --d-solid-tint: rgb(78 78 218 / 0.06);
+  /* Colour by meaning (marketing.css has the rule). --d-primary/--d-solid (indigo): buttons,
+     links, the selected row. Cyan: running billing (engine, connectors, billing annotations).
+     Lime: money won and growth (recovery, MRR, revenue); --d-lime-deep for icons and small
+     marks, --d-lime-data for bars, lines and areas, --d-lime as a fill with --d-lime-ink. --d-plain: neutral icons. Charts: revenue, MRR and
+     recovered money --d-chart-money; billing-operation counts --d-chart-billing; any other
+     series slate (#8291a6 light, #8593a8 dark). */
+  --d-cyan: #0893a6;
+  --d-cyan-soft: #dff5f8;
+  --d-cyan-tint: rgb(8 147 166 / 0.08);
+  --d-cyan-line: rgb(8 147 166 / 0.35);
+  --d-on-cyan: #ffffff;
+  --d-lime: #bef264;
+  --d-lime-ink: #1a2e05;
+  --d-lime-deep: #4d7c0f;
+  /* Lime for large marks (bars, chart lines and areas); dark mode softens it. */
+  --d-lime-data: #4d7c0f;
+  --d-lime-line: rgb(77 124 15 / 0.3);
+  --d-plain: #475569;
+  --d-chart-billing: #0893a6;
+  --d-chart-money: var(--d-lime-data);
+  --d-store: #f6f7f8;
+  /* The dashboard card shadow (shadow-lg). */
+  --lift: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --font: var(--font-sans, "Inter Variable", ui-sans-serif, system-ui, sans-serif);
+}
+.dark .ill {
+  --d-bg: #0a0f18;
+  --d-fg: #eaf0f8;
+  --d-card: #0f1621;
+  --d-primary: #9393f3;
+  --d-solid: #4e4eda;
+  --d-solid-edge: #3d3dab;
+  --d-muted: #161f2c;
+  --d-muted-fg: #8b9bb0;
+  --d-border: #1e2836;
+  --d-input: #3b4a5f;
+  --d-raised: #243042;
+  --d-head: #121a26;
+  --d-seg: #121a26;
+  --d-well: #121a26;
+  --d-stage-top: #0e1522;
+  --d-success: #4ac68b;
+  --d-success-soft: #0c2419;
+  --d-success-line: rgb(74 198 139 / 0.3);
+  --d-warning: #f2c14e;
+  --d-warning-soft: #2a1e0e;
+  --d-warning-line: rgb(242 193 78 / 0.3);
+  --d-destructive: #ef7f75;
+  --d-destructive-soft: #2b1615;
+  --d-destructive-line: rgb(239 127 117 / 0.3);
+  --d-info: #7cc4ec;
+  --d-info-soft: #0b2230;
+  --d-info-line: rgb(124 196 236 / 0.3);
+  --d-solid-tint: rgb(147 147 243 / 0.1);
+  --d-cyan: #5ed6e0;
+  --d-cyan-soft: #0b2a31;
+  --d-cyan-tint: rgb(94 214 224 / 0.1);
+  --d-cyan-line: rgb(94 214 224 / 0.35);
+  --d-on-cyan: #0a0f18;
+  --d-lime: #bef264;
+  --d-lime-ink: #1a2e05;
+  --d-lime-deep: #bef264;
+  --d-lime-data: #9ccb4f;
+  --d-lime-line: rgb(156 203 79 / 0.3);
+  --d-plain: #aebbcc;
+  --d-chart-billing: #5ed6e0;
+  --d-store: #0a0f18;
+  --lift: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 18px 36px -16px rgb(0 0 0 / 0.7);
+}
+
+/* The stage: the dashboard ground with a soft top light. */
+.ill {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--d-border);
+  border-radius: 0.875rem;
+  background: radial-gradient(120% 90% at 50% 0%, var(--d-stage-top), var(--d-bg));
+  font-family: var(--font);
+}
+.ill,
+.ill * {
+  box-sizing: border-box;
+}
+.ill .scene {
+  position: relative;
+  font-family: var(--font);
+  color: var(--d-fg);
+  font-size: 14px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+.ill .abs {
+  position: absolute;
+}
+
+/* Card: rounded-xl border bg-card. */
+.ill .dc {
+  background: var(--d-card);
+  border: 1px solid var(--d-border);
+  border-radius: 14px;
+  box-shadow: var(--lift);
+}
+.ill .dh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--d-border);
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 500;
+}
+.ill .mut {
+  color: var(--d-muted-fg);
+}
+.ill .xs {
+  font-size: 12px;
+}
+.ill .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.ill .lnk {
+  color: var(--d-primary);
+}
+
+/* StatusChip / Chip: a filled pill; the tone carries the meaning. */
+.ill .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.ill .chip.green {
+  border-color: var(--d-success-line);
+  background: var(--d-success-soft);
+  color: var(--d-success);
+}
+.ill .chip.tan {
+  border-color: var(--d-warning-line);
+  background: var(--d-warning-soft);
+  color: var(--d-warning);
+}
+.ill .chip.red {
+  border-color: var(--d-destructive-line);
+  background: var(--d-destructive-soft);
+  color: var(--d-destructive);
+}
+.ill .chip.blue {
+  border-color: var(--d-info-line);
+  background: var(--d-info-soft);
+  color: var(--d-info);
+}
+.ill .chip.gray {
+  border-color: var(--d-border);
+  background: var(--d-muted);
+  color: var(--d-muted-fg);
+}
+.ill .cdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: currentColor;
+}
+/* Diff kind tag (change-summary-dialog). */
+.ill .kind {
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  background: var(--d-warning-soft);
+  color: var(--d-warning);
+}
+
+/* Button default (solid gradient + edge, the dashboard's light shadow) and outline. */
+.ill .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: #fff;
+  background: linear-gradient(to bottom, #4e4eda, #4646c5);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.3),
+    0 0 0 1px var(--d-solid-edge),
+    0 1px 2px rgb(0 0 0 / 0.05);
+}
+.ill .btn.outline {
+  color: var(--d-fg);
+  background: var(--d-card);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.05),
+    0 0 0 1px var(--d-border);
+}
+.ill .btn.sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+/* Segmented control (TabsList). */
+.ill .seg {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid var(--d-border);
+  border-radius: 14px;
+  background: var(--d-seg);
+  padding: 4px;
+}
+.ill .seg span {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--d-muted-fg);
+  white-space: nowrap;
+}
+.ill .seg span.on {
+  background: var(--d-raised);
+  color: var(--d-fg);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+/* Table: head band, 44px rows. */
+.ill .th {
+  display: flex;
+  gap: 24px;
+  height: 36px;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--d-muted-fg);
+  background: var(--d-head);
+  border-bottom: 1px solid var(--d-border);
+}
+.ill .tr {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--d-border);
+  gap: 24px;
+}
+.ill .tr:last-child {
+  border-bottom: 0;
+}
+.ill .tr.hi {
+  background: var(--d-solid-tint);
+  box-shadow: inset 3px 0 0 var(--d-solid);
+}
+.ill .grow {
+  flex: 1;
+  min-width: 0;
+}
+.ill .amt {
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* Input (border-input) and field label. */
+.ill .input {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--d-input);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--d-card);
+}
+.ill .lbl {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+
+/* Timeline markers (dunning-journey-view). */
+.ill .mk {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  border: 1px solid;
+}
+.ill .mk.ok {
+  border-color: var(--d-success-line);
+  background: var(--d-success-soft);
+  color: var(--d-success);
+}
+.ill .mk.fail {
+  border-color: var(--d-destructive-line);
+  background: var(--d-destructive-soft);
+  color: var(--d-destructive);
+}
+.ill .mk.ev {
+  border: 0;
+}
+.ill .mk.ev::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 99px;
+  border: 1px solid var(--d-border);
+  background: var(--d-muted);
+}
+.ill .mk.next {
+  border: 0;
+}
+.ill .mk.next::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border-radius: 99px;
+  border: 1.5px solid color-mix(in oklab, var(--d-muted-fg) 40%, transparent);
+  background: var(--d-card);
+}
+.ill .mk svg {
+  width: 14px;
+  height: 14px;
+}
+.ill .reason {
+  margin-top: 5px;
+  width: fit-content;
+  border: 1px solid var(--d-destructive-line);
+  background: var(--d-destructive-soft);
+  color: var(--d-destructive);
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* A well for derived content (filled, never dashed). */
+.ill .well {
+  border-radius: 6px;
+  background: var(--d-well);
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--d-muted-fg);
+}
+.ill .well b {
+  font-weight: 500;
+  color: var(--d-fg);
+}
+.ill .visa {
+  font-size: 9px;
+  font-weight: 800;
+  color: #fff;
+  background: #1a1f71;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-style: italic;
+}
+.ill .ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ill .kick {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--d-muted-fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ill *,
+  .ill *::before,
+  .ill *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

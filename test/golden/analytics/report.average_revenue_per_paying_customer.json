@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Recurring revenue divided by the customers paying it. A customer with three subscriptions counts once, so this sits above the per-subscription figure whenever accounts hold more than one.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 5647,
+  "key": "average_revenue_per_paying_customer",
+  "kind": "money",
+  "name": "Average Revenue per Paying Customer",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "stock",
+  "tags": ["customers"],
+  "window_label": "Jul 2026"
+}

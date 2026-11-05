@@ -1,0 +1,31 @@
+{
+  "_comment_process": [
+    "node directly, not `pnpm start` — the same wrapper bug that cost 46 minutes of billing",
+    "on 2026-08-29 (see tmbilling-worker.json for the full timeline).",
+    "",
+    "pm2 supervises the pid it spawns. With script=pnpm that pid was a launcher which exits",
+    "immediately on SIGINT, so pm2 declared the app stopped and treekilled the real node",
+    "process underneath — mid-request, and long before kill_timeout could apply.",
+    "",
+    "The API strands no queue locks, so this was never going to cause the outage the worker",
+    "did. It fails more quietly instead: in-flight HTTP requests cut off mid-response, and a",
+    "kill_timeout that has never once been honoured. Fixed here because it is the same",
+    "defect, and leaving one of the two configs wrong is how it grows back."
+  ],
+  "name": "tmbilling-api",
+  "script": "node",
+  "args": "--import tsx src/index.ts",
+  "cwd": "/var/www/html/projects/tmbilling",
+  "interpreter": "none",
+  "instances": 1,
+  "exec_mode": "fork",
+  "wait_ready": false,
+  "kill_timeout": 10000,
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": "4001",
+    "HOST": "127.0.0.1",
+    "GOOGLE_CLOUD_SERVICE_CONTEXT": "tmbilling-api"
+  }
+}

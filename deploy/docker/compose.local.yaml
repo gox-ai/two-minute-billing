@@ -1,0 +1,11 @@
+# Local override: no proxy, plain http on 127.0.0.1. `init-env.sh --local` selects it through
+# COMPOSE_FILE, so `docker compose up -d` needs no flag. Still NODE_ENV=production.
+services:
+  proxy:
+    profiles: [disabled]
+  api:
+    ports:
+      - "127.0.0.1:${API_PORT:-4000}:4000"
+  dashboard:
+    ports:
+      - "127.0.0.1:${APP_PORT:-4100}:4100"

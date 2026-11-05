@@ -1,0 +1,1122 @@
+{
+  "generated_from": [
+    "src/modules/events/registry.ts",
+    "src/modules/webhooks/outbox.ts"
+  ],
+  "event_count": 164,
+  "family_count": 40,
+  "delivery": {
+    "success": "Any 2xx response.",
+    "max_attempts": 6,
+    "backoff_seconds": [
+      60,
+      300,
+      1800,
+      7200,
+      21600
+    ],
+    "ordered": false
+  },
+  "families": [
+    {
+      "key": "customer",
+      "summary": "The payer's own record: created, changed, archived, and every movement of the promotional or excess credit held against their name.",
+      "internal_note": "customer",
+      "events": [
+        {
+          "type": "customer_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_archived",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_restored",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_contact_added",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_contact_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_contact_removed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_shipping_address_added",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_shipping_address_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_shipping_address_archived",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_billing_info_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_promotional_credits_added",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_promotional_credits_deducted",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_excess_payment_recorded",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "customer_credits_restored",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "payment_source",
+      "summary": "A stored instrument belonging to a customer. These are the events that warn you an instrument will stop working before it does — expiry, an insufficient mandate, an outright refusal.",
+      "internal_note": "payment_source",
+      "events": [
+        {
+          "type": "payment_source_added",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_deleted",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_expiring",
+          "summary": "Sent ahead of the expiry date, while the instrument still works, so you can ask the customer to replace it before a renewal fails.",
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_expiry_reminder",
+          "summary": "Sent on each lead day before a card expires, when the business sets lead days for card expiry (`reminder_config.card_expiring`). Carries `expires_at` and `lead_days`. Emitted once per card, expiry date and lead day. `payment_source_expiring` still fires once, when the card enters its expiry month.",
+          "internal_note": "A lead-day notice before a card's printed expiry (`reminder_config.card_expiring`), one per (card, expiry, lead day). `payment_source_expiring` still fires once, on the status."
+        },
+        {
+          "type": "payment_source_mandate_insufficient",
+          "summary": "The instrument's authorised per-debit ceiling is below the next amount due on a subscription it is attached to. The ceiling is fixed when the instrument is authorised and cannot be raised in place — only a fresh authorisation from the customer replaces it, so this is a prompt to ask for one.",
+          "internal_note": "The instrument cannot carry the subscription it is attached to: its registered per-debit mandate ceiling is BELOW the next amount that will be collected. Emitted when a subscription is created, because that is the moment the gap opens and nobody is watching. A mandate is sized once, at VAULT time, and in the ordinary signup order — vault the card, THEN create the subscription — that is the moment least is known, so the ceiling can be the fallback while the renewal it must carry is larger. Nothing re-sizes it afterwards, and a registered ceiling cannot be raised in place: only a fresh authorisation replaces it, which only the BUYER can give. Measured on the dev book 2026-09-04: 33 of 200 INR mandates on customers with a live subscription were already below their own renewal. Sibling of `payment_source_expiring` and deliberately shaped like it — a proactive warning about an instrument that still works today and will stop, where the remedy is the customer's to apply and the business wants to ask before the failure, not after."
+        },
+        {
+          "type": "payment_source_expired",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_role_changed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_source_invalidated",
+          "summary": "The instrument was refused in a way that will not resolve on its own and has been marked unusable. Distinct from expiry: nothing ran out, it was declined.",
+          "internal_note": "A hard decline that will not fix itself, so the instrument is marked unusable. Distinct from `payment_source_expired`: nothing ran out, it was refused. Added because `setPaymentMethodStatus(…, 'invalid')` changed the row and told nobody — no webhook, and therefore no email, for the one payment-method state the customer actually has to act on."
+        }
+      ]
+    },
+    {
+      "key": "subscription",
+      "summary": "The life of one subscription, from creation through each renewal to cancellation, including changes scheduled ahead of time and the reminders sent before they take effect.",
+      "internal_note": "subscription",
+      "events": [
+        {
+          "type": "subscription_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_started",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_activated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_changed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_change_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_scheduled_change_removed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_renewed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_renewal_skipped",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_skip_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_scheduled_skip_removed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_trial_ending",
+          "summary": "Sent on each of the business's lead days before a trial ends, with `lead_days` on the event.",
+          "internal_note": null
+        },
+        {
+          "type": "subscription_cancel_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_scheduled_cancellation_removed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_canceled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_paused",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_pause_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_resumed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_resumption_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_reactivated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_deleted",
+          "summary": null,
+          "internal_note": "Soft delete. Distinct from `subscription_canceled`: nothing ended, nothing was credited and no term closed — the subscription simply stopped being visible, and an integrator holding a mirror of it should drop the row rather than mark it churned."
+        },
+        {
+          "type": "subscription_renewal_reminder",
+          "summary": "Sent on each of the business's lead days before a renewal (`reminder_config`), with `lead_days` on the event. Emitted once per subscription, renewal date and lead day, so it is safe to act on directly.",
+          "internal_note": "Time-relative reminders, emitted by runRemindersPass N days ahead of the thing they warn about. They are events rather than a private email-only scan because the events log is what dedupes them (one per subscription per occurrence) and because a merchant integrating over webhooks wants the same warning we email about."
+        },
+        {
+          "type": "subscription_cancellation_reminder",
+          "summary": "Sent on each of the business's lead days before a scheduled cancellation takes effect, with `lead_days` on the event.",
+          "internal_note": null
+        },
+        {
+          "type": "subscription_pause_reminder",
+          "summary": "Sent on each of the business's lead days before a scheduled pause (`reminder_config.pause`), with `pause_at`, `lead_days` and `scheduled_change` on the event. Off by default.",
+          "internal_note": "Before a SCHEDULED pause / resume (`reminder_config.pause` / `resume`)."
+        },
+        {
+          "type": "subscription_resume_reminder",
+          "summary": "Sent on each of the business's lead days before a scheduled resume (`reminder_config.resume`), with `resume_at`, `lead_days` and `scheduled_change` on the event. Off by default.",
+          "internal_note": null
+        },
+        {
+          "type": "subscription_pre_debit_notification",
+          "summary": "Advance notice of a mandate debit, carrying the amount, the date and the mandate reference. Required before every debit on some rails, and sent by the platform because the gateway does not send it.",
+          "internal_note": "NPCI/RBI: the payer must be told >=24h before every mandate debit, with the amount, date and mandate reference. RazorPay exposes no notification endpoint on the custom recurring API, so the engine sends it (operator ask 2)."
+        }
+      ]
+    },
+    {
+      "key": "invoice",
+      "summary": "An invoice's progress from generated to paid, written off or voided, together with the dunning sequence that chases an unpaid one.",
+      "internal_note": "invoice",
+      "events": [
+        {
+          "type": "invoice_generated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_pending_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_closed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_paid",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_payment_due",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_payment_due_reminder",
+          "summary": "Sent on each of the business's lead days before the due date of an open invoice that is not collected automatically (`reminder_config.payment_due`), with `due_at` and `lead_days` on the event. Off by default.",
+          "internal_note": "Before the due date of an invoice the customer pays (`reminder_config.payment_due`). Not `invoice_payment_due`, which is the overdue notice."
+        },
+        {
+          "type": "invoice_not_paid",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_voided",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_written_off",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_deleted",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_dunning_started",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_dunning_exhausted",
+          "summary": "The retry sequence for an unpaid invoice has run out of attempts. No further collection will be tried automatically.",
+          "internal_note": null
+        },
+        {
+          "type": "invoice_dunning_stopped",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "invoice_dunning_reminder",
+          "summary": null,
+          "internal_note": "A PARKED invoice's reminder rung. Not a retry and not a failure — nothing was attempted — so it is its own event rather than a second `payment_failed`, which would tell every downstream consumer a charge had just been refused when none was made."
+        }
+      ]
+    },
+    {
+      "key": "credit_note",
+      "summary": "Credit issued against an invoice, and what became of it — applied to a balance, refunded to the payer, or voided.",
+      "internal_note": "credit note",
+      "events": [
+        {
+          "type": "credit_note_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_note_allocated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_note_refunded",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_note_refund_reversed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_note_voided",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "payment",
+      "summary": "An attempt to collect money and how it ended. `payment_authentication_required` is the one outcome that is neither success nor failure.",
+      "internal_note": "payment / transaction",
+      "events": [
+        {
+          "type": "payment_initiated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_succeeded",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_failed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_authentication_required",
+          "summary": "The debit was accepted but the rail has paused it pending the buyer's additional authentication. Neither a success nor a failure: the money moves only if the buyer authenticates, and nothing else will prompt them.",
+          "internal_note": "An accepted debit that the RAIL has paused for the buyer's additional-factor authentication (RBI/NPCI, above ₹15,000). Not a failure and not a success: the money moves only if the buyer authenticates, and nothing else in the system will tell them to. See `debitNeedsBuyerAuthentication`."
+        }
+      ]
+    },
+    {
+      "key": "refund",
+      "summary": "Money on its way back to the payer, reported twice: once when accepted, once when settled.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "refund_created",
+          "summary": "The provider has ACCEPTED the refund. On cards and bank rails the money lands days later, so treat this as an instruction in flight rather than an outcome.",
+          "internal_note": null
+        },
+        {
+          "type": "refund_settled",
+          "summary": "The refund actually went through, confirmed by the provider. This is the one to pay out or notify on.",
+          "internal_note": "`refund_created` fires when the provider ACCEPTS a refund; on cards and bank rails that is days before the money lands. `refund_settled` is the confirmation, raised by the provider webhook that says it went through. Two events because they are two facts, and a subscriber that pays out or notifies on the first would be acting on an instruction rather than an outcome."
+        },
+        {
+          "type": "refund_failed",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "transaction",
+      "summary": "A recorded movement of money that needs your attention, has been reconciled, or failed after it appeared to succeed.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "transaction_needs_attention",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "transaction_reconciled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "transaction_late_failure",
+          "summary": "A transaction that had been reported as successful was later reversed by the provider.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "dispute",
+      "summary": "A chargeback opened by the payer's bank or card network, the money moving out and possibly back, and the case closing.",
+      "internal_note": "dispute / chargeback",
+      "events": [
+        {
+          "type": "dispute_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dispute_funds_withdrawn",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dispute_funds_reinstated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dispute_won",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dispute_lost",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dispute_closed",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "gateway_account",
+      "summary": "A payment gateway connection on one of your businesses being added, changed or removed.",
+      "internal_note": "gateway config",
+      "events": [
+        {
+          "type": "gateway_account_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "gateway_account_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "gateway_account_deleted",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "payment_intent",
+      "summary": "A container for attempts at the gateway — either authorising a charge to capture later, or a zero-amount authorisation whose product is a stored instrument.",
+      "internal_note": "payment intents (3DS + zero-amount vault setup) and the ATTEMPTS inside them. An intent is a container: `payment_intent_*` is about the container's lifecycle, `payment_attempt_*` about one try against the gateway (the \"Attempt N\" card).",
+      "events": [
+        {
+          "type": "payment_intent_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_intent_authorized",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_intent_expired",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_intent_consumed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_intent_failed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_intent_voided",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "payment_attempt",
+      "summary": "One individual try against the gateway inside an intent. A buyer who fails authentication twice before succeeding leaves three attempts, and none overwrite the earlier ones.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "payment_attempt_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_attempt_failed",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "wallet",
+      "summary": "Prepaid credit added to a customer's wallet.",
+      "internal_note": "wallet (until D merges it into balances)",
+      "events": [
+        {
+          "type": "wallet_topped_up",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "receipt",
+      "summary": "A numbered record of money received: one per payment, or one per payment on a payment request. Sent when the receipt gets its number, which is within seconds of the payment.",
+      "internal_note": "receipt: numbered proof of money received (0387). Emitted when the receipt is numbered.",
+      "events": [
+        {
+          "type": "receipt_created",
+          "summary": "Carries the receipt number, the amount received and what it was applied to. A receipt never changes after this event.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "payment_request",
+      "summary": "A request for several open invoices of one customer, paid by one charge or one link. Each invoice still gets its own payment and its own `payment_succeeded`, which names the request.",
+      "internal_note": "payment request: several open invoices of one customer, paid by one charge or link (0388)",
+      "events": [
+        {
+          "type": "payment_request_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_request_paid",
+          "summary": "Every invoice in the request is settled. Sent once, after the child `payment_succeeded` events.",
+          "internal_note": null
+        },
+        {
+          "type": "payment_request_payment_failed",
+          "summary": "The charge for the request failed or was reversed. The request is open again and the customer was sent the link.",
+          "internal_note": null
+        },
+        {
+          "type": "payment_request_canceled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "payment_request_expired",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "dunning_policy",
+      "summary": "A named set of dunning settings that you assign to customers. A customer with no policy uses the business dunning settings.",
+      "internal_note": "dunning policy: a named per-invoice dunning configuration (0386)",
+      "events": [
+        {
+          "type": "dunning_policy_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dunning_policy_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "dunning_policy_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "coupon",
+      "summary": "A discount in your catalogue being created or changed, and applied to or removed from a subscription.",
+      "internal_note": "coupon / catalog",
+      "events": [
+        {
+          "type": "coupon_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "coupon_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "coupon_archived",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "coupon_applied",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "coupon_removed",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "coupon_set",
+      "summary": "A batch of single-use codes for one coupon.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "coupon_set_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "coupon_set_codes_added",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "coupon_code",
+      "summary": "An individual code within a set.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "coupon_code_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "product_group",
+      "summary": "A grouping of products in your catalogue.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "product_group_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "product_group_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "product_group_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "product",
+      "summary": "A product in your catalogue.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "product_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "product_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "product_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "price",
+      "summary": "A price on a product — the amount, currency and billing period a subscription is sold at.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "price_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "price_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "price_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "attached_item",
+      "summary": "An add-on or charge attached to a product so it is carried onto subscriptions of that product.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "attached_item_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "attached_item_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "attached_item_deleted",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "differential_price",
+      "summary": "A price override that applies to one specific product-and-plan combination.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "differential_price_set",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "differential_price_deleted",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "feature",
+      "summary": "A capability in your catalogue that a plan can grant, such as single sign-on or a project limit. Use these events to refresh any entitlements your app caches.",
+      "internal_note": "entitlements: a feature, a plan's grant, a per-subscription override. `_set` is an upsert that changed the value; `previous_value` is null on the first grant.",
+      "events": [
+        {
+          "type": "feature_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "feature_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "feature_archived",
+          "summary": "The feature no longer grants anything: it leaves every subscription's entitlements and its checks answer `feature_archived`. Grants are kept, and reactivating the feature sends `feature_updated` with `active: true`.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "plan_entitlement",
+      "summary": "What a product grants for one feature. A change here alters the entitlements of every subscription on that product.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "plan_entitlement_set",
+          "summary": "Sent when a grant is created or its value changes. The payload carries `value` and `previous_value`, which is null for a new grant.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "subscription_entitlement",
+      "summary": "A per-subscription override of what its plan grants for one feature.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "subscription_entitlement_set",
+          "summary": "Sent when an override is created or its value changes. The payload carries `value` and `previous_value`, which is null for a new override.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "manual_discount",
+      "summary": "A percentage or fixed-amount discount applied directly to a subscription without a coupon in the catalogue.",
+      "internal_note": "manual discount (couponless % / amount discount applied directly to a subscription)",
+      "events": [
+        {
+          "type": "manual_discount_applied",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "manual_discount_removed",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "usage",
+      "summary": "Metered usage recorded against a subscription, which later prices an invoice line.",
+      "internal_note": "usage",
+      "events": [
+        {
+          "type": "usage_recorded",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "meter",
+      "summary": "A meter: what to count from your usage events, and how to add the values up.",
+      "internal_note": "meters and usage events",
+      "events": [
+        {
+          "type": "meter_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "meter_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "meter_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "usage_event",
+      "summary": "Usage events you sent. We do not send one webhook for each event; this family reports on them in summary.",
+      "internal_note": "Unmatched usage events received in the last hour, one per business per hour.",
+      "events": [
+        {
+          "type": "usage_event_unmatched",
+          "summary": "Sent at most once an hour when events arrived with a customer key that no customer has. Add the key to a customer and the events bill.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "model_prices",
+      "summary": "The AI model price list. Sent when a list price that your meters use changes.",
+      "internal_note": "The AI model price list changed for a key this business uses. One per business per sync.",
+      "events": [
+        {
+          "type": "model_prices_changed",
+          "summary": "Sent once per price sync to each business whose meters used a changed model in the last 35 days. Each change gives the old and new price, the time the new price starts, and two flags: `bill_moves` (a live subscription bills that model from the list) and `cost_moves` (you have no cost of your own for it). Usage before the start time keeps the old price.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "credit_unit",
+      "summary": "A unit of credit that you define, such as one credit worth USD 0.01.",
+      "internal_note": "credit units and grants (design G3 §7); `credit_grant_applied` is one per invoice",
+      "events": [
+        {
+          "type": "credit_unit_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_unit_updated",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_unit_archived",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "credit_grant",
+      "summary": "Credit that a customer holds, in money or in your credit unit. Invoices use it in a fixed order, and it can expire.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "credit_grant_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_grant_applied",
+          "summary": "Sent once for each invoice that used credit grants. It lists each grant and the amount that the invoice used.",
+          "internal_note": null
+        },
+        {
+          "type": "credit_grant_expired",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_grant_voided",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_grant_restored",
+          "summary": "A voided invoice gave its credit back. When the grant had expired, the credit comes back as a new grant that expires in 12 months.",
+          "internal_note": null
+        },
+        {
+          "type": "credit_grant_activated",
+          "summary": null,
+          "internal_note": "a pending (sold, unpaid) grant became active when its invoice was paid"
+        }
+      ]
+    },
+    {
+      "key": "credit_hold",
+      "summary": "An amount of credit that your app reserved before a call. We send these events only to an endpoint that lists them by name.",
+      "internal_note": "credit holds: written to the outbox only when an endpoint lists them (design G3 C5)",
+      "events": [
+        {
+          "type": "credit_hold_created",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_hold_captured",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_hold_released",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_hold_expired",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "spend_limit",
+      "summary": "A spend limit on a customer, a subscription or a usage property. Sent once per limit, subject and interval when spend reaches the limit.",
+      "internal_note": "usage controls (design G5 §5): limits, tiers, alerts, automatic top-up, threshold invoices",
+      "events": [
+        {
+          "type": "spend_limit_reached",
+          "summary": "Carries the limit, the subject, the interval, the amount spent and when the interval resets. `mode` is `hard` (new requests are refused) or `soft` (notice only).",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "customer_limit_tier",
+      "summary": "A limit tier that a customer reached when its total paid amount grew. A tier never goes down after a refund.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "customer_limit_tier_reached",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "usage_alert",
+      "summary": "An alert on usage, spend, credit balance or credit runway. Each threshold triggers at most once per period and resolves once.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "usage_alert_triggered",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "usage_alert_resolved",
+          "summary": "The value moved back across a threshold, or the period ended (`reason: period_ended`). Each trigger has exactly one resolve.",
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "credit_auto_topup",
+      "summary": "Automatic top-up: credit bought when the balance is low or on a schedule.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "credit_auto_topup_scheduled",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_succeeded",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_failed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_skipped",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_threshold_low",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "usage_threshold",
+      "summary": "Usage invoiced during the period because the unbilled usage reached the amount that you set.",
+      "internal_note": null,
+      "events": [
+        {
+          "type": "usage_threshold_reached",
+          "summary": null,
+          "internal_note": null
+        }
+      ]
+    }
+  ]
+}

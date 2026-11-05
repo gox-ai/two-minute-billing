@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Who moved from which plan to which, and what it was worth.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Plan Movement Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": ["plans"]
+}

@@ -1,0 +1,1047 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Dark mode = `.dark` on <html> (class strategy via next-themes-style toggle). */
+@custom-variant dark (&:is(.dark *));
+
+/* A clickable FIGURE — a number, amount or count that links somewhere. At rest it reads as a
+   figure (foreground, like its unlinked neighbours) with a faint dotted underline, so a touch
+   screen with no hover still shows it is a link. On hover and keyboard focus: indigo with a
+   solid underline, plus the focus ring. Text links stay `text-primary hover:underline`. */
+@utility figure-link {
+  color: var(--foreground);
+  cursor: pointer;
+  border-radius: 2px;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  &:hover,
+  &:focus-visible {
+    color: var(--primary);
+    text-decoration-style: solid;
+    text-decoration-color: currentColor;
+  }
+  &:focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--ring) 50%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+/* A finger-sized hit area (≥32px) around a small control, on touch screens only; the visible
+   box is unchanged. The element must already be positioned (relative/absolute). */
+@utility touch-target {
+  @media (pointer: coarse) {
+    &::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 2rem);
+      height: max(100%, 2rem);
+      transform: translate(-50%, -50%);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Design tokens — the single source of truth for colour and geometry.
+
+   Ink and neutrals carry the interface; one brand hue (GoX indigo #4E4EDA) carries the
+   primary action, links and the active mark; semantic colour is reserved for
+   things that need a human.
+
+   1. `--primary` is the LINK colour ("this navigates"), ~96 `text-primary`
+      uses: the brand itself in light (6.13:1 on a card), a lighter indigo in dark.
+   2. `--solid` is the PRIMARY ACTION fill, #4E4EDA (white label 6.13:1). It is
+      the gradient's LIGHTEST point, so no part of a label fails.
+      `<Button>` derives its gradient, highlight and edge from it, so a
+      storefront that rewrites `--solid` (lib/brand.ts) restyles all of it.
+   3. `--warning` must differ from the brand in LIGHTNESS, not only hue — amber
+      beside orange is otherwise one colour. Terminal states stay NEUTRAL.
+
+   Geometry: `--radius` 0.625rem → controls (rounded-md) 8px, cards
+   (rounded-xl) 14px.
+--------------------------------------------------------------------------- */
+/* `.force-light` shares this block so a subtree can render LIGHT inside a dark
+   document. Custom properties inherit, and the nearest declaration wins, so
+   re-declaring them on a descendant beats `.dark` on an ancestor.
+   Its consumers are the Brand Styles hosted-page previews and the email previews:
+   hosted pages are light-only (the storefront forces `light`) and an email carries
+   its own light colours, so previewing either dark would show something no one sees. Sharing the selector rather than
+   copying the values is deliberate — two copies of a palette is how the old one
+   drifted. */
+:root,
+.force-light {
+  --radius: 0.625rem;
+
+  /* R2: the ground is a cool tint and cards are white, so a card reads as a
+     surface without needing a shadow. The old palette had both at #ffffff,
+     which is why every container needed a border to exist at all. */
+  --background: #f2f6fb;
+  --foreground: #101828;
+  --card: #ffffff;
+  --card-foreground: #101828;
+  --popover: #ffffff;
+  --popover-foreground: #101828;
+
+  /* Links and navigation text: the brand, 6.13:1 on the card. */
+  --primary: #4e4eda;
+  --primary-foreground: #ffffff;
+
+  /* The primary action fill: GoX indigo, white label 6.13:1. */
+  --solid: #4e4eda;
+  --solid-foreground: #ffffff;
+
+  /* The brand itself, fixed: the wordmark, the active nav icon, brand tiles. */
+  --brand: #4e4eda;
+  --brand-soft: #f3f3fd;
+  --brand-border: #e1e2f8;
+
+  --secondary: #eef2f7;
+  --secondary-foreground: #101828;
+  --muted: #eef2f7;
+  --muted-foreground: #64748b;
+  /* shadcn's `accent` is the subtle hover surface, not the brand hue. */
+  --accent: #e8eef7;
+  --accent-foreground: #101828;
+
+  /* semantic — the only colour on a healthy screen that isn't the brand */
+  --success: #067647;
+  --success-soft: #e7f6ee;
+  /* Amber, and darker than the brand (OKLCH L 0.48 vs 0.56 for --primary). */
+  --warning: #854d0e;
+  --warning-soft: #fef7e6;
+  --destructive: #b42318;
+  --destructive-soft: #fdeceb;
+  --info: #0369a1;
+  --info-soft: #e8f4fb;
+
+  --border: #e2e9f2;
+  /* 3.03:1 on white. The old #dcdee3 was 1.4:1 — below the 3:1 floor for a
+     non-text control boundary, so an empty input had no perceivable edge. */
+  --input: #8296b0;
+  /* A switch's OFF track is a filled area, not a hairline, and it was borrowing
+     `--input`. Raising that token to clear the 3:1 border floor turned every
+     unchecked switch into a heavy slab — 100 of them on the decline-rules page.
+     A track only has to be told apart from the surface, so it gets its own value. */
+  --switch-off: #cbd5e2;
+  --ring: #4e4eda;
+
+  /* Scrollbars. Deliberately a token pair rather than a hardcoded rgba, because
+     the thumb has to stay visible on the recessed sidebar surface as well as on
+     white. */
+  --scrollbar-thumb: #c2d0e2;
+  --scrollbar-thumb-hover: #9fb2ca;
+
+  /* chart-3 is blue, not amber: beside an orange chart-1 an amber series reads as
+     the same one. */
+  --chart-1: #4e4eda;
+  --chart-2: #067647;
+  --chart-3: #0284c7;
+  --chart-4: #7c9ec9;
+  --chart-5: #b42318;
+
+  /* The rail follows the theme — a recessed surface, not a dark navy slab. */
+  --sidebar: #ffffff;
+
+  /**
+   * The BUYER's page ground — hosted checkout and the billing portal.
+   *
+   * Its own token on purpose. The storefront used `--sidebar`, which was a soft
+   * grey and therefore correct by accident; R2 moved the dashboard rail to white
+   * and the buyer's page went white-on-white, cards defined by a hairline alone.
+   * Measured in pixels: gutter, inter-column gap and card interiors all
+   * (255,255,255).
+   *
+   * NEUTRAL, not `--background`. These pages carry the MERCHANT's brand — the raw
+   * hex lands on `--solid` via lib/brand.ts — so R2's cool blue ground would put
+   * our accent under someone else's colour. A grey stays out of the way, and the
+   * separation is what the layout's own comment asks for.
+   */
+  --storefront: #f6f7f8;
+  --sidebar-foreground: #101828;
+  --sidebar-primary: #4e4eda;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2f7;
+  --sidebar-accent-foreground: #101828;
+  --sidebar-border: #e2e9f2;
+  --sidebar-ring: #4e4eda;
+
+  /* The selected segment of a segmented control: raised ABOVE its muted track. In dark the
+     card is darker than the track, so it cannot be the card. */
+  --raised: #ffffff;
+
+  /* The featured card: an ink surface with a brand glow, in both themes. */
+  --feature: #0b1220;
+  --feature-border: #0b1220;
+}
+
+.dark {
+  /* Same design, not a second one: every value below is the light token's pair.
+     The ground stays BELOW the card here too, so the surface hierarchy reads
+     the same way in both themes. */
+  --background: #0a0f18;
+  --foreground: #eaf0f8;
+  --card: #0f1621;
+  --card-foreground: #eaf0f8;
+  --popover: #0f1621;
+  --popover-foreground: #eaf0f8;
+
+  /* 6.39:1 on the card. */
+  --primary: #9393f3;
+  --primary-foreground: #08111f;
+
+  /* Same fill as light: white on it is 6.13:1. */
+  --solid: #4e4eda;
+  --solid-foreground: #ffffff;
+
+  --brand: #8b8bf2;
+  --brand-soft: #15163a;
+  --brand-border: #2c2d66;
+
+  --secondary: #161f2c;
+  --secondary-foreground: #eaf0f8;
+  --muted: #161f2c;
+  --muted-foreground: #8b9bb0;
+  --accent: #1a2534;
+  --accent-foreground: #eaf0f8;
+
+  --success: #4ac68b;
+  --success-soft: #0c2419;
+  /* Lighter and yellower than --primary (L 0.83 vs 0.76), 10.8:1 on the card. */
+  --warning: #f2c14e;
+  --warning-soft: #2a1e0e;
+  --destructive: #ef7f75;
+  --destructive-soft: #2b1615;
+  --info: #38bdf8;
+  --info-soft: #0c2233;
+
+  --border: #1e2836;
+  /* 3.09:1 on the card. #2f343c was 1.5:1 — the same defect as light. */
+  --input: #55677f;
+  --switch-off: #2c3a4c;
+  --ring: #8b8bf2;
+
+  --scrollbar-thumb: #2c3a4c;
+  --scrollbar-thumb-hover: #3e4f64;
+
+  --chart-1: #8b8bf2;
+  --chart-2: #4ac68b;
+  --chart-3: #38bdf8;
+  --chart-4: #7f9cc0;
+  --chart-5: #ef7f75;
+
+  --sidebar: #0f1621;
+  --storefront: #0a0f18;
+  --sidebar-foreground: #eaf0f8;
+  --sidebar-primary: #8b8bf2;
+  --sidebar-primary-foreground: #08111f;
+  --sidebar-accent: #161f2c;
+  --sidebar-accent-foreground: #eaf0f8;
+  --sidebar-border: #1e2836;
+  --sidebar-ring: #8b8bf2;
+
+  --raised: #243042;
+
+  /* Above the dark ground and card, so it still reads as a separate sheet. */
+  --feature: #171d2a;
+  --feature-border: #2a3344;
+}
+
+@theme inline {
+  /* `--font-sans` is fed by next/font (see the two root layouts), so the app
+     ships a self-hosted typeface instead of falling back to whatever the
+     viewer's OS happens to provide. */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* ── Type scale ───────────────────────────────────────────────────────────
+     Tailwind's defaults are tight for a surface read all day, and its display
+     end is small for a page title. Both are retuned here; the two WORKHORSES
+     (text-xs at 592 uses, text-sm at 587) deliberately keep their 12/14px size.
+
+     Note this departs from the design direction, which put table data at 13px.
+     Shrinking 587 elements would have made every list denser, which is the
+     opposite of the breathing room asked for — and the direction got its
+     density from 52px rows and generous spacing, not from small type. So the
+     display sizes and the rhythm land here; the body sizes stay.
+  --------------------------------------------------------------------------- */
+  --text-xs: 12px;
+  --text-xs--line-height: 1.5; /* was 1.333 — cramped for two-line cells */
+  --text-sm: 14px;
+  --text-sm--line-height: 1.5; /* was 1.43 */
+  --text-base: 15px; /* was 16 — body copy per the direction */
+  --text-base--line-height: 1.6;
+  --text-lg: 17px; /* was 18 — section/panel titles */
+  --text-lg--line-height: 1.45;
+  --text-xl: 20px;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 26px; /* was 24 — the page title, now it leads */
+  --text-2xl--line-height: 1.2;
+  --text-3xl: 32px; /* was 30 */
+  --text-3xl--line-height: 1.15;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-solid: var(--solid);
+  --color-solid-foreground: var(--solid-foreground);
+  /* The filled button's gradient bottom and its 1px edge, mixed from `--solid` where it is
+     used — so a storefront's merchant colour reaches them too. */
+  --color-solid-bottom: color-mix(in oklab, var(--solid) 90%, black);
+  --color-solid-edge: color-mix(in oklab, var(--solid) 78%, black);
+  --color-raised: var(--raised);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-border: var(--brand-border);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-switch-off: var(--switch-off);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-storefront: var(--storefront);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* The featured card: an ink sheet with a brand glow in its corner. It re-declares the surface
+   tokens for its subtree (as `.force-light` does), so primitives inside it — links, muted text,
+   hairlines, an (i) — need no variant. A portalled popover leaves the subtree and is unaffected. */
+.surface-feature {
+  --card: var(--feature);
+  --card-foreground: #ffffff;
+  --foreground: #ffffff;
+  --muted-foreground: #93a4bd;
+  --primary: #a9a9f4;
+  --border: rgb(255 255 255 / 0.08);
+  --muted: rgb(255 255 255 / 0.08);
+  --accent: rgb(255 255 255 / 0.1);
+  --accent-foreground: #ffffff;
+  color: var(--foreground);
+  border-color: var(--feature-border);
+  background:
+    radial-gradient(90% 80% at 100% 0%, rgb(129 129 240 / 0.5) 0%, transparent 60%), var(--feature);
+}
+
+/* A table of fixed-width number columns (analytics Head/Row) scrolls sideways inside its card on
+   a narrow screen instead of spilling out of it. `:where` keeps it overridable. */
+:where(:has(> [data-row])) {
+  overflow-x: auto;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+}
+
+@layer base {
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Money and dates line up in columns all over this app, so digits must share
+     one advance width by default rather than only where someone remembered
+     to add `tabular-nums`. */
+  table,
+  [data-slot="table"] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Scrollbars ───────────────────────────────────────────────────────────
+     The platform default on Linux/GTK is a wide track WITH stepper arrows, and
+     it claimed real layout width inside every scroll container — most visibly
+     the sidebar nav. There are 31 scroll containers in this app, so this is set
+     once, globally: a component-by-component fix would drift.
+
+     The two mechanisms are MUTUALLY EXCLUSIVE in Blink: once `scrollbar-width`
+     is set to anything but `auto`, Chrome ignores `::-webkit-scrollbar` and
+     picks its own width — which measured 15px here, i.e. no better than the
+     default. So the standard properties are scoped to engines that lack the
+     pseudo-element (Firefox), and Blink/WebKit gets the pseudo-elements, where
+     the width is actually controllable.
+
+     `scrollbar-width`/`scrollbar-color` are inherited, so the root is enough —
+     no expensive `*` selector needed.
+
+     Deliberately thin-but-always-visible rather than hidden-until-hover: a
+     scrollbar you cannot see is a scrollbar you cannot find, and it is the only
+     affordance telling an operator there are more rows below.
+  ------------------------------------------------------------------------- */
+  @supports not selector(::-webkit-scrollbar) {
+    html {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    /* The 2px transparent border + content-box clip is what makes a 10px gutter
+       render as a 6px thumb with breathing room, instead of a slab. */
+    background-color: var(--scrollbar-thumb);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+  /* The nav rail is short and secondary: a 3px thumb. Pages and tables keep 6px. */
+  .app-rail ::-webkit-scrollbar {
+    width: 6px;
+  }
+  .app-rail ::-webkit-scrollbar-thumb {
+    border-width: 1.5px;
+  }
+  /* Kills the stepper arrows at each end — the chunky part of the GTK default. */
+  ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/*
+  Stripe's TEST-MODE autofill pill (the "stripe ›" tab bottom-right) is an iframe that
+  Stripe.js appends to <body>, outside our React tree. Our payment dialog is a modal, so
+  Radix locks the page with `body { pointer-events: none }` — and `pointer-events`
+  INHERITS, so the pill goes inert and the hit test at that point falls through to the
+  dialog overlay instead. Result: the one control a developer wants while a card form is
+  open cannot be clicked.
+
+  Re-enable it for Stripe's own body-level frames while the lock is on. Deliberately not
+  `!important`: the frames Stripe itself marks inert carry an INLINE `pointer-events:
+  none`, which still wins, so this only undoes the inherited value. Live mode never
+  injects the pill, so this is a dev-ergonomics rule with no production surface.
+*/
+body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
+  pointer-events: auto;
+}
+
+/*
+  ── BUYER PORTAL: two columns on a desktop, tabs on a phone — from ONE DOM ──────────
+
+  The portal was five blocks in one column, and the two that exist for SELF-SERVICE
+  (billing details, payment methods) were the last two. Buyers open a payment link,
+  pay, and leave, so in practice nobody scrolled far enough to reach them.
+
+  Two answers, because the two screens have different problems:
+    ≥1000px — there is width going to waste. The money story runs down the left column
+              (balance, invoices) and the account story down the right (plan, methods,
+              details), and the whole portal fits one screen with nothing hidden.
+    <1000px — there is no width to spend, so the same sections become a filter: the
+              balance is lifted out and stays on screen, everything else is one tap.
+
+  Both are the SAME MARKUP. Rendering a phone tree and a desktop tree would mean two of
+  every form, two of every dialog and two copies of every id — so the switch lives here
+  and the only thing React owns is which section is selected (`data-tab`).
+
+  `display: contents` is the hinge. Below the breakpoint the two column wrappers stop
+  generating boxes, so their children become direct flex items of `.portal-panes` and
+  `order` can interleave them with the tab bar that sits between them in the DOM.
+
+  Note the panes are OUR OWN wrapper divs, not the section cards. `Card` is `display:
+  flex`, so toggling display on it directly would flatten its internals the moment a
+  pane was shown.
+*/
+.portal-panes {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.portal-panes > .portal-col {
+  display: contents;
+}
+
+/* Balance first, the section filter under it, the selected section under that. */
+.portal-panes > .portal-col > .portal-pinned {
+  order: 1;
+}
+.portal-panes > .portal-tabs {
+  order: 2;
+}
+
+/* The account column's own strip. Hidden below the breakpoint, where the four-way
+   filter above already decides what is on screen. */
+.portal-side-tabs {
+  display: none;
+}
+.portal-panes > .portal-col > .portal-pane {
+  order: 3;
+  /* A pane can hold more than one card — `PlanCard` renders one section per
+     subscription — so it carries the same gap as the column around it. */
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (max-width: 999px) {
+  .portal-panes > .portal-col > .portal-pane {
+    display: none;
+  }
+  .portal-panes[data-tab="invoices"] > .portal-col > .portal-pane[data-pane="invoices"],
+  .portal-panes[data-tab="plan"] > .portal-col > .portal-pane[data-pane="plan"],
+  .portal-panes[data-tab="methods"] > .portal-col > .portal-pane[data-pane="methods"],
+  .portal-panes[data-tab="details"] > .portal-col > .portal-pane[data-pane="details"] {
+    display: flex;
+  }
+}
+
+@media (min-width: 1000px) {
+  .portal-panes {
+    display: grid;
+    /* `minmax(0, …)` on both, or a long invoice number stretches its column past
+       its share and the two-column balance goes with it. */
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 1rem;
+  }
+  /* The four-way filter is replaced by the account strip — see below. */
+  .portal-panes > .portal-tabs {
+    display: none;
+  }
+  .portal-panes > .portal-col {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .portal-side-tabs {
+    display: flex;
+  }
+
+  /*
+    The money column is PERMANENT and the account column takes turns.
+
+    All four sections at once needs ~1281px in the account column against the ~771px
+    that sits above a 900px fold, so one of them was always below it — reordering only
+    chose which. Invoices is what a buyer opens a billing link for, so that is the one
+    that never moves; the rest are one click each.
+  */
+  /* `.portal-panes >` is load-bearing, not tidiness: the base rule that lays panes out
+     is `.portal-panes > .portal-col > .portal-pane` at (0,3,0) and sets `display: flex`.
+     Without the extra class this hide rule is (0,2,0) and simply loses — measured, the
+     strip switched and all three panes stayed on screen. Matching (0,3,0) lets source
+     order decide, and this block is later in the file. */
+  .portal-panes > .portal-col-account > .portal-pane {
+    display: none;
+  }
+  /* Keyed on `data-account-tab`, which the component resolves once — NOT on
+     `data-tab` with the `invoices` fallback spelled out again here. The old version
+     mapped `invoices` to `[data-pane="plan"]`, so a customer with no subscription
+     got a strip of buttons over an empty column: the fallback named a pane that was
+     never rendered, in CSS that had no way to know. One source of truth instead. */
+  .portal-panes[data-account-tab="plan"] > .portal-col-account > .portal-pane[data-pane="plan"],
+  .portal-panes[data-account-tab="methods"]
+    > .portal-col-account
+    > .portal-pane[data-pane="methods"],
+  .portal-panes[data-account-tab="details"]
+    > .portal-col-account
+    > .portal-pane[data-pane="details"] {
+    display: flex;
+  }
+}
+
+/*
+  The portal's two-column layout is the one buyer surface that wants more than the
+  storefront's 48rem measure — spending width is the entire point of it above 1000px.
+
+  Scoped with `:has()` rather than by moving the cap into each route layout, because the
+  cap is shared by checkout, the token-exchange pages and the notice cards, and every one
+  of those is correct at 48rem. This widens exactly the container that holds the panes
+  and leaves the rest of the storefront alone. Specificity (0,2,0) beats Tailwind's
+  `.max-w-3xl` without `!important`.
+*/
+@media (min-width: 1000px) {
+  .storefront-measure:has(.portal-panes) {
+    /* 80rem, one step up from 72rem. At 72rem the saved-methods rows had to fit a card's
+       brand, its expiry and its mandate ceiling into a column narrowed by the row's own
+       action buttons, and the ceiling line ("Up to ₹37,657.34 per charge") broke onto four
+       lines. The buttons now sit BELOW the identity (see the methods pane), and this step
+       gives the two panes beside each other the room that fix assumes. Deliberately not
+       full-bleed: the panes are lists of short facts, and past ~80rem the eye loses the
+       row. */
+    max-width: 80rem;
+  }
+  /* Still narrower than the portal's on purpose, and for the original reason: the portal
+     is two columns of LISTS and wants the room, whereas checkout is a form beside a
+     summary and a form keeps getting worse the wider it gets.
+
+     68rem rather than the old 64rem. The rail is fixed at 22rem with a 1.25rem gap, so
+     the card step lands at ~44.75rem ≈ 716px — the ~720px form measure this design
+     system already prescribes, where 64rem left it at ~652px. That is the widest this
+     can go while the step is still a well-measured form: 72rem would push it to ~780px,
+     past the measure, which is the "wider is worse" case the note above is about. The
+     extra room goes to the saved-instrument rows, whose auto-debit line ("Auto-debit up
+     to ₹37,657.34 per charge") was the thing being squeezed. */
+  .storefront-measure:has(.checkout-panes) {
+    max-width: 68rem;
+  }
+}
+
+/*
+  ── CHECKOUT: the order beside the form, not above it ───────────────────────────────
+
+  Checkout is a WIZARD, so it never had the portal's problem of whole sections going
+  unseen — one step shows at a time. Its problem is different: the card step is long
+  enough to push "Your order" off the top of the screen, and what am I paying for is a
+  question the buyer asks WHILE typing a card number, not before.
+
+  So above 1000px the order summary (and, on a plan change, the proration preview) moves
+  into a sticky rail beside the step instead of scrolling away above it.
+
+  Below 1000px this is the SOURCE ORDER and nothing changes: order, preview, then the
+  step — exactly what the page did before. Deliberately not the portal's filter; there
+  is nothing to hide when only one step is on screen anyway.
+*/
+.checkout-panes {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 1000px) {
+  .checkout-panes {
+    display: grid;
+    /* One row, so the two columns never couple their heights. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+    align-items: start;
+    gap: 1.25rem;
+  }
+  .checkout-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .checkout-rail {
+    grid-column: 2;
+    grid-row: 1;
+    /* The storefront scrolls the document (unlike the signed-in shell), so a plain
+       sticky offset is enough — there is no scroll container to measure against. */
+    position: sticky;
+    top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────────────
+   R2 moves. The rule everything here follows: motion explains a change, it
+   never announces one. Entrances are short and travel a few pixels; anything
+   that loops is a real pending state, never decoration.
+
+   Entrances use `both` fill mode, so an element is invisible until its turn —
+   that is the point of the stagger, and it is also why the reduced-motion block
+   collapses durations to 1ms instead of `animation: none`: a 1ms animation still
+   RUNS and lands on its end state, so nothing can be stranded at opacity 0.
+--------------------------------------------------------------------------- */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 340ms;
+}
+
+@keyframes r2-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes r2-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes r2-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Share bars grow from their own left edge, so the width reads as a quantity
+   being measured rather than a box appearing. */
+@keyframes r2-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+/* A chart line draws itself. `--len` is the path length; 2000 covers every
+   series we render, and an over-long dash simply starts further off-screen. */
+@keyframes r2-draw {
+  from {
+    stroke-dashoffset: var(--len, 2000);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes r2-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.anim-rise {
+  animation: r2-rise var(--dur-slow) var(--ease-out) both;
+}
+.anim-fade {
+  animation: r2-fade var(--dur) var(--ease-out) both;
+}
+.anim-pop {
+  animation: r2-pop var(--dur) var(--ease-out) both;
+}
+.anim-grow {
+  transform-origin: left center;
+  animation: r2-grow var(--dur-slow) var(--ease-out) both;
+}
+.anim-draw {
+  stroke-dasharray: var(--len, 2000);
+  animation: r2-draw 900ms var(--ease-out) both;
+}
+
+/* Stagger: the parent opts in, children inherit the entrance and their turn.
+   Capped at 12 — past ~500ms of lead-in the last card reads as broken, and
+   nothing we render puts more than twelve peers in one band. */
+.anim-stagger > * {
+  animation: r2-rise var(--dur-slow) var(--ease-out) both;
+}
+.anim-stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.anim-stagger > *:nth-child(2) {
+  animation-delay: 40ms;
+}
+.anim-stagger > *:nth-child(3) {
+  animation-delay: 80ms;
+}
+.anim-stagger > *:nth-child(4) {
+  animation-delay: 120ms;
+}
+.anim-stagger > *:nth-child(5) {
+  animation-delay: 160ms;
+}
+.anim-stagger > *:nth-child(6) {
+  animation-delay: 200ms;
+}
+.anim-stagger > *:nth-child(7) {
+  animation-delay: 240ms;
+}
+.anim-stagger > *:nth-child(8) {
+  animation-delay: 280ms;
+}
+.anim-stagger > *:nth-child(9) {
+  animation-delay: 320ms;
+}
+.anim-stagger > *:nth-child(10) {
+  animation-delay: 360ms;
+}
+.anim-stagger > *:nth-child(11) {
+  animation-delay: 400ms;
+}
+.anim-stagger > *:nth-child(n + 12) {
+  animation-delay: 440ms;
+}
+
+/* A card that answers the pointer. Deliberately 1px: a card that lifts 4px
+   reads as a modal opening. */
+.hoverable {
+  transition:
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.hoverable:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  box-shadow:
+    0 1px 2px rgb(16 24 40 / 6%),
+    0 8px 20px -8px rgb(16 24 40 / 12%);
+}
+.dark .hoverable:hover {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 40%),
+    0 8px 20px -8px rgb(0 0 0 / 55%);
+}
+
+@layer base {
+  /* Interaction colour always eases. Kept off `*` on purpose: a blanket
+     transition catches layout properties too, and then every list visibly
+     reflows when a filter changes. */
+  a,
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"],
+  summary {
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  /* A pressed control should feel pressed. */
+  button:active:not(:disabled),
+  [role="button"]:active {
+    transform: translateY(0.5px);
+  }
+}
+
+/* Not politeness — vestibular disorders are real, and this is a surface people
+   read for hours. See above for why 1ms and not `none`. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .hoverable:hover,
+  button:active:not(:disabled),
+  [role="button"]:active {
+    transform: none;
+  }
+}
+
+/* ── The collapsible rail ────────────────────────────────────────────────────────
+   `[data-nav="collapsed"]` is set on <html> by `components/nav-collapse.tsx` (and
+   by an inline script before first paint, so a reload does not flash the wide
+   rail). Everything below is restyling only — the aside stays a server component
+   and its server/client children are untouched.
+
+   THE LABELS ARE NOT REMOVED. `display: none` on a nav label would take the
+   link's accessible name with it, leaving a screen reader with an icon and
+   nothing else. They are visually hidden the sr-only way instead, so the name
+   survives and only the pixels go. That is also why AppNav wraps its label text
+   in a span: a bare text node cannot be styled.
+--------------------------------------------------------------------------- */
+.app-rail {
+  /* The expanded width, as a variable so the collapsed rule has one thing to
+     change and the transition has something to interpolate. */
+  width: var(--rail-w, 15.5rem);
+  transition: width 180ms var(--ease-out);
+}
+
+[data-nav="collapsed"] .app-rail {
+  --rail-w: 4rem;
+  padding-left: 0.625rem;
+  padding-right: 0.625rem;
+}
+
+/* The wordmark and the collapse control share a row; the 64px rail has room for one. */
+[data-nav="collapsed"] .app-rail .rail-tools {
+  flex-direction: column;
+  padding-left: 0;
+}
+
+/* Icon-only rows: centre the glyph and drop the horizontal padding that was
+   making room for text. */
+[data-nav="collapsed"] .app-rail .nav-row {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+}
+
+[data-nav="collapsed"] .app-rail .nav-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The full logo does not fit the collapsed rail; the receipt mark stands in for it. */
+[data-nav="collapsed"] .app-rail .wordmark-mark {
+  display: block;
+}
+
+/* Things with no icon-only reading at all: a group's disclosure chevron, its
+   child links (nested items carry no icon by design), the business id line, the
+   signed-in email and role. Hidden outright rather than sr-only'd, because each
+   duplicates something still reachable when the rail is open. */
+[data-nav="collapsed"] .app-rail [data-collapse="hide"] {
+  display: none;
+}
+
+/* A row that is only an icon should still be a comfortable target — the design
+   system's 36px control height, kept square. */
+[data-nav="collapsed"] .app-rail .nav-row {
+  height: 2.25rem;
+}
+
+/* An unread badge has two registers, and they are a symmetric PAIR of display rules rather
+   than a reuse of `.nav-label`. That rule hides by pinning `width: 1px`, which a padded pill
+   silently outranks — its padding sets a 16px min-content floor, so the badge stayed 16px wide
+   inside a 68px rail. Expanded shows the number; collapsed there is no room for digits, so a
+   dot on the icon carries the only thing that still fits: something is waiting. The accessible
+   name lives on the wrapper's `aria-label`, so nothing is lost when the digits go. */
+[data-nav="collapsed"] .app-rail .nav-badge-count {
+  display: none;
+}
+
+/* The badge wrapper's `ml-auto` pushes the count to the row's end when the rail is open. An
+   auto margin absorbs ALL remaining free space, which outranks the row's `justify-content:
+   center` — so a badged row rendered its icon shoved to the left while every unbadged row
+   sat centred. Zero it here rather than dropping `ml-auto` from the component, which is what
+   the expanded register needs. */
+[data-nav="collapsed"] .app-rail .nav-badge {
+  margin-left: 0;
+}
+
+.nav-badge-dot {
+  display: none;
+}
+
+[data-nav="collapsed"] .app-rail .nav-badge-dot {
+  display: block;
+  position: absolute;
+  top: 0.25rem;
+  right: 0.375rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--primary);
+}
+
+/* The dot's tone lives here with the rest of the collapse rules, not as a utility on the
+   element: this selector outranks a single class, so `bg-destructive` on the span would
+   silently lose to the `background` above. */
+[data-nav="collapsed"] .app-rail .nav-badge-dot[data-tone="attention"] {
+  background: var(--destructive);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-rail {
+    transition: none;
+  }
+}
+
+/* ── The rail as a mobile drawer ─────────────────────────────────────────────────
+   The aside used to carry `max-md:hidden` and NOTHING replaced it, so below 768px
+   the app had no navigation at all: 17 links gone, on all 91 pages, with no
+   hamburger and no drawer. It is restyled here rather than wrapped in a client
+   component for the same reason the collapse is — the aside is a server component
+   holding server and client children, and `[data-mobile-nav]` on <html> (set by
+   `components/mobile-nav.tsx`) keeps that split alone.
+
+   Off-canvas, not `display: none`: the panel keeps its accessible content in the
+   tree and slides, so focus and screen-reader order behave. The scrim is a real
+   button so Escape is not the only way out.
+--------------------------------------------------------------------------- */
+@media (width < 48rem) {
+  .app-rail {
+    position: fixed;
+    inset-block: 0;
+    left: 0;
+    z-index: 50;
+    /* Never the collapsed icon rail on a phone: a drawer you deliberately opened
+       should show labels. This also overrides `[data-nav="collapsed"]`. */
+    --rail-w: min(85vw, 20rem);
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+    transform: translateX(-100%);
+    transition: transform var(--dur) var(--ease-out);
+    box-shadow: none;
+  }
+
+  [data-mobile-nav="open"] .app-rail {
+    transform: translateX(0);
+    box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--foreground) 45%, transparent);
+  }
+
+  /* The collapse handle straddles the rail's own edge and has no meaning while
+     the rail is a drawer — there is no second width to go to. */
+  .app-rail [data-collapse-toggle] {
+    display: none;
+  }
+}
+
+@media (width >= 48rem) {
+  /* The trigger and scrim exist only in the drawer world. */
+  .app-mobile-only {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @media (width < 48rem) {
+    .app-rail {
+      transition-duration: 1ms;
+    }
+  }
+}

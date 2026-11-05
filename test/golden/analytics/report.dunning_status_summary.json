@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "receivables",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Where every invoice in collection currently stands.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 1,
+  "key": "dunning_status_summary",
+  "kind": "count",
+  "name": "Dunning Status Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "stopped",
+      "group_id": null,
+      "value": 1
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["collections"]
+}

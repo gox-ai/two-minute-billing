@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "comparison": {
+    "basis": "complete_month",
+    "change_bps": null,
+    "prev_label": "Jun 2026",
+    "prev_value": 0
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Everything gained divided by everything lost. Below 1 means the book is shrinking.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "quick_ratio",
+  "kind": "ratio",
+  "name": "Quick Ratio",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

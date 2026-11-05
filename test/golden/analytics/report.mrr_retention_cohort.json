@@ -1,0 +1,53 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "retention",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "For each month's intake, how much of its recurring revenue is still there one month later, two months later, and so on.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 3333,
+  "key": "<id:1>",
+  "kind": "rate",
+  "matrix": {
+    "base_kind": "money",
+    "columns": ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"],
+    "rows": [
+      {
+        "base": 8644,
+        "group": "Jan 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, 3984, 0, 0, null, null, null, null]
+      },
+      {
+        "base": 5000,
+        "group": "Feb 2026",
+        "values": [10000, 10000, 10000, 10000, 9000, 9000, 9000, null, null, null, null, null]
+      },
+      {
+        "base": 10400,
+        "group": "Mar 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, 10000, null, null, null, null, null, null]
+      },
+      {
+        "base": 10000,
+        "group": "Apr 2026",
+        "values": [10000, 10000, 10000, 10000, 10000, null, null, null, null, null, null, null]
+      },
+      {
+        "base": 3333,
+        "group": "May 2026",
+        "values": [10000, 10000, 10000, 10000, null, null, null, null, null, null, null, null]
+      }
+    ]
+  },
+  "name": "MRR Retention Cohort",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "cohort",
+  "tags": ["cohorts"]
+}

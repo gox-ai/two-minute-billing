@@ -1,0 +1,17 @@
+# Caddy terminates TLS and sets X-Forwarded-For / -Proto. With no `trusted_proxies` it drops a
+# client-sent X-Forwarded-For, so TRUST_PROXY_HOPS=1 is exact. Behind Cloudflare or a load
+# balancer, add `trusted_proxies` here and set TRUST_PROXY_HOPS=2.
+# The worker's port 4002 is never proxied.
+
+{$API_HOST} {
+	reverse_proxy api:4000 {
+		# Imports and large exports run long.
+		transport http {
+			read_timeout 120s
+		}
+	}
+}
+
+{$APP_HOST} {
+	reverse_proxy dashboard:4100
+}

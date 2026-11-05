@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "transactions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "The same discount total, split by the coupon that caused it.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 0,
+  "key": "revenue_leakage_summary",
+  "kind": "money",
+  "name": "Revenue Leakage Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": ["leakage", "billing_and_taxes"]
+}

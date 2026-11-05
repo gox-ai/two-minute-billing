@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# The engine image: API, billing worker and the one-shot `init`, chosen by command.
+#
+# Build from the PUBLISHED tree (a public checkout, or `pnpm publish:oss -- --out <dir>`), never
+# from a private checkout: `.dockerignore` is the second fence, not the first.
+#
+#   docker build -f deploy/docker/Dockerfile.engine -t two-minute-billing-engine .
+#
+# No secret enters the image: no ENV, ARG or file carries one. They arrive at run time.
+ARG NODE_IMAGE=node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+
+FROM ${NODE_IMAGE} AS deps
+WORKDIR /app
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY dashboard/package.json dashboard/package.json
+COPY docs-site/package.json docs-site/package.json
+# Engine runtime dependencies only (tsx runs the TypeScript, as under pm2).
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter tmbilling
+
+FROM ${NODE_IMAGE}
+# tini is PID 1: it forwards SIGTERM to node and reaps tsx's esbuild helper.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tini \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV NODE_ENV=production \
+    TMBILLING_REQUIRE_SCHEMA=TRUE \
+    MALLOC_ARENA_MAX=2
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json tsconfig.json ./
+COPY src ./src
+COPY db ./db
+COPY scripts/seed-geo.ts scripts/bootstrap-worker.ts ./scripts/
+COPY scripts/sql ./scripts/sql
+COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
+USER node
+EXPOSE 4000
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/deploy/docker/entrypoint.sh"]
+# Exec form, never `pnpm` or `sh -c`: SIGTERM must reach the process that drains.
+CMD ["node", "--import", "tsx", "src/index.ts"]

@@ -1,0 +1,54 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "How much of your recurring revenue sits in your largest accounts. Bands do not overlap, so they sum to total MRR and any top-N share is the running total.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 28233,
+  "key": "customer_concentration",
+  "kind": "money",
+  "name": "Customer Concentration",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Largest account",
+      "group_id": null,
+      "value": 10000
+    },
+    {
+      "group": "Accounts 2–5",
+      "group_id": null,
+      "value": 18233
+    },
+    {
+      "group": "Accounts 6–10",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Accounts 11–25",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Accounts 26–100",
+      "group_id": null,
+      "value": 0
+    },
+    {
+      "group": "Everyone else",
+      "group_id": null,
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": ["customers"]
+}

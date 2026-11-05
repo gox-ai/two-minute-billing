@@ -1,0 +1,29 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "churn",
+  "comparison": {
+    "basis": "complete_month",
+    "change_bps": -3377,
+    "prev_label": "Jun 2026",
+    "prev_value": 5200
+  },
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Churned recurring revenue divided by the number of subscriptions that left.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 3444,
+  "key": "average_revenue_lost_per_churned_subscription",
+  "kind": "money",
+  "name": "Average Revenue Lost per Churned Subscription",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "flow",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

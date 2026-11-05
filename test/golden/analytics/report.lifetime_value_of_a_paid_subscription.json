@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "subscriptions",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "What a paying subscription is worth over its life: its average monthly revenue times the average life of one that ended.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 30021,
+  "key": "lifetime_value_of_a_paid_subscription",
+  "kind": "money",
+  "name": "Lifetime Value of a Paid Subscription",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "stock",
+  "tags": [],
+  "window_label": "Jul 2026"
+}

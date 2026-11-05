@@ -1,0 +1,132 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "recurring_revenue",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Every month on one row: what you opened with, everything that moved, and what you closed with.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 28233,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "MRR Movement Summary",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "periodic",
+  "table": {
+    "columns": [
+      {
+        "key": "opening",
+        "label": "Opening"
+      },
+      {
+        "key": "new",
+        "label": "New"
+      },
+      {
+        "key": "free_to_paid",
+        "label": "Free to paid"
+      },
+      {
+        "key": "upgrade",
+        "label": "Upgrade"
+      },
+      {
+        "key": "expansion",
+        "label": "Expansion"
+      },
+      {
+        "key": "reactivation",
+        "label": "Reactivation"
+      },
+      {
+        "key": "resumed",
+        "label": "Resumed"
+      },
+      {
+        "key": "downgrade",
+        "label": "Downgrade"
+      },
+      {
+        "key": "contraction",
+        "label": "Contraction"
+      },
+      {
+        "key": "paused",
+        "label": "Paused"
+      },
+      {
+        "key": "churn",
+        "label": "Cancellation"
+      },
+      {
+        "key": "fx",
+        "label": "FX"
+      },
+      {
+        "key": "net",
+        "label": "Net"
+      },
+      {
+        "key": "closing",
+        "label": "Closing"
+      }
+    ],
+    "rows": [
+      {
+        "period": "Aug 2026",
+        "values": [28233, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28233]
+      },
+      {
+        "period": "Jul 2026",
+        "values": [31677, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3444, 0, -3444, 28233]
+      },
+      {
+        "period": "Jun 2026",
+        "values": [37377, 0, 0, 0, 0, 0, 0, 0, 500, 0, 5200, 0, -5700, 31677]
+      },
+      {
+        "period": "May 2026",
+        "values": [34044, 3333, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3333, 37377]
+      },
+      {
+        "period": "Apr 2026",
+        "values": [24044, 10000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10000, 34044]
+      },
+      {
+        "period": "Mar 2026",
+        "values": [13644, 10400, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10400, 24044]
+      },
+      {
+        "period": "Feb 2026",
+        "values": [8644, 5000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5000, 13644]
+      },
+      {
+        "period": "Jan 2026",
+        "values": [0, 8644, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8644, 8644]
+      },
+      {
+        "period": "Dec 2025",
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Nov 2025",
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Oct 2025",
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      },
+      {
+        "period": "Sep 2025",
+        "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    ]
+  },
+  "tags": []
+}

@@ -1,0 +1,29 @@
+# Starts the pm2 daemon, and every app in ~webadmin/.pm2/dump.pm2, at boot. Install and switch-over:
+# deploy/README.md § 7. Without it a reboot brings no app back: no API, no billing clock.
+[Unit]
+Description=pm2 for tmbilling (every app saved in ~webadmin/.pm2/dump.pm2)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=forking
+User=webadmin
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+# fnm's `default` alias, not a per-shell fnm_multishells path: that one is gone after a reboot.
+Environment=PATH=/home/webadmin/.local/share/fnm/aliases/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PM2_HOME=/home/webadmin/.pm2
+# glibc reads this once, at exec; cluster children inherit it from the daemon (§ 7).
+Environment=MALLOC_ARENA_MAX=2
+PIDFile=/home/webadmin/.pm2/pm2.pid
+ExecStartPre=/var/www/html/projects/tmbilling/deploy/systemd/wait-for-db.sh
+ExecStart=/usr/lib/node_modules/pm2/bin/pm2 resurrect
+ExecStop=/usr/lib/node_modules/pm2/bin/pm2 kill
+TimeoutStartSec=180
+# A job cut off here is recovered by the stranded-lock sweep after the next start.
+TimeoutStopSec=120
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

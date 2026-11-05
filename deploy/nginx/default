@@ -1,0 +1,8 @@
+# Replaces Ubuntu's stock default site, which served /var/www/html — and the repo inside it.
+# Unknown hosts and the bare IP get no response.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}

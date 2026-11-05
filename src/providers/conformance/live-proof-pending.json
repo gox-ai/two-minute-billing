@@ -1,0 +1,33 @@
+{
+  "$comment": "Payment methods that pass verify:gateway-conformance offline but have not passed their whole lifecycle in the gateway's sandbox, real webhooks included: gateway -> method -> { reason, planRef }. A listed method is not offered: no new setups, and buyers do not see it on checkout, portal or pay now. Methods already saved keep charging. Keys are catalog method keys (advertisedMethods, or apple_pay on a gateway with applePayHosted); verify:gateway-conformance fails on a key the catalog does not have. Remove the entry when the method is proven live. See scripts/conformance/README.md.",
+  "adyen": {
+    "sepa_debit": {
+      "reason": "Adyen deactivated SEPA Direct Debit on the test merchant account, so no live sandbox debit has run.",
+      "planRef": "4 live proof"
+    }
+  },
+  "cybersource": {
+    "us_bank_account": {
+      "reason": "The Microform payment form takes cards only. It does not show the ACH authorization text yet.",
+      "planRef": "4 live proof"
+    }
+  },
+  "checkoutcom": {
+    "apple_pay": {
+      "reason": "The Hosted Payments Page Apple Pay flow needs Safari and an Apple sandbox tester account.",
+      "planRef": "4 live proof"
+    }
+  },
+  "payu": {
+    "bank_transfer": {
+      "reason": "A net banking mandate has not passed in the PayU test environment.",
+      "planRef": "4 live proof"
+    }
+  },
+  "square": {
+    "apple_pay": {
+      "reason": "The Square Sandbox does not show Apple Pay on checkout pages.",
+      "planRef": "4 live proof"
+    }
+  }
+}

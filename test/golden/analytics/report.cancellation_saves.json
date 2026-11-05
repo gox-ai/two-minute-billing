@@ -1,0 +1,23 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "retention",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Of the customers who saw offers when they started to cancel in the portal, the share who took one instead, by offer. An offer followed by a cancel within 30 days does not count.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": null,
+  "key": "cancellation_saves",
+  "kind": "rate",
+  "name": "Cancellation Saves",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": []
+}

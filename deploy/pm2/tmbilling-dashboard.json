@@ -1,0 +1,26 @@
+{
+  "_comment_process": [
+    "node directly on Next's real entrypoint, not the `node_modules/.bin/next` shim.",
+    "",
+    "Same class of defect as the other two configs (see tmbilling-worker.json): that shim is",
+    "a /bin/sh script, so pm2 was supervising a shell rather than the Next server, and every",
+    "signal had to survive a hop that pm2 could not see past.",
+    "",
+    "Lowest stakes of the three — a hard-killed Next server drops in-flight page renders and",
+    "nothing else, no locks and no money — but fixed alongside them so all three configs",
+    "state the same rule: pm2's pid IS the process, always."
+  ],
+  "name": "tmbilling-dashboard",
+  "script": "node",
+  "args": "node_modules/next/dist/bin/next start -p 4101 -H 127.0.0.1",
+  "cwd": "/var/www/html/projects/tmbilling/dashboard",
+  "interpreter": "none",
+  "instances": 1,
+  "exec_mode": "fork",
+  "wait_ready": false,
+  "kill_timeout": 10000,
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
