@@ -1,0 +1,95 @@
+# Build, push and sign the self-host images (ghcr.io/gox-ai/two-minute-billing-{engine,dashboard})
+# on a release tag of the PUBLIC repository. Skipped in a private repository.
+#
+# GITHUB_TOKEN pushes: a repository's own workflow may create packages in its owner's namespace,
+# so no personal token is involved. Signing is keyless: the signature names this workflow and
+# the tag it ran on (cosign verify --certificate-identity-regexp …/images-publish.yml@refs/tags/v…).
+#
+# Only GitHub's own actions are used: QEMU comes from a digest-pinned image, cosign from a pinned
+# release binary checked against its SHA-256.
+#
+# Run it by hand (Actions → Publish images → Run workflow) to build without pushing.
+name: Publish images
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the v (for example 0.1.1)"
+        required: true
+      push:
+        description: "Push and sign (off = build only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    if: github.event.repository.private == false && github.repository == 'gox-ai/two-minute-billing'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      COSIGN_VERSION: v3.1.4
+      COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+      BINFMT_IMAGE: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and mode
+        id: mode
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUSH: ${{ inputs.push }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="${GITHUB_REF_NAME#v}"; push=true
+          else
+            version="$INPUT_VERSION"; push="$INPUT_PUSH"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          echo "Building $version (push: $push)"
+
+      - name: arm64 emulation
+        run: docker run --privileged --rm "$BINFMT_IMAGE" --install arm64
+
+      - name: Builder
+        run: docker buildx create --name release --driver docker-container --use --bootstrap
+
+      - name: Log in to ghcr.io
+        if: steps.mode.outputs.push == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Install cosign (pinned, checksum verified)
+        if: steps.mode.outputs.push == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL -o "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Build images
+        env:
+          VERSION: ${{ steps.mode.outputs.version }}
+          PUSH: ${{ steps.mode.outputs.push }}
+        run: |
+          if [ "$PUSH" = true ]; then
+            bash deploy/docker/build-images.sh "$VERSION" --push --sign
+          else
+            bash deploy/docker/build-images.sh "$VERSION"
+          fi

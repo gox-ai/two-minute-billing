@@ -250,7 +250,6 @@
     "verify:conformance:pricing": "tsx scripts/lib/verify-run.ts scripts/verify-conformance-pricing.ts",
     "verify:conformance:usage": "tsx scripts/lib/verify-run.ts scripts/verify-conformance-usage.ts",
     "verify:gate": "tsx scripts/lib/verify-run.ts scripts/verify-gate.ts",
-    "verify:all:fresh": "tsx scripts/verify-all-fresh.ts",
     "verify:hubspot-sync": "tsx scripts/lib/verify-run.ts scripts/verify-hubspot-sync.ts",
     "verify:hubspot-customers": "tsx scripts/lib/verify-run.ts scripts/verify-hubspot-customers.ts",
     "verify:hubspot-deals": "tsx scripts/lib/verify-run.ts scripts/verify-hubspot-deals.ts",

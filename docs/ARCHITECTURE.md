@@ -1,9 +1,7 @@
 # tmbilling — Architecture
 
-> **Canonical architecture doc.** Supersedes `BLUEPRINT.md` and the earlier architecture drafts
-> (now in `docs/archive/`). For *how to build* (conventions, golden path, verify gates) see
-> [`GUIDE.md`](./GUIDE.md); for *where we are* (status/roadmap/changelog) see
-> [`PROGRESS.md`](./PROGRESS.md); for operator migration how-to see [`MIGRATION.md`](./MIGRATION.md).
+> **Canonical architecture doc.** For *how to build* (conventions, golden path, verify gates) see
+> [`GUIDE.md`](./GUIDE.md).
 
 ## 1. What tmbilling is
 
@@ -13,7 +11,7 @@ subscription businesses — sane defaults, clean mental model; (2) a real, well-
 with Stripe-quality DX; (3) easy migration in — built-in importers with a reconcile step; (4)
 provider-agnostic — Stripe, RazorPay, PayPal (and more) interchangeably; (5) automatic
 subscription management — renewals, proration, dunning, all hands-off. The initial build
-program (backend phases 0→H + dashboard) is complete; ongoing work lives in PROGRESS.md.
+program (backend phases 0→H + dashboard) is complete.
 
 ---
 
@@ -160,7 +158,7 @@ own host — and that is a sizing decision, not an architectural one.
 
 **Supersedes ADR-010.** No columnar analytics store is adopted. The analytics module
 (`src/modules/metrics/olap/`, its sync job, its gates and the ClickHouse client) was removed on
-2026-09-23; `git log -- src/modules/metrics/olap` holds it if it is ever wanted again.
+2026-09-23, before the first open-source release, so none of it ships.
 
 **What we measured.** Nine engines, each against a copy of the production book — 74,574
 subscriptions, 1 GB — through the application's own `resolveReport`, with a row-store baseline taken
@@ -264,18 +262,20 @@ transfer reference the same object across test and live businesses.
 ## 4. System diagram
 
 <!-- BEGIN GENERATED: architecture-mermaid -->
-_Generated from [architecture.json](architecture/architecture.json) by `pnpm docs:generate`. Arrows point at dependencies._
+_Generated from [architecture.json](architecture/architecture.json). Arrows point at dependencies._
 
 ```mermaid
 flowchart TD
   subgraph layer_foundation["Foundation modules"]
     audit["audit"]
     auth["auth"]
+    comments["comments"]
     emails["emails"]
     events["events"]
     hubspot["hubspot"]
     integrations["integrations"]
     ledger["ledger"]
+    list_views["list-views"]
     ops["ops"]
     request_log["request-log"]
     tenancy["tenancy"]
@@ -284,7 +284,9 @@ flowchart TD
   subgraph layer_catalog["Catalog & pricing"]
     catalog["catalog"]
     coupons["coupons"]
+    custom_fields["custom-fields"]
     entitlements["entitlements"]
+    reason_codes["reason-codes"]
     tax["tax"]
   end
   subgraph layer_customer["Customers & balances"]
@@ -294,10 +296,12 @@ flowchart TD
     customer_portal["customer-portal"]
     customers["customers"]
     metadata_rules["metadata-rules"]
+    segments["segments"]
     usage_controls["usage-controls"]
     wallet["wallet"]
   end
   subgraph layer_billing["Subscriptions & billing"]
+    dunning_policies["dunning-policies"]
     invoicing["invoicing"]
     metering["metering"]
     metrics["metrics"]
@@ -306,10 +310,13 @@ flowchart TD
     team_alerts["team-alerts"]
   end
   subgraph layer_payments["Payments & gateway"]
+    disputes["disputes"]
     gateway["gateway"]
     payment_intents["payment-intents"]
     payment_methods["payment-methods"]
+    payment_requests["payment-requests"]
     payments["payments"]
+    receipts["receipts"]
     refunds["refunds"]
     transactions["transactions"]
   end
@@ -326,6 +333,8 @@ flowchart TD
   hubspot --> customers
   integrations --> events
   integrations --> hubspot
+  list_views --> audit
+  list_views --> custom_fields
   ops --> subscriptions
   tenancy --> audit
   tenancy --> gateway
@@ -372,6 +381,10 @@ flowchart TD
   customers --> webhooks
   customers --> metadata_rules
   metadata_rules --> tenancy
+  segments --> customers
+  segments --> custom_fields
+  segments --> metrics
+  segments --> subscriptions
   usage_controls --> catalog
   usage_controls --> credits
   usage_controls --> customers
@@ -391,6 +404,9 @@ flowchart TD
   wallet --> payments
   wallet --> transactions
   wallet --> webhooks
+  dunning_policies --> audit
+  dunning_policies --> events
+  dunning_policies --> subscriptions
   invoicing --> audit
   invoicing --> catalog
   invoicing --> coupons
@@ -429,6 +445,9 @@ flowchart TD
   team_alerts --> invoicing
   team_alerts --> webhooks
   team_alerts --> emails
+  disputes --> audit
+  disputes --> events
+  disputes --> ledger
   gateway --> events
   gateway --> webhooks
   payment_intents --> events
@@ -439,12 +458,23 @@ flowchart TD
   payment_intents --> webhooks
   payment_methods --> events
   payment_methods --> webhooks
+  payment_requests --> customers
+  payment_requests --> events
+  payment_requests --> gateway
+  payment_requests --> invoicing
+  payment_requests --> ledger
+  payment_requests --> payments
+  payment_requests --> receipts
+  payment_requests --> transactions
   payments --> events
   payments --> invoicing
   payments --> ledger
   payments --> subscriptions
   payments --> wallet
   payments --> webhooks
+  receipts --> customers
+  receipts --> events
+  receipts --> invoicing
   refunds --> events
   refunds --> ledger
   refunds --> transactions
@@ -472,9 +502,9 @@ flowchart TD
 <!-- END GENERATED: architecture-mermaid -->
 
 Machine-readable module graph: [`architecture/architecture.json`](./architecture/architecture.json). Interactive
-visualizations: [`architecture.html`](./architecture/architecture.html) (module graph) and
-[`architecture-flow.html`](./architecture/architecture-flow.html) (flows) — regenerate both with
-[`visualize-architecture.py`](./architecture/visualize-architecture.py).
+visualizations: [`architecture.html`](./architecture/architecture.html) (every module, generated from the
+JSON by [`visualize-architecture.py`](./architecture/visualize-architecture.py)) and
+[`architecture-flow.html`](./architecture/architecture-flow.html) (money and state flows, drawn by hand).
 
 ---
 
@@ -662,7 +692,7 @@ generated typed `sdk/`.
 ```
 tmbilling/
 ├─ CLAUDE.md            # read-me-first for every session
-├─ docs/                # ARCHITECTURE (this) · PROGRESS · GUIDE · MIGRATION · …
+├─ docs/                # ARCHITECTURE (this) · GUIDE · architecture/ (module graph)
 ├─ db/
 │  ├─ schema/           # Drizzle table definitions (one file per domain; barrel index.ts)
 │  └─ migrations/       # generated + hand-written (RLS policies, triggers)
@@ -686,7 +716,7 @@ tmbilling/
 └─ test/                # vitest unit layer
 ```
 
-Stack: Node 20 · pnpm · Fastify · Zod · Postgres · Drizzle ORM · graphile-worker · pino.
+Stack: Node 24 · pnpm · Fastify · Zod · Postgres · Drizzle ORM · graphile-worker · pino.
 Dashboard is a BFF: the browser never sees the API key.
 
 ---
@@ -720,9 +750,9 @@ Durable concepts and where they live:
 | Webhooks | unlimited endpoints, HMAC-signed, retry/backoff | |
 | Settings: business default + per-customer/sub override | same pattern | e.g. `auto_collection`, `net_term_days`, calendar anchors. |
 
-**Deliberately not built (deferred):** customer hierarchy / consolidated invoicing, email
-engine + email logs, hosted checkout/portal pages, card account updater, automatic tax
-providers, renewal fan-out (scale-gated). See PROGRESS.md for the live backlog.
+**Deliberately not built (deferred):** customer hierarchy / consolidated invoicing, card
+account updater, automatic tax providers (Stripe Tax and Avalara are scaffolds only). Renewal
+fan-out is built and off by default (`RENEWAL_FANOUT`), for when renewal volume needs it.
 
 **Cross-cutting rules (permanent):**
 1. Every new/changed mutation emits its event (review gate).
@@ -736,7 +766,7 @@ providers, renewal fan-out (scale-gated). See PROGRESS.md for the live backlog.
 
 Fixed input → expected-output cases for the pricing and aggregation math, asserted against
 `computeLineAmount` / `aggregateUsage`. Run: `pnpm verify:conformance:pricing` ·
-`pnpm verify:conformance:usage` (both also run inside `pnpm verify:all`). Amounts below are
+`pnpm verify:conformance:usage` (both also run in the full suite). Amounts below are
 major units; tmbilling computes in integer **minor units** (×100).
 
 ### Charge models

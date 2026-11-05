@@ -33,9 +33,10 @@ pnpm test
 ```
 
 Run the `verify:*` suites that cover what you changed (listed in
-[`scripts/README.md`](./scripts/README.md)). They run against a real Postgres; use
-`pnpm verify:all:fresh -- --suite <name>` so they get a throwaway database. Dashboard changes must
-also pass `pnpm verify:ui`.
+[`scripts/README.md`](./scripts/README.md)), for example `pnpm verify:coupons`. They run against
+the real Postgres in `DATABASE_URL` and write test data to it, so point `DATABASE_URL` at a
+database you can throw away. Dashboard changes must also pass `pnpm verify:ui`. We run the full
+suite before we merge.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org) — the commit
 hook checks them.

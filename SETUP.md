@@ -5,8 +5,7 @@ The one-page runbook: bring up Postgres, build the schema, then **fill the datab
 engine, so every dashboard page and report has something to show.
 
 > Conceptual background lives in the canonical docs — [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
-> and [`docs/GUIDE.md`](./docs/GUIDE.md). Moving an existing book in from another billing system is
-> [`docs/MIGRATION.md`](./docs/MIGRATION.md). This file only sequences the commands.
+> and [`docs/GUIDE.md`](./docs/GUIDE.md). This file only sequences the commands.
 >
 > Want to run it, not develop it? `deploy/docker/` installs everything with Docker Compose — see
 > the "Self-host with Docker" page in the developer docs.
@@ -33,7 +32,7 @@ a second run otherwise stops at `An account with that email already exists`.
 
 | Need | Check | Notes |
 |---|---|---|
-| Node 20 via `fnm` | `fnm use && node -v` → `v20.18.2` | `.node-version` pins it |
+| Node 24 via `fnm` | `fnm use && node -v` → `v24.21.0` | `.node-version` pins it |
 | `pnpm` | `pnpm -v` | **Never** npm/yarn/bun — the lockfile is `pnpm-lock.yaml` |
 | Postgres 17 | see §1 | must be a **superuser** connection: migration `0001` runs `CREATE ROLE tmbilling_app` |
 
@@ -175,8 +174,9 @@ pnpm test                     # vitest unit tests (billing math)
 pnpm verify:catalog           # one end-to-end suite; needs the API + worker up
 ```
 
-⚠️ **`pnpm verify:all` runs `db:reset`** — it truncates the database, seed included. Use
-`pnpm verify:all:fresh`, which runs the same gate against a throwaway database and drops it after.
+Every `verify:*` suite writes test data to the database in `DATABASE_URL`; run them against a
+database you can throw away.
+
 
 ---
 

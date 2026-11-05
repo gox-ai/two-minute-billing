@@ -7,72 +7,11 @@
 > shown here with real code copied from this repo. When unsure, find the nearest existing
 > module and mirror it.
 >
-> **Read order:** (1) this guide top-to-bottom once; (2) [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-> for *why* each module looks the way it does; (3) [`BACKEND-IMPLEMENTATION-PLAN.md`](./archive/cloning-phase/BACKEND-IMPLEMENTATION-PLAN.md)
-> for the authoritative task list (this guide's tickets mirror it — that doc wins on any conflict of scope).
->
-> **Task tracking — [`CLONE-PROGRESS.md`](./archive/cloning-phase/CLONE-PROGRESS.md) is your work queue and status
-> board.** At the START of every session: open it, find the first unchecked subtask (top to
-> bottom — the order is the dependency order), and work on exactly that. As you work: tick each
-> subtask (`- [x]`) the moment it's done AND verified. At the END of every session: update the
-> ticket/phase statuses (⬜→🚧→✅), the `Done/Total` counts in its Progress matrix, and add a
-> dated line to its Log. Never work on a ticket without updating the tracker — an out-of-date
-> tracker is a bug, same severity as a failing test.
->
-> **Golden rule:** small increments. One ticket → typecheck → its verify suite → `pnpm verify:all`
-> → tick it in CLONE-PROGRESS.md → stop. Never batch multiple tickets before verifying. If
-> `verify:all` was green before your change and red after, you broke something — fix it before
-> moving on.
->
-> **⚠️ Status note (2026-07-06):** the initial build program above is **complete** — the
-> `cloning-phase/` trackers are now **archived history**, not a live queue. For all ongoing work
-> (new features, bug fixes) follow **§ Working process** immediately below; §§ 1–7 remain the
-> authoritative *how-to-build* reference and still apply verbatim.
+> **Read order:** this guide top to bottom once, then [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+> for *why* each module looks the way it does.
 
 ---
 
-## Working process (ongoing — start here for any new feature or bug)
-
-The single source of truth is **[`PROGRESS.md`](./PROGRESS.md)** — not the `cloning-phase/`
-trackers (archived). **Do not create new docs** (CLAUDE.md mandates a fixed set); put new content
-in the closest existing one.
-
-**Where each thing is tracked:**
-- **Backlog (what's next)** → PROGRESS.md § *"Next up — start here"*. Every not-yet-done bug or
-  feature is a bullet here.
-- **Current capabilities** → PROGRESS.md § *"Feature status"*. Flip a status only when the capability actually changes.
-- **What happened** → PROGRESS.md § *Changelog* (newest first) — one line at the END of every session.
-- **In-session checklist** → the live todo list (ephemeral; the durable record is PROGRESS.md).
-- **Cross-session preferences/decisions** → auto-memory — NOT task status.
-
-**The loop for every task:**
-1. **Start** — read CLAUDE.md + PROGRESS.md. Pick the top item from *"Next up"* (or add it there
-   first if it's new, so it's captured).
-2. **Branch** — `git checkout -b fix/<slug>` or `feat/<slug>` off `main`. Never work on main.
-3. **Build** — follow the golden path in § 3 below (schema → migration+RLS → service → route →
-   verify). Mirror the nearest existing module.
-4. **Verify** — `pnpm typecheck` + the relevant `pnpm verify:*` (+ a real-browser check for UI —
-   renders ≠ works; browser-only bugs have slipped past typecheck + review before).
-5. **Track** — in the SAME change: remove the item from *"Next up"*, flip *"Feature status"* if a
-   capability changed, add one *Changelog* line.
-6. **PR** — push the feature branch, open a PR to `main`. **Ask before push/merge.**
-
-**Match ceremony to size:**
-- *Tiny fix* (typo, one-liner): skip the backlog bullet; just fix + one changelog line.
-- *Bug worth tracking*: add a *"Next up"* bullet with **symptom + where**; the changelog line
-  records the **root cause** when fixed (that's what makes history useful later).
-- *Small feature* (~1 session): backlog bullet → build → changelog.
-- *Large multi-session program*: the ONLY case that justifies a dedicated tracker doc (as
-  `CLONE-PROGRESS.md` was) — one file with a ticket checklist + status matrix; fold a summary into
-  PROGRESS.md and archive the tracker when it closes.
-
-**Templates:**
-```
-Backlog item (in "Next up"):   - <verb> <what> — <one-line why / where>. (blocked by: <x>, if any)
-Changelog line (newest first): - **YYYY-MM-DD · <title>** (`branch`) — <what changed + root cause if a bug>. <verification>.
-```
-
----
 
 ## 0. Environment & commands
 
@@ -97,8 +36,6 @@ Commands you will use constantly:
 | `pnpm db:reset` | drop + recreate + re-migrate + reseed the local DB |
 | `pnpm seed` | seed demo org/businesses/api-keys |
 | `pnpm verify:<name>` | run one verify suite (e.g. `pnpm verify:coupons`) |
-| `pnpm verify:all` | run the whole suite via `scripts/verify-all.sh` — the release gate. **Truncates the local DB** |
-| `pnpm verify:all:fresh` | the same gate against a throwaway database, dropped after — prefer this locally. Sharded, it is six processes like CI: `-- --shard i/5` (i=1..5, each skips gateway-conformance) plus `-- --only gateway-conformance`. `-- --list` prints a run's steps without running them |
 | `pnpm sdk:generate` | regenerate the typed SDK from OpenAPI (run after touching routes) |
 | `pnpm dev` | run the API server (Fastify) |
 | `pnpm dev:dashboard` | run the Next.js dashboard on :4100 |
@@ -106,6 +43,7 @@ Commands you will use constantly:
 | `pnpm lint` | oxlint over BOTH packages (add `--quiet` for errors only, as CI runs it) |
 | `pnpm lint:fix` | oxlint with autofix |
 | `pnpm format` | oxfmt — see the warning below before running this repo-wide |
+
 
 ### Lint, format and git hooks
 
@@ -146,15 +84,10 @@ rejected at commit time, not at review time.
 
 **Standard loop for any change:**
 ```
-pick next unchecked subtask in CLONE-PROGRESS.md
-  → edit → pnpm typecheck → pnpm db:generate && pnpm db:migrate (if schema changed)
-  → pnpm verify:<the suite for this ticket> → pnpm verify:all
-  → tick the subtask in CLONE-PROGRESS.md → commit-ready
+edit → pnpm typecheck → pnpm db:generate && pnpm db:migrate (if schema changed)
+  → pnpm verify:<the suite for your change> → pnpm lint → commit-ready
 ```
 
-**Commit granularity: one commit per PHASE is fine** (user decision 2026-07-03) — message
-`Phase X: <scope> (<TICKET>..<TICKET>)`. Work on the current branch; never push to main.
-Verify + tracker updates still happen per ticket — only the commit is batched.
 
 ---
 
@@ -225,25 +158,29 @@ webhooks async via the billing clock.
 
 Each module has a `README.md` next to its code (`src/modules/<name>/README.md`) — purpose, data
 model, routes, invariants, changelog. The table below is **generated** from
-`docs/architecture/architecture.json` by `pnpm docs:generate` — edit the JSON, not the table.
+`docs/architecture/architecture.json` — edit the JSON, not the table.
 
 <!-- BEGIN GENERATED: module-map -->
 | Module | Owns | Key service entry points | Route file · schema |
 |---|---|---|---|
 | [`audit`](../src/modules/audit/README.md) | Append-only actor/diff log of writes (who did what). | `writeAuditLog` `listAuditLogs` | `audit-routes.ts` · `audit-logs` |
 | [`auth`](../src/modules/auth/README.md) | Dashboard login, sessions, RBAC, invites. | `login` `signup` `resolveSession` `can` `inviteUser` | `auth-routes.ts` · `users` |
+| [`comments`](../src/modules/comments/README.md) | Operator notes pinned to a billing record (invoice, credit note, customer, subscription). | `listComments` `createComment` `updateComment` `deleteComment` | `comment-routes.ts` · `comments` |
 | [`emails`](../src/modules/emails/README.md) | Customer billing email outbox: event-sink enqueue + clock-driven delivery via a provider-agnostic mailer adapter (opt-in per business). | `enqueueEmails` `deliverPendingEmails` `renderEmail` `resolveEmailConfig` | `email-routes.ts` · `emails(email_messages)` |
 | [`events`](../src/modules/events/README.md) | Typed ~67-event registry, payload builders, events list API. | `listEventsFiltered` `getEventWithDeliveries` `buildEventData` | `events-routes.ts` · `platform(events)` |
 | [`hubspot`](../src/modules/hubspot/README.md) | HubSpot CRM sync — OAuth connection per business, record links, the push queue fed by the integrations sink, sync runs and their log. | `connectHubSpot` `disconnectHubSpot` `queueHubSpotSync` `runSync` | `hubspot-routes.ts` · `hubspot` |
 | [`integrations`](../src/modules/integrations/README.md) | Integrations catalogue + one event sink: push integrations (partner API call per event, own outbox) and sync adapters (HubSpot); business-level connect API. | `dispatchIntegrations` `connectIntegration` `deliverPendingIntegrations` `redeliverIntegrationDelivery` | `integration-routes.ts` · `integrations(integration_connections, integration_deliveries)` |
 | [`ledger`](../src/modules/ledger/README.md) | Append-only double-entry postings; the money truth. Balances derived, never mutated. | `postEntries` `accountBalance` | `-` · `ledger` |
+| [`list-views`](../src/modules/list-views/README.md) | Saved list views: named filter sets on every list screen, private or shared. | `listListViews` `validateFilters` `createListView` `updateListView` `deleteListView` | `list-view-routes.ts` · `list-views` |
 | [`ops`](../src/modules/ops/README.md) | Instrumentation the engine runs on — billing-clock tick records (counters, per-item errors, overrun guard), worker heartbeats, the stranded queue-lock release, the due-work index, HTTP request stats. | `startClockTick` `finishClockTick` `registerWorker` `beat` `releaseStrandedQueueLocks` `refreshDueWork` `recordHttpRequest` | `-` · `platform(clock_ticks)` `platform(worker_heartbeats)` |
 | [`request-log`](../src/modules/request-log/README.md) | API request log: one redacted row per /v1 request an organization's credentials made (API-key reads and writes, dashboard writes), buffered off the request path; Request-Id header. | `registerRequestLog` `listRequestLogsPage` `getRequestLog` `flushRequestLogs` | `request-log-routes.ts` · `request-log` |
 | [`tenancy`](../src/modules/tenancy/README.md) | Organizations, businesses, API keys — the tenant + isolation boundary. | `createBusiness` `updateBusiness` `listBusinesses` `createApiKey` `authenticateApiKey` | `(auth)` · `tenancy` |
 | [`webhooks`](../src/modules/webhooks/README.md) | Outbox: emitEvent (event+deliveries in one tx), endpoints, delivery, redeliver, test-send, inbound provider events. | `emitEvent` `deliverPending` `createEndpoint` `redeliverDelivery` `testSendEndpoint` `handleProviderEvent` | `webhook-routes.ts` · `platform(webhook_endpoints, webhook_deliveries)` |
 | [`catalog`](../src/modules/catalog/README.md) | Product groups, products (plan/addon/charge), prices (all models), differential + attached items, price snapshots. | `createProduct` `createPrice` `snapshotPrice` `resolveDifferential` `resolveMandatoryAddonItems` `setDifferentialPrice` | `catalog-routes.ts` · `catalog` `price_rates` |
 | [`coupons`](../src/modules/coupons/README.md) | Coupons, sets, codes; stacked discount computation; item constraints. | `createCoupon` `computeStackedDiscounts` `applyCouponToSubscription` `addCouponSetCodes` `couponStatus` | `coupon-routes.ts` · `coupons` |
+| [`custom-fields`](../src/modules/custom-fields/README.md) | Admin-defined typed fields on customers, subscriptions and catalog items, validated on write. | `createDefinition` `listDefinitions` `updateDefinition` `archiveDefinition` `validateAndCoerce` | `custom-field-routes.ts` · `custom-fields` |
 | [`entitlements`](../src/modules/entitlements/README.md) | Features + plan/subscription grants + runtime checks. | `createFeature` `setPlanEntitlement` `setSubscriptionEntitlement` `checkEntitlement` | `entitlement-routes.ts` · `entitlements` |
+| [`reason-codes`](../src/modules/reason-codes/README.md) | Merchant-managed reason lists an operator picks from, so churn and refund reports group by code. | `listReasonCodes` `resolveOfferedReasons` `createReasonCode` `updateReasonCode` `deleteReasonCode` | `reason-code-routes.ts` · `reason-codes` |
 | [`tax`](../src/modules/tax/README.md) | Manual tax-rate table, per-line tax computation, pluggable tax providers. | `computeInvoiceTax` `allocateTaxAcrossLines` `createTaxRate` `getTaxProvider` | `tax-routes.ts` · `tax` |
 | [`checkout`](../src/modules/checkout/README.md) | Hosted checkout: operator mints a price-scoped cstk_ token; buyer subscribes at /checkout/<token> via /checkout/v1/* (enter details, vault card, create subscription) — org key never reaches the buyer. mode='change' instead changes an EXISTING subscription's plan (upgrade/downgrade, proration preview, customer pinned at mint). | `createCheckoutSession` `resolveCheckoutSession` `completeCheckout` | `checkout-routes.ts` · `checkout-sessions` |
 | [`credit-notes`](../src/modules/credit-notes/README.md) | Adjustment + refundable credit notes, allocations, refunds, void; routes write-off. | `issueAdjustmentCreditNote` `issueRefundableCreditNote` `refundCreditNote` `voidCreditNote` `allocateRefundableDraw` | `credit-note-routes.ts` · `credit-notes` |
@@ -251,21 +188,26 @@ model, routes, invariants, changelog. The table below is **generated** from
 | [`customer-portal`](../src/modules/customer-portal/README.md) | Buyer self-serve portal: customer-scoped pstk_ entry tokens exchanged for psst_ sessions; /portal/v1/* payment-method + invoices + subscriptions surface, and an operator revoke that kills both credentials (org key never reaches the buyer). There is no self-serve way in — an operator or integration mints every link. Usage so far, projected bill and usage by day, each behind its business setting. | `createPortalSession` `resolvePortalSession` `revokePortalSession` | `customer-portal-routes.ts` · `portal-sessions` |
 | [`customers`](../src/modules/customers/README.md) | Customer records, contacts, 3-balance wallet (promotional/refundable/excess), VAT status, GDPR clear, ad-hoc collect. | `createCustomer` `getCustomerBalances` `addPromotionalCredits` `recordExcessPayment` `collectPayment` `clearPersonalData` `planCreditApplication` | `customer-routes.ts` · `customers` |
 | [`metadata-rules`](../src/modules/metadata-rules/README.md) | Per-business rules for dot paths in customer and subscription metadata: type checks, strict mode and an on/off switch, enforced on every metadata write. | `enforceMetadataRules` `checkMetadataWrite` `createRule` `setRulesConfig` | `metadata-rule-routes.ts` · `metadata_key_rules` `businesses.metadata_rules_config` |
+| [`segments`](../src/modules/segments/README.md) | Customer segments: saved populations over customer attributes that reports compare a metric across. | `listSegments` `getSegment` `resolveSegment` `validateSegmentFilters` | `segment-routes.ts` · `segments` |
 | [`usage-controls`](../src/modules/usage-controls/README.md) | Spend controls and early billing (G5): spend limits (customer, subscription or usage property; hard limits answer the access check, soft limits notify), limit tiers by lifetime paid, alerts with a state per threshold, credit runway, automatic top-up (threshold or schedule, pre-debit notice on mandate rails, off after a decline), invoices raised when unbilled usage reaches an amount, the price-change preview and the embeddable usage widget. Checked on arrival through a dirty set and a one-minute cron on its own queue. | `evaluateSpendLimits` `measureRunway` `alertStates` `putAutoTopup` `previewRateChange` `mintUsageWidgetToken` `usageWidgetView` | `usage-control-routes.ts + usage-billing-routes.ts + portal-usage-control-routes.ts + rate-change-preview-routes.ts + usage-widget-routes.ts` · `spend_limits` `spend_limit_tiers` `customer_limit_tier_reached` `spend_limit_states` `usage_alerts` `usage_alert_states` `usage_alert_observations` `credit_auto_topups` `credit_auto_topup_runs` `usage_invoice_thresholds` `usage_widget_tokens` `usage_control_cursors` `usage_control_dirty` |
 | [`wallet`](../src/modules/wallet/README.md) | Legacy top-up audit trail (folded into customer balances). | `topUpWallet` `walletBalance` | `wallet-routes.ts` · `wallet` |
+| [`dunning-policies`](../src/modules/dunning-policies/README.md) | Named dunning configurations; a customer runs its assigned policy, else the business config. | `loadEffectiveDunningConfig` `createDunningPolicy` `listDunningPolicies` `getDunningPolicy` | `dunning-policy-routes.ts` · `dunning-policies` |
 | [`invoicing`](../src/modules/invoicing/README.md) | Invoice generation + lifecycle (pending/posted/payment_due/not_paid/paid/voided), dunning transitions, close/void/write-off/regenerate/collect, offline payments, HTML render. | `billSubscriptionPeriod` `createManualInvoice` `closeInvoice` `writeOffInvoice` `collectInvoiceNow` `recordOfflinePayment` `renderInvoiceHtml` `runInvoiceDueTransitions` | `invoice-routes.ts` · `invoices` |
 | [`metering`](../src/modules/metering/README.md) | Usage ingestion and rating. Usage records per subscription item (idempotent, add/remove), and usage events (G1a): meters, per-event-key dedup, per-org ingest limit, monthly partitions, 15-minute rollups with an exact-edge live read, late usage, customer usage keys, partition archive. Measurement (sum/max/last/count/min/avg/unique/weighted_sum, recurring levels) and rating (rateMeteredItem; rateMeterItem per group combination from a rate card). Usage by day in the business time zone, and model_price_list rating per price segment (G1b). | `recordUsage` `aggregateMeteredQuantity` `rateMeteredItem` `rateSubscriptionUsage` `createMeter` `ingestUsageEvents` `runUsageFold` `readMeterUsage` `rateMeterItem` `addUsageKey` `customerUsageHistory` `loadModelPriceBook` | `usage-routes.ts (+ subscription usage)` · `usage` `meters` `customer_usage_keys` `usage_events` `usage_event_dedup` `usage_rollups` `usage_rollup_state` `usage_meter_levels` `usage_archives` `ingest_rate_counters` |
 | [`metrics`](../src/modules/metrics/README.md) | MRR/ARR/ARPU/churn per currency + converted-to-base FX roll-up. Usage margin (G1b): revenue after discounts and line credit notes, before tax, minus line cost, per customer, model or meter. | `computeBusinessMetrics` `usageMargin` | `metrics-routes.ts` · `(derived)` |
 | [`model-prices`](../src/modules/model-prices/README.md) | AI model price list (G1b): a dated, append-only copy of a public price list (genai-prices v2), synced two times a day through guardedFetch with a suspect-batch hold; your cost per organization (model_cost_overrides); resolveListPrice and resolveModelCost, which return the value and the row it came from; price-change notices (webhook + email to price managers). | `runModelPriceSync` `releaseHeldModelPrices` `resolveListPrice` `resolveModelCost` `createCostOverride` `runModelPriceNotices` | `model-price-routes.ts` · `model_price_models` `model_prices` `model_cost_overrides` `model_price_notices` |
 | [`subscriptions`](../src/modules/subscriptions/README.md) | The subscription engine + billing clock: create/change/cancel/pause/resume option sets, scheduled changes, dunning, estimates, ad-hoc/unbilled charges, renewals. | `createSubscription` `changeSubscription` `runBillingClockTick` `runDunningPass` `cancelSubscriptionWithOptions` `estimateChange` `scheduleChange` `addAdHocCharge` | `subscription-routes.ts` · `subscriptions` `scheduled-changes` `unbilled-charges` |
-| `team-alerts` | Opt-in mail to a business's own staff (team_alerts_config): high-value overdue invoices and failed webhook deliveries every hour, and a daily summary of payments, dunning and expiring cards; hourly cron fan-out to one queued send per business and kind, through the deployment mailer. | `resolveTeamAlertsConfig` `planTeamAlerts` `runTeamAlertsFanout` `sendTeamAlert` | `undefined` · — |
+| [`team-alerts`](../src/modules/team-alerts/README.md) | Opt-in mail to a business's own staff (team_alerts_config): high-value overdue invoices and failed webhook deliveries every hour, and a daily summary of payments, dunning and expiring cards; hourly cron fan-out to one queued send per business and kind, through the deployment mailer. | `resolveTeamAlertsConfig` `planTeamAlerts` `runTeamAlertsFanout` `sendTeamAlert` | `undefined` · — |
+| [`disputes`](../src/modules/disputes/README.md) | Chargebacks from the gateway or recorded by hand, ledgered, with the chargeback policy applied. | `handleDisputeEvent` `recordOperatorDispute` `recordDisputeOutcome` `applyChargebackPolicy` | `dispute-routes.ts` · `disputes` |
 | [`gateway`](../src/modules/gateway/README.md) | Gateway accounts (encrypted creds), currency×method router, inbound webhook ingestion + reconciliation. | `selectGatewayAccount` `ingestGatewayWebhook` `listGatewayWebhooks` | `gateway-routes.ts` · `gateway` |
 | [`payment-intents`](../src/modules/payment-intents/README.md) | On-session 3DS/SCA intents: create → authorize → consume; expiry sweep. | `createPaymentIntent` `authorizePaymentIntent` `consumePaymentIntent` `expirePaymentIntents` | `payment-intent-routes.ts` · `payment-intents` |
 | [`payment-methods`](../src/modules/payment-methods/README.md) | Vaulted payment sources, roles (primary/backup), status lifecycle + expiry sweep. | `vaultPaymentMethod` `assignPaymentMethodRole` `paymentSourceSweep` `detachPaymentMethod` | `payment-method-routes.ts` · `payment-methods` `provider-customers` |
+| [`payment-requests`](../src/modules/payment-requests/README.md) | Ask one customer for several open invoices at once: one combined charge or one payment link. | `createPaymentRequest` `loadPaymentRequestView` `requestByCharge` `reverseRequestCharge` | `payment-request-routes.ts` · `payment-requests` |
 | [`payments`](../src/modules/payments/README.md) | Charge-outcome settlement: apply gateway success/failure to invoice + ledger + dunning. | `settlePaymentSucceeded` `settlePaymentFailed` `settleTransactionOutcome` | `(via invoicing/gateway)` · `payments` |
+| [`receipts`](../src/modules/receipts/README.md) | Numbered, immutable records of money received, with a PDF; not a tax invoice. | `createReceiptForPayment` `createReceiptForRequestSettlement` `numberUnnumberedReceipts` `renderReceiptPdf` | `receipt-routes.ts` · `receipts` |
 | [`refunds`](../src/modules/refunds/README.md) | Refund execution (full/partial) through the adapter; ledger + transaction record. | `refundPayment` `listRefunds` | `refund-routes.ts` · `payments` |
 | [`transactions`](../src/modules/transactions/README.md) | Gateway-facing money log (auth/payment/refund; succeeded/failed/needs_attention/timeout/late_failed) + reconcile op. | `recordTransaction` `reconcileTransaction` `listTransactions` `findTransactionByGatewayCharge` | `transaction-routes.ts` · `transactions` |
-| [`migration`](../src/modules/migration/README.md) | Import from another billing system or generic JSON (idempotent, no double-charge) + reconcile — CLI only. | `importFromSource` | `(CLI)` · `migration` |
+| `migration` | Import from another billing system or generic JSON (idempotent, no double-charge) + reconcile — CLI only. | `importFromSource` | `(CLI)` · `migration` |
 | [`time-travel`](../src/modules/time-travel/README.md) | Test-business virtual clock: start_afresh + travel_forward; businessNow() seam. | `startTimeTravel` `travelForward` `stopTimeTravel` `timeTravelledBusinessIds` | `time-travel-routes.ts` · `time-travels` |
 | [`transfer`](../src/modules/transfer/README.md) | Transfer Configurations (catalog, settings, company profile, email sending and tax copy between businesses; live = merge-only unless an owner/admin applies the audited live override after a preview) + sample data. | `previewTransfer` `runTransfer` `createSampleData` `deleteSampleData` `getTransfer` | `transfer-routes.ts` · `transfer` |
 <!-- END GENERATED: module-map -->
@@ -583,9 +525,7 @@ process.exit(failed ? 1 : 0)
 
 Then:
 1. Add the script to `package.json`: `"verify:coupons": "tsx scripts/verify-coupons.ts"`.
-2. Add it to `scripts/verify-all.sh` (follow the existing list; suites needing provider creds
-   self-skip).
-3. `pnpm verify:coupons` then `pnpm verify:all`.
+3. `pnpm verify:coupons`, against a database you can throw away.
 
 **Copy the setup boilerplate from the closest existing suite** (e.g. `verify-coupons.ts`) — do not reinvent org/business/key creation.
 
@@ -663,186 +603,13 @@ Then:
 
 ---
 
-## 5. Ticket breakdown
-
-Tickets mirror [`BACKEND-IMPLEMENTATION-PLAN.md`](./archive/cloning-phase/BACKEND-IMPLEMENTATION-PLAN.md) — that doc holds
-the full schema DDL and semantics per task; this section tells you the working order, the files
-you'll touch, and the **Definition of Done (DoD)** for each. Do tickets in listed order. Each
-ticket = one focused change following the §3 golden path.
-
-**Every ticket below has a matching checklist in [`CLONE-PROGRESS.md`](./archive/cloning-phase/CLONE-PROGRESS.md) with
-its subtasks broken out** — that file is where you track execution (tick subtasks as they land);
-this section is where you read what each ticket means.
-
-> **Definition of Done, applies to EVERY ticket:** `pnpm typecheck` clean · migration generated
-> + applied · new table in `verify:rls` list (if any) · service emits its event(s) · route
-> serializes snake_case · Zod-validated · verify suite asserts the new behavior · `pnpm
-> verify:all` green · `pnpm sdk:generate` run if routes changed · **all the ticket's subtasks
-> ticked in CLONE-PROGRESS.md + its matrix counts updated**. Update PROGRESS.md changelog.
-
-### Phase 0 — Foundations
-
-- **CAT-0 · Catalog/coupon slug IDs** (do first; schema-touching) — replace random
-  `prod_/price_/cpn_` public ids with user-provided human-readable slugs (merge with the existing
-  `code` column into one id), unique-per-business + immutable + auto-slug-from-name; the migration
-  importer preserves source ids verbatim. Applies to product_groups, products, prices,
-  coupons, coupon_sets only — transactional resources keep `prefix_nanoid`. Plan §0.1.
-  **DoD:** create-without-id auto-slugs; dup id → 409; id immutable (PATCH id → 400); importer
-  keeps source ids; `verify:catalog`/`verify:coupons` assert slug ids.
-
-### Phase A — Events core
-
-- **A1 · Event registry** — create `src/modules/events/registry.ts` with the `EVENT_TYPES`
-  const array + `EventType` union (full list in the plan §A1). Narrow `emitEvent`'s `type`
-  param to `EventType`. **DoD:** typecheck fails if any `emitEvent` call uses a string not in
-  the registry (this is the point — it forces exhaustiveness).
-- **A2 · Envelope enrichment** — add `source`, `actor`, `resource_type`, `resource_id` columns
-  to `events` (migration); thread `source`/`actor` from a request-scoped context (api key id or
-  clock). Update the delivered webhook body shape (plan §A2). **DoD:** events carry source+actor;
-  webhook body includes `resource` + `data.<res>.resource_version`.
-- **A3 · Emit everywhere** — add `emitEvent` to every mutating service function in the plan's A3
-  table (customers, payment-methods, subscriptions, invoicing, wallet, coupons, catalog,
-  metering). Rename existing ad-hoc event strings to registry names. **DoD:** a scripted
-  lifecycle emits the full expected event sequence.
-- **A4 · Events API** — `GET /v1/events` (filters: type[], resource_type, resource_id, source,
-  occurred_after/before; cursor pagination), `GET /v1/events/:evt` (+ its deliveries),
-  business-scoped variant. **DoD:** filter/pagination round-trip in `verify:events`.
-- **Verify:** new `scripts/verify-events.ts` — scripted end-to-end scenario asserting the exact
-  event sequence + registry-exhaustiveness grep + filter round-trips. Add to `verify-all.sh`.
-
-### Phase B — Webhooks module
-
-- **B1 · Per-endpoint subscriptions** — add `event_types jsonb` (+ `description`) to
-  `webhook_endpoints`; filter fan-out in `emitEvent` (null = all). Validate `event_types`
-  against the registry in the PATCH route.
-- **B2 · Redelivery + test-send** — `POST …/deliveries/:del/redeliver` (clones the delivery row and
-  calls the subscriber **inline**, answering 200 with that attempt's request/response transcript —
-  reworked 2026-09-02; it used to queue the clone and answer 202),
-  `POST …/:whe/test` (send a canned sample payload from registry payload builders).
-- **B3 · Status rollup** — derived `webhook_status` on event rows (worst delivery status wins).
-- **Verify:** `scripts/verify-webhooks.ts` — subscribed endpoint receives only its types;
-  redelivery succeeds; test-send returns receiver status.
-
-### Phase C — Gateway rebuild (largest)
-
-Do strictly in this sub-order; each builds on the prior.
-- **C1 · `gateway_accounts` table + crypto** — table (plan §C1), `src/platform/secrets.ts`
-  (AES-256-GCM encrypt/decrypt, `v1:` prefix), CRUD API + `verify` health-check, registry rework
-  to build adapters from DB rows (LRU cache by `(id, resource_version)`), seed-script migration
-  from `businesses.providerConfig` → gateway_account rows, then drop `providerConfig`.
-- **C2 · Router** — `src/modules/gateway/router.ts` `selectGatewayAccount(...)` by currency ×
-  method type, `gateway_account_id` override, no silent fallback. Add `gateway_account_id` FK to
-  `payment_methods`.
-- **C3 · Adapter contract v2** — extend `src/providers/types.ts` (plan §C3); keep existing
-  adapters behind a shim during the phase.
-- **C4 · TM Billing Test Gateway** — `src/providers/tmtest/` full implementation with
-  deterministic instruments (magic PANs table in plan §C4, **including the common classic test
-  cards as aliases**), own persistence, simulated async webhooks posting to our own inbound
-  route, `POST /v1/tmtest/advance` to flush async behavior synchronously in tests.
-- **C5 · Transactions module** — `transactions` table (plan §C5), written alongside
-  payments/refunds, `reconcile` op, list API.
-- **C6 · Payment-source lifecycle** — status + role columns on `payment_methods`, `assign_role`
-  op, `paymentSourceSweep` daily job (expiring/expired events), backup-PM fallback on hard
-  decline.
-- **C7 · Payment intents** — `payment_intents` table + on-session 3DS via tmtest; off-session
-  `requires_action` → retriable dunning failure; hourly expiry sweep.
-- **C8 · Inbound reconciliation + log** — extend `provider_events` (business_id, payload,
-  outcome, error); handle `charge.succeeded/failed`, reversal → `late_failed` + reopen invoice;
-  gateway-webhooks list + inspector API.
-- **C9 · Test/live enforcement** — `gateway_accounts.livemode` must match `business.livemode`;
-  auto-provision tmtest on new test businesses; block tmtest on live.
-- **C10 · Re-wire Stripe/PayPal/RazorPay** — credentials from gateway_accounts; results into
-  transactions; webhooks through C8; re-run each provider's live smoke (`verify:stripe` etc.,
-  self-skip without creds).
-- **Verify:** `scripts/verify-gateway.ts` — all failure modes on tmtest (success, hard decline,
-  retriable→dunning→recovery, vault-ok-charge-fails, timeout→reconcile, late_failure→reopen,
-  3DS intent, backup fallback, expiring sweep, router currency-split + no-gateway error,
-  credential crypto round-trip).
-
-### Phase D — Customers
-
-- **D1 · Balance split** — new ledger accounts `promotional_credit_balance` /
-  `refundable_credit_balance` / `excess_payment_balance`; migrate the unified `customer_balance`
-  (granted→promotional, paid→excess); `getCustomerBalances(...)`; promotional-credit + excess-
-  payment ops APIs; wallet folds in (paid→excess, granted→promotional); stub the pre-tax/post-tax
-  application order for Phase E. **This is a prerequisite for Phase E.**
-- **D2 · Payment roles** — surface `primary_/backup_payment_source_id` on customer API (roles
-  built in C6).
-- **D3 · Ad-hoc collect** — `POST /v1/customers/:cus/collect_payment` (apply excess/refundable
-  first, charge remainder, oldest-due-first).
-- **D4 · VAT status** — `vat_number_status` column + `TaxIdValidator` interface (noop impl).
-- **D5 · Calendar anchor per customer** — `billing_date` + mode; consumed at subscription create.
-- **D6 · GDPR clear** — `POST /v1/customers/:cus/clear_personal_data` (scrub PII, keep ledger).
-- **Verify:** `scripts/verify-customers.ts` — 3-balance application math (promo pre-tax!), role
-  fallback, collect allocation, GDPR scrub leaves ledger intact.
-
-### Phase E — Invoices & Credit Notes
-
-- **E1 · Status vocabulary** — migrate `invoices.status` to the final vocabulary
-  (`pending|posted|payment_due|not_paid|paid|voided`) + `dunning_status`; clock auto-transitions
-  posted→due at due date (plan §E1 mapping).
-- **E2 · Pending invoices + Close** — `create_pending_invoices` flag; usage appends to open
-  pending; `POST /v1/invoices/:inv/close`; auto-close job.
-- **E3 · Dunning depth** — structured dunning config (retries + final_action {invoice,
-  subscription}); `runDunningPass` honors it; `stop_dunning`/`pause_dunning` ops.
-- **E4 · Adjustment CNs + allocations** — `kind`/`status`/`reason_code` on credit_notes;
-  `credit_note_allocations` table; write-off rerouted through an adjustment CN (INV-4); refundable
-  CN allocation + `refund` op; enforce `total = allocated + refunded + available`.
-- **E5 · Cancellation credits** — `issueProratedCreditForUnusedTerm(...)` helper (feeds Phase F).
-- **E6 · Round-off + regenerate** — `invoice_rounding` setting; regenerate voided invoice.
-- **Verify:** `scripts/verify-invoices-v2.ts` — full status matrix, pending/close, dunning
-  final-action permutations, write-off-via-CN ledger equivalence, allocation-invariant fuzz.
-
-### Phase F — Subscriptions
-
-- **F1 · `future` status** · **F2 · `non_renewing` + `remaining_billing_cycles`** ·
-  **F3 · cancel option set** (credit/unbilled/AR/refundable handling + reason codes, defaults
-  from settings) · **F4 · pause/resume option sets** · **F5 · dues snapshot + change_term_end**.
-  Details + fields in plan §F.
-- **Verify:** `scripts/verify-subscriptions-v2.ts` — future→start; remaining-cycles →
-  non_renewing → cancelled; every cancel-option permutation checks ledger + CN; pause
-  skip_billing_cycles auto-resume; dunning-exhaust with subscription retained.
-
-### Phase G — Catalog completeness
-
-- **G1 · Coupon stacking** (many applied_coupons/sub; fixed application order) · **G2 · item
-  constraints** (`apply_on` + per-item-type `all|specific|none`) · **G3 · mandatory
-  auto-include** · **G4 · attached charges** (`attached_items`;
-  charge_on_event/charge_once/default_quantity/billing_cycles) · **G5 · coupon + set ops**
-  (redeem_by/max_redemptions edit; set add-codes/archive/delete-unused) · **G6 · differential
-  depth + list filters**. Details in plan §G.
-- **Verify:** `scripts/verify-catalog-v2.ts` — stacking-order golden tests, constraint scoping,
-  mandatory auto-include with differential pricing, charge_on_event once-vs-every.
-
-### Phase H — Settings, Audit, Transfer, Time Travel
-
-- **H1 · Billing-rule defaults** (columns on `businesses` consumed by E/F) · **H2 · Audit log**
-  (`audit_logs` append-only, actor+diff, `GET /v1/audit_logs`) · **H3 · Transfer Configurations**
-  (async catalog+settings copy test↔live, live=merge-only, never customers/subs/invoices/
-  creds/keys; per-object copy; sample-data tools) · **H4 · Time Travel** (test-only,
-  `start_afresh`/`travel_forward`, `businessNow(businessId)` clock plumbing) · **H5 · Clock
-  observability (SCHED-1)** (`clock_ticks` history table — platform-global, no RLS like
-  `provider_events` — with counters + per-item errors + overrun guard). Details in plan §H. (SCHED-2 renewal fan-out is DEFERRED/scale-gated — do not build.)
-- **Verify:** settings defaults drive cancel/change; audit rows match a scripted session +
-  append-only enforced; catalog transfer round-trip (merge-only asserted); time-travel a
-  trial→renewal→dunning scenario 3 months forward; a forced renewal failure shows up in
-  `clock_ticks.errors` with its subscription id.
-
----
 
 ## 6. Cross-cutting, every phase
 
 1. **OpenAPI + SDK:** document new routes with response schemas; `pnpm sdk:generate`; commit the
    regenerated `sdk/`. CI drift-checks it.
-2. **Migration importer:** phases D (balances), E (CN kinds/allocations), G (coupon stacking)
-   each update the import CLI + reconcile mappings in the same change.
 3. **Events discipline:** new mutation ⇒ registry event + verify assertion. No exceptions after
    Phase A.
-4. **Tracker:** keep `CLONE-PROGRESS.md` current in the same change as the code — subtasks
-   ticked, ticket/phase statuses flipped, matrix `Done/Total` counts updated, dated Log line on
-   phase completion.
-5. **Docs:** append a dated PROGRESS.md changelog entry each session; if you deviate from the
-   plan, update `ARCHITECTURE.md`/`BACKEND-IMPLEMENTATION-PLAN.md` to match reality.
 
 ---
 

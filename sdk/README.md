@@ -1,5 +1,10 @@
 # @two-minute-billing/sdk
 
+[![npm](https://img.shields.io/npm/v/@two-minute-billing/sdk?logo=npm)](https://www.npmjs.com/package/@two-minute-billing/sdk)
+[![Types](https://img.shields.io/npm/types/@two-minute-billing/sdk)](https://www.npmjs.com/package/@two-minute-billing/sdk)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Docs](https://img.shields.io/badge/docs-twominutebilling.com-4E4EDA)](https://twominutebilling.com/help/developers/getting-started/sdks)
+
 Typed, dependency-free TypeScript client for the [Two Minute Billing](https://github.com/gox-ai/two-minute-billing) API.
 
 - Every request and response type is generated from the API's OpenAPI document.

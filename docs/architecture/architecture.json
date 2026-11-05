@@ -1137,6 +1137,206 @@
       ],
       "emits": [],
       "dependsOn": []
+    },
+    {
+      "id": "comments",
+      "layer": "foundation",
+      "responsibility": "Operator notes pinned to a billing record (invoice, credit note, customer, subscription).",
+      "tables": [
+        "comments"
+      ],
+      "routeFile": "comment-routes.ts",
+      "keyFunctions": [
+        "listComments",
+        "createComment",
+        "updateComment",
+        "deleteComment"
+      ],
+      "emits": [],
+      "dependsOn": []
+    },
+    {
+      "id": "list-views",
+      "layer": "foundation",
+      "responsibility": "Saved list views: named filter sets on every list screen, private or shared.",
+      "tables": [
+        "list-views"
+      ],
+      "routeFile": "list-view-routes.ts",
+      "keyFunctions": [
+        "listListViews",
+        "validateFilters",
+        "createListView",
+        "updateListView",
+        "deleteListView"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "audit",
+        "custom-fields"
+      ]
+    },
+    {
+      "id": "custom-fields",
+      "layer": "catalog",
+      "responsibility": "Admin-defined typed fields on customers, subscriptions and catalog items, validated on write.",
+      "tables": [
+        "custom-fields"
+      ],
+      "routeFile": "custom-field-routes.ts",
+      "keyFunctions": [
+        "createDefinition",
+        "listDefinitions",
+        "updateDefinition",
+        "archiveDefinition",
+        "validateAndCoerce"
+      ],
+      "emits": [],
+      "dependsOn": []
+    },
+    {
+      "id": "reason-codes",
+      "layer": "catalog",
+      "responsibility": "Merchant-managed reason lists an operator picks from, so churn and refund reports group by code.",
+      "tables": [
+        "reason-codes"
+      ],
+      "routeFile": "reason-code-routes.ts",
+      "keyFunctions": [
+        "listReasonCodes",
+        "resolveOfferedReasons",
+        "createReasonCode",
+        "updateReasonCode",
+        "deleteReasonCode"
+      ],
+      "emits": [],
+      "dependsOn": []
+    },
+    {
+      "id": "segments",
+      "layer": "customer",
+      "responsibility": "Customer segments: saved populations over customer attributes that reports compare a metric across.",
+      "tables": [
+        "segments"
+      ],
+      "routeFile": "segment-routes.ts",
+      "keyFunctions": [
+        "listSegments",
+        "getSegment",
+        "resolveSegment",
+        "validateSegmentFilters"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "customers",
+        "custom-fields",
+        "metrics",
+        "subscriptions"
+      ]
+    },
+    {
+      "id": "dunning-policies",
+      "layer": "billing",
+      "responsibility": "Named dunning configurations; a customer runs its assigned policy, else the business config.",
+      "tables": [
+        "dunning-policies"
+      ],
+      "routeFile": "dunning-policy-routes.ts",
+      "keyFunctions": [
+        "loadEffectiveDunningConfig",
+        "createDunningPolicy",
+        "listDunningPolicies",
+        "getDunningPolicy"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "audit",
+        "events",
+        "subscriptions"
+      ]
+    },
+    {
+      "id": "payment-requests",
+      "layer": "payments",
+      "responsibility": "Ask one customer for several open invoices at once: one combined charge or one payment link.",
+      "tables": [
+        "payment-requests"
+      ],
+      "routeFile": "payment-request-routes.ts",
+      "keyFunctions": [
+        "createPaymentRequest",
+        "loadPaymentRequestView",
+        "requestByCharge",
+        "reverseRequestCharge"
+      ],
+      "emits": [
+        "payment_request_created",
+        "payment_request_paid",
+        "payment_request_payment_failed",
+        "payment_request_canceled",
+        "payment_request_expired"
+      ],
+      "dependsOn": [
+        "customers",
+        "events",
+        "gateway",
+        "invoicing",
+        "ledger",
+        "payments",
+        "receipts",
+        "transactions"
+      ]
+    },
+    {
+      "id": "receipts",
+      "layer": "payments",
+      "responsibility": "Numbered, immutable records of money received, with a PDF; not a tax invoice.",
+      "tables": [
+        "receipts"
+      ],
+      "routeFile": "receipt-routes.ts",
+      "keyFunctions": [
+        "createReceiptForPayment",
+        "createReceiptForRequestSettlement",
+        "numberUnnumberedReceipts",
+        "renderReceiptPdf"
+      ],
+      "emits": [
+        "receipt_created"
+      ],
+      "dependsOn": [
+        "customers",
+        "events",
+        "invoicing"
+      ]
+    },
+    {
+      "id": "disputes",
+      "layer": "payments",
+      "responsibility": "Chargebacks from the gateway or recorded by hand, ledgered, with the chargeback policy applied.",
+      "tables": [
+        "disputes"
+      ],
+      "routeFile": "dispute-routes.ts",
+      "keyFunctions": [
+        "handleDisputeEvent",
+        "recordOperatorDispute",
+        "recordDisputeOutcome",
+        "applyChargebackPolicy"
+      ],
+      "emits": [
+        "dispute_created",
+        "dispute_funds_withdrawn",
+        "dispute_funds_reinstated",
+        "dispute_won",
+        "dispute_lost",
+        "dispute_closed"
+      ],
+      "dependsOn": [
+        "audit",
+        "events",
+        "ledger"
+      ]
     }
   ],
   "flows": [

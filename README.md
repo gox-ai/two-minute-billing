@@ -5,11 +5,17 @@ supported).** Plans, usage meters, AI model prices, prepaid credits, invoices, G
 dunning, hosted checkout and MRR reports, with a flat price and no share of your revenue.
 Self-host it for free, or let us run it on our Cloud.
 
+[![Release](https://img.shields.io/github/v/tag/gox-ai/two-minute-billing?label=release&sort=semver)](https://github.com/gox-ai/two-minute-billing/tags)
+[![npm](https://img.shields.io/npm/v/@two-minute-billing/sdk?label=npm%20sdk&logo=npm)](https://www.npmjs.com/package/@two-minute-billing/sdk)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![SDK: MIT](https://img.shields.io/badge/SDK-MIT-green.svg)](./sdk/LICENSE)
+[![Docs](https://img.shields.io/badge/docs-twominutebilling.com-4E4EDA)](https://twominutebilling.com/help)
+[![Self-host: Docker](https://img.shields.io/badge/self--host-Docker-2496ED?logo=docker&logoColor=white)](https://twominutebilling.com/help/developers/getting-started/self-host-docker)
+[![GitHub stars](https://img.shields.io/github/stars/gox-ai/two-minute-billing?style=flat&logo=github&label=stars)](https://github.com/gox-ai/two-minute-billing)
 
 [Website](https://twominutebilling.com) · [Documentation](https://twominutebilling.com/help) ·
 [API reference](https://twominutebilling.com/help/developers/api-reference) ·
+[TypeScript SDK on npm](https://www.npmjs.com/package/@two-minute-billing/sdk) ·
 [Self-host](./SETUP.md) · [Compare](https://twominutebilling.com/compare)
 
 ## What is Two Minute Billing?
@@ -106,9 +112,28 @@ Guides: [usage and AI billing](https://twominutebilling.com/help/guides/usage-an
 
 ## Payment gateways
 
-Twelve gateways, on your own accounts, routed by currency and payment method: Stripe, PayPal,
-Razorpay, Square, Braintree, Checkout.com, Adyen, Mollie, Authorize.net, GoCardless, Cashfree and
-PayU.
+Twelve gateways, on your own accounts, routed by currency and payment method. Connect more than
+one and each charge goes to the account that takes its currency and method.
+
+| Gateway | Payment methods | Setup guide |
+|---|---|---|
+| Stripe | Cards, Direct Debit (ACH), Direct Debit (SEPA) | [Connect Stripe](https://twominutebilling.com/help/guides/connect-a-payment-gateway/stripe) |
+| PayPal | PayPal wallet | [Connect PayPal](https://twominutebilling.com/help/guides/connect-a-payment-gateway/paypal) |
+| Razorpay | Cards, UPI Autopay, Netbanking (eMandate) | [Connect Razorpay](https://twominutebilling.com/help/guides/connect-a-payment-gateway/razorpay) |
+| Square | Cards | [Connect Square](https://twominutebilling.com/help/guides/connect-a-payment-gateway/square) |
+| Braintree | Cards, PayPal, Venmo | [Connect Braintree](https://twominutebilling.com/help/guides/connect-a-payment-gateway/braintree) |
+| Checkout.com | Cards | [Connect Checkout.com](https://twominutebilling.com/help/guides/connect-a-payment-gateway/checkoutcom) |
+| Adyen | Cards | [Connect Adyen](https://twominutebilling.com/help/guides/connect-a-payment-gateway/adyen) |
+| Mollie | Cards, Direct Debit (SEPA), PayPal | [Connect Mollie](https://twominutebilling.com/help/guides/connect-a-payment-gateway/mollie) |
+| Authorize.net | Cards, eCheck (ACH) | [Connect Authorize.net](https://twominutebilling.com/help/guides/connect-a-payment-gateway/authorizenet) |
+| GoCardless | Direct Debit: Bacs, SEPA, ACH, BECS (AU and NZ), PAD, Autogiro, Betalingsservice; PayTo | [Connect GoCardless](https://twominutebilling.com/help/guides/connect-a-payment-gateway/gocardless) |
+| Cashfree | Cards, UPI Autopay, eNACH | [Connect Cashfree](https://twominutebilling.com/help/guides/connect-a-payment-gateway/cashfree) |
+| PayU | Cards, UPI Autopay | [Connect PayU](https://twominutebilling.com/help/guides/connect-a-payment-gateway/payu) |
+
+Coming next: CyberSource (cards), finishing its live checks. Every install also includes a test
+gateway for test mode, with a test card for each outcome, and Time Travel runs a year of renewals
+in seconds, so you can try your setup before you connect a real gateway.
+
 Card details go straight to the gateway, so you stay in PCI DSS SAQ-A scope, and you are never
 locked to one provider.
 
@@ -156,6 +181,25 @@ Without `--local` it asks for two host names and serves both over HTTPS. Automat
 upgrades and backups:
 [twominutebilling.com/help/developers/getting-started/self-host-docker](https://twominutebilling.com/help/developers/getting-started/self-host-docker).
 
+**Images.** Every release publishes two images, built by GitHub Actions from the release tag for
+`linux/amd64` and `linux/arm64`, each with an SBOM and build provenance, and signed with
+[cosign](https://github.com/sigstore/cosign):
+
+| Image | What it runs |
+|---|---|
+| `ghcr.io/gox-ai/two-minute-billing-engine` | The API, the billing worker and the one-time `init` (schema, first admin) |
+| `ghcr.io/gox-ai/two-minute-billing-dashboard` | The dashboard, hosted checkout and customer portal |
+
+`init-env.sh` sets `TMBILLING_VERSION` to the release you checked out; to upgrade, change it and
+run `docker compose pull && docker compose up -d`. To check that an image came from this
+repository's release workflow:
+
+```bash
+cosign verify ghcr.io/gox-ai/two-minute-billing-engine:<version> \
+  --certificate-identity-regexp '^https://github.com/gox-ai/two-minute-billing/\.github/workflows/images-publish\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
 ### From source
 
 You need Node 24 (via [fnm](https://github.com/Schniz/fnm)), [pnpm](https://pnpm.io) and Docker.
@@ -186,8 +230,9 @@ paid subscription:
 
 ## Use the API
 
-Install the typed TypeScript client, [`@two-minute-billing/sdk`](./sdk/README.md) (MIT, no
-dependencies, Node 20+, Deno, Bun and the browser):
+Install the typed TypeScript client,
+[`@two-minute-billing/sdk`](https://www.npmjs.com/package/@two-minute-billing/sdk) on npm
+([source](./sdk/README.md); MIT, no dependencies, Node 20+, Deno, Bun and the browser):
 
 ```bash
 pnpm add @two-minute-billing/sdk

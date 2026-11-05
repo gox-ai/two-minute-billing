@@ -18,25 +18,12 @@ real data through the API/services and asserts ledger/invoice/subscription outco
 
 - Run one area: `pnpm verify:<name>` — e.g. `verify:ledger`, `verify:renewal`, `verify:proration`,
   `verify:coupons`, `verify:tax`, `verify:subscriptions-v2`, `verify:invoices-v2`, `verify:gateway`,
-  `verify:time-travel`, `verify:migration`, `verify:logging`, `verify:conformance:pricing|usage`. Full list in
+  `verify:time-travel`, `verify:logging`, `verify:conformance:pricing|usage`. Full list in
   `package.json`.
 - Pick the suite(s) matching the module you touched (module READMEs + `docs/GUIDE.md` §3.5 tell
   you which); add a new `verify-<feature>.ts` for every new feature.
-- **⚠️ `pnpm verify:all`** (`verify-all.sh`) is the release gate — but it runs `db:reset`, which
-  **TRUNCATES the local DB**. Re-run `pnpm seed` afterwards; the dashboard login/API key rotate
-  on reseed (`.claude/current.md`).
-- **`pnpm verify:all:fresh`** (`verify-all-fresh.ts`) is the same gate with that footgun removed: it
-  creates `<db>_verify_<pid>`, points `DATABASE_URL` at it for the whole run (every step of
-  `verify-all.sh` reads it, so one override redirects all of them), and drops it afterwards —
-  terminating leaked connections first, or a single suite that forgot to close one would leave a
-  database behind on every run. Flags pass through (`-- --shard 1/5`, `--skip a,b`, `--only a,b`,
-  `--list`); `-- --keep` keeps the database. A `--shard` run skips gateway-conformance by itself
-  (7-8 min alone), so a full sharded run is the five shards plus `-- --only gateway-conformance`.
-  The URL reaches the child through its ENVIRONMENT, never argv or a temp file, so the password does
-  not land in the process list. **Prefer this locally.** CI still calls `verify:all` directly — each
-  shard job already starts from its own fresh Postgres, so there is nothing there to protect.
 
-**Opt-in LIVE-sandbox suites** (real provider API calls, test keys only, never in `verify:all`):
+**Opt-in LIVE-sandbox suites** (real provider API calls, test keys only, never in the full suite):
 `verify:stripe-live` · `verify:paypal-live` · `verify:razorpay-live` · `verify:razorpay-emandate-live` ·
 **`verify:razorpay-pro-amounts`**. The last one is the one to reach for when the question is *"can we
 bill this plan?"* rather than *"does the rail work?"* — it runs REAL PLAN PRICES (₹56,118 and ₹5,61,180)
@@ -56,37 +43,6 @@ Prose runbook: `SETUP.md`.
 `pnpm db:generate` (Drizzle migration from schema diff) · `pnpm db:migrate` · `pnpm db:push` ·
 `pnpm db:studio` · `pnpm seed` (Demo Org: three test businesses with 10–14 months of engine-made history, loaded in seconds from the snapshot in `db/seed-data/demo/`; `--small` for the smaller snapshot, `--live` to run the engine generator instead; code in `seed/`) · `pnpm seed:capture` (regenerate that snapshot in a throwaway database) · `pnpm db:reset` (drop + migrate + seed).
 
-### ⚠ Run verify suites on a SCRATCH database, not the dev one
-
-```bash
-pnpm db:scratch --setup                 # create + migrate tmbilling_scratch_verify
-pnpm db:scratch -- pnpm verify:gateway  # run any command against it
-pnpm db:scratch --drop                  # delete it
-```
-
-Every suite WRITES — organizations, invoices, queue jobs, ledger entries — and the harm is not to
-the data but to the MEASUREMENTS taken from it. Three cases from 2026-08-31, all of them a suite
-reading whole-DB state:
-
-| symptom | cause |
-|---|---|
-| `verify:ops` § SCHED-3 failed 4/41 | "queue total equals the sum of its states" reads `graphile_worker.jobs` unfiltered, after ~14 suites had enqueued work. **Passes 41/41 on a scratch DB** — the failures were residue, not a defect. |
-| the `unapplied_gateway_money` alert read PAGE at 197 rows | fixture-left detached payments. That is how a permanently-red alert gets built. |
-| two `verify:dunning-offline` assertions | only ever passed because the dunning backlog happened to be empty; on a 1163-row backlog they failed. |
-
-The runner derives the scratch URL from `DATABASE_URL` and **never prints it** (it carries the
-password) — the child command is spawned with the URL in its environment instead, so there is no
-value for anyone to paste into a transcript. It refuses to nest scratch databases, and `--drop` only
-accepts a name carrying the `_scratch_` marker, so a typo cannot reach the dev database.
-
-`--setup` runs `db:migrate`, which is `db:bootstrap && drizzle-kit migrate` — so the
-`graphile_worker` schema exists and queue-reading suites fail for their own reasons rather than for
-a missing schema.
-
-Data repairs (dry run by default, `--write` to apply): `pnpm repair:overpaid [--inv inv_…]` —
-re-allocates payments on invoices that collected more than they were for, moving the surplus to the
-customer's excess-payment balance with one compensating AR entry (the pre-2026-08-04
-`recordOfflinePayment` bug; see `src/modules/invoicing/README.md`).
 
 Queue repair (same convention): `tsx scripts/purge-redundant-clock-ticks.ts [--write]` — deletes
 `billing_clock_tick` jobs backed up on the `billing_clock` queue, keeping every locked row and the
@@ -138,6 +94,4 @@ taskset -c 0-3 pnpm tsx scripts/loadtest/nightly.ts            # S4: nightly met
 
 ## Codegen / docs
 
-`pnpm sdk:generate` (OpenAPI → `sdk/`; run after touching routes) · `pnpm openapi:coverage` ·
-`pnpm docs:generate` (`docs-modulemap.ts`: architecture.json → module-map table in `docs/GUIDE.md`
-+ mermaid graph in `docs/ARCHITECTURE.md`).
+`pnpm sdk:generate` (OpenAPI → `sdk/`; run after touching routes).

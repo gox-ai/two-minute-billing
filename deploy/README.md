@@ -156,8 +156,8 @@ empty cache treated as "no list, accept anything" would leave every address unva
 every `state_code` resolving to no place of supply, i.e. tax silently 0.
 
 It needs no network — it reads the committed `db/seed-data/geo.json` — and it is idempotent,
-so re-running is how a refresh is applied. (`pnpm geo:generate` fetches from the upstream
-dataset and is a development command; never run it on a server.)
+so re-running is how a refresh is applied. (Refreshing `geo.json` from the upstream dataset is
+a development task; never do it on a server.)
 
 ## 5b · The app's own login (tenant isolation)
 
@@ -182,7 +182,6 @@ read `.env` once at boot). `deploy/reload.sh` migrates as `MIGRATION_DATABASE_UR
 back-office migrator is run by hand, so prefix it the same way. If `pg_hba.conf` lists users,
 add the new one. Rollback: point `DATABASE_URL` back at the owner and restart.
 
-`pnpm verify:all:fresh -- --system-role` runs every suite logged in as this role.
 
 ## 6 · Firewall
 
@@ -575,16 +574,7 @@ loop rather than folding them together.
 
 **Verifying delivery.** `pnpm verify:logging` deliberately runs with NO credentials — it
 proves the sink degrades safely when it cannot reach Google, so it can never prove the happy
-path. `scripts/probe-cloud-logging.ts` does the other half: it ships INFO/WARN/ERROR against
-the real project and then **reads them back** through the Logging API, because a sink that
-swallows its own write failures by design looks identical to a working one from the caller's
-side. Run it after changing the sink or rotating the key:
-
-```bash
-CLOUD_LOGGING=TRUE GOOGLE_CLOUD_PROJECT_ID=<project> \
-GOOGLE_CLOUD_CREDENTIALS_PATH=./cloudlogging.json \
-pnpm tsx scripts/probe-cloud-logging.ts
-```
+path.
 
 Two things that look wrong and are not: off GCP you get one `MetadataLookupWarning: All
 promises were rejected` on startup (the auth library probing for a metadata server that only
@@ -643,10 +633,9 @@ touching it:
 
 - **The engine's own markdown** (`src/**/*.md`, `db/**/*.md`) — the 35 module READMEs. A bash
   `case` glob crosses `/`, so `src/*` swallowed them into the engine catch-all. Measured over
-  134 commits: four reloaded the clock for no reason but a README, and `7628d4a7` changed
-  nothing but `docs/PROGRESS.md` and one module README yet reloaded the API *and* the worker.
-  Since `CLAUDE.md` requires appending to a module's changelog whenever you touch it, this
-  fired on ordinary work rather than rare commits.
+  134 commits: four reloaded the clock for no reason but a README, and one that changed only
+  docs reloaded the API *and* the worker. Every change to a module appends to its README's
+  changelog, so this fired on ordinary work rather than rare commits.
 - **`db/migrations/**`** — applied by the `pnpm db:migrate` step in this same script and read
   by nothing else (`drizzle.config.ts` is the only thing that points at the directory). A
   migration shipping alone, such as a backfill or an index, needs no reload at all. In practice
@@ -864,36 +853,6 @@ about 800–900 MB at every step. A worker killed mid-peak and restarted left no
 renewed twice or unbilled. For more throughput, run another worker process (`collect` charges,
 `clock` renews) before anything else.
 
-## Deploying the docs site
-
-`reload.sh` never touches the docs: they are content plus a Nitro server with no database, and
-building them on the box would compete for its memory with Postgres and the worker. Deploy them
-from your own machine instead:
-
-```bash
-cp deploy/docs-deploy.local.example deploy/docs-deploy.local   # once; fill in the host
-eval "$(ssh-agent)" && ssh-add ~/.ssh/id_ed25519                # the key is passphrase-protected
-pnpm deploy:docs              # build, check, ship, swap, reload, verify
-pnpm deploy:docs --dry-run    # everything up to the package; nothing sent
-pnpm deploy:docs --rollback   # put the previous build back
-```
-
-It builds with `pnpm docs-site:build`, refuses a build that bundles a Node-version-specific
-binary (only `sharp`'s N-API ones travel between Node versions — the box runs a different Node
-than most laptops), smoke-tests it locally, then ships a checksummed tarball. On the box it keeps
-the old build as `.output.prev-<stamp>`, reloads `tmbilling-docs`, and restores the old build by
-itself if `/help/guides/read-your-numbers` does not answer 200. One previous build is kept for
-`--rollback`. The live site is whatever is checked out HERE, so deploy from `main` after pushing
-(the script warns otherwise).
-
-It builds the **Cloud** edition (`NUXT_PUBLIC_EDITION` defaults to `cloud` in this script only; a
-plain `pnpm docs-site:build` stays `self_hosted`). The prerendered pages fix `NUXT_PUBLIC_*` at
-build time: set `NUXT_PUBLIC_APP_URL` (and any other `NUXT_PUBLIC_*`) in `deploy/docs-deploy.local`
-to build with the production values.
-
-The running server reads its runtime settings (`NUXT_PRICING_*`, `NUXT_CONTACT_*`,
-`NUXT_TURNSTILE_SECRET`, `NUXT_PUBLIC_*`) from the box's root `.env` at start, and only those
-keys. After changing them there: `pm2 reload tmbilling-docs`.
 
 ## Stopping billing
 
@@ -959,10 +918,6 @@ reboot from resurrecting the old pinned binaries.
 
 ## Rotating / rebuilding
 
-- **`GATEWAY_CREDENTIALS_KEY`** — set `GATEWAY_CREDENTIALS_KEY_PREVIOUS` to the old value
-  first, run `pnpm gateway:rotate-credentials --write`, then remove the `_PREVIOUS` var.
-  Swapping the key alone makes every stored credential unreadable at once (measured: 954/954
-  accounts).
 - **Backups.** Managed or `pg_dump`, and **rehearse a restore at least once**. The ledger is
   append-only, so a bad restore is unrecoverable money data — an untested backup is not a
   backup.
