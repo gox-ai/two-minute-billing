@@ -36,7 +36,7 @@ must match the business's livemode; tmtest is the only gateway allowed on test b
 ## API routes
 | Method · Path | Purpose |
 |---|---|
-| `GET /v1/gateways` | the gateways an account can be created for: names, credential fields, methods, webhook-secret ownership |
+| `GET /v1/gateways` | the gateways an account can be created for: names, credential fields, methods, webhook-secret ownership, `dashboard_links` |
 | `POST/GET/PATCH/DELETE /v1/businesses/:biz/gateway_accounts[/:gwa]` | account CRUD |
 | `POST .../gateway_accounts/:gwa/verify` | adapter health-check |
 | `GET .../gateway_webhooks[/:id]` | inbound inspector |
@@ -3230,3 +3230,9 @@ gateway's own `detail` says so and the card prints that text verbatim rather tha
   `dashboard_links` on `GET /v1/gateways`; the dashboard's `gatewayObjectUrl` reads it. Linked:
   Stripe `pi_`/`ch_` and Razorpay `pay_` (confirmed), Stripe `seti_` and PayPal captures (not yet
   confirmed). Every other gateway declares none. Gate: `test/unit/gateway-object-url.test.ts`.
+- **2026-11-15** — `dashboardLinks` widened. Stripe `seti_` confirmed on a live setup intent.
+  New: GoCardless payment `PM…` and mandate `MD…`, Adyen pspReference (16 chars; a refund's
+  opens the same page), confirmed from each gateway's own published plugin code; Square payment
+  (not yet confirmed). Unconfirmed now: `paypal:payment`, `square:payment`. No link: Braintree
+  and Mollie (the URL needs a merchant or organization id), Checkout.com, Authorize.net,
+  CyberSource, Cashfree, PayU (no official per-record URL). Gate: `gateway-object-url` 24.

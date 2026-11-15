@@ -28,7 +28,8 @@ of three: it does not describe every setting, the screens and the code do.
   placing it and the phrases people use when it is their answer: where is, take me to, how do I,
   a problem, keywords (contextual retrieval). Indexed in `notes` (weight D) and embedded with the
   section. Maintained with `scripts/docs-section-notes.ts` (coverage, `--todo`, `--merge`,
-  `--write` with the platform model); a stale or missing note only loses the boost.
+  `--write` with the platform model, printing its calls and tokens; a failed call stops the run
+  and still merges what earlier calls drafted); a stale or missing note only loses the boost.
 - `vectors.ts`: embeds every section, help and screens with their notes (`text-embedding-3-small`,
   the platform key only, never an organization's key), stored once per distinct text in
   `assistant_doc_vectors`, held in memory and reloaded when the index changes: ~4,300 sections ×
@@ -41,7 +42,7 @@ of three: it does not describe every setting, the screens and the code do.
   the list-price cost (`embed-cost.ts`). Never part of an organization's allowance.
   `searchDocs` merges keyword and nearest sections by reciprocal rank (k = 60): pages by rank in
   each list, the section within a page by combined rank; a page found only by meaning needs
-  cosine ≥ 0.3, and the nearest sections are ordered at their source's weight (`meaningScore`). Keyword-only when the key is unset, `vectors: false` or the embedding call fails
+  cosine ≥ 0.3, and the nearest sections are ordered at their source's weight (`meaningScore`). Keyword-only when the key is unset, `ASSISTANT_DOCS_VECTORS=off`, `vectors: false` or the embedding call fails
   (2.5 s timeout). MCP calls are hybrid too since OpenAI is on the sub-processor list.
 - `map.ts`: a one-line-per-page map of the help (title + first sentence of its description) for
   the assistant's instructions, so it searches in the help's own words.
@@ -52,7 +53,13 @@ of three: it does not describe every setting, the screens and the code do.
   API) → `dashboard-map.generated.json`, gated by `verify:dashboard-map`. Reads label props on any
   element, option and data arrays (`label`/`title`/`heading` keys), row builders
   (`configRow("Excess payments", …)`) and components two imports deep; drops labels on more
-  than one screen in six (shared chrome).
+  than one screen in six (shared chrome). Every label has a kind: control, option, heading, crumb
+  or title. Breadcrumbs (`Crumb[]` props) and the page title are dropped; card and section titles
+  go to `headings`, never controls. An element names a catalogue with
+  `data-map-options="<source>"` (closed list `OPTION_SOURCES`: gateways, integrations, email
+  types, release-note types), and its labels go to `options`. `verify:dashboard-map` also runs
+  `scripts/dashboard-map-audit.ts`: no control that is chrome or a heading only, code-like, or
+  absent from the files the screen renders and the catalogue it declares.
 
 ## Data model
 `assistant_doc_chunks` (generated `search` tsvector: title A, heading and terms B, body C, notes
@@ -71,12 +78,18 @@ organization (nullable), inputs, input tokens, `cost_fixed12`; RLS on, system co
   whose answer is a control (`assistant-capability-golden.json`: subscription, one-time, usage,
   AI and general; every form people ask in; tune on the "own" third only), with floors per mode
   that only go up. Change the
-  weights, notes or fusion only with that gate green, in both modes (unset the key, or
-  set `ASSISTANT_BASE_URL`, for keyword-only).
+  weights, notes or fusion only with that gate green, in both modes. The verify runner keeps docs
+  search keyword-only (`ASSISTANT_DOCS_VECTORS=off`); `VERIFY_DOCS_HYBRID=1` runs it hybrid
+  (re-embeds on a fresh database, about $0.14).
 - Keyword-only search ignores the notes (`ts_filter` drops weight D) and ranks exactly as before
   they existed; the note-phrase bonus applies only in hybrid search.
 
 ## Changelog
+- **2026-11-15 (docs/screen-notes-model-redraft)** — The screen notes are model-drafted again (300 of
+  301; one by hand): the hand-written ones from fix/show-me-targets were accurate but too short,
+  and § F screen fell to 35% under its 36% keyword floor (now 37%). `docs-section-notes.ts
+  --write` prints its calls and tokens, and a failed call stops the run but merges what earlier
+  calls drafted.
 - **2026-11-15 (fix/docs-search-guides-first)** — A page's priors apply in both lists. Hybrid
   search weighed sources in the keyword list only (`SOURCE_WEIGHT`: help 1, API 0.45, else 0.4),
   so the meaning list, crowded with near-identical operation pages, put the API reference first

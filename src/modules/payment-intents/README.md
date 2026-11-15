@@ -31,7 +31,9 @@ inited|in_progress|authorized|consumed|expired|**voided**, `purpose`, `attempt_c
 
 `db/schema/payment-attempts.ts` — `payment_attempts` (`attempt_number`, `status`
 inited|requires_action|authorized|consumed|failed|voided, `id_at_gateway`, `error_code`/`error_text`,
-**`trace_id`**). One row per gateway interaction; a failed attempt stays on the timeline forever.
+**`trace_id`**, **`span_id`**). One row per gateway interaction; a failed attempt stays on the
+timeline forever. `id_at_gateway` has a partial index (0532): an inbound webhook finds its
+attempt's span by it (`webhooks/event-span.ts`).
 
 `transactions` carries `payment_intent_id` + `payment_attempt_id` on every path.
 

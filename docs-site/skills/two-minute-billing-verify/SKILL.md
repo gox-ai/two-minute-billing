@@ -54,6 +54,7 @@ Show this plan, adjusted to the user's catalog, and wait for a yes. Each scenari
 customer, so the user's other test data is not touched.
 
 1. **Webhook route.** Start the app, then run `webhook-check.mjs`. Fix the route until it passes.
+   Then start `tmb listen` ("Webhooks from the engine"), so the scenarios' real events reach it.
 2. **Start the clock** at now: `clock.mjs start`. Create the scenarios after this, so they run on the
    simulated clock. The started clock **does not move** by itself: it stays at `simulated_now`
    until you advance it. Usage events, holds and the access check all read that one instant, so
@@ -161,10 +162,24 @@ https://twominutebilling.com/help/developers/getting-started/test-and-live.md
 
 ## Webhooks from the engine
 
-`webhook-check.mjs` proves the handler. To prove delivery too, the engine must reach the app: a
-public URL (the user's tunnel, or a deployed test environment), or the self-hosted engine on the same
-machine. Then list `GET /v1/webhook_endpoints/{id}/deliveries` after the scenarios: every delivery
-must show a 2xx `last_response_status`.
+`webhook-check.mjs` proves the handler on a sample event. To run it on the real events of the
+scenarios, with no tunnel, run `tmb listen` while the app runs, in the background or in the user's
+own terminal (it does not stop by itself):
+
+```bash
+npx @two-minute-billing/cli listen --forward http://localhost:<port>/<path> --env-file <env file>
+```
+
+It refuses a key that is not a test key, and posts each new event of the test business to the
+loopback URL with the body and `Tmbilling-Signature` an endpoint gets, signed with
+`TMBILLING_WEBHOOK_SECRET`. It prints one line for each event with the app's HTTP status: every
+line must show a 2xx. The events that `clock.mjs advance` causes are sent too.
+
+`listen` sends each event once, and its sends are not in `/deliveries`. To prove the engine's own
+delivery and retries, the engine must reach the app: a public URL (the user's tunnel, or a deployed
+test environment), or the self-hosted engine on the same machine. Then list
+`GET /v1/webhook_endpoints/{id}/deliveries` after the scenarios: every delivery must show a 2xx
+`last_response_status`.
 
 `POST /v1/webhook_endpoints/{id}/test` with `{ "type": "invoice_paid" }` (the type is required)
 sends one sample event to the endpoint. A test send is **not** listed in

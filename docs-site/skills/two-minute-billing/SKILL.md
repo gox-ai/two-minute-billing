@@ -25,8 +25,10 @@ This skill gets a safe connection. The work after it lives in focused skills:
 | Prove it | `two-minute-billing-verify` | Real invoices match the expected figures, renewals included |
 | Go live | `two-minute-billing-go-live` | A read-only audit passes; the user does the live steps |
 
-If a skill is not installed: `npx skills add https://twominutebilling.com` installs the set. An
-agent's safety checks may block that command; then ask the user to run it in their own terminal.
+If a skill is not installed: `npx skills add https://twominutebilling.com` installs the set.
+`npx @two-minute-billing/cli init` asks, runs the same install, and adds the four setting names,
+with no values, to `.env.example`; it never changes `.env`. An agent's safety checks may block
+these commands; then ask the user to run one in their own terminal.
 Suggest committing what it adds (`.agents/skills/`, the agent's skills folder, and
 `skills-lock.json` if the install wrote one), so the whole team's agents use the same version;
 `npx skills update` moves it.

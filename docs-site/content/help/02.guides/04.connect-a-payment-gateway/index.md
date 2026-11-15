@@ -124,6 +124,11 @@ only discover that weeks later in a reconciliation.
 
 Create a customer in test mode, save a payment method with the test details in your gateway's
 guide (under **Test it**), and collect an invoice. **Logs** shows the actual call to the provider and what came back.
+On a payment intent, each attempt's **Request/response logs** lists every call made for it, also
+the calls made when the gateway reports the result later, such as a decline.
+
+A payment's id at Stripe, Razorpay, PayPal, GoCardless, Adyen or Square opens the payment in that
+gateway's own dashboard. For other gateways, copy the id and search for it there.
 
 ## When a payment provider tells you something later
 

@@ -7,7 +7,7 @@
 // It appends TMBILLING_WEBHOOK_SECRET=… to the --env-file-out file and prints only the endpoint
 // id, URL and events. It refuses before it creates anything when that file is tracked by git or
 // already holds TMBILLING_WEBHOOK_SECRET, when the URL is not https (http is allowed for
-// localhost and 127.0.0.1 only), and when the key is not a test key (GET /v1/me).
+// localhost, 127.0.0.1 and [::1] only), and when the key is not a test key (GET /v1/me).
 // Exit: 0 created, secret written · 1 bad input or request · 2 refused: the env file is
 //       tracked or already has a secret · 3 not a test key.
 // Node 20.6+, no dependencies. Never prints the API key or the signing secret.
@@ -59,7 +59,7 @@ try {
 }
 const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
 if (u.protocol !== "https:" && !(u.protocol === "http:" && loopback))
-  fail("the URL must be https (http only for localhost or 127.0.0.1).");
+  fail("the URL must be https (http only for localhost, 127.0.0.1 or [::1]).");
 
 // The env file: never a tracked one, never one that already holds a secret.
 const out = resolve(outArg);

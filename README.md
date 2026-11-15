@@ -7,6 +7,7 @@ Self-host it for free, or let us run it on our Cloud.
 
 [![Release](https://img.shields.io/github/v/tag/gox-ai/two-minute-billing?label=release&sort=semver)](https://github.com/gox-ai/two-minute-billing/tags)
 [![npm](https://img.shields.io/npm/v/@two-minute-billing/sdk?label=npm%20sdk&logo=npm)](https://www.npmjs.com/package/@two-minute-billing/sdk)
+[![npm](https://img.shields.io/npm/v/@two-minute-billing/cli?label=npm%20cli&logo=npm)](https://www.npmjs.com/package/@two-minute-billing/cli)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![SDK: MIT](https://img.shields.io/badge/SDK-MIT-green.svg)](./sdk/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-twominutebilling.com-4E4EDA)](https://twominutebilling.com/help)
@@ -16,6 +17,7 @@ Self-host it for free, or let us run it on our Cloud.
 [Website](https://twominutebilling.com) · [Documentation](https://twominutebilling.com/help) ·
 [API reference](https://twominutebilling.com/help/developers/api-reference) ·
 [TypeScript SDK on npm](https://www.npmjs.com/package/@two-minute-billing/sdk) ·
+[CLI on npm](https://www.npmjs.com/package/@two-minute-billing/cli) ·
 [Self-host](./SETUP.md) · [Compare](https://twominutebilling.com/compare)
 
 ## What is Two Minute Billing?
@@ -309,6 +311,35 @@ comes from the API's OpenAPI document. From any other language, generate a clien
 `/openapi.json`. The guide:
 [twominutebilling.com/help/developers/getting-started/sdks](https://twominutebilling.com/help/developers/getting-started/sdks).
 
+## Use the command line
+
+`tmb`, the command line in [`cli/`](./cli/README.md), is
+[`@two-minute-billing/cli`](https://www.npmjs.com/package/@two-minute-billing/cli) on npm (MIT,
+Node 20+, no dependencies). Run it once, or add it to your project:
+
+```bash
+npx @two-minute-billing/cli doctor     # the server, organization and key mode your key reaches
+pnpm add -D @two-minute-billing/cli    # then: pnpm exec tmb <command>
+```
+
+It reads `TMBILLING_URL`, `TMBILLING_API_KEY`, `TMBILLING_BUSINESS_ID` and
+`TMBILLING_WEBHOOK_SECRET` from the environment or `./.env`, never prints a key or a secret, and
+refuses a key that is not a test key for every command that changes data.
+
+- `tmb listen --forward http://localhost:3000/webhooks/billing` sends the test business's new
+  events to your local route, with the same body and signature that an endpoint gets. No tunnel
+  and no registered endpoint.
+- `tmb init` installs the Agent Skills (it asks first) and adds the setting names, with no values,
+  to `.env.example`. It never changes `.env`.
+- `tmb trigger purchase` (or `payment-failed`, `subscription`) creates a test customer with a test
+  card and a purchase or a subscription, so real events occur.
+- `tmb reset` deletes all the data of a test business, after you type its id (or give
+  `--confirm biz_…`). The business id, team members and API keys stay.
+
+It also pushes a catalog file (`push`), moves the test clock (`clock`), compares an invoice with
+the figures you expect (`check`), and tests or registers a webhook route (`webhooks`). The guide:
+[twominutebilling.com/help/developers/getting-started/command-line](https://twominutebilling.com/help/developers/getting-started/command-line).
+
 ## Repository
 
 | Path | What |
@@ -317,6 +348,7 @@ comes from the API's OpenAPI document. From any other language, generate a clien
 | [`dashboard/`](./dashboard/README.md) | Next.js operator dashboard, hosted checkout and customer portal |
 | `db/` | Drizzle schema, the one-file baseline schema (`baseline.sql`), migrations and row-level security policies |
 | [`sdk/`](./sdk/README.md) | Typed TypeScript client generated from the OpenAPI spec, published as `@two-minute-billing/sdk` |
+| [`cli/`](./cli/README.md) | The `tmb` command line, published as `@two-minute-billing/cli` |
 | `docs-site/` | Product and API documentation site |
 | [`scripts/`](./scripts/README.md) | Setup, seed data and the end-to-end `verify:*` suites |
 | `test/` | Unit tests for billing maths |
@@ -348,7 +380,8 @@ The engine, dashboard and docs site are licensed under the
 version as a network service, you must offer its source to that service's users.
 
 The API client in [`sdk/`](./sdk) (`@two-minute-billing/sdk`) is [MIT](./sdk/LICENSE), so it can be
-embedded in any application.
+embedded in any application. The command line in [`cli/`](./cli) (`@two-minute-billing/cli`) is
+[MIT](./cli/LICENSE) too.
 
 **Third-party data.** AI model prices are synced from
 [genai-prices](https://github.com/pydantic/genai-prices) (MIT, copyright Pydantic Services Inc.)

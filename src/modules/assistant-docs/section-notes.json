@@ -1304,17 +1304,17 @@
     "hash": "b80bfa17ad76"
   },
   "developers/concepts/payments#read-the-transaction-log": {
-    "context": "On the payments concept page: the transaction log of every gateway call, with statuses like timeout, needs_attention and late_failed.",
+    "context": "On the payments concept page: the transaction log of every gateway call, its statuses, and how to link an id to the gateway's own dashboard.",
     "asks": [
       "list all gateway calls",
       "payment error codes",
-      "gateway transaction history",
       "what does needs_attention mean",
       "timeout status on payment",
-      "see failed attempts in API",
+      "link a payment id to the provider dashboard",
+      "dashboard_links in the gateways API",
       "old status names success failure"
     ],
-    "hash": "6f7e89f54b71"
+    "hash": "d2674288d990"
   },
   "developers/concepts/payments#reconcile-late-failures": {
     "context": "On the payments concept page: how provider webhooks settle pending charges and reopen invoices when a success is later reversed.",
@@ -1570,9 +1570,198 @@
     "hash": "8a92d0049549"
   },
   "developers/getting-started": {
-    "context": "On the developers getting started index: where to begin with the API and which page to read next.",
+    "context": "The developer getting-started overview says what the engine does and which page to read next: introduction, quickstart, test mode, SDKs, command line or self-hosting.",
+    "asks": [
+      "Where do I start with the billing API?",
+      "Which developer page should I read first?",
+      "Is there a quickstart for subscriptions?",
+      "Is there an SDK or CLI?",
+      "How do I run the billing engine myself?",
+      "developer documentation overview"
+    ],
+    "hash": "6acc0f08c015"
+  },
+  "developers/getting-started/command-line": {
+    "context": "The command line page introduces tmb, a terminal tool that sends test events to a local route, creates test payments, moves the test clock and resets test data.",
+    "asks": [
+      "Is there a CLI for the billing API?",
+      "How do I test webhooks on localhost without ngrok?",
+      "terminal tool for billing test mode",
+      "Can I create test payments from the command line?",
+      "What does the tmb command do?",
+      "Which Node version does the CLI need?"
+    ],
+    "hash": "ed9f7d8833ab"
+  },
+  "developers/getting-started/command-line#add-the-agent-skills": {
+    "context": "On the command line page, this section explains tmb init, which installs the Agent Skills and adds the setting names to the example env file.",
+    "asks": [
+      "How do I set up a project for billing with one command?",
+      "Install the coding agent skills from the terminal",
+      "Will the CLI change my .env file?",
+      "Which settings should my .env.example list?",
+      "Can I run init without the confirmation question?",
+      "What are the next steps after installing the skills?"
+    ],
+    "hash": "639e3ca2ad25"
+  },
+  "developers/getting-started/command-line#check-an-invoice": {
+    "context": "On the command line page, this section explains tmb check, which compares a real invoice with the figures you expect, field by field.",
+    "asks": [
+      "How do I check an invoice total is correct?",
+      "Compare an invoice with expected amounts automatically",
+      "Test that tax and discounts came out right",
+      "Check the newest invoice of a subscription",
+      "Check the invoice a checkout created",
+      "Save the invoice check result to a file"
+    ],
+    "hash": "29b2b91b7dc0"
+  },
+  "developers/getting-started/command-line#check-your-setup": {
+    "context": "On the command line page, this section explains tmb doctor, which shows which server, organization and key mode your key reaches, and its exit codes.",
+    "asks": [
+      "How do I check that my API key works?",
+      "Which organization does my key belong to?",
+      "Is my key a test key or a live key?",
+      "connection check before writing billing code",
+      "Can I check a read-only live key?",
+      "Get the setup check result as JSON"
+    ],
+    "hash": "25fc8e23dfdc"
+  },
+  "developers/getting-started/command-line#create-test-payments": {
+    "context": "On the command line page, this section explains tmb trigger, which creates a test customer and a purchase, a declined payment or a subscription so real events occur.",
+    "asks": [
+      "How do I create a test payment quickly?",
+      "Make a failed payment event for testing",
+      "Generate an invoice_paid event in test mode",
+      "Create a test subscription from the command line",
+      "Which test card declines?",
+      "Which price does the trigger command use?"
+    ],
+    "hash": "5c9fec9f0700"
+  },
+  "developers/getting-started/command-line#forward-events-to-your-local-route": {
+    "context": "On the command line page, this section explains tmb listen, which sends a test business's new events to a localhost route, signed like a real webhook, with no tunnel.",
+    "asks": [
+      "How do I receive webhooks on localhost?",
+      "Test my webhook handler locally without ngrok or a tunnel",
+      "Do I need a public URL to get events in development?",
+      "Forward only some event types to my local app",
+      "Replay events from the last ten minutes to my machine",
+      "Does the local forwarder sign events the same way?",
+      "Can I forward events to a non-local address?"
+    ],
+    "hash": "75bd37768806"
+  },
+  "developers/getting-started/command-line#forward-events-to-your-local-route~2": {
+    "context": "On the command line page, this part says how tmb listen differs from a registered endpoint, and that it forwards events created while the test clock moves.",
+    "asks": [
+      "Does the local forwarder retry a failed event?",
+      "Why are my local test events not in the delivery log?",
+      "How do I test webhook retries?",
+      "Can I see renewal events locally while time travelling?",
+      "Test a year of billing events on my laptop"
+    ],
+    "hash": "9f1d935d528f"
+  },
+  "developers/getting-started/command-line#give-it-your-settings": {
+    "context": "On the command line page, this section lists the four environment variables tmb reads, how it loads an env file, and its test-key-only rule.",
+    "asks": [
+      "What environment variables does the CLI need?",
+      "Where does tmb read my API key from?",
+      "Can I point the CLI at a different env file?",
+      "Will the CLI print my secret key?",
+      "Why does the CLI refuse my live key?",
+      "Which API host do I set for Cloud or self-hosted?",
+      "What value should the webhook secret have for local testing?"
+    ],
+    "hash": "72e02c4b0386"
+  },
+  "developers/getting-started/command-line#install-the-cli": {
+    "context": "On the command line page, this section shows how to run tmb once with npx or add it to a project as a dev dependency.",
+    "asks": [
+      "How do I install the tmb CLI?",
+      "Can I run the CLI without installing it?",
+      "What is the package name of the command line tool?",
+      "add the billing CLI to my project dev dependencies",
+      "How do I see the list of CLI commands?",
+      "Where are the options for one CLI command?"
+    ],
+    "hash": "e20d4eb2bf71"
+  },
+  "developers/getting-started/command-line#move-the-test-clock": {
+    "context": "On the command line page, this section explains tmb clock, which starts, advances, reads and stops Time Travel on a test business.",
+    "asks": [
+      "How do I fast-forward a test subscription a month?",
+      "Run renewals now from the terminal",
+      "Does 1m mean one month or one minute?",
+      "Stop time travel and keep my test data",
+      "Simulate a trial ending without waiting",
+      "Move the test clock to an exact date"
+    ],
+    "hash": "b8d9f7ab98da"
+  },
+  "developers/getting-started/command-line#push-your-catalog": {
+    "context": "On the command line page, this section explains tmb push, which plans and then applies the products and prices in a catalog file.",
+    "asks": [
+      "How do I keep my plans and prices in a file?",
+      "Preview catalog changes before I apply them",
+      "Create products and prices from a JSON file",
+      "Why can't I change a price's terms?",
+      "catalog as code for subscription plans"
+    ],
+    "hash": "a7908661c08f"
+  },
+  "developers/getting-started/command-line#read-the-exit-codes": {
+    "context": "On the command line page, this section lists the exit codes tmb returns, so scripts and CI can act on a result.",
+    "asks": [
+      "What do the CLI exit codes mean?",
+      "Use the billing CLI in CI",
+      "Why did tmb exit with code 3?",
+      "exit code 2 from the command line tool",
+      "How does a script know a check failed?"
+    ],
+    "hash": "944a4d26b935"
+  },
+  "developers/getting-started/command-line#register-an-endpoint": {
+    "context": "On the command line page, this section explains tmb webhooks register, which creates an endpoint and writes its signing secret to the env file without printing it.",
+    "asks": [
+      "How do I create a webhook endpoint from the terminal?",
+      "Where is my webhook signing secret saved?",
+      "Register a webhook URL without copying the secret by hand",
+      "Why does the CLI refuse my env file?",
+      "Subscribe an endpoint to only some events"
+    ],
+    "hash": "9d2eb6b2b03e"
+  },
+  "developers/getting-started/command-line#related": {
+    "context": "On the command line page, this section links to the webhook, signature, test mode and SDK pages.",
     "asks": [],
-    "hash": "da7240edb415"
+    "hash": "e546aef46113"
+  },
+  "developers/getting-started/command-line#reset-a-test-business": {
+    "context": "On the command line page, this section explains tmb reset, which deletes all the data of a test business and keeps its id, team and keys.",
+    "asks": [
+      "How do I wipe my test data and start again?",
+      "Delete all test customers and invoices",
+      "Clear a test business from a script",
+      "Will a reset delete my API keys?",
+      "Can I undo a test data reset?",
+      "Start over with the same business id"
+    ],
+    "hash": "e53c43630006"
+  },
+  "developers/getting-started/command-line#test-your-webhook-route": {
+    "context": "On the command line page, this section explains tmb webhooks test, which checks that a local route refuses a forged event and accepts a signed one and a repeat.",
+    "asks": [
+      "How do I check my webhook signature check works?",
+      "Does my webhook route reject fake requests?",
+      "Test that my handler accepts a duplicate event",
+      "webhook route returns 401 for the right signature",
+      "Send a sample signed event to localhost"
+    ],
+    "hash": "a48320c35992"
   },
   "developers/getting-started/connect-ai-assistants": {
     "context": "On the AI assistant page: connecting Claude, Cursor or another MCP client to read billing data through a read-only connection.",
@@ -1925,27 +2114,39 @@
     "hash": "4dfb915f42be"
   },
   "developers/getting-started/sdks#set-up-with-a-coding-agent": {
-    "context": "In the SDKs and tools guide, this section explains how to add billing to a codebase with an agent while keeping the work in test mode.",
+    "context": "In the SDKs and tools guide, this section explains how to install the Agent Skills, from the site, the command line or a Claude Code plugin, and what they build in test mode.",
     "asks": [
       "Can an AI coding helper add billing routes to my project?",
       "How do I install the project instructions for my coding assistant?",
+      "Is there a Claude Code plugin for billing setup?",
+      "How do I keep my team's coding assistants using the same instructions?",
       "Can the assistant test renewals and failed charges without waiting?",
-      "How do I keep my team’s coding assistants using the same instructions?",
-      "Will the setup helper use a key that can change live data?",
-      "Can an agent read these help pages as markdown?"
+      "Will the setup helper use a key that can change live data?"
     ],
-    "hash": "229d12a2e030"
+    "hash": "fddcd8b11859"
+  },
+  "developers/getting-started/sdks#set-up-with-a-coding-agent~2": {
+    "context": "In the SDKs and tools guide, this part says how an agent can read the help pages directly, as an index file or as markdown.",
+    "asks": [
+      "Can an AI agent read these help pages?",
+      "Is there an llms.txt file for the docs?",
+      "How do I get a docs page as markdown?",
+      "plain text version of the documentation for agents",
+      "Where is the list of every docs page?"
+    ],
+    "hash": "11e1bb3ba68a"
   },
   "developers/getting-started/sdks#use-the-built-in-tools": {
-    "context": "On the SDKs page: built-in developer tools such as webhook signature check, test gateway and estimates.",
+    "context": "In the SDKs and tools guide, this section lists the tools that come with the product: signature checks, the command line, the test gateway and estimates.",
     "asks": [
-      "preview a subscription change",
-      "dry run before subscribing",
-      "test cards for failures",
-      "developer helpers",
-      "simulate a year of renewals"
+      "What tools help me test my billing integration?",
+      "Is there a command line tool for testing webhooks locally?",
+      "How do I try failed cards without real money?",
+      "Can I preview a plan change before I make it?",
+      "Do I need a library to check webhook signatures?",
+      "How can I simulate a year of renewals?"
     ],
-    "hash": "4f0d54943880"
+    "hash": "3eb9d2f261f7"
   },
   "developers/getting-started/sdks#use-the-typescript-client": {
     "context": "In the SDKs and tools guide, this section shows how to install and use the JavaScript client to make API requests from an application.",
@@ -2594,6 +2795,17 @@
     "context": "On the checkout and portal recipe: links to the product feature page and the dashboard setup guide.",
     "asks": [],
     "hash": "68dbdeded2fb"
+  },
+  "developers/recipes/checkout-and-portal#resend-a-change-that-waits-for-payment": {
+    "context": "On the checkout and portal recipe: create a new change session with the same items so the buyer can pay a plan change that waits for payment.",
+    "asks": [
+      "let the customer pay a declined upgrade",
+      "send a new checkout link for a pending plan change",
+      "checkout shows change waits for payment",
+      "what happens if the new session has different items",
+      "pay the held invoice from hosted checkout"
+    ],
+    "hash": "da11d8baaae1"
   },
   "developers/recipes/checkout-and-portal#select-a-mode": {
     "context": "Helps developers choose the right checkout session mode: create, change or purchase.",
@@ -4098,17 +4310,17 @@
     "hash": "bba43a8270d8"
   },
   "developers/recipes/plan-changes#handle-a-declined-charge~2": {
-    "context": "On the plan changes recipe: retrying a held plan change, 3-D Secure, expiry, cancelling it, the webhooks, and the other failed-charge settings.",
+    "context": "On the plan changes recipe: paying a held plan change by retry, portal or checkout, 3-D Secure, expiry, cancelling it, the webhooks, and the other failed-charge settings.",
     "asks": [
       "retry a declined upgrade",
       "customer added a new card, apply the change",
+      "pay a pending plan change through checkout",
       "how long until a pending change expires",
       "cancel a pending plan change API",
       "webhook when the plan change is applied",
-      "3D secure on a plan change",
-      "revert a plan change after a hard decline"
+      "3D secure on a plan change"
     ],
-    "hash": "d729b542dc0e"
+    "hash": "e854c128e35d"
   },
   "developers/recipes/plan-changes#net-it-into-an-invoice": {
     "context": "On the plan changes recipe: how credit and charge net into one invoice, that the renewal date stays, and what happens to downgrade credit.",
@@ -5031,9 +5243,9 @@
     "hash": "57835dae50d3"
   },
   "developers/webhooks/delivery#related": {
-    "context": "On the webhook delivery page: links to signature verification and event reference.",
+    "context": "In the delivery and retries guide, this section links to the signature, event reference and command line pages.",
     "asks": [],
-    "hash": "78107288c966"
+    "hash": "b9c856fb147b"
   },
   "developers/webhooks/delivery#rely-on-the-outbox": {
     "context": "On the webhook delivery page: why events are recorded with the state change so a webhook never disagrees with reality.",
@@ -5045,6 +5257,17 @@
       "webhook consistency with database"
     ],
     "hash": "b03fb97c3879"
+  },
+  "developers/webhooks/delivery#test-delivery-on-your-machine": {
+    "context": "In the delivery and retries guide, this section explains how to test a webhook handler on localhost with tmb listen, and what it does not cover.",
+    "asks": [
+      "How do I test webhooks before I deploy?",
+      "My webhook URL is localhost, can events reach it?",
+      "Do I need a tunnel to test webhook delivery?",
+      "Does local event forwarding retry failures?",
+      "receive billing events on my development machine"
+    ],
+    "hash": "dda84dc15887"
   },
   "developers/webhooks/delivery#understand-the-retry-schedule": {
     "context": "On the webhook delivery page: the six retry attempts with their delays, and that any non-2xx response fails.",
@@ -5695,21 +5918,21 @@
     "hash": "7aac2b325038"
   },
   "developers/webhooks#related": {
-    "context": "On the webhooks page: related links to event reference and integrations.",
+    "context": "In the webhooks guide, this section links to the event reference, the command line and integrations.",
     "asks": [],
-    "hash": "73c2ed5d681c"
+    "hash": "55b2cad6a33f"
   },
   "developers/webhooks#test-and-recover": {
-    "context": "On the webhooks page: send test events, list deliveries and redeliver after fixing your handler.",
+    "context": "In the webhooks guide, this section lists the calls to send a test event, read deliveries, redeliver and rotate the secret, and how to test on localhost with tmb listen.",
     "asks": [
-      "test my webhook",
-      "resend a failed webhook",
-      "see webhook delivery attempts",
-      "missed events recovery",
-      "webhook failing replay",
-      "sample webhook payload"
+      "How do I send a test webhook?",
+      "See whether my server received an event",
+      "Resend a webhook after I fixed my handler",
+      "Change my webhook signing secret",
+      "Test webhooks on localhost without a tunnel",
+      "Get events I missed while my server was down"
     ],
-    "hash": "e4b97f47cbaa"
+    "hash": "39c611a026cd"
   },
   "getting-started": {
     "context": "On the getting started index: ordered steps to set up billing from business to go live.",
@@ -5830,16 +6053,28 @@
     "hash": "81f220161af2"
   },
   "getting-started/create-your-business#create-it": {
-    "context": "On the create-your-business page: create the business with a name and default currency, in test and live modes.",
+    "context": "On the create-your-business page: create a business with a name and default currency, see the organization home, and switch between businesses from the sidebar.",
     "asks": [
       "create a new business",
-      "how to start",
       "pick default currency",
       "is there a free plan",
-      "test mode first then live",
-      "add another company"
+      "how do I switch to another company",
+      "find a business when I have many",
+      "why does my business show initials instead of a logo",
+      "switching business took me out of test mode"
     ],
-    "hash": "b944b5df6dc8"
+    "hash": "43126f8434e5"
+  },
+  "getting-started/create-your-business#create-it~2": {
+    "context": "On the create-your-business page: switch between test and live mode, see the test mode bar, and copy your set-up to live mode.",
+    "asks": [
+      "how do I switch to live mode",
+      "how do I know I am in test mode",
+      "copy test setup to live",
+      "where is the test mode toggle",
+      "move my products to production"
+    ],
+    "hash": "40da86ac6b35"
   },
   "getting-started/create-your-business#currencies": {
     "context": "On the create-your-business page: add the currencies you sell in and set reporting exchange rates.",
@@ -6248,6 +6483,18 @@
       "Settings Billy toggle"
     ],
     "hash": "0fdd103d6735"
+  },
+  "guides/ask-billy#let-billy-show-you-where-to-click": {
+    "context": "On the Ask Billy guide: the Show me button opens the screen and highlights each control in turn, with steps you move through.",
+    "asks": [
+      "can the assistant show me where to click",
+      "walk me through the screen step by step",
+      "highlight the button I need",
+      "Show me button does not highlight anything",
+      "move the guide card out of the way",
+      "stop the guided tour"
+    ],
+    "hash": "7d34d26bb421"
   },
   "guides/ask-billy#open-billy": {
     "context": "On the Ask Billy page, open the assistant from the dashboard or a record page and learn who can see your chats.",
@@ -8052,15 +8299,17 @@
     "hash": "4329e423fdca"
   },
   "guides/connect-a-payment-gateway#check-it-works": {
-    "context": "On the payment gateways page: testing a new gateway by saving a test method and collecting an invoice, then reading Logs.",
+    "context": "On the payment gateways page: test a new gateway with a test payment, read the logs of every call, and open a payment in the gateway's own dashboard.",
     "asks": [
       "test that my gateway works",
       "how to try a test payment",
       "see request to payment provider",
-      "verify gateway connection",
-      "where are gateway logs"
+      "where are gateway logs",
+      "why was a payment declined later",
+      "open this payment in my gateway dashboard",
+      "find the payment at my provider"
     ],
-    "hash": "886af9349f24"
+    "hash": "ac458d7fefae"
   },
   "guides/connect-a-payment-gateway#connect-an-account": {
     "context": "On the payment gateways page: adding a gateway account with its credentials, currencies and methods, and using test keys in test mode.",
@@ -8597,16 +8846,16 @@
     "hash": "f08b2b2037a2"
   },
   "guides/handle-disputes#responding": {
-    "context": "On the disputes guide: you respond in your payment provider's dashboard, with context from Two Minute Billing.",
+    "context": "On the disputes guide: you respond in your payment provider's dashboard, with context from Two Minute Billing and a link to the disputed payment.",
     "asks": [
       "where do I submit evidence",
       "fight a chargeback",
       "deadline to respond to dispute",
-      "what information do I need for the bank",
-      "respond through Stripe or Razorpay dashboard",
-      "what did the customer buy"
+      "what did the customer buy",
+      "open the disputed payment at my provider",
+      "respond in the gateway dashboard"
     ],
-    "hash": "ad5dd1291ac1"
+    "hash": "c21c3fa7f423"
   },
   "guides/handle-disputes#what-happens-to-your-records": {
     "context": "On the disputes guide: how a dispute shows in your records and keeps the audit trail for reconciliation.",

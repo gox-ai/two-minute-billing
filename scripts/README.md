@@ -96,3 +96,13 @@ taskset -c 0-3 pnpm tsx scripts/loadtest/nightly.ts            # S4: nightly met
 
 `pnpm sdk:generate` (OpenAPI → `sdk/`; run after touching routes).
 
+`pnpm dashboard-map:generate` (`generate-dashboard-map.ts`: each screen's controls, options and
+headings → `src/modules/assistant-docs/dashboard-map.generated.json`, which the assistant's Show me
+reads; run after changing a dashboard label). `pnpm verify:dashboard-map` fails on a stale map and
+runs `dashboard-map-audit.ts` (no breadcrumb, title, heading or code as a control; every control
+rendered by its screen or declared with `data-map-options`).
+
+The docs-search suites (`verify:assistant-docs`, and any suite that starts the API) run
+keyword-only: the verify runner sets `ASSISTANT_DOCS_VECTORS=off`. `VERIFY_DOCS_HYBRID=1` runs them
+hybrid, which re-embeds on a fresh database (about $0.14). `verify:assistant-live` is always hybrid.
+

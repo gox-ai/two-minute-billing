@@ -19,7 +19,9 @@ the upgrade/downgrade surface.
 The view carries `change.blocked` when the business rules refuse the change, and the page then
 shows the reason in place of figures and Confirm. A declined charge follows
 `failed_change_charge`: under `apply_when_paid` the session stays open with the held invoice's
-price for a retry; under `revert` the change and what the session wrote are undone.
+price for a retry; under `revert` the change and what the session wrote are undone. A new change
+session for the same change (`repeatsPendingChange`) shows that held invoice and its expiry too; a
+session for a different change shows nothing, and its confirm replaces the hold.
 
 Both modes carry a **list of items** plus **coupons**.
 

@@ -18,5 +18,7 @@ gateways, and dunning when a card fails.
   cards for every failure path, and what it takes to go live.
 - [SDKs and tools](/help/developers/getting-started/sdks) — the typed client, and the OpenAPI document you can
   generate your own from.
+- [Command line](/help/developers/getting-started/command-line) — `tmb`, which forwards events to
+  your local webhook route with no tunnel, creates test payments and moves the test clock.
 - [Self-host with Docker](/help/developers/getting-started/self-host-docker) — run the engine, the
   worker and the dashboard on your own server with one Compose file.

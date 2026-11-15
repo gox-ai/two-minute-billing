@@ -164,9 +164,26 @@ The webhook is the source of truth for what a customer has.
    untracked file (git-ignored), and load both files: the app with both, scripts with two
    `--env-file` flags.
 
-Local development needs no tunnel to test the handler: `webhook-check.mjs` in
-`two-minute-billing-verify` signs events and posts them to the local route. Deliveries from the
-engine itself need a public URL; ask the user which tunnel they use, if any.
+Local development needs no tunnel. `webhook-check.mjs` in `two-minute-billing-verify` proves the
+signature check and the dedupe with a sample event. To run the handler on the test business's real
+events, run `tmb listen` while the app runs. It does not stop by itself: run it in the background,
+or ask the user to run it in their own terminal.
+
+```bash
+npx @two-minute-billing/cli listen --forward http://localhost:<port>/webhooks/billing \
+  --env-file <env file>
+```
+
+It reads `TMBILLING_URL`, `TMBILLING_API_KEY`, `TMBILLING_BUSINESS_ID` and
+`TMBILLING_WEBHOOK_SECRET` (from the environment, else `--env-file`, else `./.env`), refuses a key
+that is not a test key, and never prints a key. Each new event goes to the loopback URL with the
+body, `Tmbilling-Signature` and `Tmbilling-Event-Id` that an endpoint gets, and prints one line
+with the app's status. It needs no registered endpoint: until one exists, the user sets
+`TMBILLING_WEBHOOK_SECRET` to any value in the env file, which the app and `listen` both read.
+`npx @two-minute-billing/cli trigger purchase` (or `payment-failed`, `subscription`) makes a test
+customer and real events. Only the engine's own delivery (its retries and the `/deliveries` log)
+needs a URL the engine can reach: a tunnel or a deployed test environment. Ask the user which, if
+they want to test that.
 
 ## Feature gating
 

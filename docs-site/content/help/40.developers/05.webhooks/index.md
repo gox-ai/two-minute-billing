@@ -98,6 +98,15 @@ out and be redelivered — with the email sent twice.
 | `POST /webhook_endpoints/{id}/deliveries/{del}/redeliver` | Redelivers one event after you fix your handler. |
 | `POST /webhook_endpoints/{id}/rotate_secret` | Rotates the signing secret and returns the new one once. |
 
+To test your handler on your own machine, run
+[`tmb listen`](/help/developers/getting-started/command-line#forward-events-to-your-local-route). It
+sends your test business's events to a `localhost` route with the same body and signature that an
+endpoint gets, so you need no tunnel and no registered endpoint:
+
+```sh [terminal]
+npx @two-minute-billing/cli listen --forward http://localhost:3000/webhooks/billing
+```
+
 You can also read events directly, which is your backstop when an endpoint stayed down longer
 than the retry schedule:
 
@@ -112,4 +121,5 @@ and what your server answered.
 ## Related
 
 - [Webhook event reference](/help/developers/webhooks/events)
+- [Command line](/help/developers/getting-started/command-line)
 - [Integrations](/integrations)

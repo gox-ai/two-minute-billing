@@ -71,6 +71,10 @@ every module's events via `emitEvent`, but those are owned by the emitting modul
   failed attempt and is never followed. `last_error` holds a fixed sentence, never the raw
   network error. `WEBHOOK_ALLOW_PRIVATE_TARGETS=TRUE` lifts the address check (self-hosted, dev);
   `scripts/lib/verify-run.ts` sets it for every suite, `verify:webhook-ssrf` turns it back on.
+- **An inbound gateway event runs under its record's span** (`event-span.ts`): the attempt, then
+  the transaction, that holds the event's intent or charge id. The match reads `systemDb` (on
+  `system-db-allowlist.json`) because it runs before the organization is known; it narrows to
+  the business when one is given.
 - **Partner integrations are not endpoints** (since 2026-10-27). They live in
   `modules/integrations` with their own connections, outbox and history.
 - **A bulk requeue queues one replay per EVENT, not per failed row.** An endpoint that failed,

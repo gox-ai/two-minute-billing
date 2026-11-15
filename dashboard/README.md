@@ -6,8 +6,8 @@ in server components / server actions). Local login creds + seeded key: `.claude
 (rotates on reseed).
 
 ```bash
-cd dashboard && pnpm install && pnpm dev      # pnpm only — never npm/yarn/bun
-pnpm typecheck && pnpm build                  # the verify gate for UI work
+pnpm install && pnpm dev:dashboard           # from the repo root (one workspace lockfile); pnpm only
+pnpm typecheck:dashboard && pnpm build        # the verify gate for UI work
 ```
 
 ## Settings
@@ -89,6 +89,8 @@ mode and HSTS are fixed at build; the rest is read when `next start` starts.
     `ListPage` receives an already-settled value, so every change it sees is worth a request.
 - **`lib/`** — session, format (money/date — always minor units in, formatted out), mode
   (test/live), action-result helpers.
+- A business renders as `BizMark` (`components/business-mark.tsx`) everywhere: the rail's
+  business switcher, the org rail and the Organization home cards.
 - **`content/releases/`** — the `/whats-new` release notes, one markdown file per note.
   Frontmatter: `title`, `date` (`YYYY-MM-DD`), `type`, `tags`, optional `summary` and `version`.
   `type` is a closed set (Feature / Fix / Improvement / Performance / Security) validated at parse
@@ -117,6 +119,11 @@ mode and HSTS are fixed at build; the rest is read when `next start` starts.
   it (`import type` is erased) but not a runtime value — importing one const drags `next/headers`
   into the browser bundle and `next build` fails. That is why `NO_SESSION` lives in
   `lib/checkout-strings.ts` rather than in `lib/checkout-api.ts`.
+- **A signed-out redirect is `redirect(await signInUrl())`** (`lib/sign-in-url.ts`), never a bare
+  `redirect("/login")`: it carries the page and its query (`x-tmb-path` + `x-tmb-search`, set by
+  `proxy.ts`) as `redirectTo`, so signing in returns to the same tab and filters.
+  `safeRedirectTo` (`lib/redirect-to.ts`) refuses off-site and auth-route destinations and any over
+  2,048 characters. Only sign-out goes to plain `/login`.
 - Money is formatted from integer minor units + currency — never parse floats back.
 - **Time zone is picked, never typed** — `<TimezoneSelect>` over `Intl.supportedValuesOf('timeZone')`. We store the zone **name** (`Asia/Kolkata`), never an offset (an offset has no DST rule), and only **modern** IANA names: ICU still canonicalizes 18 zones to their old spelling, so `lib/tz.ts`'s `LEGACY_TO_MODERN` (mirrored in `src/platform/timezones.ts`) maps them for display, search and storage. `normalizeTimezone` rejects fixed offsets and bare abbreviations, which `Intl` would otherwise accept.
 - **Dates: business timezone in the UI, UTC on the wire.** Display goes through

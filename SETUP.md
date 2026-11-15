@@ -196,6 +196,10 @@ An owner can also add an organization's own key in **Settings → Billy**, and d
 Billy may prepare changes (off at first). Self-hosted installations have no monthly limit unless
 you set `ASSISTANT_ORG_MONTHLY_TOKENS`.
 
+With `ASSISTANT_PROVIDER=openai` and no `ASSISTANT_BASE_URL`, Billy's docs search also embeds the
+docs with the same key, so it finds a page by meaning. `ASSISTANT_DOCS_VECTORS=off` keeps it
+keyword-only, with no embedding calls.
+
 The **MCP server** for AI tools is always on, at your API host followed by `/mcp`. To serve it
 from a host of its own, point that host at the API (forward only `/mcp`, `/oauth/` and
 `/.well-known/oauth-*`) and set `MCP_PUBLIC_URL=https://mcp.example.com`.
