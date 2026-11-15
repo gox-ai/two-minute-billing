@@ -1,0 +1,45 @@
+/* Motion: rolling-number. Owned by the matching component; tokens from globals.css only. */
+
+/* components/ui/rolling-number.tsx. A figure breaks only where its text has a space. */
+.roll-word {
+  white-space: nowrap;
+}
+/* One digit's slot: as wide and as tall as the real digit (the ghost), clipped top and bottom
+   only, so a wider glyph mid-roll is not cut at the sides. */
+.roll-digit {
+  position: relative;
+  display: inline-block;
+  clip-path: inset(0 -0.25em);
+  /* clip-path alone still counts as scroll overflow: a hidden digit column hung ~280px below
+     the figure and gave every board tile a scrollbar. */
+  overflow-y: clip;
+}
+.roll-ghost {
+  color: transparent;
+}
+/* The 0–9 column, one line per digit; -10% of its height is one digit. It rests on the final
+   digit, so a skipped animation lands there. */
+.roll-column {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+  /* Whole-pixel lines. A figure's line height is often fractional (26px × 1.2 = 31.2px), and
+     digit N rests N lines down: each digit then lands on a different fraction of a pixel and
+     some draw one pixel low (the 8 in "842" did). */
+  line-height: round(1lh, 1px);
+  user-select: none;
+  pointer-events: none;
+  transform: translateY(calc(var(--roll-to) * -10%));
+}
+.roll-column[data-roll] {
+  animation: roll-digit var(--dur-slow) var(--ease-glide) var(--roll-delay, 0ms) both;
+}
+@keyframes roll-digit {
+  from {
+    transform: translateY(calc(var(--roll-from) * -10%));
+  }
+}

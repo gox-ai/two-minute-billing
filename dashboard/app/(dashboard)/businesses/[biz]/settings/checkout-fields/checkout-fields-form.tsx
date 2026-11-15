@@ -65,15 +65,18 @@ const BILLING: Row[] = [
   },
 ];
 
-/** Column heads over the two selects; each select also carries its own aria-label. */
+/**
+ * Column heads over the two selects; each select also carries its own aria-label. The
+ * selects stay boxed (a matrix needs aligned columns) at 120px and the default 36px height.
+ */
 function SurfaceHeads() {
   return (
     <div
       aria-hidden
       className="hidden justify-end gap-2 px-5 pt-3 pb-1 text-xs font-medium text-muted-foreground sm:flex"
     >
-      <span className="w-32">Checkout</span>
-      <span className="w-32">Portal</span>
+      <span className="w-30">Checkout</span>
+      <span className="w-30">Portal</span>
     </div>
   );
 }
@@ -106,8 +109,7 @@ function SurfaceSelect({
         ariaLabel={ariaLabel}
         options={opts}
         disabled={disabled}
-        size="sm"
-        className="w-32"
+        className="w-30"
       />
     </div>
   );
@@ -200,7 +202,7 @@ function PoNumberRow({
             onValueChange={setV}
             options={CHECKOUT_NO_HIDDEN}
           />
-          <span className="w-32 self-center text-muted-foreground">Not asked</span>
+          <span className="w-30 self-center text-muted-foreground">Not asked</span>
         </div>
       }
       consequence={
@@ -295,8 +297,8 @@ export function CheckoutFieldsCards({
           placement="end"
           control={
             <div className="flex flex-col gap-2 text-sm sm:flex-row">
-              <span className="w-32 font-medium">Always required</span>
-              <span className="w-32 text-muted-foreground">Not asked</span>
+              <span className="w-30 font-medium">Always required</span>
+              <span className="w-30 text-muted-foreground">Not asked</span>
             </div>
           }
           help="A new subscription cannot start without one. A plan-change checkout keeps the customer's email and does not ask."

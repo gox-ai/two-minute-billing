@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 
 export function initialsOf(name: string): string {
   // Strip punctuation off each word before taking its initial. Business names in the
-  // wild are "acme-analytics (india)" and "Acme, Inc." — taking `word[0]` blindly
+  // wild are "halyard-analytics (india)" and "Halyard, Inc." — taking `word[0]` blindly
   // renders "A(" and "A," as someone's brand mark.
   return (
     name
@@ -31,9 +31,9 @@ export function initialsOf(name: string): string {
 
 const SIZES = {
   sm: {
-    tile: "size-8 text-xs rounded-lg",
+    tile: "size-8 text-xs rounded-md",
     img: "max-h-8 max-w-[140px]",
-    icon: "size-8 rounded-lg",
+    icon: "size-8 rounded-md",
   },
   md: {
     tile: "size-10 text-sm rounded-xl",

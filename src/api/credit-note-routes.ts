@@ -71,6 +71,9 @@ const createBody = z.object({
   kind: z.enum(["adjustment", "refundable"]),
   reason_code: z.enum(REASON_CODES).optional(),
   reason: z.string().max(500).optional(),
+  // A credit pack line: `unused` (default) credits the unused credits only; `full` the whole
+  // line, used credits too.
+  pack_refund: z.enum(["unused", "full"]).optional(),
   /** A note to the customer, stored on the credit note. */
   customer_notes: z.string().trim().min(1).max(LIMITS.notes).optional(),
   // `invoice_line_item` is optional but strongly preferred: it is what lets the
@@ -123,6 +126,7 @@ export async function registerCreditNoteRoutes(app: FastifyInstance) {
         })),
         reasonCode: parsed.data.reason_code,
         reason: parsed.data.reason,
+        ...(parsed.data.pack_refund === "full" ? { packRefund: "full" as const } : {}),
         ...(parsed.data.customer_notes ? { customerNotes: parsed.data.customer_notes } : {}),
       };
       try {
@@ -152,6 +156,7 @@ export async function registerCreditNoteRoutes(app: FastifyInstance) {
           exchange_rate: cn.exchangeRate ?? null,
           exchange_rate_base: cn.exchangeRateBase ?? null,
           customer_notes: cn.customerNotes ?? null,
+          pack_refund: cn.packRefund === "full" ? "full" : "unused",
         });
       } catch (e) {
         // Create takes its invoice in the BODY, so a missing one is a bad field (400),

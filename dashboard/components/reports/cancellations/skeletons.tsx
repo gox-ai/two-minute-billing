@@ -44,7 +44,7 @@ export function CancellationsSkeleton() {
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="col-span-12 rounded-xl border bg-card p-6 lg:col-span-6 2xl:col-span-3"
+            className="col-span-12 rounded-xl border bg-card p-6 lg:col-span-6 @min-[64.375rem]/main:col-span-3"
           >
             <Skeleton className="h-3 w-24" />
             <Skeleton className="mt-2.5 h-7 w-28" />
@@ -52,7 +52,7 @@ export function CancellationsSkeleton() {
           </div>
         ))}
       </Grid>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-4 @min-[59.5rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <CardBones>
           <div className="flex items-end gap-1.5" style={{ height: 220 }}>
             {[40, 65, 50, 80, 55, 70, 45, 60, 75, 50, 65, 55].map((h, i) => (

@@ -28,7 +28,7 @@ export function ModeBand({
   const [confirming, setConfirming] = React.useState(false);
 
   return (
-    <div className="sticky top-0 z-20 mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-primary/30 bg-primary/10 px-4 py-2.5">
+    <div className="sticky top-(--compact-h,0px) z-20 mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-primary/30 bg-primary/10 px-4 py-2.5">
       <LayoutGrid className="size-4 shrink-0 text-primary" aria-hidden="true" />
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="text-sm font-semibold text-primary">Editing layout · {name}</span>

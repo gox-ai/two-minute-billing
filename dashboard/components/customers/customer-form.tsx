@@ -109,6 +109,8 @@ export interface CustomerDunningOptions {
   policies: Array<{ id: string; name: string; archived: boolean }>;
   /** What the business settings do, in one sentence. */
   businessLine: string;
+  /** The business maps plans to policies: with no customer policy, a plan's policy can apply. */
+  planPolicies: boolean;
 }
 
 export type CustomerFormProps = {
@@ -142,6 +144,8 @@ export function CustomerForm(props: CustomerFormProps) {
   const formRef = React.useRef<HTMLFormElement>(null);
   const recordHref = c ? `/businesses/${biz}/customers/${c.id}` : null;
   const hasCustomFields = cfDefs.some((d) => !d.archived);
+  // Only a required custom field carries a star; with none, the footer says nothing.
+  const hasRequired = cfDefs.some((d) => !d.archived && d.required);
 
   // The two controls the kit renders controlled; everything else stays uncontrolled.
   const [v, set] = useFormModel(
@@ -214,7 +218,9 @@ export function CustomerForm(props: CustomerFormProps) {
     ? "Excluded"
     : policyName
       ? `Policy: ${policyName}`
-      : "Business settings";
+      : dunning?.planPolicies
+        ? "The plan's policy, or the business settings"
+        : "Business dunning settings";
 
   const summary = (
     <SummaryCard
@@ -252,7 +258,7 @@ export function CustomerForm(props: CustomerFormProps) {
       <input type="hidden" name="email_fields" value="1" />
       <input type="hidden" name="dunning_fields" value="1" />
       <input type="hidden" name="reporting_fields" value="1" />
-      {/* Marks the policy select present, so "Business settings" ('') posts as null. */}
+      {/* Marks the policy select present, so "No customer policy" ('') posts as null. */}
       {dunning ? (
         <>
           <input type="hidden" name="dunning_policy_field" value="1" />
@@ -276,6 +282,7 @@ export function CustomerForm(props: CustomerFormProps) {
         cancelHref={recordHref ?? `/businesses/${biz}/customers`}
         submitLabel={editing ? "Save changes" : "Create customer"}
         summary={summary}
+        {...(hasRequired ? {} : { footerNote: null })}
       >
         <FormCard title="Contact">
           {c ? (
@@ -324,23 +331,14 @@ export function CustomerForm(props: CustomerFormProps) {
               autoComplete="organization"
             />
           </Field>
-          {c ? (
-            // Dial code + national number, posting one E.164 value; the billing country seeds the dial code.
-            <PhoneField
-              name="phone"
-              countries={countries}
-              defaultValue={c.phone}
-              countryCode={c.address?.country ?? null}
-            />
-          ) : (
-            <Field
-              name="phone"
-              label="Phone"
-              help="Include the country code for international numbers."
-            >
-              <Input name="phone" placeholder="+1 555 0100" maxLength={50} autoComplete="tel" />
-            </Field>
-          )}
+          {/* Dial code + national number, posting one E.164 value under `phone`. Edit seeds
+              the dial code from the saved billing country; create follows the one entered. */}
+          <PhoneField
+            name="phone"
+            countries={countries}
+            defaultValue={c?.phone}
+            countryCode={c ? (c.address?.country ?? null) : t("addr_country") || null}
+          />
         </FormCard>
 
         <FormCard title="Billing preferences">
@@ -395,13 +393,13 @@ export function CustomerForm(props: CustomerFormProps) {
                 options={[
                   {
                     value: "on",
-                    label: "On",
-                    hint: "Charge the customer’s payment method when we create an invoice",
+                    label: "On: charge automatically",
+                    hint: "We charge the customer’s payment method.",
                   },
                   {
                     value: "off",
                     label: "Off: send the invoice",
-                    hint: "We send the invoice and the customer pays it",
+                    hint: "We send each invoice and the customer pays it.",
                   },
                 ]}
               />
@@ -441,7 +439,12 @@ export function CustomerForm(props: CustomerFormProps) {
                 label="Dunning policy"
                 help={
                   <>
-                    Business settings: {dunning.businessLine}
+                    {t("dunning_policy")
+                      ? "Business dunning settings: "
+                      : dunning.planPolicies
+                        ? "The plan's dunning policy applies. If the plan has none, the business dunning settings apply: "
+                        : "The business dunning settings apply: "}
+                    {dunning.businessLine}
                     {v.dunning_excluded
                       ? " This customer is excluded from dunning, so no policy applies."
                       : ""}
@@ -453,7 +456,7 @@ export function CustomerForm(props: CustomerFormProps) {
                   ariaLabel="Dunning policy"
                   defaultValue={c?.dunning_policy ?? ""}
                   options={[
-                    { value: "", label: "Business settings" },
+                    { value: "", label: "No customer policy" },
                     ...dunning.policies.map((p) => ({
                       value: p.id,
                       label: p.archived ? `${p.name} (archived)` : p.name,
@@ -468,17 +471,21 @@ export function CustomerForm(props: CustomerFormProps) {
           <Field
             name="net_term_days"
             label="Net term days"
-            help="Payment is due N days after the invoice date."
+            help="Enter 0 to make invoices due on receipt."
           >
-            <Input
-              name="net_term_days"
-              type="number"
-              min={0}
-              max={365}
-              step={1}
-              {...(c ? { defaultValue: c.net_term_days ?? 0 } : { placeholder: "0" })}
-              className="tabular-nums"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id="net_term_days"
+                name="net_term_days"
+                type="number"
+                min={0}
+                max={365}
+                step={1}
+                {...(c ? { defaultValue: c.net_term_days ?? 0 } : { placeholder: "0" })}
+                className="w-20 tabular-nums"
+              />
+              <span className="text-sm text-muted-foreground">days after the invoice date</span>
+            </div>
           </Field>
           {c ? (
             <Wide>
@@ -498,7 +505,7 @@ export function CustomerForm(props: CustomerFormProps) {
           ) : (
             <Field
               name="invoice_notes"
-              label="Invoice notes"
+              label="Invoice note"
               help="We print it on every invoice for this customer."
             >
               <Input name="invoice_notes" maxLength={2000} />
@@ -570,24 +577,38 @@ export function CustomerForm(props: CustomerFormProps) {
           </Field>
           {c ? (
             <>
-              <Field name="withholding_rate_bps" label="Withholding / TDS rate (bps · 1000 = 10%)">
-                <Input
-                  name="withholding_rate_bps"
-                  type="number"
-                  min={0}
-                  max={10000}
-                  step={1}
-                  defaultValue={c.withholding_rate_bps ?? 0}
-                  className="tabular-nums"
-                />
+              {/* Posts basis points; the live percent beside it saves the conversion. */}
+              <Field
+                name="withholding_rate_bps"
+                label="Withholding / TDS rate"
+                help="100 basis points = 1%."
+              >
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="withholding_rate_bps"
+                    name="withholding_rate_bps"
+                    type="number"
+                    min={0}
+                    max={10000}
+                    step={1}
+                    defaultValue={c.withholding_rate_bps ?? 0}
+                    className="w-30 tabular-nums"
+                  />
+                  <span className="text-sm whitespace-nowrap text-muted-foreground tabular-nums">
+                    basis points ({bps / 100}%)
+                  </span>
+                </div>
               </Field>
               {/* Gated on the region for the BILLING country: its treatments are the only
-                  ones the engine honours. */}
-              <TaxTreatmentField
-                region={props.taxRegions.find((r) => r.country === c.address?.country) ?? null}
-                value={c.tax_treatment}
-                registrationNumber={c.tax_registration_number}
-              />
+                  ones the engine honours. Its "no treatment" note is a card-wide line at the
+                  end, not a half row beside a field. */}
+              <div className="contents [&>.rounded-md]:order-last sm:[&>.rounded-md]:col-span-full [&>p]:order-last sm:[&>p]:col-span-full">
+                <TaxTreatmentField
+                  region={props.taxRegions.find((r) => r.country === c.address?.country) ?? null}
+                  value={c.tax_treatment}
+                  registrationNumber={c.tax_registration_number}
+                />
+              </div>
             </>
           ) : (
             <>

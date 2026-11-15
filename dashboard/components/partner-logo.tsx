@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
  * fixed per call site, so a column of logos lines up. A key with no file shows its name as
  * text in the same box.
  *
- * Decorative: callers always show the name as text beside it.
+ * Decorative: the name always rides along as text (visible, or screen-reader only where
+ * the logo already spells it, as in `GatewayLabel`).
  */
 
 type Variant = {
@@ -127,6 +128,23 @@ export function partnerName(key: string | null | undefined): string | null {
   return (key && LOGOS[key]?.name) || null;
 }
 
+/**
+ * A gateway ACCOUNT's label, or null when it only repeats the gateway's own name
+ * ("Stripe" on a Stripe account). A second account ("Stripe-1") still shows.
+ * `shownName` is the name already on screen (the catalogue's display name), so a
+ * gateway with no logo is compared with what the operator actually reads.
+ */
+export function distinctAccountLabel(
+  gatewayKey: string | null | undefined,
+  label: string | null | undefined,
+  shownName?: string | null,
+): string | null {
+  const l = label?.trim();
+  if (!l) return null;
+  const same = (n: string | null | undefined) => !!n && n.trim().toLowerCase() === l.toLowerCase();
+  return same(shownName) || same(partnerName(gatewayKey)) || same(gatewayKey) ? null : l;
+}
+
 function LogoImage({
   variant,
   aspect,
@@ -172,6 +190,7 @@ export function PartnerLogo({
   area,
   width,
   fit = false,
+  align = "center",
   className,
 }: {
   /** Catalogue key: `gateway_key` or the integration key. */
@@ -184,12 +203,22 @@ export function PartnerLogo({
   width: number;
   /** Shrink the box to the logo (a title, a card) instead of a fixed column width. */
   fit?: boolean;
+  /**
+   * Where the logo sits in a fixed box. `center` (default) beside a label that follows
+   * the box; `start` where the logo IS the label and text under it is left-aligned.
+   */
+  align?: "center" | "start";
   className?: string;
 }) {
   const logo = LOGOS[brand];
   const size = { area, width };
   const boxHeight = Math.ceil(Math.sqrt(area / MIN_ASPECT));
-  const box = cn("flex shrink-0 items-center", fit ? "justify-start" : "justify-center", className);
+  const start = fit || align === "start";
+  const box = cn(
+    "flex shrink-0 items-center",
+    start ? "justify-start" : "justify-center",
+    className,
+  );
   const boxWidth = fit ? undefined : width;
 
   if (!logo) {
@@ -203,7 +232,7 @@ export function PartnerLogo({
           maxWidth: width,
           minHeight: boxHeight,
           fontSize: Math.min(20, Math.max(12, Math.round(boxHeight * 0.55))),
-          textAlign: fit ? "left" : "center",
+          textAlign: start ? "left" : "center",
         }}
       >
         <span className="min-w-0 wrap-anywhere">{name}</span>
@@ -236,9 +265,9 @@ export function PartnerLogo({
 }
 
 /**
- * A gateway named in a list or detail: a small logo, then the name as text (read by
- * screen readers and matched by search). A key with no logo (an offline method, the test
- * gateway) shows the name only.
+ * A gateway named in a list or detail. Every logo is a wordmark, so a key with a logo
+ * shows the logo alone and keeps the name for screen readers. A key with no logo (an
+ * offline method, the test gateway) shows the name as text.
  */
 export function GatewayLabel({
   gatewayKey,
@@ -254,12 +283,19 @@ export function GatewayLabel({
   className?: string;
 }) {
   const label = name ?? partnerName(gatewayKey) ?? gatewayKey;
+  const logo = hasPartnerLogo(gatewayKey);
   return (
     <span className={cn("inline-flex items-center gap-2 align-middle", className)}>
-      {hasPartnerLogo(gatewayKey) ? (
-        <PartnerLogo brand={gatewayKey} name={label} {...LOGO_SIZE.inline} fit={fit} />
+      {logo ? (
+        <PartnerLogo
+          brand={gatewayKey}
+          name={label}
+          {...LOGO_SIZE.inline}
+          fit={fit}
+          align="start"
+        />
       ) : null}
-      <span className="min-w-0">{label}</span>
+      <span className={logo ? "sr-only" : "min-w-0"}>{label}</span>
     </span>
   );
 }

@@ -7,7 +7,7 @@ import { PORTAL_TABS, PORTAL_TAB_LABELS as LABELS, type PortalTab } from "./port
 /**
  * How a CROSS-REFERENCE reaches the selection this component owns.
  *
- * `PortalSectionLink` renders a real `<a href="?tab=…#portal-…">`, which is right for a
+ * `PortalSectionLink` renders a real anchor to `?tab=…#portal-…`, which is right for a
  * first load, a new tab, or JS off — the server resolves the opening section from that
  * parameter. But an in-app click on it used to change only the URL: this component seeds
  * `tab` from `initialTab` with `useState`, and a client-side navigation does not remount
@@ -28,8 +28,14 @@ import { PORTAL_TABS, PORTAL_TAB_LABELS as LABELS, type PortalTab } from "./port
 /** The account strip, left to right. The money column owns `invoices`. */
 const ACCOUNT_TABS = ["plan", "methods", "details"] as const;
 
+export type PortalSelectOpts = {
+  hash?: boolean;
+  /** An element inside the pane to bring into view instead of the pane's top. */
+  anchor?: string;
+};
+
 const SelectContext = React.createContext<
-  ((next: PortalTab, opts?: { hash?: boolean }) => void) | null
+  ((next: PortalTab, opts?: PortalSelectOpts) => void) | null
 >(null);
 
 /** Null when rendered outside `PortalPanes` — callers must fall back to plain navigation. */
@@ -108,7 +114,7 @@ export function PortalPanes({
   const accountTab = tab === "invoices" ? accountStrip[0] : tab;
   const navRef = React.useRef<HTMLElement>(null);
 
-  const select = React.useCallback((next: PortalTab, opts?: { hash?: boolean }) => {
+  const select = React.useCallback((next: PortalTab, opts?: PortalSelectOpts) => {
     setTab(next);
     /**
      * Reflected into the URL so a reload, a back button, or a redirect from a gateway
@@ -146,6 +152,15 @@ export function PortalPanes({
     window.history.replaceState(null, "", url);
     if (opts?.hash) {
       setTimeout(() => {
+        // An anchor (the add-method form) is a target the buyer must SEE whole: scroll
+        // unless its top is already in the upper part of the screen.
+        const target = opts.anchor ? document.getElementById(opts.anchor) : null;
+        if (target) {
+          const t = target.getBoundingClientRect().top;
+          if (t < 0 || t > window.innerHeight * 0.4)
+            target.scrollIntoView({ block: "start", behavior: "smooth" });
+          return;
+        }
         const pane = document.getElementById(`portal-${next}`);
         if (!pane) return;
         const r = pane.getBoundingClientRect();

@@ -1,0 +1,70 @@
+/* Motion: pull-refresh. Owned by components/pull-refresh.tsx; tokens from globals.css only. */
+
+/* The clip at <main>'s top edge. `--pull-p` is 0 hidden, 1 armed (and at rest), up to 1.25. */
+.pull-refresh {
+  height: 7.5rem;
+}
+/* -56px hides the chip and its shadow above the edge; at 1 it rests 16px below it. */
+.pull-refresh-chip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% calc(-56px + 72px * var(--pull-p, 0));
+  opacity: clamp(0, var(--pull-p, 0) * 3, 1);
+}
+/* The arrow turns with the pull. */
+.pull-refresh-icon {
+  rotate: calc(var(--pull-p, 0) * 270deg);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.pull-refresh[data-state="idle"] .pull-refresh-chip {
+  opacity: 0;
+}
+
+/* Armed: the arrow takes the brand colour and the chip pops. */
+.pull-refresh:is([data-state="armed"], [data-state="refreshing"]) .pull-refresh-icon {
+  color: var(--primary);
+}
+@keyframes m-pull-pop {
+  from {
+    scale: 0.86;
+  }
+}
+.pull-refresh[data-state="armed"] .pull-refresh-chip {
+  animation: m-pull-pop var(--dur) var(--ease-spring);
+}
+
+/* Released past the arm point: the chip glides to its rest and spins until the data is in. */
+@keyframes m-pull-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+.pull-refresh[data-state="refreshing"] .pull-refresh-chip {
+  transition: translate var(--dur) var(--ease-glide);
+}
+.pull-refresh[data-state="refreshing"] .pull-refresh-icon {
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    rotate var(--dur) var(--ease-glide);
+  animation: m-pull-spin 1s linear infinite;
+}
+
+/* Released short of it: back under the edge. */
+.pull-refresh[data-state="settle"] .pull-refresh-chip {
+  transition:
+    translate var(--dur-out) var(--ease-glide),
+    opacity var(--dur-out) var(--ease-out);
+}
+.pull-refresh[data-state="settle"] .pull-refresh-icon {
+  transition: rotate var(--dur-out) var(--ease-glide);
+}
+
+/* Done: the chip scales out where it rests. */
+.pull-refresh[data-state="done"] .pull-refresh-chip {
+  scale: 0;
+  opacity: 0;
+  transition:
+    scale var(--dur-out) var(--ease-glide),
+    opacity var(--dur-out) var(--ease-out);
+}

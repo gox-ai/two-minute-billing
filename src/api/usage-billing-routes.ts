@@ -38,6 +38,10 @@ const applicability = z.union([
     prices: z.array(z.string().min(1).max(100)).min(1).max(100),
   }),
 ]);
+const purchaseLimit = z
+  .object({ count: z.number().int().min(1).max(1000), amount_minor: POSITIVE })
+  .partial()
+  .strict();
 export const autoTopupBody = z.object({
   currency: CURRENCY.optional(),
   unit: z.string().min(1).max(100).nullable().optional(),
@@ -56,12 +60,36 @@ export const autoTopupBody = z.object({
   monthly_cap_minor: POSITIVE,
   max_runs_per_day: z.number().int().min(1).max(10).optional(),
   payment_method: z.string().min(1).max(100).nullable().optional(),
-  grant: z.object({
-    tax_treatment: z.enum(["taxed_at_purchase", "taxed_at_use"]),
-    priority: z.number().int().min(0).max(100).optional(),
-    expires_after_months: z.number().int().min(1).max(120).nullable().optional(),
-    applicability: applicability.optional(),
-  }),
+  // Not for a unit with no rate: the pack carries the grant's settings.
+  grant: z
+    .object({
+      tax_treatment: z.enum(["taxed_at_purchase", "taxed_at_use"]),
+      priority: z.number().int().min(0).max(100).optional(),
+      expires_after_months: z.number().int().min(1).max(120).nullable().optional(),
+      applicability: applicability.optional(),
+    })
+    .nullable()
+    .optional(),
+  // A unit with no rate: a threshold in credits and the credit pack a run buys.
+  threshold_units: z
+    .union([z.string().min(1).max(40), z.number().nonnegative().finite()])
+    .transform((v) => (typeof v === "number" ? String(v) : v.trim()))
+    .nullable()
+    .optional(),
+  pack_price: z.string().min(1).max(100).nullable().optional(),
+  pack_quantity: z.number().int().min(1).max(1000).nullable().optional(),
+  // "Recharge to N units": whole packs to reach at least N credits.
+  target_units: z
+    .union([z.string().min(1).max(40), z.number().positive().finite()])
+    .transform((v) => (typeof v === "number" ? String(v) : v.trim()))
+    .nullable()
+    .optional(),
+  purchase_limits: z
+    .object({ hour: purchaseLimit, day: purchaseLimit, week: purchaseLimit, month: purchaseLimit })
+    .partial()
+    .strict()
+    .nullable()
+    .optional(),
 });
 const which = z.object({
   currency: CURRENCY.optional(),
@@ -141,7 +169,12 @@ export async function registerUsageBillingRoutes(app: FastifyInstance) {
             monthlyCapMinor: BigInt(d.monthly_cap_minor),
             maxRunsPerDay: d.max_runs_per_day,
             paymentMethod: d.payment_method ?? null,
-            grant: d.grant,
+            grant: d.grant ?? null,
+            thresholdUnits: d.threshold_units ?? null,
+            packPrice: d.pack_price ?? null,
+            packQuantity: d.pack_quantity ?? null,
+            targetUnits: d.target_units ?? null,
+            purchaseLimits: d.purchase_limits ?? null,
           },
         });
         return serializeAutoTopup(req.organization!.id, config, lead);

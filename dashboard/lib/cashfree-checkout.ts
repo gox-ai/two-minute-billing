@@ -8,6 +8,7 @@
  *   - `kind: 'order'` — a one-time payment, in Cashfree's modal over our page.
  * Card and bank details stay inside Cashfree's pages (PCI SAQ-A).
  */
+import { cashfreeFailure, contactBusiness } from "./gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "./gateway-sdk";
 
 interface CashfreeResult {
@@ -37,7 +38,7 @@ function loadScript(): Promise<void> {
     el.onload = () => resolve();
     el.onerror = () => {
       loading = null;
-      reject(new Error("We could not connect to Cashfree. Check your connection. Then try again."));
+      reject(new Error("We could not load the payment form. Reload the page. Then try again."));
     };
     document.head.appendChild(el);
   });
@@ -49,13 +50,13 @@ const leaving = () => new Promise<GatewaySdkResult>(() => {});
 
 export async function openCashfreeCheckout(
   params: Record<string, unknown>,
-  _context: GatewaySdkContext,
+  context: GatewaySdkContext,
 ): Promise<GatewaySdkResult> {
   const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
   if (!sessionId)
     return {
       status: "failed",
-      message: "We could not open the payment form. Contact the business.",
+      message: `We could not open the payment form. ${contactBusiness(context.businessName)}`,
     };
   await loadScript();
   const cashfree = window.Cashfree!({
@@ -70,17 +71,15 @@ export async function openCashfreeCheckout(
     if (res?.error)
       return {
         status: "failed",
-        message:
-          "We could not open the mandate form. Try again. If the problem continues, contact the business.",
+        message: cashfreeFailure("subscription", res.error, context.businessName),
       };
     return leaving();
   }
 
   const res = await cashfree.checkout({ paymentSessionId: sessionId, redirectTarget: "_modal" });
   if (res?.redirect) return leaving();
-  if (res?.error) {
-    // Closing the modal reports an error too. The order stays payable, so it is a dismissal.
-    return { status: "dismissed" };
-  }
+  // A close and a failed payment both come back as `error`, with nothing to tell them
+  // apart: shown either way, so a decline is never taken for a close.
+  if (res?.error) return { status: "failed", message: cashfreeFailure("order", res.error) };
   return { status: "completed" };
 }

@@ -182,10 +182,9 @@ function verifyPassword(password: string, stored: string): boolean {
  * both. Before this, only the absolute bound existed and it was stamped once at
  * sign-in, so an abandoned session stayed valid for the remainder of the week.
  */
-// The organization may shorten both (0482, `session-policy.ts`); never lengthen them.
-const idleWindowMs = (org?: Partial<OrgSessionPolicy> | null) => effectiveIdleMinutes(org) * 60_000;
-const absoluteTtlMs = (org?: Partial<OrgSessionPolicy> | null) =>
-  effectiveAbsoluteTtlHours(org) * 3600_000;
+// Both windows are the installation's (`session-policy.ts`); an organization cannot change them.
+const idleWindowMs = (_org?: unknown) => effectiveIdleMinutes() * 60_000;
+const absoluteTtlMs = (_org?: unknown) => effectiveAbsoluteTtlHours() * 3600_000;
 
 /**
  * Don't write on every single request. Once dashboard traffic authenticates by session,
@@ -934,10 +933,6 @@ export async function listSessions(
     .select({
       s: sessions,
       orgName: organizations.name,
-      org: {
-        sessionIdleMinutes: organizations.sessionIdleMinutes,
-        sessionAbsoluteTtlHours: organizations.sessionAbsoluteTtlHours,
-      },
     })
     .from(sessions)
     .innerJoin(organizations, eq(organizations.id, sessions.organizationId))
@@ -945,7 +940,7 @@ export async function listSessions(
     .orderBy(desc(sessions.expiresAt));
   const mine = sessionHash(currentToken);
   return rows
-    .filter(({ s, org }) => s.createdAt.getTime() + absoluteTtlMs(org) > now.getTime())
+    .filter(({ s }) => s.createdAt.getTime() + absoluteTtlMs() > now.getTime())
     .map(({ s, orgName }) => ({
       id: s.id,
       createdAt: s.createdAt,
@@ -2405,14 +2400,6 @@ async function createSession(
   how: SessionOrigin,
 ): Promise<string> {
   const token = `sess_${randomBytes(32).toString("base64url")}`;
-  const [policy] = await systemDb
-    .select({
-      sessionIdleMinutes: organizations.sessionIdleMinutes,
-      sessionAbsoluteTtlHours: organizations.sessionAbsoluteTtlHours,
-    })
-    .from(organizations)
-    .where(eq(organizations.id, organizationId))
-    .limit(1);
   // `expiresAt` starts as the idle deadline; `createdAt` defaults to now and is what the
   // absolute ceiling is measured from. `createdIp`/`userAgent` record where the session BEGAN
   // (audit M5): a session whose later requests move continents is the hijack signal, and it
@@ -2421,7 +2408,7 @@ async function createSession(
     userId,
     organizationId,
     tokenHash: sessionHash(token),
-    expiresAt: new Date(Date.now() + idleWindowMs(policy)),
+    expiresAt: new Date(Date.now() + idleWindowMs()),
     lastActiveAt: new Date(),
     createdIp: ctx.ip ?? null,
     userAgent: ctx.userAgent?.slice(0, 500) ?? null,
@@ -2453,7 +2440,7 @@ export async function resolveSession(token: string): Promise<AuthedUser | null> 
   // The ceiling is deliberately checked in code rather than folded into the query
   // above: a session that has run out its full life should be DELETED, not merely
   // filtered out, or the row lingers and is re-evaluated on every later request.
-  if (s.createdAt.getTime() + absoluteTtlMs(org) <= now.getTime()) {
+  if (s.createdAt.getTime() + absoluteTtlMs() <= now.getTime()) {
     await systemDb.delete(sessions).where(eq(sessions.id, s.id));
     log.log("session reached its absolute ceiling", { user: s.userId });
     return null;
@@ -2474,12 +2461,12 @@ export async function resolveSession(token: string): Promise<AuthedUser | null> 
     .limit(1);
   const m = mr?.m;
   if (!user || !m || !org) return null;
-  // Idle past the org's window, even one shortened after this deadline was stamped. A row
-  // from before 0482 has no last use: its deadline was stamped with the deployment window.
+  // Idle past the installation's window. A row from before 0482 has no last use: its deadline
+  // was stamped with the same window.
   const lastActive = s.lastActiveAt?.getTime() ?? s.expiresAt.getTime() - idleWindowMs();
-  if (lastActive + idleWindowMs(org) <= now.getTime()) {
+  if (lastActive + idleWindowMs() <= now.getTime()) {
     await systemDb.delete(sessions).where(eq(sessions.id, s.id));
-    log.log("session passed its organization's idle window", { user: s.userId });
+    log.log("session passed its idle window", { user: s.userId });
     return null;
   }
 
@@ -2487,12 +2474,12 @@ export async function resolveSession(token: string): Promise<AuthedUser | null> 
   // than the throttle, so a burst of calls rendering one page costs a single write.
   // Deliberately NOT awaited-into the response path's critical section beyond this: the
   // refresh failing must not fail the request, since the session is already valid.
-  // Also when the deadline is further off than the window: the organization shortened it.
+  // Also when the deadline is further off than the window (one stamped under an old, longer one).
   const left = s.expiresAt.getTime() - now.getTime();
-  if (left < idleWindowMs(org) - REFRESH_THROTTLE_MS || left > idleWindowMs(org)) {
+  if (left < idleWindowMs() - REFRESH_THROTTLE_MS || left > idleWindowMs()) {
     await systemDb
       .update(sessions)
-      .set({ expiresAt: new Date(now.getTime() + idleWindowMs(org)), lastActiveAt: now })
+      .set({ expiresAt: new Date(now.getTime() + idleWindowMs()), lastActiveAt: now })
       .where(eq(sessions.id, s.id));
   }
 

@@ -6,6 +6,38 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DIALOG_FROM_CLICK } from "@/lib/motion";
+import {
+  installPressOrigin,
+  lastPress,
+  originPercent,
+  pressPoint,
+  settledBox,
+} from "@/lib/press-origin";
+
+// At module load, not on mount: the press that opens a dialog comes before it mounts.
+if (DIALOG_FROM_CLICK) installPressOrigin();
+
+const placed = new WeakSet<HTMLElement>();
+
+/**
+ * Point a mounting dialog's `transform-origin` at the press that opened it. A callback ref
+ * runs in the commit, before the first frame, so the entrance starts from the right point.
+ * Phone width (bottom sheet) and reduced motion skip it; no recent press keeps the centre.
+ */
+function setPressOrigin(el: HTMLElement) {
+  // Once per mount: a re-attached ref must not move the origin to a press inside the dialog.
+  if (placed.has(el)) return;
+  placed.add(el);
+  if (window.matchMedia("(width < 40rem), (prefers-reduced-motion: reduce)").matches) return;
+  const point = pressPoint(lastPress(), performance.now());
+  if (!point) return;
+  const box = settledBox(el.getBoundingClientRect(), el.offsetWidth, el.offsetHeight);
+  const o = originPercent(point, box);
+  if (!o) return;
+  el.style.setProperty("--origin-x", `${o.x}%`);
+  el.style.setProperty("--origin-y", `${o.y}%`);
+}
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
@@ -31,7 +63,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/70 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 bg-scrim backdrop-blur-[3px] data-[state=closed]:animate-scrim-out data-[state=open]:animate-scrim-in",
         className,
       )}
       {...props}
@@ -56,9 +88,13 @@ function DialogContent({
   showCloseButton = true,
   size = "md",
   dismissOnOutsideClick = false,
+  motion = "dialog",
+  ref,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /** `pop` for a launcher (the ⌘K palette): quicker, menu-like. */
+  motion?: "dialog" | "pop";
   /**
    * Let a click outside close this dialog. OFF for everything but the ⌘K palette.
    *
@@ -78,11 +114,22 @@ function DialogContent({
    */
   size?: "sm" | "md" | "lg" | "xl";
 }) {
+  const closeRef = React.useRef<HTMLButtonElement>(null);
+  const fromClick = DIALOG_FROM_CLICK && motion === "dialog";
+  const contentRef = React.useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el && fromClick) setPressOrigin(el);
+      if (typeof ref === "function") return ref(el);
+      if (ref) ref.current = el;
+    },
+    [ref, fromClick],
+  );
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        ref={contentRef}
         /**
          * A CLICK OUTSIDE DOES NOT CLOSE A DIALOG HERE.
          *
@@ -104,15 +151,27 @@ function DialogContent({
         onPointerDownOutside={dismissOnOutsideClick ? undefined : (e) => e.preventDefault()}
         onInteractOutside={dismissOnOutsideClick ? undefined : (e) => e.preventDefault()}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-popover p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-popover-border bg-popover p-6 shadow-lg outline-none",
+          // A dialog springs up from .96 (or from the press: app/motion/dialog-origin.css);
+          // the palette is a menu, so it pops like one.
+          motion === "pop"
+            ? "data-[state=closed]:animate-pop-out data-[state=open]:animate-pop-in"
+            : fromClick
+              ? "dialog-from-click"
+              : "[--m-scale-out:0.98] [--m-scale:0.96] data-[state=closed]:animate-dialog-out data-[state=open]:animate-dialog-in",
+          // Below 640px a dialog is a bottom sheet: pinned to the foot, slides up.
+          motion === "dialog" &&
+            "max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-t-2xl max-sm:rounded-b-none max-sm:border-x-0 max-sm:border-b-0 max-sm:pb-[max(1.5rem,env(safe-area-inset-bottom))] max-sm:[--m-y:100%] max-sm:data-[state=closed]:animate-sheet-out max-sm:data-[state=open]:animate-sheet-in",
           DIALOG_SIZE[size],
           className,
         )}
         {...props}
       >
         {children}
+        {motion === "dialog" && showCloseButton ? <SheetGrabber closeRef={closeRef} /> : null}
         {showCloseButton && (
           <DialogPrimitive.Close
+            ref={closeRef}
             data-slot="dialog-close"
             /**
              * A real hit target, pinned to the dialog's own top-right corner.
@@ -143,6 +202,56 @@ function DialogContent({
         )}
       </DialogPrimitive.Content>
     </DialogPortal>
+  );
+}
+
+/**
+ * The bottom sheet's grabber (phone width only). Drag it down: past 80px the sheet closes
+ * through the ×, so it leaves exactly as a click would; short of that it springs back.
+ * Pointer-only, so `aria-hidden` — the × and Escape are the accessible exits.
+ */
+function SheetGrabber({ closeRef }: { closeRef: React.RefObject<HTMLButtonElement | null> }) {
+  const drag = React.useRef<{ y: number; dy: number } | null>(null);
+  const sheet = (el: HTMLElement) => el.closest<HTMLElement>('[data-slot="dialog-content"]');
+  return (
+    <div
+      aria-hidden
+      data-sheet-grabber
+      className="absolute top-0 left-1/2 flex h-6 w-24 -translate-x-1/2 cursor-grab touch-none justify-center pt-2 sm:hidden"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { y: e.clientY, dy: 0 };
+        const s = sheet(e.currentTarget);
+        if (s) s.style.transition = "none";
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        const s = sheet(e.currentTarget);
+        if (!d || !s) return;
+        d.dy = Math.max(0, e.clientY - d.y);
+        s.style.transform = `translateY(${d.dy}px)`;
+      }}
+      onPointerUp={(e) => {
+        const d = drag.current;
+        const s = sheet(e.currentTarget);
+        drag.current = null;
+        if (!d || !s) return;
+        if (d.dy > 80) {
+          s.style.transition = "";
+          closeRef.current?.click();
+          return;
+        }
+        s.style.transition = "transform var(--dur) var(--ease-spring)";
+        s.style.transform = "";
+      }}
+      onPointerCancel={(e) => {
+        drag.current = null;
+        const s = sheet(e.currentTarget);
+        if (s) s.style.transform = "";
+      }}
+    >
+      <span className="h-1 w-9 rounded-full bg-muted-foreground/40" />
+    </div>
   );
 }
 

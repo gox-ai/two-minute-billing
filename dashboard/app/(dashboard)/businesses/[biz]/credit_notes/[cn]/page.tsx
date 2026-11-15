@@ -1,11 +1,14 @@
+import { notFound } from "next/navigation";
 import { billingRules } from "@/lib/billing-rules";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
-import { getCreditNote } from "@/lib/api/credit-notes";
-import { invoiceRefundAccount } from "@/lib/api/gateways";
+import { listBusinesses, isApiNotFound, businessLabel } from "@/lib/api";
+import { getCreditNote, type CreditNoteItem } from "@/lib/api/credit-notes";
+import { getGatewayCatalogOrEmpty, invoiceRefundAccount } from "@/lib/api/gateways";
+import { gatewayObjectUrl } from "@/components/gateways/gateway-meta";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
-import { StatusChip, IdChip } from "@/components/patterns/chip";
+import { Chip, StatusChip, IdChip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { creditNoteChipStatus } from "@/lib/credit-note-status";
 import {
   RecordCrumbs,
@@ -26,13 +29,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ErrorState, EmptyState } from "@/components/states";
-import { money, fmtDate, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime, fmtRange } from "@/lib/format-date";
 import { ActivityLogCard } from "@/components/activity-log-card";
 import { CommentsCard } from "@/components/comments/comments-card";
 import { Button } from "@/components/ui/button";
 import { FileDown } from "lucide-react";
 import { KindBadge, reasonLabel } from "@/components/credit-notes/chips";
-import { Badge } from "@/components/ui/badge";
 import {
   RefundCreditNoteButton,
   RecordOfflineRefundButton,
@@ -101,6 +104,15 @@ const CN_DISCOUNT_LABELS: Record<string, string> = {
   item_level_coupon: "Discount",
   document_level_coupon: "Discount",
 };
+
+// Detail-read fields on each item (src/modules/credit-notes/serialize.ts).
+type NoteItem = CreditNoteItem & {
+  /** Invoice line vocabulary; "tax" = the tax the note reverses. */
+  kind?: string | null;
+  /** The ladder states this item in its tax rows, so the line table leaves it out. */
+  stated_in_taxes?: boolean;
+};
+
 export default async function CreditNoteDetail({
   params,
 }: {
@@ -109,23 +121,30 @@ export default async function CreditNoteDetail({
   const { biz, cn: cnId } = await params;
   await requirePermission("credit_notes:view", "ops");
 
-  let businesses, note;
+  let businesses, note, catalog;
   try {
-    [businesses, note] = await Promise.all([listBusinesses(), getCreditNote(biz, cnId)]);
+    [businesses, note, catalog] = await Promise.all([
+      listBusinesses(),
+      getCreditNote(biz, cnId),
+      getGatewayCatalogOrEmpty(),
+    ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader
           title="Credit Note"
           breadcrumbs={[
-            { label: "Businesses", href: "/" },
-            { label: biz, href: `/businesses/${biz}` },
-            { label: "Credit Notes", href: `/businesses/${biz}/credit_notes` },
+            { label: await businessLabel(biz), href: `/businesses/${biz}` },
+            { label: "Credit notes", href: `/businesses/${biz}/credit_notes` },
             { label: "Credit Note" },
           ]}
         />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="credit note"
+          back={{ label: "View credit notes", href: `/businesses/${biz}/credit_notes` }}
+          retry
         />
       </>
     );
@@ -138,25 +157,7 @@ export default async function CreditNoteDetail({
   const tz = businesses.data.find((b) => b.id === biz)?.timezone ?? null;
   const name = business?.name ?? biz;
 
-  if (!note) {
-    return (
-      <>
-        <PageHeader
-          title="Credit Note"
-          breadcrumbs={[
-            { label: "Businesses", href: "/" },
-            { label: name, href: `/businesses/${biz}` },
-            { label: "Credit Notes", href: `/businesses/${biz}/credit_notes` },
-            { label: cnId },
-          ]}
-        />
-        <ErrorState
-          title="Credit note not found"
-          description={<span className="font-mono text-xs">{cnId}</span>}
-        />
-      </>
-    );
-  }
+  if (!note) notFound();
 
   // The payer row. `note.customer_name` is now resolved server-side through
   // `accountHolderName` (credit-notes/service.ts), so it already IS the account
@@ -229,6 +230,9 @@ export default async function CreditNoteDetail({
   // in the other state, and a "Subtotal" row identical to "Total" on every one of them
   // is noise, so they keep exactly the ladder this page has always drawn.
   const showGrossLadder = note.discounts.length > 0 || taxRows.length > 0;
+  // A plan-change note also writes its tax as an item. The engine marks the items its tax
+  // rows already state (the same rule the PDF uses), so the tax prints once.
+  const lineItems = (note.items as NoteItem[]).filter((it) => !it.stated_in_taxes);
   const headlineMinor = note.total_minor > 0 ? note.total_minor : discountTotalMinor;
 
   const pdfHref = `/businesses/${biz}/credit_notes/${note.id}/pdf`;
@@ -248,7 +252,7 @@ export default async function CreditNoteDetail({
       <RecordCrumbs
         items={[
           { label: name, href: `/businesses/${biz}` },
-          { label: "Credit Notes", href: `/businesses/${biz}/credit_notes` },
+          { label: "Credit notes", href: `/businesses/${biz}/credit_notes` },
           { label: note.number ?? note.id },
         ]}
       />
@@ -286,9 +290,9 @@ export default async function CreditNoteDetail({
           <Link
             key="inv"
             href={`/businesses/${biz}/invoices/${note.invoice}`}
-            className="font-mono text-xs text-primary hover:underline"
+            className="text-primary hover:underline"
           >
-            {note.invoice}
+            {note.invoice_number ?? <MiddleEllipsis value={note.invoice} className="text-xs" />}
           </Link>,
         ]}
         actions={
@@ -315,7 +319,7 @@ export default async function CreditNoteDetail({
               />
             ) : (
               <Button asChild>
-                <a href={pdfHref}>
+                <a data-document-link href={pdfHref}>
                   <FileDown className="size-4" /> Download PDF
                 </a>
               </Button>
@@ -352,7 +356,11 @@ export default async function CreditNoteDetail({
                     trigger={<button type="button">Send email</button>}
                   />
                 ) : null}
-                {primary !== "pdf" ? <a href={pdfHref}>Download PDF</a> : null}
+                {primary !== "pdf" ? (
+                  <a data-document-link href={pdfHref}>
+                    Download PDF
+                  </a>
+                ) : null}
                 {primary === "offline" ? (
                   <span className="px-2.5 py-1.5 text-xs text-muted-foreground">
                     No gateway refund is available. The invoice of this note has no payment left to
@@ -397,10 +405,10 @@ export default async function CreditNoteDetail({
         <Row span="8/4">
           <RecordCard id="lines" title="Line items" flush>
             <>
-              {note.items.length === 0 ? (
+              {lineItems.length === 0 ? (
                 <EmptyState title="No line items" />
               ) : (
-                <Table className="table-fixed max-lg:min-w-0">
+                <Table phone="stack" className="table-fixed max-lg:min-w-0">
                   <colgroup>
                     <col />
                     <col className="w-40" />
@@ -408,21 +416,24 @@ export default async function CreditNoteDetail({
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Line item</TableHead>
-                      <TableHead className="pr-5 text-right">Amount ({note.currency})</TableHead>
+                      <TableHead phone="aside" className="pr-5 text-right">
+                        Amount ({note.currency})
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {note.items.map((it) => (
+                    {lineItems.map((it) => (
                       <TableRow key={it.id}>
                         <TableCell className="pl-5 whitespace-normal">
                           <div className="text-sm font-medium wrap-anywhere">{it.description}</div>
                           {/* Service period credited, inherited from the invoice line. */}
                           {it.period_start ? (
                             <div className="text-xs text-muted-foreground">
-                              {fmtDate(it.period_start, tz)} – {fmtDate(it.period_end, tz)}
+                              <span className="whitespace-nowrap">
+                                {fmtRange(it.period_start, it.period_end, tz)}
+                              </span>
                             </div>
                           ) : null}
-                          <div className="font-mono text-xs text-muted-foreground">{it.id}</div>
                         </TableCell>
                         <TableCell className="pr-5 text-right font-medium tabular-nums">
                           {money(it.amount_minor, note.currency)}
@@ -435,7 +446,7 @@ export default async function CreditNoteDetail({
               {/* The PDF's ladder, in its order: gross, bucket returns, tax, Total, then
                     what was drawn against it and what remains. The top rows only on a note
                     that records a gross of its own (`showGrossLadder`). */}
-              <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm">
+              <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm max-sm:ml-0 max-sm:max-w-none">
                 {showGrossLadder ? (
                   <>
                     <div className="flex justify-between gap-8">
@@ -485,7 +496,7 @@ export default async function CreditNoteDetail({
                   </div>
                 ) : null}
                 <div className="flex justify-between gap-8 border-t pt-1 font-semibold">
-                  <span>Amount Available ({note.currency})</span>
+                  <span>Amount available ({note.currency})</span>
                   <span className="tabular-nums">{money(note.available_minor, note.currency)}</span>
                 </div>
                 {nothingLeft ? (
@@ -506,14 +517,9 @@ export default async function CreditNoteDetail({
                   value: note.customer ? (
                     <Link
                       href={`/businesses/${biz}/customers/${note.customer}`}
-                      className="text-primary hover:underline"
+                      className="flex max-w-full min-w-0 text-primary hover:underline"
                     >
-                      <span className="block">{holderName ?? note.customer}</span>
-                      {holderName ? (
-                        <span className="block font-mono text-xs text-muted-foreground">
-                          {note.customer}
-                        </span>
-                      ) : null}
+                      {holderName ?? <MiddleEllipsis value={note.customer} className="text-xs" />}
                     </Link>
                   ) : (
                     "—"
@@ -524,9 +530,11 @@ export default async function CreditNoteDetail({
                   value: (
                     <Link
                       href={`/businesses/${biz}/invoices/${note.invoice}`}
-                      className="font-mono text-xs text-primary hover:underline"
+                      className="flex max-w-full min-w-0 text-primary hover:underline"
                     >
-                      {note.invoice}
+                      {note.invoice_number ?? (
+                        <MiddleEllipsis value={note.invoice} className="text-xs" />
+                      )}
                     </Link>
                   ),
                 },
@@ -583,7 +591,17 @@ export default async function CreditNoteDetail({
                           {r.id_at_gateway ? (
                             <>
                               {" "}
-                              (<span className="font-mono text-xs">{r.id_at_gateway}</span>)
+                              (
+                              <GatewayIdText
+                                id={r.id_at_gateway}
+                                href={gatewayObjectUrl(
+                                  catalog,
+                                  r.gateway_key,
+                                  r.id_at_gateway,
+                                  business?.livemode ?? null,
+                                )}
+                              />
+                              )
                             </>
                           ) : null}
                         </>
@@ -592,9 +610,9 @@ export default async function CreditNoteDetail({
                       {" — "}
                       <Link
                         href={`/businesses/${biz}/transactions/${r.transaction}`}
-                        className="font-mono text-xs text-primary hover:underline"
+                        className="text-primary hover:underline"
                       >
-                        {r.transaction}
+                        View transaction
                       </Link>
                       {(r.status === "failed" || r.status === "late_failed") && r.error_text ? (
                         <span className="block text-xs text-destructive">
@@ -612,9 +630,7 @@ export default async function CreditNoteDetail({
                     key={`${a.invoice}-${i}`}
                     className="flex flex-wrap items-center gap-2 text-sm"
                   >
-                    <Badge variant="secondary" className="uppercase">
-                      Allocated
-                    </Badge>
+                    <Chip className="uppercase">Allocated</Chip>
                     <span className="min-w-0 flex-1 wrap-anywhere">
                       <span className="font-medium tabular-nums">
                         {money(a.amount_minor, note.currency)}
@@ -622,7 +638,7 @@ export default async function CreditNoteDetail({
                       was allocated to invoice{" "}
                       <Link
                         href={`/businesses/${biz}/invoices/${a.invoice}`}
-                        className="font-medium text-primary hover:underline"
+                        className="font-medium whitespace-nowrap text-primary hover:underline"
                       >
                         {a.invoice}
                       </Link>{" "}
@@ -681,5 +697,21 @@ export default async function CreditNoteDetail({
         ) : null}
       </section>
     </div>
+  );
+}
+
+/** A gateway refund id; it opens the gateway's page in a new tab when one is declared. */
+function GatewayIdText({ id, href }: { id: string; href: string | null }) {
+  return href ? (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="font-mono text-xs text-primary hover:underline"
+    >
+      {id}
+    </a>
+  ) : (
+    <span className="font-mono text-xs">{id}</span>
   );
 }

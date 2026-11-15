@@ -23,7 +23,8 @@ function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxP
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer touch-target relative size-4 shrink-0 rounded-[4px] border border-input bg-card shadow-xs transition-shadow outline-none",
+        // 4px, off the two-radius scale on purpose: on a 16px box the 8px control radius reads as a disc.
+        "peer touch-target relative size-4 shrink-0 rounded-[4px] border border-input bg-card shadow-xs transition-[background-color,border-color,box-shadow] outline-none",
         "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
         "data-[state=checked]:border-solid data-[state=checked]:bg-solid data-[state=checked]:text-solid-foreground",
         "data-[state=indeterminate]:border-solid data-[state=indeterminate]:bg-solid data-[state=indeterminate]:text-solid-foreground",
@@ -35,7 +36,8 @@ function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxP
     >
       <CheckboxPrimitive.Indicator
         data-slot="checkbox-indicator"
-        className="flex items-center justify-center text-current"
+        // The mark pops in on the spring; unchecking removes it at once.
+        className="flex animate-mark items-center justify-center text-current"
       >
         {props.checked === "indeterminate" ? (
           <Minus className="size-3.5" />
@@ -80,7 +82,8 @@ function CheckboxField({
   label?: React.ReactNode;
   hint?: React.ReactNode;
   defaultChecked?: boolean;
-  checked?: boolean;
+  /** Controlled; "indeterminate" draws the mixed mark (a group with some items checked). */
+  checked?: boolean | "indeterminate";
   onCheckedChange?: (checked: boolean) => void;
   disabled?: boolean;
   className?: string;
@@ -105,7 +108,7 @@ function CheckboxField({
 
   return (
     <div ref={ref} className={cn("flex items-start gap-2.5", className)}>
-      {name && on ? <input type="hidden" name={name} value={value} /> : null}
+      {name && on === true ? <input type="hidden" name={name} value={value} /> : null}
       <Checkbox
         id={id}
         checked={on}

@@ -349,7 +349,7 @@ function RuleNodeView({
   if (node.children.length) {
     const extra = uncoveredChildren(current, rules, node);
     return (
-      <fieldset className="flex flex-col gap-3 rounded-lg bg-muted/50 p-3">
+      <fieldset className="flex flex-col gap-3 rounded-xl bg-muted/50 p-3">
         <legend className="sr-only">{node.path}</legend>
         <div>
           <span className="font-mono text-sm font-medium">{node.path}</span>

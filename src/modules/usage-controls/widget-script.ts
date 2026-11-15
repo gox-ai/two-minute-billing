@@ -58,6 +58,7 @@ export const USAGE_WIDGET_SCRIPT = String.raw`(function () {
     var rw = data.runway;
     var runwayText = !rw || rw.runway_days == null
       ? "Not enough usage to estimate"
+      : rw.runway_days === 0 ? (rw.balance_minor + rw.auto_topup_minor <= 0 ? "Used up" : "Runs out in less than a day")
       : rw.runway_days === 1 ? "Runs out in about 1 day" : "Runs out in about " + rw.runway_days + " days";
     card.appendChild(el("div", "muted", runwayText));
     var at = data.auto_topup;

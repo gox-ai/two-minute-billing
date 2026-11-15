@@ -88,6 +88,10 @@ export const PERMISSIONS = [
   { key: "webhooks:view", resource: "webhooks", mode: "read", legacy: "any", area: "Developers", label: "View webhook endpoints and deliveries", operatorOnly: false },
   { key: "webhooks:manage", resource: "webhooks", mode: "write", legacy: "developer", area: "Developers", label: "Create, change and test webhook endpoints", operatorOnly: false },
   { key: "api_logs:view", resource: "api_logs", mode: "read", legacy: "developer", area: "Developers", label: "View API request logs", operatorOnly: false },
+  { key: "mcp:use", resource: "mcp", mode: "read", legacy: "any", area: "Developers", label: "Connect AI assistants (MCP) to read billing data", operatorOnly: false },
+  { key: "mcp:connect", resource: "mcp", mode: "write", legacy: "any", area: "Developers", label: "Approve an AI assistant's request to connect, and disconnect it", operatorOnly: true },
+  { key: "assistant:view", resource: "assistant", mode: "read", legacy: "any", area: "Assistant", label: "View your assistant conversations", operatorOnly: true },
+  { key: "assistant:use", resource: "assistant", mode: "write", legacy: "any", area: "Assistant", label: "Ask the assistant questions", operatorOnly: true },
   { key: "members:view", resource: "members", mode: "read", legacy: "admin", area: "Team", label: "View team members", operatorOnly: true },
   { key: "members:manage", resource: "members", mode: "write", legacy: "admin", area: "Team", label: "Invite, change and remove team members", operatorOnly: true },
   { key: "roles:view", resource: "roles", mode: "read", legacy: "admin", area: "Team", label: "View roles", operatorOnly: true },
@@ -97,7 +101,7 @@ export const PERMISSIONS = [
 ] as const satisfies readonly PermissionDef[];
 
 /** Resources an API key permission map may name. */
-export const KEY_RESOURCES: readonly string[] = ["customers","payment_methods","credits","credit_holds","subscriptions","usage","usage_events","usage_controls","invoices","credit_notes","payments","checkout_sessions","catalog","meters","model_prices","coupons","taxes","emails","comments","reports","usage_margin","views","audit_logs","events","settings","businesses","test_mode","dunning_policies","gateways","integrations","transfers","test_tools","test_clock","api_keys","webhooks","api_logs"];
+export const KEY_RESOURCES: readonly string[] = ["customers","payment_methods","credits","credit_holds","subscriptions","usage","usage_events","usage_controls","invoices","credit_notes","payments","checkout_sessions","catalog","meters","model_prices","coupons","taxes","emails","comments","reports","usage_margin","views","audit_logs","events","settings","businesses","test_mode","dunning_policies","gateways","integrations","transfers","test_tools","test_clock","api_keys","webhooks","api_logs","mcp"];
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 

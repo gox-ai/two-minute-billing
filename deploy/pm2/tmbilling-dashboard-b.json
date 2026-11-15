@@ -1,0 +1,25 @@
+{
+  "_comment_purpose": [
+    "The dashboard's STANDBY: same app as tmbilling-dashboard.json on port 4102, serving its own",
+    "copy of the build (.next-b). nginx lists it as `backup` in the tmb_dashboard upstream",
+    "(deploy/nginx/05-upstreams.conf), so it takes traffic only while 4101 refuses connections.",
+    "",
+    "reload.sh refreshes it FIRST (idle, so free), then restarts 4101; during that restart nginx",
+    "sends every request here, already on the new build. Own distDir so neither process ever",
+    "reads the other's files mid-swap."
+  ],
+  "name": "tmbilling-dashboard-b",
+  "script": "node",
+  "args": "node_modules/next/dist/bin/next start -p 4102 -H 127.0.0.1",
+  "cwd": "/var/www/html/projects/tmbilling/dashboard",
+  "interpreter": "none",
+  "instances": 1,
+  "exec_mode": "fork",
+  "wait_ready": false,
+  "kill_timeout": 10000,
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "env": {
+    "NODE_ENV": "production",
+    "NEXT_DIST_DIR": ".next-b"
+  }
+}

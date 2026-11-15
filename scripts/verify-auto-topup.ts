@@ -1,8 +1,12 @@
 /**
  * Automatic credit top-up (design G5 §3.6), end to end on tmtest:
  *  - concurrent creations make one run, one invoice, one charge; a re-run makes nothing;
- *  - a decline books the attempt, voids the invoice, turns the config off and emits
- *    `credit_auto_topup_failed`; dunning and the stranded sweep never touch a purchase;
+ *  - with retries off, a decline books the attempt, voids the invoice, turns the config off
+ *    and emits `credit_auto_topup_failed`; dunning and the stranded sweep never touch a purchase;
+ *  - retries on (the default): the default schedule, a custom list, a list per payment method
+ *    kind and its fallback, a hard decline at once, the 5-try and 72-hour limits;
+ *  - `auto_topup_on_hard_decline: keep_enabled`: a hard decline fails the run and keeps the
+ *    top-up on; the next run waits for the balance to go above the threshold and below again;
  *  - a lost answer (ProviderIndeterminateError) is pending, never failed; a pending payment
  *    grants nothing until it settles;
  *  - the monthly cap reduces a run, then skips it once; runs per day skip once;
@@ -26,7 +30,12 @@ import { startTimeTravel } from "@/modules/time-travel/service";
 import { runDunningPass, sweepStrandedRetries } from "@/modules/subscriptions/dunning";
 import { settlePaymentSucceeded } from "@/modules/payments/settlement";
 import { publicId } from "@/platform/ids";
-import { grantViews, serializeCreditGrant } from "@/modules/credits/service";
+import {
+  createPromotionalGrant,
+  grantViews,
+  serializeCreditGrant,
+} from "@/modules/credits/service";
+import { businessCreditConfigSchema } from "@/modules/credits/customer-settings";
 import {
   AutoTopupError,
   createRunFor,
@@ -250,8 +259,13 @@ const usd = await newBusiness("ATU USD", "USD");
   );
 }
 
-// ── 2. A decline: attempt booked, invoice voided, config off, never dunned ────────────
-console.log("2. decline");
+// ── 2. Retries off: a decline books the attempt, voids the invoice, turns the config off ──
+console.log("2. decline with retries off");
+const setRetries = (cfg: Record<string, unknown> | null) =>
+  systemDb
+    .update(businesses)
+    .set({ creditConfig: cfg as never })
+    .where(eq(businesses.id, usd.biz.id));
 {
   const c = await customerWith(usd.biz.id, "4000000000009995");
   const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
@@ -259,7 +273,10 @@ console.log("2. decline");
     .update(businesses)
     .set({ emailConfig: { enabled: true, types: {} } })
     .where(eq(businesses.id, usd.biz.id));
+  // `auto_topup_retries: false`: the first soft decline ends it, as before 0530.
+  await setRetries({ auto_topup_retries: false });
   await pass(usd.biz.id, T0);
+  await setRetries(null);
   await systemDb.update(businesses).set({ emailConfig: null }).where(eq(businesses.id, usd.biz.id));
   const [run] = await runsOf(config.id);
   const pays = await paymentsOf(run!.invoiceId!);
@@ -308,6 +325,185 @@ console.log("2. decline");
   );
   await pass(usd.biz.id, T0);
   check("a disabled config makes no new run", (await runsOf(config.id)).length === 1);
+}
+
+// ── 2b. Retries on (the default): the schedule decides the tries ─────────────────────
+console.log("2b. retries of a soft decline");
+const HR = 3_600_000;
+{
+  // Default [4, 12]: three tries in 16 hours, then off.
+  const c = await customerWith(usd.biz.id, "4000000000009995");
+  const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
+  await pass(usd.biz.id, T0);
+  const [r1] = await runsOf(config.id);
+  const ev1 = await eventsOf("credit_auto_topup_retry_scheduled", config.publicId);
+  check(
+    "default: a soft decline on a money top-up waits 4 hours for try 2 (max_attempts 3), still on",
+    r1!.status === "created" &&
+      r1!.attempts === 1 &&
+      r1!.chargeAfter?.getTime() === T0.getTime() + 4 * HR &&
+      (await configRow(config.id)).status === "active" &&
+      (await invoiceRow(r1!.invoiceId!)).status !== "voided" &&
+      (ev1[0]?.data as Record<string, unknown>)?.max_attempts === 3 &&
+      (await eventsOf("credit_auto_topup_failed", config.publicId)).length === 0,
+    { run: r1, ev: ev1[0]?.data },
+  );
+  const t2 = new Date(T0.getTime() + 4 * HR);
+  await pass(usd.biz.id, t2);
+  const [r2] = await runsOf(config.id);
+  check(
+    "try 2 fails: try 3 is 12 hours later",
+    r2!.attempts === 2 && r2!.chargeAfter?.getTime() === t2.getTime() + 12 * HR,
+    r2,
+  );
+  await pass(usd.biz.id, new Date(t2.getTime() + 12 * HR));
+  const [r3] = await runsOf(config.id);
+  const after = await configRow(config.id);
+  check(
+    "try 3 fails: the top-up is off (retries_exhausted), the invoice voided, one failed event",
+    r3!.status === "failed" &&
+      r3!.attempts === 3 &&
+      after.status === "disabled" &&
+      after.disabledReason === "retries_exhausted" &&
+      (await invoiceRow(r3!.invoiceId!)).status === "voided" &&
+      (await eventsOf("credit_auto_topup_retries_exhausted", config.publicId)).length === 1 &&
+      (await eventsOf("credit_auto_topup_failed", config.publicId)).length === 1,
+    { run: r3, cfg: after },
+  );
+}
+{
+  // A custom list [1, 1, 2]: four tries, at +1 h, +2 h and +4 h.
+  await setRetries({ auto_topup_retry_hours: [1, 1, 2] });
+  const c = await customerWith(usd.biz.id, "4000000000009995");
+  const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
+  const seen: Array<number | null> = [];
+  let t = T0;
+  for (let i = 0; i < 4; i++) {
+    await pass(usd.biz.id, t);
+    const [r] = await runsOf(config.id);
+    seen.push(r!.status === "failed" ? null : (r!.chargeAfter!.getTime() - T0.getTime()) / HR);
+    if (r!.chargeAfter && r!.status !== "failed") t = r!.chargeAfter;
+  }
+  const ev = await eventsOf("credit_auto_topup_retry_scheduled", config.publicId);
+  check(
+    "a custom list [1, 1, 2]: tries at +1, +2 and +4 hours, then off after the 4th (max_attempts 4)",
+    JSON.stringify(seen) === JSON.stringify([1, 2, 4, null]) &&
+      (ev[0]?.data as Record<string, unknown>)?.max_attempts === 4 &&
+      (await configRow(config.id)).disabledReason === "retries_exhausted",
+    { seen, ev: ev.map((e) => e.data) },
+  );
+  await setRetries(null);
+}
+{
+  // Per kind of payment method: a card uses its own list, else the business list.
+  await setRetries({
+    auto_topup_retry_hours: [5],
+    auto_topup_retry_hours_by_method: { card: [2] },
+  });
+  const c = await customerWith(usd.biz.id, "4000000000009995");
+  const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
+  await pass(usd.biz.id, T0);
+  const [r] = await runsOf(config.id);
+  await setRetries({
+    auto_topup_retry_hours: [5],
+    auto_topup_retry_hours_by_method: { bank_debit: [24] },
+  });
+  const c2 = await customerWith(usd.biz.id, "4000000000009995");
+  const { config: config2 } = await save(
+    usd.biz.id,
+    c2.customer.publicId,
+    fixedCfg({ currency: "USD" }),
+  );
+  await pass(usd.biz.id, T0);
+  const [r2] = await runsOf(config2.id);
+  check(
+    "a card's own list (2 h) wins; with a list for bank debit only, a card uses the business list (5 h)",
+    r!.chargeAfter?.getTime() === T0.getTime() + 2 * HR &&
+      r2!.chargeAfter?.getTime() === T0.getTime() + 5 * HR,
+    { card: r!.chargeAfter, fallback: r2!.chargeAfter },
+  );
+  await setRetries(null);
+}
+{
+  // A hard decline turns it off at once, with retries on.
+  const c = await customerWith(usd.biz.id, "4000000000000069");
+  const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
+  await pass(usd.biz.id, T0);
+  const [r] = await runsOf(config.id);
+  check(
+    "a hard decline (expired card): no retry, off at once, credit_auto_topup_hard_declined",
+    r!.status === "failed" &&
+      r!.attempts === 1 &&
+      (await configRow(config.id)).status === "disabled" &&
+      (await eventsOf("credit_auto_topup_hard_declined", config.publicId)).length === 1 &&
+      (await eventsOf("credit_auto_topup_retry_scheduled", config.publicId)).length === 0,
+    r,
+  );
+}
+{
+  // keep_enabled: a hard decline ends the run, the top-up stays on and waits for a new crossing.
+  await setRetries({ auto_topup_on_hard_decline: "keep_enabled" });
+  const c = await customerWith(usd.biz.id, "4000000000000069");
+  const { config } = await save(usd.biz.id, c.customer.publicId, fixedCfg({ currency: "USD" }));
+  await pass(usd.biz.id, T0);
+  const [r] = await runsOf(config.id);
+  const failedEv = await eventsOf("credit_auto_topup_failed", config.publicId);
+  const data = failedEv[0]?.data as Record<string, unknown> | undefined;
+  check(
+    "keep_enabled: a hard decline fails the run once, the top-up stays on, no hard_declined event",
+    r!.status === "failed" &&
+      r!.attempts === 1 &&
+      (await configRow(config.id)).status === "active" &&
+      (await configRow(config.id)).disabledReason === null &&
+      (await eventsOf("credit_auto_topup_hard_declined", config.publicId)).length === 0 &&
+      data?.stays_enabled === true &&
+      /stays on/.test(String(data?.message)) &&
+      (await eventsOf("credit_auto_topup_retry_scheduled", config.publicId)).length === 0,
+    { run: r, data },
+  );
+  await pass(usd.biz.id, new Date(T0.getTime() + HR));
+  check(
+    "keep_enabled: still below the threshold, so no new run (the declined payment is not tried again)",
+    (await runsOf(config.id)).length === 1,
+    (await runsOf(config.id)).map((x) => x.status),
+  );
+  await at(usd.biz.id, new Date(T0.getTime() + 2 * HR), () =>
+    createPromotionalGrant({
+      organizationId: orgId,
+      businessId: usd.biz.id,
+      customerPublicId: c.customer.publicId,
+      currency: "USD",
+      amount: 2_000n,
+    }),
+  );
+  await pass(usd.biz.id, new Date(T0.getTime() + 2 * HR));
+  check("keep_enabled: above the threshold, no run", (await runsOf(config.id)).length === 1);
+  await hold(usd.biz.id, c.customer.id, "USD", 1_500n);
+  await pass(usd.biz.id, new Date(T0.getTime() + 3 * HR));
+  const runs = await runsOf(config.id);
+  check(
+    "keep_enabled: below the threshold again, a new run starts (and fails on the same card)",
+    runs.length === 2 && (await configRow(config.id)).status === "active",
+    runs.map((x) => [x.status, x.declineCode]),
+  );
+  await setRetries(null);
+}
+{
+  // The limits: at most 4 delays (5 tries), 72 hours in total.
+  const tooMany = businessCreditConfigSchema.safeParse({ auto_topup_retry_hours: [1, 1, 1, 1, 1] });
+  const tooLong = businessCreditConfigSchema.safeParse({
+    auto_topup_retry_hours_by_method: { card: [24, 24, 25] },
+  });
+  const ok = businessCreditConfigSchema.safeParse({ auto_topup_retry_hours: [24, 24, 24] });
+  check(
+    "a list of 5 delays and a list over 72 hours are refused with their reason; 72 hours is allowed",
+    !tooMany.success &&
+      /4 delays or fewer/.test(tooMany.error.issues[0]!.message) &&
+      !tooLong.success &&
+      /72 hours or less/.test(tooLong.error.issues[0]!.message) &&
+      ok.success,
+    { tooMany: tooMany.error?.issues, tooLong: tooLong.error?.issues },
+  );
 }
 {
   // A purchase invoice in the shape the stranded sweep re-arms is left alone.

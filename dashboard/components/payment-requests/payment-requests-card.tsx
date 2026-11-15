@@ -9,7 +9,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import type { PaymentRequest } from "@/lib/api/payment-requests";
 
 /** A customer's latest payment requests. Server component: no hooks. */

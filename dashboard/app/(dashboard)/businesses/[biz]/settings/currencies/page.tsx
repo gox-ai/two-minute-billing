@@ -3,7 +3,6 @@ import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import {
   SettingsCard,
   SettingsColumns,
@@ -14,6 +13,7 @@ import {
 import { CurrencyScreen } from "@/components/settings/currency-rates";
 import { savePriceTypeAction } from "../actions";
 import { PriceTypeRow } from "./price-type-row";
+import { fmtDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -90,70 +90,64 @@ export default async function CurrencySettings({ params }: { params: Promise<{ b
       description="The currencies this business sells in, their exchange rates for reporting, and the price type new prices start with."
       attention={attention}
     >
-      <SettingsColumns
-        summary={
-          <SettingsSummary
-            items={[
-              { label: "Base currency", value: base ?? "Not set" },
-              {
-                label: "Sells in",
-                value: base
-                  ? [base, ...additional.map((r) => r.currency)].join(", ")
-                  : additional.map((r) => r.currency).join(", ") || "—",
-              },
-              additional.length > 0 && {
-                label: "Rates",
-                value: `${autoCount} updated daily · ${additional.length - autoCount} set by hand`,
-              },
-              {
-                label: "New prices",
-                value: priceType === "inclusive" ? "Tax inclusive" : "Tax exclusive",
-              },
-            ]}
+      {/* One form for the page's one Save (the price type). The rate dialogs keep their
+          own forms; they render in a portal, outside this one. */}
+      <ActionForm action={savePriceTypeAction} className="flex flex-col gap-5">
+        <input type="hidden" name="biz" value={biz} />
+        <SettingsColumns
+          save={{ label: "Save price type" }}
+          summary={
+            <SettingsSummary
+              items={[
+                { label: "Base currency", value: base ?? "Not set" },
+                {
+                  label: "Sells in",
+                  value: base
+                    ? [base, ...additional.map((r) => r.currency)].join(", ")
+                    : additional.map((r) => r.currency).join(", ") || "—",
+                },
+                additional.length > 0 && {
+                  label: "Rates",
+                  value: `${autoCount} updated daily · ${additional.length - autoCount} set by hand`,
+                },
+                {
+                  label: "New prices",
+                  value: priceType === "inclusive" ? "Tax inclusive" : "Tax exclusive",
+                },
+              ]}
+            />
+          }
+        >
+          <CurrencyScreen
+            biz={biz}
+            baseCurrency={base}
+            rates={additional}
+            enabledCount={enabledCount}
           />
-        }
-      >
-        <CurrencyScreen
-          biz={biz}
-          baseCurrency={base}
-          rates={additional}
-          enabledCount={enabledCount}
-        />
 
-        <ActionForm action={savePriceTypeAction}>
-          <input type="hidden" name="biz" value={biz} />
-          <SettingsCard
-            title="Price types"
-            footer={
-              <SubmitButton size="sm" variant="outline">
-                Save price type
-              </SubmitButton>
-            }
-          >
+          <SettingsCard title="Price types">
             <PriceTypeRow saved={priceType} />
           </SettingsCard>
-        </ActionForm>
 
-        <SettingsCard title="Smart routing rules" padded>
-          <p className="m-0 text-sm text-muted-foreground">
-            You set which gateway account collects a payment on the gateway itself, for each
-            currency and payment method.{" "}
-            <Link
-              href={`/businesses/${biz}/settings/gateways`}
-              className="text-primary hover:underline"
-            >
-              Configure gateways →
-            </Link>
-          </p>
-        </SettingsCard>
-      </SettingsColumns>
+          <SettingsCard title="Smart routing rules" padded>
+            <p className="m-0 text-sm text-muted-foreground">
+              You set which gateway account collects a payment on the gateway itself, for each
+              currency and payment method.{" "}
+              <Link
+                href={`/businesses/${biz}/settings/gateways`}
+                className="text-primary hover:underline"
+              >
+                Configure gateways →
+              </Link>
+            </p>
+          </SettingsCard>
+        </SettingsColumns>
+      </ActionForm>
     </SettingsPage>
   );
 }
 
-/** `2026-09-02T00:00:00Z` → `2 Sept 2026`. */
+/** `2026-09-02T00:00:00Z` → `2 Sep 2026`. */
 function formatDay(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return fmtDate(iso, "UTC");
 }

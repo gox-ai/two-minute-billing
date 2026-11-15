@@ -181,8 +181,18 @@ const illustrationVersions: Record<string, string> = existsSync(ILLUSTRATIONS)
     )
   : {};
 
+/**
+ * Every production build gets its own asset folder. Some chunk names stayed the same across
+ * builds while their content changed (the chunk named the old entry stylesheet), and assets are
+ * cached `immutable` for a year, so a returning browser mixed old and new CSS (2026-11-11: the
+ * pre-change campaign bar colour won). A new folder per build means no cached file is reused.
+ */
+const ASSET_DIR = process.argv.includes("build") ? `/_nuxt/${BUILT_AT.toString(36)}/` : undefined;
+
 export default defineNuxtConfig({
   extends: ["docus"],
+
+  ...(ASSET_DIR ? { app: { buildAssetsDir: ASSET_DIR } } : {}),
 
   vite: {
     define: {
@@ -386,6 +396,40 @@ export default defineNuxtConfig({
   },
 
   /**
+   * Marketing pages are Vue pages with no markdown twin. Excluded, their llms.txt links stay page
+   * URLs; otherwise the module rewrote them to `/raw/<page>.md`, which answered 404.
+   */
+  agentDiscovery: {
+    excludePrefixes: {
+      extend: [
+        "/pricing",
+        "/security",
+        "/product",
+        "/solutions",
+        "/compare",
+        "/integrations",
+        "/open-source",
+        "/contact",
+        "/privacy",
+        "/terms",
+        "/sub-processors",
+        "/changelog",
+      ],
+    },
+    discovery: {
+      links: [
+        {
+          href: "https://api.twominutebilling.com/openapi.json",
+          rel: "service-desc",
+          type: "application/vnd.oai.openapi+json",
+          title: "OpenAPI document of the Two Minute Billing API (Cloud)",
+          anchor: "/",
+        },
+      ],
+    },
+  },
+
+  /**
    * llms.txt and llms-full.txt: what an AI assistant reads first. Every line here is a fact
    * the product holds today; the docs index that follows is generated from content/.
    */
@@ -457,6 +501,12 @@ export default defineNuxtConfig({
             description: "MRR, churn, cohorts and receivables from the ledger.",
           },
           {
+            title: "Billy, the AI assistant",
+            href: `${SITE_URL}/product/ai-assistant`,
+            description:
+              "Answers questions from your own billing data, checks every figure, and prepares changes that a member confirms. Read-only MCP server for AI tools.",
+          },
+          {
             title: "AI billing",
             href: `${SITE_URL}/solutions/ai-billing`,
             description:
@@ -495,6 +545,24 @@ export default defineNuxtConfig({
             href: `${SITE_URL}/security`,
             description:
               "PCI DSS SAQ-A scope, the ledger, roles, two-factor sign-in and the audit log.",
+          },
+          {
+            title: "Sub-processors",
+            href: `${SITE_URL}/sub-processors`,
+            description:
+              "The companies that process customer data for Two Minute Billing Cloud: what each receives and where.",
+          },
+          {
+            title: "Privacy Policy",
+            href: `${SITE_URL}/privacy`,
+            description:
+              "What data we collect, why, who receives it, cookies and analytics, and your rights.",
+          },
+          {
+            title: "Terms of Service",
+            href: `${SITE_URL}/terms`,
+            description:
+              "Accounts, plans and the billing limit, fees, cancellation, refunds and governing law.",
           },
           {
             title: "Contact",

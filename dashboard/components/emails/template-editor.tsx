@@ -283,7 +283,7 @@ export function TemplateEditor({
   );
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="grid gap-5 @min-[56.875rem]/main:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <div className="flex min-w-0 flex-col gap-5">
         <SettingsCard title="Content" meta={statusMeta} actions={modeToggle}>
           {template.inherits_from ? (
@@ -1011,7 +1011,7 @@ function PreviewPane({
   );
 
   return (
-    <div className="min-w-0 xl:sticky xl:top-4 xl:self-start">
+    <div className="min-w-0 @min-[56.875rem]/main:sticky @min-[56.875rem]/main:top-[calc(var(--compact-h,0px)+1rem)] @min-[56.875rem]/main:self-start">
       <SettingsCard
         title="Preview"
         meta={<span aria-live="polite">{pending ? "Updating…" : "Sample data"}</span>}
@@ -1093,7 +1093,7 @@ function EmailFrame({ html, width }: { html: string; width: number | null }) {
       sandbox="allow-same-origin"
       srcDoc={doc}
       style={{ height, width: width ?? "100%" }}
-      className={cn("block border-0 bg-card", width && "mx-auto rounded-lg border shadow-xs")}
+      className={cn("block border-0 bg-card", width && "mx-auto rounded-xl border shadow-xs")}
     />
   );
 }
@@ -1134,14 +1134,14 @@ function FallbackDialog({
               We use the fallback when {label.toLowerCase()} is empty.
             </DialogDescription>
           </DialogHeader>
-          <Input
-            aria-label="Fallback text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="e.g. there"
-            maxLength={100}
-            autoFocus
-          />
+          <Field name="fallback_text" label="Fallback text">
+            <Input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              maxLength={100}
+              autoFocus
+            />
+          </Field>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel

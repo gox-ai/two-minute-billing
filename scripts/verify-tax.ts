@@ -392,6 +392,10 @@ ok(
       registration_number: "29AAFCN5032R1Z1",
     })
   ).json();
+  ok(
+    "state registration: a code without a name gets the known name",
+    reg.state_name === "Karnataka",
+  );
   const wrongParent = await call("DELETE", `${R}/${usRegion}/state_registrations/${reg.id}`);
   const kept = (await call("GET", `${R}/${inRegion}`)).json().state_registrations as Array<{
     id: string;

@@ -24,6 +24,7 @@ import {
   TAX_TREATMENT_LABEL,
   amountDecimals,
   rateSentence,
+  unitOptionLabel,
   type CreditTaxTreatment,
   type CreditUnit,
 } from "@/lib/credits";
@@ -133,7 +134,11 @@ export function GiveCreditButton({
                   {
                     value: "promotional",
                     label: "Promotional",
-                    hint: "Free credit. We apply it before tax.",
+                    // Tax applies to money on an invoice: a unit with no money value has none.
+                    hint:
+                      unit && unit.minor_per_unit == null
+                        ? "Free credit."
+                        : "Free credit. We apply it before tax.",
                   },
                   {
                     value: "paid",
@@ -162,7 +167,7 @@ export function GiveCreditButton({
                 ariaLabel="Unit"
                 options={[
                   { value: "", label: "Money" },
-                  ...units.map((u) => ({ value: u.id, label: `${u.plural_name} (${u.currency})` })),
+                  ...units.map((u) => ({ value: u.id, label: unitOptionLabel(u) })),
                 ]}
               />
             </Field>

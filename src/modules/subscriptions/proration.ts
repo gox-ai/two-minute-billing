@@ -1,5 +1,5 @@
 import { syncMeterBilling } from "./meter-billing";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, gt, lte, ne } from "drizzle-orm";
 import { enforceMetadataRules, type MetadataRuleScope } from "@/modules/metadata-rules/service";
 import { withTenant, withTenantTx, type Tx } from "@/platform/db";
 // TYPE-ONLY, and it must stay that way: this module reaches the credit-note service
@@ -7,17 +7,25 @@ import { withTenant, withTenantTx, type Tx } from "@/platform/db";
 // erased at compile time, so it adds no runtime edge.
 import type { CreditRefundOutcome } from "./downgrade-credit";
 import type { CreditNoteDiscountInput } from "@/modules/credit-notes/service";
+import { TAX_REVERSAL_DESCRIPTION } from "@/modules/credit-notes/tax-items";
 import { auditSubscription, subscriptionSnapshot } from "./audit";
+import type { ChangeUndoSink, RevertedCharge } from "./change-revert";
+import type { ChangeHold, PendingRestore, PendingSource } from "./pending-change";
+import { notHeldInvoice } from "./change-policy";
 import { resolveUnbilledChargesConfig } from "./unbilled-charges-config";
 import {
   loadBillingRulesRow,
   resolveBillingRulesConfig,
   type FailedChangeCharge,
 } from "./billing-rules-config";
-import type { PlanChangeCoupons } from "./lifecycle-config";
+import {
+  resolveLifecycleConfig,
+  type NetCreditDocuments,
+  type PlanChangeCoupons,
+} from "./lifecycle-config";
 import type { ResetOverrides } from "@/modules/credits/reset-settings";
 import { publicId } from "@/platform/ids";
-import { isOpenInvoiceStatus } from "@/modules/invoicing/status";
+import { OPEN_INVOICE_STATUSES, isOpenInvoiceStatus } from "@/modules/invoicing/status";
 // The arithmetic of WHERE a term credit goes — distribution across invoices and the
 // per-invoice split — lives in one pure module so `estimate.ts` can predict what this
 // file will book instead of modelling it a second time. See its header.
@@ -59,12 +67,15 @@ import {
   alignTermStart,
   billingModeFor,
   prorationWindowStart,
+  type BillingMode,
 } from "@/modules/subscriptions/billing-mode";
 import { localDatePartsInTz } from "@/platform/clock";
+import { currentChannel } from "@/platform/event-context";
 import { createLogger } from "@/platform/logger";
 import { emitEvent, emitOrDefer, type DeferredEvents } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { settleMeteredUsage } from "./usage-settlement";
+import { midTermCouponsFor } from "./mid-term-coupons";
 import { subPeriodFields } from "./sub-periods";
 import { appendSegment, bookEarlyEndCommitment, freshSegments, termSegments } from "./commitment";
 import {
@@ -231,6 +242,59 @@ export class ProrationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ProrationError";
+  }
+}
+
+/**
+ * A change whose invoice failed for good was reverted (`change-revert.ts`): nothing changed
+ * and nothing is owed. The API answers 402 `payment_failed`; checkout and the portal refuse.
+ */
+export class ChangeRevertedError extends ProrationError {
+  constructor(readonly reverted: RevertedCharge) {
+    super(
+      `We could not change the subscription. The payment for invoice ${reverted.invoice} failed: ${reverted.declineMessage.replace(/\.$/, "")}. ${
+        reverted.kind === "item_add"
+          ? "We removed the added item and voided the invoice."
+          : "We put the subscription back as it was and voided the invoice."
+      }`,
+    );
+    this.name = "ChangeRevertedError";
+  }
+}
+
+/** A change held until its invoice is paid (`apply_when_paid`, `pending-change.ts`). */
+export interface HeldCharge {
+  kind: "change" | "item_add";
+  /** `payment_failed`: declined or still in progress; `requires_action`: the payer must authenticate. */
+  code: "payment_failed" | "requires_action";
+  pendingChange: string;
+  invoice: string;
+  expiresAt: Date;
+  /** The payment is still in progress at the gateway (a slow method). */
+  inFlight: boolean;
+  declineCode: string | null;
+  /** Payer-safe, with the business's decline overrides applied. */
+  declineMessage: string | null;
+  /** An on-session request's payment intent, for the payer to authenticate. */
+  intent?: import("@/modules/payment-intents/service").PaymentIntent | null;
+}
+
+/**
+ * The change waits for its invoice (`failed_change_charge: apply_when_paid`): nothing changed
+ * yet. The API answers 402 with `pending_change`; checkout and the portal show the decline.
+ */
+export class PendingChangeError extends ProrationError {
+  constructor(readonly held: HeldCharge) {
+    const why =
+      held.code === "requires_action"
+        ? `The payment for invoice ${held.invoice} needs authentication by the payer`
+        : held.inFlight
+          ? `The payment for invoice ${held.invoice} is in progress`
+          : `The payment for invoice ${held.invoice} failed: ${(held.declineMessage ?? "The payment was not completed").replace(/\.$/, "")}`;
+    super(
+      `We did not change the subscription yet. ${why}. The change applies when the invoice is paid, before ${held.expiresAt.toISOString()}.`,
+    );
+    this.name = "PendingChangeError";
   }
 }
 
@@ -1438,6 +1502,15 @@ async function termInvoiceCanAbsorb(input: {
   return needed <= available;
 }
 
+/** A creditable invoice exists on the subscription: `issueCurrentTermCredit`'s `live` set. */
+async function termWasBilled(tx: Tx, businessId: string, subscriptionId: string): Promise<boolean> {
+  const rows = await tx
+    .select({ status: invoices.status, totalMinor: invoices.totalMinor })
+    .from(invoices)
+    .where(and(eq(invoices.businessId, businessId), eq(invoices.subscriptionId, subscriptionId)));
+  return rows.some((r) => !["voided", "pending"].includes(r.status) && r.totalMinor > 0n);
+}
+
 /**
  * Read one invoice's `InvoiceCreditBasis` — its ledger tax and coupon discount, the cash
  * already refunded, the promotional credit that settled it, and its status.
@@ -1909,7 +1982,7 @@ async function creditOneInvoice(
   const bookedTax = booked.tax;
   const netBase = inv.totalMinor - bookedTax;
   // Work on a LOCAL copy — never mutate the caller-owned input.items array.
-  let creditItems = [...input.items];
+  let creditItems: Array<(typeof input.items)[number] & { kind?: "tax" }> = [...input.items];
 
   // A DISCOUNTED term must be credited at what the customer actually paid, not at
   // list. The per-item amounts arrive as a fraction of the LIST price, but a coupon
@@ -2011,7 +2084,11 @@ async function creditOneInvoice(
     if (taxItem > 0n) {
       taxItemMinor = taxItem;
       taxLineIndex = creditItems.length;
-      creditItems.push({ description: "Tax reversal on credited time", amountMinor: taxItem });
+      creditItems.push({
+        description: TAX_REVERSAL_DESCRIPTION,
+        amountMinor: taxItem,
+        kind: "tax",
+      });
     }
   }
   let total2 = creditItems.reduce((s, i) => s + i.amountMinor, 0n);
@@ -2042,6 +2119,8 @@ async function creditOneInvoice(
     // name. `resolveCreditedLines` scopes the lookup to THIS invoice, which is sound
     // because every part is built from its own invoice's lines.
     invoiceLineItemPublicId: i.invoiceLineItemPublicId ?? null,
+    // Marks the tax-reversal item, so the note states it once, in its tax rows.
+    kind: i.kind ?? null,
   }));
   const { issueAdjustmentCreditNote, createRefundableCreditNote, refundableCapacityForInvoice } =
     await import("@/modules/credit-notes/service");
@@ -2579,18 +2658,120 @@ export async function defaultInvoiceImmediately(
   return resolveUnbilledChargesConfig(biz)[event] === "invoice_immediately";
 }
 
+/** `block_downgrade_when_past_due` refusal. The portal replaces it with its own sentence. */
+export const PAST_DUE_DOWNGRADE_MESSAGE =
+  "We could not change the subscription. The customer has an invoice that is past due. Collect the payment first, or schedule the change for the end of the term.";
+
 /**
  * Apply a change, then send its credit where `downgrade_credit` says. `creditHandling` is
  * the customer's choice, read only when the rule is `customer_chooses`; `downgradeCredit`
  * is the operator's choice for this call and replaces the rule.
  */
+
 export async function changeSubscription(
   input: Parameters<typeof applyChange>[0] & {
     creditHandling?: "credit_balance" | "refund";
     downgradeCredit?: "credit_balance" | "refund";
+    /** `apply_when_paid`: who asked, and what a void of the held invoice puts back. */
+    pendingSource?: PendingSource;
+    pendingRestore?: PendingRestore | null;
+    /** The payer is present: a held change that needs authentication returns the intent. */
+    onSession?: boolean;
   },
 ): Promise<Awaited<ReturnType<typeof applyChange>> & { creditRefunds?: CreditRefundOutcome[] }> {
-  const result = await applyChange(input);
+  // A held invoice (usage grace) closes first, on the items the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
+  const rule =
+    input.failedChangeCharge ??
+    resolveBillingRulesConfig(await loadBillingRulesRow(input.organizationId, input.businessId))
+      .failedChangeCharge;
+  // A pending change (`apply_when_paid`): a repeat of its request collects the same invoice
+  // again; any other change replaces it (its invoice and credit notes are voided first).
+  const pending = await import("./pending-change");
+  const request = pendingRequestOf(input);
+  const repeat = await pending.pendingBeforeChange(
+    input.organizationId,
+    input.businessId,
+    input.subscriptionId,
+    request,
+  );
+  if (repeat) {
+    const r = await pending.collectHeldAgain(input.organizationId, input.businessId, repeat, {
+      ...(input.onSession ? { onSession: true } : {}),
+    });
+    if (!r.applied) throw new PendingChangeError(r.held);
+    return { prorationInvoice: r.invoice, creditNote: null, creditNotes: [], payment: null };
+  }
+  const hold: ChangeHold | undefined =
+    rule === "apply_when_paid"
+      ? {
+          source: input.pendingSource ?? (currentChannel() === "dashboard" ? "dashboard" : "api"),
+          request,
+          restore: input.pendingRestore ?? null,
+          ...(input.onSession ? { onSession: true } : {}),
+        }
+      : undefined;
+  const undoSink: ChangeUndoSink = {};
+  const result = await applyChange({ ...input, undoSink, ...(hold ? { hold } : {}) });
+  if (hold?.held && result.prorationInvoice) {
+    const r = await pending.settleHeldInvoice({
+      organizationId: input.organizationId,
+      businessId: input.businessId,
+      invoiceId: result.prorationInvoice.id,
+      announce: true,
+      ...(input.onSession ? { onSession: true } : {}),
+    });
+    if (!r.applied) throw new PendingChangeError(r.held);
+    const [paid] = await withTenant(input.organizationId, (tx) =>
+      tx.select().from(invoices).where(eq(invoices.id, result.prorationInvoice!.id)).limit(1),
+    );
+    return refundCredit(input, { ...result, prorationInvoice: paid ?? result.prorationInvoice });
+  }
+  // `grant_when: invoice_paid`: the new plan's credits wait for the change invoice.
+  const { settleHeldChangeGrants } = await import("@/modules/credits/service");
+  await withTenant(input.organizationId, (tx) =>
+    settleHeldChangeGrants(tx, {
+      subscriptionId: input.subscriptionId,
+      invoiceId: result.prorationInvoice?.id ?? null,
+    }),
+  );
+  if (result.prorationInvoice) {
+    // `failed_change_charge`: a hard decline exhausts the invoice at once. `revert` undoes the
+    // change; `start_dunning` (unset) runs the final action, as a renewal; `next_renewal` waits.
+    // A change `apply_when_paid` could not hold settles as `revert`.
+    const settleRule = rule === "apply_when_paid" ? "revert" : rule;
+    const settle = await import("./change-revert");
+    if (settleRule === "revert") {
+      const reverted = await settle.settleExhaustedChange(
+        input,
+        result.prorationInvoice.publicId,
+        undoSink.value,
+        result.creditNotes,
+      );
+      // A reverted change's credit notes are void: nothing is left to refund.
+      if (reverted) throw new ChangeRevertedError(reverted);
+    } else if (settleRule === "start_dunning")
+      await settle.finalActionIfExhausted(
+        input.organizationId,
+        input.businessId,
+        result.prorationInvoice.publicId,
+      );
+  }
+  return refundCredit(input, result);
+}
+
+/** The change's credit notes go where `downgrade_credit` says. */
+async function refundCredit(
+  input: {
+    organizationId: string;
+    businessId: string;
+    creditHandling?: "credit_balance" | "refund";
+    downgradeCredit?: "credit_balance" | "refund";
+  },
+  result: Awaited<ReturnType<typeof applyChange>>,
+): Promise<Awaited<ReturnType<typeof applyChange>> & { creditRefunds?: CreditRefundOutcome[] }> {
   if (result.creditNotes.length === 0) return result;
   const { refundChangeCredit } = await import("./downgrade-credit");
   const creditRefunds = await refundChangeCredit({
@@ -2601,6 +2782,323 @@ export async function changeSubscription(
     ...(input.downgradeCredit ? { override: input.downgradeCredit } : {}),
   });
   return creditRefunds ? { ...result, creditRefunds } : result;
+}
+
+/**
+ * Whether this request repeats the subscription's pending change (`apply_when_paid`). A repeat
+ * pays the held invoice, priced at the first request, so a caller's quote check does not apply.
+ */
+export async function repeatsPendingChange(
+  input: Parameters<typeof applyChange>[0],
+): Promise<boolean> {
+  const { livePendingChange, requestHash } = await import("./pending-change");
+  const row = await withTenant(input.organizationId, (tx) =>
+    livePendingChange(tx, input.subscriptionId),
+  );
+  return !!row && row.requestHash === requestHash(pendingRequestOf(input));
+}
+
+/** The request a held change stores and matches a repeat on. `now` is not part of it. */
+function pendingRequestOf(input: Parameters<typeof applyChange>[0]): Record<string, unknown> {
+  return {
+    kind: "change",
+    changes: input.changes,
+    adds: input.adds ?? [],
+    removes: input.removes ?? [],
+    reset_term: input.resetTerm ?? null,
+    prorate: input.prorate ?? null,
+    invoice_immediately: input.invoiceImmediately ?? null,
+    coupon: input.couponCode ?? null,
+    manual_discount: input.manualDiscount ?? null,
+    remove_discount: input.removeDiscount ?? false,
+    metadata: input.metadata === undefined ? "unchanged" : input.metadata,
+    plan_change_coupons: input.planChangeCoupons ?? null,
+    net_credit_documents: input.netCreditDocuments ?? null,
+    reset_overrides: input.resetOverrides ?? null,
+  };
+}
+
+/** What `writeChangeComposition` writes: the plan phase's result, or a held change's replay. */
+export interface ComposePlan {
+  sub: typeof subscriptions.$inferSelect;
+  updates: Array<{ itemId: string; priceId: string; quantity: number; snapshot: PriceSnapshot }>;
+  inserts: Array<{
+    priceId: string;
+    quantity: number;
+    snapshot: PriceSnapshot;
+    billingCycles: number | null;
+    requestKey?: string | null;
+    autoIncluded?: boolean;
+  }>;
+  removals: Array<{ itemId: string }>;
+  unbilledSettlements: UnbilledChargeSettlement[];
+  resetTerm: boolean;
+  inTrial: boolean;
+  resetStart: Date;
+  newPeriodEnd: Date | null;
+  resetAnchorDay: number | null;
+  newInterval: Interval;
+  newIntervalCount: number;
+  bizMode: BillingMode;
+  postMonthlyUsage: boolean;
+  postCommitmentMinor: bigint | null;
+  prorationNow: Date;
+  allItemIds: string[];
+}
+
+/**
+ * The non-money writes of a change: metered settlement, items, deferred-charge re-cuts, term,
+ * commitment, MRR, plan credits, `subscription_changed` and the audit row. `applyChange` runs it
+ * in its own transaction; a change held for payment runs it when the invoice is paid
+ * (`pending-change.ts`), with `now` = the request instant.
+ */
+export async function writeChangeComposition(
+  tx: Tx,
+  a: {
+    organizationId: string;
+    businessId: string;
+    now: Date;
+    plan: ComposePlan;
+    beforeFull: Awaited<ReturnType<typeof subscriptionSnapshot>>;
+    appliedCouponId: string | null;
+    resetOverrides?: ResetOverrides;
+    deferEventsTo?: DeferredEvents;
+  },
+): Promise<{
+  settledUsage: unknown[];
+  skipped: Set<string>;
+  insertedByRequestKey: Map<string, string>;
+  skippedRequestKeys: Set<string>;
+}> {
+  const { organizationId, businessId, now, plan, appliedCouponId, beforeFull } = a;
+  // Usage this change stops measuring: a removed item's open window, or every metered
+  // item's window up to a term reset (the new term measures from `resetStart`).
+  const settledUsage = await settleMeteredUsage(
+    tx,
+    plan.sub,
+    plan.resetTerm ? plan.allItemIds : plan.removals.map((r) => r.itemId),
+    plan.resetTerm ? plan.resetStart : now,
+  );
+  // The prices the changed items leave, for the plan credits' change rules (G3b §3.6).
+  const before = plan.updates.length
+    ? await tx
+        .select({
+          itemId: subscriptionItems.id,
+          oldPriceId: subscriptionItems.priceId,
+          oldQuantity: subscriptionItems.quantity,
+        })
+        .from(subscriptionItems)
+        .where(
+          inArray(
+            subscriptionItems.id,
+            plan.updates.map((u) => u.itemId),
+          ),
+        )
+    : [];
+  for (const u of plan.updates) {
+    await tx
+      .update(subscriptionItems)
+      .set({ priceId: u.priceId, quantity: u.quantity, priceSnapshot: u.snapshot })
+      .where(eq(subscriptionItems.id, u.itemId));
+  }
+  // Plan-swap: remove auto-included mandatory add-ons no longer required.
+  for (const rem of plan.removals) {
+    await tx.delete(subscriptionItems).where(eq(subscriptionItems.id, rem.itemId));
+  }
+  // The charge side of those removals: re-cut each detached item's still-pending
+  // deferred charge to the span it was actually held (money bug, 2026-08-24). On this
+  // handle, so the re-cut charge, the deletion and the netted credit commit together —
+  // a credit the refundable cap refuses must not leave a charge already trimmed.
+  await applyUnbilledChargeSettlements(tx, {
+    organizationId,
+    businessId,
+    settlements: plan.unbilledSettlements,
+  });
+  // CAT-3: insert auto-included mandatory add-on items (immutable snapshot).
+  // onConflictDoNothing on the (subscription_id, price_id) unique index makes a
+  // concurrent change / retried apply idempotent (G backlog: no double-insert).
+  // Post-H (#3): if the insert is SKIPPED by the conflict (the item already
+  // exists — a concurrent change won the race), we must NOT bill this call's
+  // proration line for it, or one item gets charged twice. Track the skipped
+  // price ids and drop their lines below.
+  const skipped = new Set<string>();
+  // Where each REQUESTED add landed, keyed by its line's `requestedAddKey`. Needed once
+  // this transaction has committed: the item id does not exist while the lines are built,
+  // and a one-off billed outside the period planner must hand its id to
+  // `createInvoiceFromLines({ markItemsBilled })` or the next renewal bills the fee again.
+  const insertedByRequestKey = new Map<string, string>();
+  const skippedRequestKeys = new Set<string>();
+  for (const ins of plan.inserts) {
+    const res = await tx
+      .insert(subscriptionItems)
+      .values({
+        organizationId,
+        businessId,
+        subscriptionId: plan.sub.id,
+        publicId: publicId("si"),
+        priceId: ins.priceId,
+        quantity: ins.quantity,
+        priceSnapshot: ins.snapshot,
+        billingCycles: ins.billingCycles ?? null,
+        // An operator's add carries no metadata at all — exactly what `addSubscriptionItem`
+        // writes. Only the CAT-3 expansion stamps `auto_included`, which is also the
+        // predicate of the partial unique index the conflict clause relies on (so the
+        // clause is inert for a requested add, and its row is never silently dropped).
+        ...(ins.requestKey && !ins.autoIncluded
+          ? {}
+          : { metadata: { auto_included: "mandatory" } }),
+      })
+      .onConflictDoNothing()
+      .returning({ id: subscriptionItems.id });
+    if (res.length === 0) {
+      if (ins.requestKey) skippedRequestKeys.add(ins.requestKey);
+      else skipped.add(ins.priceId);
+    } else if (ins.requestKey) insertedByRequestKey.set(ins.requestKey, res[0]!.id);
+  }
+  // A coupon that matches none of the post-change items rolls the whole change back.
+  if (appliedCouponId) {
+    const { assertAppliedCouponMatchesAnItem } = await import("@/modules/coupons/service");
+    await assertAppliedCouponMatchesAnItem(tx, appliedCouponId, plan.sub.id);
+  }
+  // Plan change and scheduled-change apply: freeze meter rate cards, guard the meters.
+  await syncMeterBilling(tx, plan.sub.id);
+  // TERM RESET: restart the period from now, re-align billingPeriod(Unit) to
+  // the post-change plan cadence. The billing clock renews off current_period_end
+  // (a scan, not a per-subscription job — see README "Billing-clock tick order"),
+  // so moving this column IS the reschedule; nothing else to touch.
+  if (plan.resetTerm) {
+    await tx
+      .update(subscriptions)
+      .set({
+        // IN TRIAL the "current term" IS the trial window (currentPeriodEnd =
+        // trialEnd), so re-anchoring it hands the customer a whole extra free
+        // period: a monthly→yearly swap during a 14-day trial moved
+        // current_period_end a YEAR out and the sub stayed `in_trial` until then,
+        // because the billing clock renews off current_period_end. Keep the trial
+        // window exactly as promised and only re-cadence — the post-trial term is
+        // then one NEW interval from trial end (renewSubscription reads the
+        // SUBSCRIPTION's cadence, which the two lines below keep correct).
+        // Found by verify:trial-change, 2026-08-03.
+        ...(plan.inTrial
+          ? {}
+          : {
+              currentPeriodStart: plan.resetStart,
+              currentPeriodEnd: plan.newPeriodEnd,
+              // The anchor has to follow the term it anchors. `billing_anchor_day` was
+              // written once at create and never again, so after a reset moved the term
+              // start it still named the OLD day of the month — and `advancePeriod`
+              // dutifully re-aligned every later renewal onto it. Measured 2026-08-23: a
+              // term reset from an 08-Aug subscription to 23-Aug renewed 2027-08-23 →
+              // 2028-08-**08**, a 351-day "year", and every renewal after it stayed on
+              // the 8th. Re-anchoring to the new term start's LOCAL day of the month is
+              // what `createSubscription` does for a fresh term (service.ts:742), so a
+              // reset term is anchored the same way a new one is.
+              // The SAME value the boundary computation used — see `resetAnchorDay`. These
+              // were two copies of one expression and they drifted, which is the whole
+              // defect: the term end was computed from the old anchor while the new one
+              // was persisted here.
+              billingAnchorDay: plan.resetAnchorDay,
+            }),
+        billingPeriod: plan.newIntervalCount,
+        billingPeriodUnit: plan.newInterval,
+      })
+      .where(eq(subscriptions.id, plan.sub.id));
+  }
+  // Monthly usage billing and the commitment: a reset term starts fresh; otherwise a
+  // commitment change is a new segment from now.
+  {
+    const newTerm = plan.resetTerm && !plan.inTrial;
+    const termStart = newTerm ? plan.resetStart : plan.sub.currentPeriodStart;
+    const termEnd = newTerm ? plan.newPeriodEnd : plan.sub.currentPeriodEnd;
+    const commitmentChanged =
+      String(plan.postCommitmentMinor) !== String(plan.sub.commitmentAmountMinor);
+    const subPeriod = subPeriodFields(
+      {
+        billUsageMonthly: plan.postMonthlyUsage,
+        billingPeriodUnit: plan.newInterval,
+        billingPeriod: plan.newIntervalCount,
+        billingAnchorDay: newTerm ? plan.resetAnchorDay : plan.sub.billingAnchorDay,
+      },
+      termStart,
+      termEnd,
+      plan.bizMode,
+    );
+    if (newTerm || commitmentChanged || plan.postMonthlyUsage !== plan.sub.billUsageMonthly) {
+      await tx
+        .update(subscriptions)
+        .set({
+          billUsageMonthly: plan.postMonthlyUsage,
+          // A flag flipped at the term end takes effect at the renewal claim.
+          ...(newTerm ? subPeriod : {}),
+          commitmentAmountMinor: plan.postCommitmentMinor,
+          commitmentSegments: newTerm
+            ? freshSegments(plan.postCommitmentMinor, termStart)
+            : commitmentChanged && termStart
+              ? appendSegment(termSegments(plan.sub, termStart), now, plan.postCommitmentMinor)
+              : plan.sub.commitmentSegments,
+        })
+        .where(eq(subscriptions.id, plan.sub.id));
+    }
+  }
+  // CACHED MRR (bug, 2026-08-03): `subscriptions.mrr` is the figure the
+  // subscriptions list shows, sorts and filters on — and NOTHING on this path
+  // ever recomputed it, so every quantity / price / cadence change left it
+  // reporting the pre-change revenue (measured: an addon 6→7 at 20000 left mrr
+  // 20000 low). Runs HERE, after the item updates/inserts/removals AND the
+  // term-reset cadence write, because `computeSubscriptionMrr` normalizes each
+  // item's snapshot interval to a monthly figure — a monthly→yearly swap
+  // restates MRR and must be read post-write. Same recompute the add/remove
+  // paths call (items.ts), on this transaction, so a rolled-back change can
+  // never leave the cached column describing items that were never applied.
+  // Dated where the money is: a reset takes effect at the new term's start, a
+  // mid-term change at the instant it prorates from.
+  await recomputeSubscriptionMrr(
+    tx,
+    plan.sub.id,
+    plan.resetTerm ? plan.resetStart : plan.prorationNow,
+  );
+  {
+    const { applyPlanChangeCredits } = await import("@/modules/credits/credit-clock");
+    await applyPlanChangeCredits(tx, {
+      subscriptionId: plan.sub.id,
+      now: plan.resetTerm ? plan.resetStart : plan.prorationNow,
+      termReset: !!plan.resetTerm && !plan.inTrial,
+      changes: before,
+      ...(a.resetOverrides ? { overrides: a.resetOverrides } : {}),
+    });
+  }
+  await emitOrDefer(
+    tx,
+    {
+      organizationId,
+      businessId,
+      type: "subscription_changed",
+      data: buildEventData(
+        "subscription_changed",
+        { id: plan.sub.publicId, status: plan.sub.status },
+        plan.sub.resourceVersion,
+      ),
+    },
+    a.deferEventsTo,
+  );
+  // Re-read rather than reusing `plan.sub`: this path writes the term reset, the
+  // cadence and the cached MRR above, none of which are on the row we planned from.
+  const [current] = await tx
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.id, plan.sub.id))
+    .limit(1);
+  if (current) {
+    await auditSubscription(tx, {
+      organizationId,
+      businessId,
+      action: "subscription.change",
+      before: beforeFull,
+      after: current,
+    });
+  }
+
+  return { settledUsage, skipped, insertedByRequestKey, skippedRequestKeys };
 }
 
 async function applyChange(input: {
@@ -2689,7 +3187,9 @@ async function applyChange(input: {
    * though the change form still PRESELECTS "Immediately" rather than the business
    * preference, which is now a resolvable default it should preview instead. Filed.
    *
-   * The CREDIT side is unaffected: a downgrade's credit note and a term reset's
+   * A change that nets to a CREDIT ignores this: its credit note and, under
+   * `net_credit_documents: credit_note_and_invoice`, the invoice for its new lines are
+   * issued now. The CREDIT side is unaffected: a downgrade's credit note and a term reset's
    * unused-time credit note are issued immediately either way (the credit is money
    * already owed, not a charge being scheduled). On the deferred
    * branch the reset credit simply stays on the customer's balance until the renewal
@@ -2753,6 +3253,10 @@ async function applyChange(input: {
   failedChangeCharge?: FailedChangeCharge;
   /** `plan_change_coupons` for this call only. Omitted = the business rule. */
   planChangeCoupons?: PlanChangeCoupons;
+  /** `net_credit_documents` for this call only. Omitted = the business rule. */
+  netCreditDocuments?: NetCreditDocuments;
+  /** The scheduled-change applier: a change scheduled earlier is not refused when it lands. */
+  skipPastDueGuard?: boolean;
   /** `plan_credits` / `allowances` rules for this call only (`applyPlanChangeCredits`). */
   resetOverrides?: ResetOverrides;
   /**
@@ -2766,6 +3270,10 @@ async function applyChange(input: {
    * `applyItemOperations` — see the coalescing note there.
    */
   deferEventsTo?: DeferredEvents;
+  /** Filled inside the apply transaction with what a revert needs (`change-revert.ts`). */
+  undoSink?: ChangeUndoSink;
+  /** `apply_when_paid`: hold the change until its invoice is paid (`pending-change.ts`). */
+  hold?: ChangeHold;
 }): Promise<{
   prorationInvoice: Invoice | null;
   /** The FIRST credit note raised, kept for callers that expect one. */
@@ -4599,6 +5107,49 @@ async function applyChange(input: {
   const invoiceImmediately =
     input.invoiceImmediately ??
     (await defaultInvoiceImmediately(organizationId, businessId, "onChange"));
+  const lifecycle = resolveLifecycleConfig(await loadBillingRulesRow(organizationId, businessId));
+  // The documents a net credit takes: this call's, else the business rule; null = not saved.
+  const creditDocuments = input.netCreditDocuments ?? lifecycle.netCreditDocuments;
+  // `block_downgrade_when_past_due`: a change that credits now waits while the customer has
+  // a past-due invoice. Checked before any write. A change at the term end credits nothing.
+  if (
+    lifecycle.blockDowngradeWhenPastDue &&
+    !input.skipPastDueGuard &&
+    !plan.inTrial &&
+    plan.lines.reduce((sum, l) => sum + l.amountMinor, 0n) < 0n
+  ) {
+    const [pastDue] = await withTenant(organizationId, (tx) =>
+      tx
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.businessId, businessId),
+            eq(invoices.customerId, plan.sub.customerId),
+            inArray(invoices.status, [...OPEN_INVOICE_STATUSES]),
+            gt(invoices.amountDueMinor, 0n),
+            lte(invoices.dueDate, now),
+            notHeldInvoice(),
+          ),
+        )
+        .limit(1),
+    );
+    if (pastDue) throw new ProrationError(PAST_DUE_DOWNGRADE_MESSAGE);
+  }
+  // `apply_when_paid`: raise and collect the invoice now, write the change once it is paid
+  // (`pending-change.ts`). Only a change that raises an invoice now is held. A shape a replay
+  // cannot carry exactly applies as before, and the caller settles it as `revert`.
+  const planNet = plan.lines.reduce((sum, l) => sum + l.amountMinor, 0n);
+  let holding =
+    !!input.hold && !plan.inTrial && planNet !== 0n && (planNet < 0n || invoiceImmediately);
+  if (holding) {
+    const { holdBlocker } = await import("./pending-change");
+    const blocker = await holdBlocker(organizationId, businessId, plan, input);
+    if (blocker) {
+      input.hold!.blocker = blocker;
+      holding = false;
+    }
+  }
   const applied = await withTenant(organizationId, async (tx) => {
     // ── Bugs #8: OPTIMISTIC LOCK on the subscription (CP-0 idiom, `bump_row_version`).
     // The read phase above computed this whole change — the credit for the old term,
@@ -4631,7 +5182,8 @@ async function applyChange(input: {
         // the same optimistic lock: a concurrent change makes this match 0 rows and the
         // metadata is not written either. `!== undefined` keeps `null` (an explicit
         // clear) distinct from omission (leave it alone).
-        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+        // A held change writes its metadata when it applies.
+        ...(input.metadata !== undefined && !holding ? { metadata: input.metadata } : {}),
       })
       .where(
         and(
@@ -4651,6 +5203,26 @@ async function applyChange(input: {
     // Taken after the optimistic lock so it reflects the state the change is applied
     // to, and inside this transaction so a conflict leaves no audit row behind.
     const beforeFull = await subscriptionSnapshot(tx, plan.sub);
+    if (input.undoSink) {
+      const blocker =
+        plan.inserts.length || plan.removals.length
+          ? "items_added_or_removed"
+          : plan.unbilledSettlements.length
+            ? "deferred_charges"
+            : input.removeDiscount || input.couponCode || input.manualDiscount
+              ? "discount"
+              : null;
+      const { captureChangeUndo } = await import("./change-revert");
+      input.undoSink.value = await captureChangeUndo(tx, {
+        sub: plan.sub,
+        moved: plan.updates.map((u) => ({
+          itemId: u.itemId,
+          priceId: u.priceId,
+          quantity: u.quantity,
+        })),
+        blocker,
+      });
+    }
 
     // AFTER the snapshot (so the event diff still reports the discount as a change) and
     // BEFORE the item operations and the invoice below — see the `couponCode` note above.
@@ -4674,6 +5246,7 @@ async function applyChange(input: {
         ...(input.planChangeCoupons ? { rule: input.planChangeCoupons } : {}),
       });
       if (drop.length) {
+        if (input.undoSink?.value) input.undoSink.value.blocker ??= "discount";
         const { removeDiscountInTx } = await import("@/modules/coupons/service");
         for (const code of drop)
           await removeDiscountInTx(tx, {
@@ -4684,9 +5257,11 @@ async function applyChange(input: {
           });
       }
     }
+    // The items move below, so the coupon is checked against them there.
+    let appliedCouponId: string | null = null;
     if (input.couponCode) {
       const { applyCouponToSubscription } = await import("@/modules/coupons/service");
-      await applyCouponToSubscription({
+      const row = await applyCouponToSubscription({
         organizationId,
         businessId,
         subscriptionId: plan.sub.id,
@@ -4694,8 +5269,10 @@ async function applyChange(input: {
         now,
         tx,
         suppressSubscriptionChanged: true,
+        skipItemMatch: true,
         ...(input.deferEventsTo ? { deferEventsTo: input.deferEventsTo } : {}),
       });
+      appliedCouponId = row.id;
     }
     if (input.manualDiscount) {
       const { applyManualDiscount } = await import("@/modules/coupons/service");
@@ -4713,604 +5290,436 @@ async function applyChange(input: {
       });
     }
 
-    // Usage this change stops measuring: a removed item's open window, or every metered
-    // item's window up to a term reset (the new term measures from `resetStart`).
-    await settleMeteredUsage(
-      tx,
-      plan.sub,
-      plan.resetTerm ? plan.allItemIds : plan.removals.map((r) => r.itemId),
-      plan.resetTerm ? plan.resetStart : now,
-    );
-    // The prices the changed items leave, for the plan credits' change rules (G3b §3.6).
-    const before = plan.updates.length
-      ? await tx
-          .select({
-            itemId: subscriptionItems.id,
-            oldPriceId: subscriptionItems.priceId,
-            oldQuantity: subscriptionItems.quantity,
-          })
-          .from(subscriptionItems)
-          .where(
-            inArray(
-              subscriptionItems.id,
-              plan.updates.map((u) => u.itemId),
-            ),
-          )
-      : [];
-    for (const u of plan.updates) {
-      await tx
-        .update(subscriptionItems)
-        .set({ priceId: u.priceId, quantity: u.quantity, priceSnapshot: u.snapshot })
-        .where(eq(subscriptionItems.id, u.itemId));
-    }
-    // Plan-swap: remove auto-included mandatory add-ons no longer required.
-    for (const rem of plan.removals) {
-      await tx.delete(subscriptionItems).where(eq(subscriptionItems.id, rem.itemId));
-    }
-    // The charge side of those removals: re-cut each detached item's still-pending
-    // deferred charge to the span it was actually held (money bug, 2026-08-24). On this
-    // handle, so the re-cut charge, the deletion and the netted credit commit together —
-    // a credit the refundable cap refuses must not leave a charge already trimmed.
-    await applyUnbilledChargeSettlements(tx, {
-      organizationId,
-      businessId,
-      settlements: plan.unbilledSettlements,
-    });
-    // CAT-3: insert auto-included mandatory add-on items (immutable snapshot).
-    // onConflictDoNothing on the (subscription_id, price_id) unique index makes a
-    // concurrent change / retried apply idempotent (G backlog: no double-insert).
-    // Post-H (#3): if the insert is SKIPPED by the conflict (the item already
-    // exists — a concurrent change won the race), we must NOT bill this call's
-    // proration line for it, or one item gets charged twice. Track the skipped
-    // price ids and drop their lines below.
-    const skipped = new Set<string>();
-    // Where each REQUESTED add landed, keyed by its line's `requestedAddKey`. Needed once
-    // this transaction has committed: the item id does not exist while the lines are built,
-    // and a one-off billed outside the period planner must hand its id to
-    // `createInvoiceFromLines({ markItemsBilled })` or the next renewal bills the fee again.
-    const insertedByRequestKey = new Map<string, string>();
-    const skippedRequestKeys = new Set<string>();
-    for (const ins of plan.inserts) {
-      const res = await tx
-        .insert(subscriptionItems)
-        .values({
+    const composed = holding
+      ? null
+      : await writeChangeComposition(tx, {
           organizationId,
           businessId,
-          subscriptionId: plan.sub.id,
-          publicId: publicId("si"),
-          priceId: ins.priceId,
-          quantity: ins.quantity,
-          priceSnapshot: ins.snapshot,
-          billingCycles: ins.billingCycles ?? null,
-          // An operator's add carries no metadata at all — exactly what `addSubscriptionItem`
-          // writes. Only the CAT-3 expansion stamps `auto_included`, which is also the
-          // predicate of the partial unique index the conflict clause relies on (so the
-          // clause is inert for a requested add, and its row is never silently dropped).
-          ...(ins.requestKey && !ins.autoIncluded
-            ? {}
-            : { metadata: { auto_included: "mandatory" } }),
-        })
-        .onConflictDoNothing()
-        .returning({ id: subscriptionItems.id });
-      if (res.length === 0) {
-        if (ins.requestKey) skippedRequestKeys.add(ins.requestKey);
-        else skipped.add(ins.priceId);
-      } else if (ins.requestKey) insertedByRequestKey.set(ins.requestKey, res[0]!.id);
+          now,
+          plan,
+          beforeFull,
+          appliedCouponId,
+          ...(input.resetOverrides ? { resetOverrides: input.resetOverrides } : {}),
+          ...(input.deferEventsTo ? { deferEventsTo: input.deferEventsTo } : {}),
+        });
+    if (composed?.settledUsage.length && input.undoSink?.value)
+      input.undoSink.value.blocker ??= "metered_usage";
+    const skipped = composed?.skipped ?? new Set<string>();
+    const insertedByRequestKey = composed?.insertedByRequestKey ?? new Map<string, string>();
+    const skippedRequestKeys = composed?.skippedRequestKeys ?? new Set<string>();
+    // Held: the request's own state, so a replay can tell that nothing moved meanwhile.
+    if (holding) {
+      const { subscriptionFingerprint } = await import("./pending-change");
+      input.hold!.fingerprint = await subscriptionFingerprint(tx, plan.sub.id);
     }
-    // Plan change and scheduled-change apply: freeze meter rate cards, guard the meters.
-    await syncMeterBilling(tx, plan.sub.id);
-    // TERM RESET: restart the period from now, re-align billingPeriod(Unit) to
-    // the post-change plan cadence. The billing clock renews off current_period_end
-    // (a scan, not a per-subscription job — see README "Billing-clock tick order"),
-    // so moving this column IS the reschedule; nothing else to touch.
-    if (plan.resetTerm) {
-      await tx
-        .update(subscriptions)
-        .set({
-          // IN TRIAL the "current term" IS the trial window (currentPeriodEnd =
-          // trialEnd), so re-anchoring it hands the customer a whole extra free
-          // period: a monthly→yearly swap during a 14-day trial moved
-          // current_period_end a YEAR out and the sub stayed `in_trial` until then,
-          // because the billing clock renews off current_period_end. Keep the trial
-          // window exactly as promised and only re-cadence — the post-trial term is
-          // then one NEW interval from trial end (renewSubscription reads the
-          // SUBSCRIPTION's cadence, which the two lines below keep correct).
-          // Found by verify:trial-change, 2026-08-03.
-          ...(plan.inTrial
-            ? {}
-            : {
-                currentPeriodStart: plan.resetStart,
-                currentPeriodEnd: plan.newPeriodEnd,
-                // The anchor has to follow the term it anchors. `billing_anchor_day` was
-                // written once at create and never again, so after a reset moved the term
-                // start it still named the OLD day of the month — and `advancePeriod`
-                // dutifully re-aligned every later renewal onto it. Measured 2026-08-23: a
-                // term reset from an 08-Aug subscription to 23-Aug renewed 2027-08-23 →
-                // 2028-08-**08**, a 351-day "year", and every renewal after it stayed on
-                // the 8th. Re-anchoring to the new term start's LOCAL day of the month is
-                // what `createSubscription` does for a fresh term (service.ts:742), so a
-                // reset term is anchored the same way a new one is.
-                // The SAME value the boundary computation used — see `resetAnchorDay`. These
-                // were two copies of one expression and they drifted, which is the whole
-                // defect: the term end was computed from the old anchor while the new one
-                // was persisted here.
-                billingAnchorDay: plan.resetAnchorDay,
-              }),
-          billingPeriod: plan.newIntervalCount,
-          billingPeriodUnit: plan.newInterval,
-        })
-        .where(eq(subscriptions.id, plan.sub.id));
-    }
-    // Monthly usage billing and the commitment: a reset term starts fresh; otherwise a
-    // commitment change is a new segment from now.
-    {
-      const newTerm = plan.resetTerm && !plan.inTrial;
-      const termStart = newTerm ? plan.resetStart : plan.sub.currentPeriodStart;
-      const termEnd = newTerm ? plan.newPeriodEnd : plan.sub.currentPeriodEnd;
-      const commitmentChanged =
-        String(plan.postCommitmentMinor) !== String(plan.sub.commitmentAmountMinor);
-      const subPeriod = subPeriodFields(
-        {
-          billUsageMonthly: plan.postMonthlyUsage,
-          billingPeriodUnit: plan.newInterval,
-          billingPeriod: plan.newIntervalCount,
-          billingAnchorDay: newTerm ? plan.resetAnchorDay : plan.sub.billingAnchorDay,
-        },
-        termStart,
-        termEnd,
-        plan.bizMode,
+
+    const out = await (async () => {
+      // ── The money, decided INSIDE this transaction so a refused credit vetoes
+      // the writes above rather than stranding them.
+      //
+      // Post-H (#3): drop the mandatory-addon proration lines whose insert conflicted
+      // (already present) — otherwise a change bills the same add-on twice. Second line
+      // of defence behind the optimistic lock above: it also covers an add-on inserted
+      // by a DIFFERENT path (e.g. addSubscriptionItem) between our read and apply.
+      // Keys off the line's `autoIncludedAddon` tag — the previous version matched on a
+      // `'Mandatory add-on '` description prefix that this code has never emitted, so
+      // the guard was dead and every skipped insert was still billed.
+      const billableLines = plan.lines.filter(
+        (l) =>
+          !(l.autoIncludedAddon === true && skipped.has(l.priceId)) &&
+          // An ADD whose insert did not land must not be billed either — the same second line
+          // of defence, for the same reason: a line with no item behind it charges for
+          // something the subscription does not have.
+          !(l.requestedAddKey != null && skippedRequestKeys.has(l.requestedAddKey)),
       );
-      if (newTerm || commitmentChanged || plan.postMonthlyUsage !== plan.sub.billUsageMonthly) {
-        await tx
-          .update(subscriptions)
-          .set({
-            billUsageMonthly: plan.postMonthlyUsage,
-            // A flag flipped at the term end takes effect at the renewal claim.
-            ...(newTerm ? subPeriod : {}),
-            commitmentAmountMinor: plan.postCommitmentMinor,
-            commitmentSegments: newTerm
-              ? freshSegments(plan.postCommitmentMinor, termStart)
-              : commitmentChanged && termStart
-                ? appendSegment(termSegments(plan.sub, termStart), now, plan.postCommitmentMinor)
-                : plan.sub.commitmentSegments,
-          })
-          .where(eq(subscriptions.id, plan.sub.id));
+      const net = billableLines.reduce((s, l) => s + l.amountMinor, 0n);
+
+      // In trial the read phase emptied both money lists, so this is the exit taken —
+      // the composition change is applied and NOTHING is billed or credited. Asserted
+      // rather than implied: a future line-producing branch must not leak a charge into
+      // a free trial (verify:trial-change A2/D1).
+      // A reset ends the old term early: its prorated commitment true-up rides the next invoice.
+      if (plan.resetTerm && !plan.inTrial && (billableLines.length === 0 || net === 0n))
+        await bookEarlyEndCommitment(tx, plan.sub, plan.resetStart, plan.bizMode);
+      if (plan.inTrial || billableLines.length === 0 || net === 0n) {
+        return {
+          billableLines,
+          net,
+          downgradeCreditNote: [] as CreditNote[],
+          resetCreditNote: [] as CreditNote[],
+          insertedByRequestKey,
+        };
       }
-    }
-    // CACHED MRR (bug, 2026-08-03): `subscriptions.mrr` is the figure the
-    // subscriptions list shows, sorts and filters on — and NOTHING on this path
-    // ever recomputed it, so every quantity / price / cadence change left it
-    // reporting the pre-change revenue (measured: an addon 6→7 at 20000 left mrr
-    // 20000 low). Runs HERE, after the item updates/inserts/removals AND the
-    // term-reset cadence write, because `computeSubscriptionMrr` normalizes each
-    // item's snapshot interval to a monthly figure — a monthly→yearly swap
-    // restates MRR and must be read post-write. Same recompute the add/remove
-    // paths call (items.ts), on this transaction, so a rolled-back change can
-    // never leave the cached column describing items that were never applied.
-    // Dated where the money is: a reset takes effect at the new term's start, a
-    // mid-term change at the instant it prorates from.
-    await recomputeSubscriptionMrr(
-      tx,
-      plan.sub.id,
-      plan.resetTerm ? plan.resetStart : plan.prorationNow,
-    );
-    {
-      const { applyPlanChangeCredits } = await import("@/modules/credits/credit-clock");
-      await applyPlanChangeCredits(tx, {
-        subscriptionId: plan.sub.id,
-        now: plan.resetTerm ? plan.resetStart : plan.prorationNow,
-        termReset: !!plan.resetTerm && !plan.inTrial,
-        changes: before,
-        ...(input.resetOverrides ? { overrides: input.resetOverrides } : {}),
-      });
-    }
-    await emitOrDefer(
-      tx,
-      {
-        organizationId,
-        businessId,
-        type: "subscription_changed",
-        data: buildEventData(
-          "subscription_changed",
-          { id: plan.sub.publicId, status: plan.sub.status },
-          plan.sub.resourceVersion,
-        ),
-      },
-      input.deferEventsTo,
-    );
-    // Re-read rather than reusing `plan.sub`: this path writes the term reset, the
-    // cadence and the cached MRR above, none of which are on the row we planned from.
-    const [current] = await tx
-      .select()
-      .from(subscriptions)
-      .where(eq(subscriptions.id, plan.sub.id))
-      .limit(1);
-    if (current) {
-      await auditSubscription(tx, {
-        organizationId,
-        businessId,
-        action: "subscription.change",
-        before: beforeFull,
-        after: current,
-      });
-    }
 
-    // ── The money, decided INSIDE this transaction so a refused credit vetoes
-    // the writes above rather than stranding them.
-    //
-    // Post-H (#3): drop the mandatory-addon proration lines whose insert conflicted
-    // (already present) — otherwise a change bills the same add-on twice. Second line
-    // of defence behind the optimistic lock above: it also covers an add-on inserted
-    // by a DIFFERENT path (e.g. addSubscriptionItem) between our read and apply.
-    // Keys off the line's `autoIncludedAddon` tag — the previous version matched on a
-    // `'Mandatory add-on '` description prefix that this code has never emitted, so
-    // the guard was dead and every skipped insert was still billed.
-    const billableLines = plan.lines.filter(
-      (l) =>
-        !(l.autoIncludedAddon === true && skipped.has(l.priceId)) &&
-        // An ADD whose insert did not land must not be billed either — the same second line
-        // of defence, for the same reason: a line with no item behind it charges for
-        // something the subscription does not have.
-        !(l.requestedAddKey != null && skippedRequestKeys.has(l.requestedAddKey)),
-    );
-    const net = billableLines.reduce((s, l) => s + l.amountMinor, 0n);
+      // ── Downgrade (net < 0): we owe the customer. Issue a real credit note against
+      // the current-term invoice — NOT a negative "credited" invoice (ADR-009 style,
+      // matches change_term_end + cancellation). Per-item "Prorated Credits" lines.
+      // Adjustment vs refundable split is handled by the helper.
+      //
+      // ── CREDIT GROSS, THEN BILL THE NEW TERM (2026-08-24) ────────────────────────
+      // This used to NET the two sides when the change also produced a charge: the
+      // unused-old and the new-term lines collapsed into ONE credit item worth `-net`,
+      // and no invoice was raised for the new term at all. That is the wrong shape, and
+      // on a tax-plus-promotional-credit term it is not even the same money.
+      //
+      // Measured (scripts/probe-change-promo-tax-retention.ts), day-anchored INR
+      // business, IGST 18%, promo grant 1000000, pro 2791800 → lite 911800 same day.
+      // Invoice #1 books subtotal 2791800, promo applied PRE-tax so the taxable base is
+      // 1791800, IGST 322524, total 3114324, cash 2114324.
+      //   netted   → one credit item of 1880000. `creditOneInvoice` reverses tax at the
+      //              invoice's BLENDED effective rate (322524/2791800 = 11.5525%, low
+      //              because the promo already shrank the base) on only the credited
+      //              FRACTION → 217188, credit 2097188, split 673400 promo /
+      //              1423787 refundable. Customer holds 2097187.
+      //   grossed  → the WHOLE term is credited (2791800 + all 322524 of tax = 3114324,
+      //              split 1000000 promo / 2114324 refundable) and the new term is
+      //              billed as its own invoice, where the returned promotional credit
+      //              re-applies PRE-tax: subtotal 911800, taxable base 0, tax 0.
+      //              Customer holds 88200 promo + 2114324 refundable = 2202524.
+      // 105337 of the customer's money, and 618990 of it in the wrong bucket, purely
+      // because netting hid a taxable supply inside a credit.
+      //
+      // So: credit the credit lines GROSS, and let the charge lines fall through to the
+      // ordinary invoice path below (the credit note commits with this transaction, so
+      // its restored balances are visible to that invoice's `applyCredit` draw — the
+      // same ordering the term-reset branch relies on).
+      //
+      // ── ONLY WHEN THE TERM'S INVOICE CAN ACTUALLY ABSORB IT ──────────────────────
+      // Grossing up is safe exactly while the gross credit is placeable. It is not
+      // always: `issueCurrentTermCredit` books an ITEM-SPECIFIC credit against ONE
+      // invoice (see its `wholeTerm` note — spreading an item credit across a term's
+      // invoices puts lines on invoices that never charged the item), and
+      // `splitCreditByFunding` then clamps the cashable slice to that invoice's own
+      // funding. Where the gross credit exceeds it the surplus is silently dropped —
+      // while the new term's charge is billed in full, so the customer pays for time
+      // they were just credited for. Measured 2026-08-24 on a term billed across two
+      // invoices (a 1000 term bill + a 1000 qty-upgrade proration, then a downgrade
+      // whose unused old quantity is worth 1500): the gross credit clamped to the
+      // newest invoice's 1000, the 500 new-term charge was billed anyway, and the
+      // customer was left 500 out of pocket against the netted result.
+      //
+      // ── THE OFFSETTING CHARGE IS INVOICED NOW, WHATEVER `invoice_immediately` SAYS ──
+      // Queuing the charge as unbilled while the whole unused term comes back as cashable
+      // credit would leave money we are still owed in a bucket the customer can cash
+      // (measured 2026-08-24, verify:credit: credit note 1500 + a 500 unbilled charge). So
+      // the grossed shape always raises the invoice in this request, and the credit note
+      // settles it at once.
+      //
+      // ── TWO DOCUMENTS BY DEFAULT (2026-11-13) ────────────────────────────────────
+      // `net_credit_documents` picks the shape. `credit_note_and_invoice` (the default)
+      // grosses, so the new plan gets its own tax invoice at its own rate and place of
+      // supply. `one_credit_note` is the opt-in netting. Both leave the customer in the
+      // same net position. A gross credit past the term's capacity is credited up to what each
+      // invoice can still take; what was already refunded, credited or written off is not
+      // handed back twice.
+      if (net < 0n) {
+        const creditLines = billableLines.filter((l) => l.amountMinor < 0n);
+        const hasCharges = billableLines.some((l) => l.amountMinor > 0n);
+        // The prices this credit is FOR — every credit line carries the price whose unused
+        // time it hands back (the OLD price on a swap). The notes therefore book against
+        // the invoices that actually charged them, all of them, each from its own lines:
+        // see `issueCurrentTermCredit.targetPriceIds`. This replaces a rule that only
+        // attributed a removes-only call detaching exactly one item, and only to ONE
+        // invoice — every other downgrade fell back to "the newest live invoice", which on
+        // a term billed across several invoices is the wrong document AND the wrong cap.
+        // Measured 2026-08-24: a 6→5 downgrade of a 20000/unit plan whose term also
+        // carried a 500 add-on proration credited 500 against the ADD-ON's invoice and
+        // silently dropped the other 19500.
+        const creditTargetPriceIds = [...new Set(creditLines.map((l) => l.priceId))];
+        // ── ONE WORDING FOR A CREDIT LINE, AND ONE WINDOW ───────────────────────────
+        // `creditedDescription` is the single phrasing for "this hands back the unused
+        // part of X" and every other credit path already uses it. This builder instead
+        // appended "— prorated credit" to the CHARGE line's own wording, so the same
+        // operation produced three different strings depending on which path ran:
+        // "Unused time on BUSINESS plan ×1" (multi-invoice split), "Unused time on PRO
+        // plan" (reset), "Unused time on BUSINESS plan ×1 — prorated credit" (here).
+        // Measured on sub_XXXXXXXXXXXXXXXXXXXXXX01, CN-1689 vs CN-1703 vs CN-1668.
+        //
+        // Our wording deliberately names the quantity and the side of the proration,
+        // rather than a bare "… - Prorated Credits for 31-Aug-2026 - 25-Sep-2026". Being
+        // INTERNALLY inconsistent was never part of the decision.
+        const grossItems = creditLines.map((l) => ({
+          description: creditedDescription(l.description),
+          amountMinor: -l.amountMinor,
+          priceId: l.priceId,
+        }));
+        const grossTotal = grossItems.reduce((s, i) => s + i.amountMinor, 0n);
+        // With no charge to separate out, gross IS the netted shape (`-net` equals the
+        // credit lines), so the question does not arise and no extra read is made.
+        // `credit_note_and_invoice`: two documents whenever the term was billed (a never-billed
+        // term has nothing to credit and nets to nothing, as before); a term whose invoices
+        // cannot take the whole gross credit is credited up to what each can still take.
+        // `one_credit_note`: one note. Unset: the rule before 2026-11-13, unchanged.
+        const grossed =
+          !hasCharges ||
+          (creditDocuments === "credit_note_and_invoice"
+            ? await termWasBilled(tx, businessId, plan.sub.id)
+            : creditDocuments === null &&
+              invoiceImmediately &&
+              (await termInvoiceCanAbsorb({
+                organizationId,
+                businessId,
+                subscription: plan.sub,
+                targetPriceIds: creditTargetPriceIds,
+                preTaxMinor: grossTotal,
+                tx,
+              })));
+        const items = grossed
+          ? grossItems
+          : [{ description: "Prorated credit for subscription change", amountMinor: -net }];
+        const downgradeCreditNote = await issueCurrentTermCredit({
+          organizationId,
+          businessId,
+          subscription: plan.sub,
+          items,
+          reasonCode: "subscription_change",
+          reason: "Prorated credit for subscription change",
+          targetPriceIds: creditTargetPriceIds,
+          creditedPeriod: changeCreditedPeriod(plan),
+          tx,
+        });
+        return {
+          billableLines,
+          net,
+          downgradeCreditNote,
+          downgradeGrossed: grossed,
+          resetCreditNote: [] as CreditNote[],
+          insertedByRequestKey,
+        };
+      }
 
-    // In trial the read phase emptied both money lists, so this is the exit taken —
-    // the composition change is applied and NOTHING is billed or credited. Asserted
-    // rather than implied: a future line-producing branch must not leak a charge into
-    // a free trial (verify:trial-change A2/D1).
-    // A reset ends the old term early: its prorated commitment true-up rides the next invoice.
-    if (plan.resetTerm && !plan.inTrial && (billableLines.length === 0 || net === 0n))
-      await bookEarlyEndCommitment(tx, plan.sub, plan.resetStart, plan.bizMode);
-    if (plan.inTrial || billableLines.length === 0 || net === 0n) {
+      // ── Upgrade (net > 0), SAME-CADENCE (no term reset) ─────────────────────────
+      // Root 2 of the 2026-08-25 full-suite run (49 failures). Without this the
+      // `Unused time on …` line — NEGATIVE, built at :1806 — stayed in `billableLines`
+      // and was netted onto the new invoice. The correct report is
+      // `lines=1 · total=59700 · creditsApplied=29700 · creditNotes=1`; we reported
+      // `lines=2 · lines[0]=-29700 · total=30000 · creditsApplied=0`.
+      //
+      // NOT a presentation difference — netting LOSES A DISCOUNT. With a 10% coupon the
+      // customer owes (59700 × 0.9) − 26730 = 27000, but `59700 − 29700 = 30000` never
+      // lets the percentage reach the new charge, because by then the two are one lump.
+      // Measured overcharges: +3000, +5970 and +96000.
+      //
+      // Same mechanism as the `net < 0` branch above: credit the old term FIRST, inside
+      // this transaction, so `createInvoiceFromLines(applyCredit)` draws it onto the new
+      // FULL-PRICE invoice as `creditsApplied` — and the coupon lands on the charge before
+      // the credit does. Also emits credit_note_created / customer_changed /
+      // invoice_updated, the event set for this shape.
+      //
+      // ⚠ PRICE SWAPS ONLY. A QUANTITY change must keep the netted shape — measured:
+      // moving a per-unit add-on from ×1 to ×4 raises ONE invoice for
+      // `USD 150.00 qty=3 "… - Prorated Charges"` with NO credit note, NO negative line
+      // and NO credits_applied. It bills the ADDED UNITS, it does not credit the old
+      // quantity and re-bill the new one. Our netting already lands on the identical
+      // total, so generalising the credit-note shape here would have been WRONG — and
+      // would have "fixed" `verify-change-atomicity`'s 19500-delta fixture, which is
+      // right as written.
+      //
+      // The two are separable from the lines alone: a swap credits price X and charges
+      // price Y, while a quantity/rate change credits and charges the SAME price. So only
+      // a negative line whose price is NOT among the charges becomes a credit note.
+      let upgradeCreditNote: CreditNote[] = [];
+      let upgradeGrossed = false;
+      const chargedPriceIds = new Set(
+        billableLines.filter((l) => l.amountMinor > 0n).map((l) => l.priceId),
+      );
+      // `rerated` overrides the priceId test: a re-rated add-on is charged under the SAME
+      // price it is credited under, so the test alone would keep its credit netted onto the
+      // change invoice — see the flag's own note.
+      const upgradeCreditLines = billableLines.filter(
+        (l) => l.amountMinor < 0n && (l.rerated === true || !chargedPriceIds.has(l.priceId)),
+      );
+      const upgradeCreditedPriceIds = upgradeCreditLines.map((l) => l.priceId);
+      if (
+        plan.resetCreditItems.length === 0 &&
+        upgradeCreditLines.length > 0 &&
+        invoiceImmediately
+      ) {
+        const upgradeTargetPriceIds = [...new Set(upgradeCreditLines.map((l) => l.priceId))];
+        upgradeCreditNote = await issueCurrentTermCredit({
+          organizationId,
+          businessId,
+          subscription: plan.sub,
+          // Same single wording and same credited window as the downgrade builder above.
+          items: upgradeCreditLines.map((l) => ({
+            description: creditedDescription(l.description),
+            amountMinor: -l.amountMinor,
+            priceId: l.priceId,
+          })),
+          reasonCode: "subscription_change",
+          reason: "Prorated credit for subscription change",
+          targetPriceIds: upgradeTargetPriceIds,
+          creditedPeriod: changeCreditedPeriod(plan),
+          tx,
+        });
+        // No creditable invoice to attach to (pending / voided / zero-total, or the term
+        // was never billed): keep the pre-2026-08-25 netting byte for byte rather than
+        // drop a credit the customer is owed. Only a note that actually exists may remove
+        // the negative lines from the invoice.
+        upgradeGrossed = upgradeCreditNote.length > 0;
+      }
+
+      // ── Upgrade (net > 0), TERM RESET only — the unused old term
+      // is booked as a credit note (issued against the paid old-term invoice →
+      // refundable balance) BEFORE the new invoice is created, so
+      // createInvoiceFromLines(applyCredit) draws it onto the new invoice
+      // (creditsApplied) instead of netting it as invoice lines. The CN create +
+      // allocation also fire credit_note_created / customer_changed / invoice_updated
+      // (via credit-notes/service emitters).
+      // A plan DOWNGRADE swap lands here too (term reset charges the full new plan, so
+      // net > 0) — which is exactly why this credit belongs in the transaction: its
+      // refusal used to leave the sub swapped onto the cheaper plan with the old term's
+      // money neither credited nor charged.
+      let resetCreditNote: Awaited<ReturnType<typeof issueCurrentTermCredit>> = [];
+      if (plan.resetCreditItems.length > 0) {
+        resetCreditNote = await issueCurrentTermCredit({
+          organizationId,
+          businessId,
+          subscription: plan.sub,
+          items: plan.resetCreditItems,
+          reasonCode: "subscription_change",
+          reason: "Unused time credited on plan change",
+          // A reset credits EVERY item's unused time, so this is the one caller whose
+          // credit may be spread across the term's invoices (D1).
+          wholeTerm: true,
+          // The reset's window starts at `resetStart` (the new term's start), which is
+          // exactly the boundary the amounts were cut on — see `creditUnused` in the plan
+          // phase — and ends at the OLD term end, because that is what the credited
+          // invoices billed. NOT `newPeriodEnd`: the new term is what gets CHARGED.
+          creditedPeriod: changeCreditedPeriod(plan),
+          tx,
+        });
+      }
+
+      // No credit note could be attached (`issueCurrentTermCredit` found no live
+      // invoice to credit against). The caller then falls back to booking the
+      // unused-term credit as NEGATIVE invoice lines — which is fine while the credit
+      // is smaller than the new charge, and catastrophic when it is not.
+      //
+      // On any plan-swap DOWNGRADE it is not: the old term's unused time (3000) exceeds
+      // the full new-plan charge (1000), the fallback lines drive the invoice subtotal
+      // negative, and `createInvoiceFromLines` throws a bare `Error` — AFTER this
+      // transaction has committed. Measured: the subscription came out swapped onto the
+      // cheaper plan with its MRR restated, no invoice, no credit note, and a 500 to the
+      // caller. Silent corruption, and the retry re-runs a change that has already been
+      // applied.
+      //
+      // Decided HERE, inside the transaction, so a rejection rolls the item change back
+      // instead of stranding it.
+      if (plan.resetTerm && !plan.inTrial)
+        await bookEarlyEndCommitment(tx, plan.sub, plan.resetStart, plan.bizMode);
+      let resetCreditDropped = false;
+      if (plan.resetCreditItems.length > 0 && resetCreditNote.length === 0) {
+        const [everBilled] = await tx
+          .select({ id: invoices.id })
+          .from(invoices)
+          .where(and(eq(invoices.businessId, businessId), eq(invoices.subscriptionId, plan.sub.id)))
+          .limit(1);
+        const creditTotal = plan.resetCreditItems.reduce((s, i) => s + i.amountMinor, 0n);
+        if (!everBilled) {
+          // The term was never invoiced, so no money was ever taken for it and there is
+          // nothing to give back. Crediting unused time on a term the customer was never
+          // charged for invents money. Drop it and bill the new plan alone — this is the
+          // never-billed subscription (an import with no invoice history, an offline
+          // subscription whose first invoice has not been raised).
+          resetCreditDropped = true;
+        } else if (creditTotal > net) {
+          // An invoice EXISTS but no credit note could be attached to the term, so the
+          // money is real and in flight — dropping the credit would keep money the
+          // customer is owed. We cannot net it onto this invoice either. Refuse, in this
+          // module's taxonomy so the caller gets a 400 naming the reason rather than a
+          // 500 that invites a retry.
+          //
+          // ── THE MESSAGE HAS TO NAME THE CONDITION THAT ACTUALLY FAILED (2026-09-01) ──
+          // It used to read "the term's invoice cannot be credited (it is pending or
+          // voided). Settle or void that invoice first, or cancel and re-subscribe." Both
+          // halves were wrong, and an operator acts on this text.
+          //
+          // WRONG CONDITION. Pending/voided is only ONE of the ways `issueCurrentTermCredit`
+          // returns nothing. Reading it: no live invoice at all (every row voided, pending,
+          // or zero-total → `live.length === 0`); or a live invoice whose credit
+          // `creditOneInvoice` declined because the split had nothing cashable AND nothing
+          // to hand back to a bucket — "reachable only when the invoice was settled by
+          // neither cash nor credit — e.g. fully withheld or written off", and equally when
+          // its capacity has already been spent by earlier notes; or, on this whole-term
+          // path, an invoice with no chargeable lines / a non-positive subtotal. A PAID,
+          // fully-credited invoice lands here and is told it is "pending or voided".
+          //
+          // WRONG ADVICE, and actively harmful. "Void that invoice" GUARANTEES the failure
+          // forever: `issueCurrentTermCredit` filters `voided` out of `live` before it looks
+          // at anything, so voiding removes the only document the credit could ever attach
+          // to. "Settle it" does nothing for the already-paid case and is not even the
+          // operation a `pending` invoice needs (pending is "open, still accreting lines" —
+          // it has to be CLOSED, not paid). And "cancel and re-subscribe" throws away the
+          // term, the schedule and the subscription id to work around a proration artefact.
+          //
+          // WHAT ACTUALLY WORKS, and is why the actions below are the ones named:
+          //   · `prorate: false` — measured in the reset branch of the plan phase above:
+          //     "freq change + prorate=false → term resets, 6000 charged, no credit note".
+          //     `creditUnused` becomes 0, `resetCreditItems` comes out empty, this guard is
+          //     never reached, and the change applies charging the full new term. The
+          //     unused time is then not handed back, which is the trade the operator is
+          //     being asked to make knowingly rather than have it silently dropped.
+          //   · schedule it for the term end — no unused time exists at the boundary, so
+          //     there is nothing to credit and nothing to refuse.
+          // Neither destroys a document, which is the property the old advice lacked.
+          throw new ProrationError(
+            "We cannot apply this plan change. The unused time on the current term is worth " +
+              `${creditTotal} against the new term's charge of ${net} (minor units). No ` +
+              "invoice on that term can carry the credit. Each invoice is voided, pending or " +
+              "zero-total, or its collected amount is already credited or withheld. " +
+              "Apply the change again with prorate: false to charge the new term in full " +
+              "without a credit for the " +
+              "unused time. Or schedule the change for the end of the current term. Do NOT void the " +
+              "invoice of the term. You can never credit a voided invoice, so the problem becomes " +
+              "permanent.",
+          );
+        }
+      }
       return {
         billableLines,
         net,
         downgradeCreditNote: [] as CreditNote[],
-        resetCreditNote: [] as CreditNote[],
+        resetCreditNote,
+        resetCreditDropped,
+        upgradeCreditNote,
+        upgradeGrossed,
+        upgradeCreditedPriceIds,
         insertedByRequestKey,
       };
-    }
-
-    // ── Downgrade (net < 0): we owe the customer. Issue a real credit note against
-    // the current-term invoice — NOT a negative "credited" invoice (ADR-009 style,
-    // matches change_term_end + cancellation). Per-item "Prorated Credits" lines.
-    // Adjustment vs refundable split is handled by the helper.
-    //
-    // ── CREDIT GROSS, THEN BILL THE NEW TERM (2026-08-24) ────────────────────────
-    // This used to NET the two sides when the change also produced a charge: the
-    // unused-old and the new-term lines collapsed into ONE credit item worth `-net`,
-    // and no invoice was raised for the new term at all. That is the wrong shape, and
-    // on a tax-plus-promotional-credit term it is not even the same money.
-    //
-    // Measured (scripts/probe-change-promo-tax-retention.ts), day-anchored INR
-    // business, IGST 18%, promo grant 1000000, pro 2791800 → lite 911800 same day.
-    // Invoice #1 books subtotal 2791800, promo applied PRE-tax so the taxable base is
-    // 1791800, IGST 322524, total 3114324, cash 2114324.
-    //   netted   → one credit item of 1880000. `creditOneInvoice` reverses tax at the
-    //              invoice's BLENDED effective rate (322524/2791800 = 11.5525%, low
-    //              because the promo already shrank the base) on only the credited
-    //              FRACTION → 217188, credit 2097188, split 673400 promo /
-    //              1423787 refundable. Customer holds 2097187.
-    //   grossed  → the WHOLE term is credited (2791800 + all 322524 of tax = 3114324,
-    //              split 1000000 promo / 2114324 refundable) and the new term is
-    //              billed as its own invoice, where the returned promotional credit
-    //              re-applies PRE-tax: subtotal 911800, taxable base 0, tax 0.
-    //              Customer holds 88200 promo + 2114324 refundable = 2202524.
-    // 105337 of the customer's money, and 618990 of it in the wrong bucket, purely
-    // because netting hid a taxable supply inside a credit.
-    //
-    // So: credit the credit lines GROSS, and let the charge lines fall through to the
-    // ordinary invoice path below (the credit note commits with this transaction, so
-    // its restored balances are visible to that invoice's `applyCredit` draw — the
-    // same ordering the term-reset branch relies on).
-    //
-    // ── ONLY WHEN THE TERM'S INVOICE CAN ACTUALLY ABSORB IT ──────────────────────
-    // Grossing up is safe exactly while the gross credit is placeable. It is not
-    // always: `issueCurrentTermCredit` books an ITEM-SPECIFIC credit against ONE
-    // invoice (see its `wholeTerm` note — spreading an item credit across a term's
-    // invoices puts lines on invoices that never charged the item), and
-    // `splitCreditByFunding` then clamps the cashable slice to that invoice's own
-    // funding. Where the gross credit exceeds it the surplus is silently dropped —
-    // while the new term's charge is billed in full, so the customer pays for time
-    // they were just credited for. Measured 2026-08-24 on a term billed across two
-    // invoices (a 1000 term bill + a 1000 qty-upgrade proration, then a downgrade
-    // whose unused old quantity is worth 1500): the gross credit clamped to the
-    // newest invoice's 1000, the 500 new-term charge was billed anyway, and the
-    // customer was left 500 out of pocket against the netted result.
-    //
-    // ── AND ONLY WHEN THE OFFSETTING CHARGE IS INVOICED IN THE SAME REQUEST ─────
-    // Grossing splits one net credit into a full-term credit NOW plus a charge for the
-    // time being kept. That charge becomes an invoice only when this change invoices
-    // immediately. When `invoice_immediately` resolves FALSE — and it does by default,
-    // `businesses.default_invoice_immediately` ships `false` — the charge is queued as
-    // an UNBILLED CHARGE for the next renewal instead, and grossing then hands the
-    // customer the whole unused term back as cashable refundable credit while the time
-    // they are keeping is not billed at all.
-    //
-    // Measured 2026-08-24 (verify:credit, the scenario that caught this): a 3000/mo
-    // term for 3 seats, invoiced and collected in cash, downgraded to 1 seat at
-    // mid-term. Grossed with no immediate invoice → credit note 1500 and a 500 unbilled
-    // charge, refundable balance 1500. Netted → credit note 1000, nothing outstanding,
-    // refundable balance 1000. The two agree on the customer's NET position only once
-    // the unbilled charge is actually billed (at renewal it was: a 1500 renewal
-    // invoice, fully covered, balance 0) — but refundable credit is cashable ON DEMAND
-    // before then, so the grossed shape leaves 500 of money we are still owed sitting
-    // in a bucket the customer can ask back in cash. That is the same hazard as the
-    // clamp above, with the signs swapped.
-    //
-    // And there is nothing to trade away for it: the bucket + tax fix grossing buys is
-    // earned entirely ON the second INVOICE (the returned promotional credit has to
-    // re-apply to it PRE-tax). No second invoice, no gain — only the exposure.
-    //
-    // So the shape is chosen, not assumed: gross when the money can be returned AND
-    // the offsetting charge is billed now; otherwise the pre-2026-08-24 netting, byte
-    // for byte. Both leave the customer in the same net position; only the gross one
-    // can also fix the bucket + tax split.
-    if (net < 0n) {
-      const creditLines = billableLines.filter((l) => l.amountMinor < 0n);
-      const hasCharges = billableLines.some((l) => l.amountMinor > 0n);
-      // The prices this credit is FOR — every credit line carries the price whose unused
-      // time it hands back (the OLD price on a swap). The notes therefore book against
-      // the invoices that actually charged them, all of them, each from its own lines:
-      // see `issueCurrentTermCredit.targetPriceIds`. This replaces a rule that only
-      // attributed a removes-only call detaching exactly one item, and only to ONE
-      // invoice — every other downgrade fell back to "the newest live invoice", which on
-      // a term billed across several invoices is the wrong document AND the wrong cap.
-      // Measured 2026-08-24: a 6→5 downgrade of a 20000/unit plan whose term also
-      // carried a 500 add-on proration credited 500 against the ADD-ON's invoice and
-      // silently dropped the other 19500.
-      const creditTargetPriceIds = [...new Set(creditLines.map((l) => l.priceId))];
-      // ── ONE WORDING FOR A CREDIT LINE, AND ONE WINDOW ───────────────────────────
-      // `creditedDescription` is the single phrasing for "this hands back the unused
-      // part of X" and every other credit path already uses it. This builder instead
-      // appended "— prorated credit" to the CHARGE line's own wording, so the same
-      // operation produced three different strings depending on which path ran:
-      // "Unused time on BUSINESS plan ×1" (multi-invoice split), "Unused time on PRO
-      // plan" (reset), "Unused time on BUSINESS plan ×1 — prorated credit" (here).
-      // Measured on sub_XXXXXXXXXXXXXXXXXXXXXX01, CN-1689 vs CN-1703 vs CN-1668.
-      //
-      // Our wording deliberately names the quantity and the side of the proration,
-      // rather than a bare "… - Prorated Credits for 31-Aug-2026 - 25-Sep-2026". Being
-      // INTERNALLY inconsistent was never part of the decision.
-      const grossItems = creditLines.map((l) => ({
-        description: creditedDescription(l.description),
-        amountMinor: -l.amountMinor,
-        priceId: l.priceId,
-      }));
-      const grossTotal = grossItems.reduce((s, i) => s + i.amountMinor, 0n);
-      // With no charge to separate out, gross IS the netted shape (`-net` equals the
-      // credit lines), so the question does not arise and no extra read is made.
-      const grossed =
-        !hasCharges ||
-        (invoiceImmediately &&
-          (await termInvoiceCanAbsorb({
-            organizationId,
-            businessId,
-            subscription: plan.sub,
-            targetPriceIds: creditTargetPriceIds,
-            preTaxMinor: grossTotal,
-            tx,
-          })));
-      const items = grossed
-        ? grossItems
-        : [{ description: "Prorated credit for subscription change", amountMinor: -net }];
-      const downgradeCreditNote = await issueCurrentTermCredit({
+    })();
+    // Held, but nothing to collect now (a credit note only): apply the change in this
+    // transaction, as an unheld change does.
+    const raises =
+      !plan.inTrial &&
+      out.billableLines.length > 0 &&
+      out.net !== 0n &&
+      (out.net > 0n
+        ? invoiceImmediately
+        : out.downgradeGrossed === true && out.billableLines.some((l) => l.amountMinor > 0n));
+    if (holding && !raises) {
+      if (input.metadata !== undefined)
+        await tx
+          .update(subscriptions)
+          .set({ metadata: input.metadata })
+          .where(eq(subscriptions.id, plan.sub.id));
+      const late = await writeChangeComposition(tx, {
         organizationId,
         businessId,
-        subscription: plan.sub,
-        items,
-        reasonCode: "subscription_change",
-        reason: "Prorated credit for subscription change",
-        targetPriceIds: creditTargetPriceIds,
-        creditedPeriod: changeCreditedPeriod(plan),
-        tx,
+        now,
+        plan,
+        beforeFull,
+        appliedCouponId: null,
+        ...(input.resetOverrides ? { resetOverrides: input.resetOverrides } : {}),
+        ...(input.deferEventsTo ? { deferEventsTo: input.deferEventsTo } : {}),
       });
-      return {
-        billableLines,
-        net,
-        downgradeCreditNote,
-        downgradeGrossed: grossed,
-        resetCreditNote: [] as CreditNote[],
-        insertedByRequestKey,
-      };
-    }
-
-    // ── Upgrade (net > 0), SAME-CADENCE (no term reset) ─────────────────────────
-    // Root 2 of the 2026-08-25 full-suite run (49 failures). Without this the
-    // `Unused time on …` line — NEGATIVE, built at :1806 — stayed in `billableLines`
-    // and was netted onto the new invoice. The correct report is
-    // `lines=1 · total=59700 · creditsApplied=29700 · creditNotes=1`; we reported
-    // `lines=2 · lines[0]=-29700 · total=30000 · creditsApplied=0`.
-    //
-    // NOT a presentation difference — netting LOSES A DISCOUNT. With a 10% coupon the
-    // customer owes (59700 × 0.9) − 26730 = 27000, but `59700 − 29700 = 30000` never
-    // lets the percentage reach the new charge, because by then the two are one lump.
-    // Measured overcharges: +3000, +5970 and +96000.
-    //
-    // Same mechanism as the `net < 0` branch above: credit the old term FIRST, inside
-    // this transaction, so `createInvoiceFromLines(applyCredit)` draws it onto the new
-    // FULL-PRICE invoice as `creditsApplied` — and the coupon lands on the charge before
-    // the credit does. Also emits credit_note_created / customer_changed /
-    // invoice_updated, the event set for this shape.
-    //
-    // ⚠ PRICE SWAPS ONLY. A QUANTITY change must keep the netted shape — measured:
-    // moving a per-unit add-on from ×1 to ×4 raises ONE invoice for
-    // `USD 150.00 qty=3 "… - Prorated Charges"` with NO credit note, NO negative line
-    // and NO credits_applied. It bills the ADDED UNITS, it does not credit the old
-    // quantity and re-bill the new one. Our netting already lands on the identical
-    // total, so generalising the credit-note shape here would have been WRONG — and
-    // would have "fixed" `verify-change-atomicity`'s 19500-delta fixture, which is
-    // right as written.
-    //
-    // The two are separable from the lines alone: a swap credits price X and charges
-    // price Y, while a quantity/rate change credits and charges the SAME price. So only
-    // a negative line whose price is NOT among the charges becomes a credit note.
-    let upgradeCreditNote: CreditNote[] = [];
-    let upgradeGrossed = false;
-    const chargedPriceIds = new Set(
-      billableLines.filter((l) => l.amountMinor > 0n).map((l) => l.priceId),
-    );
-    // `rerated` overrides the priceId test: a re-rated add-on is charged under the SAME
-    // price it is credited under, so the test alone would keep its credit netted onto the
-    // change invoice — see the flag's own note.
-    const upgradeCreditLines = billableLines.filter(
-      (l) => l.amountMinor < 0n && (l.rerated === true || !chargedPriceIds.has(l.priceId)),
-    );
-    const upgradeCreditedPriceIds = upgradeCreditLines.map((l) => l.priceId);
-    if (plan.resetCreditItems.length === 0 && upgradeCreditLines.length > 0 && invoiceImmediately) {
-      const upgradeTargetPriceIds = [...new Set(upgradeCreditLines.map((l) => l.priceId))];
-      upgradeCreditNote = await issueCurrentTermCredit({
-        organizationId,
-        businessId,
-        subscription: plan.sub,
-        // Same single wording and same credited window as the downgrade builder above.
-        items: upgradeCreditLines.map((l) => ({
-          description: creditedDescription(l.description),
-          amountMinor: -l.amountMinor,
-          priceId: l.priceId,
-        })),
-        reasonCode: "subscription_change",
-        reason: "Prorated credit for subscription change",
-        targetPriceIds: upgradeTargetPriceIds,
-        creditedPeriod: changeCreditedPeriod(plan),
-        tx,
-      });
-      // No creditable invoice to attach to (pending / voided / zero-total, or the term
-      // was never billed): keep the pre-2026-08-25 netting byte for byte rather than
-      // drop a credit the customer is owed. Only a note that actually exists may remove
-      // the negative lines from the invoice.
-      upgradeGrossed = upgradeCreditNote.length > 0;
-    }
-
-    // ── Upgrade (net > 0), TERM RESET only — the unused old term
-    // is booked as a credit note (issued against the paid old-term invoice →
-    // refundable balance) BEFORE the new invoice is created, so
-    // createInvoiceFromLines(applyCredit) draws it onto the new invoice
-    // (creditsApplied) instead of netting it as invoice lines. The CN create +
-    // allocation also fire credit_note_created / customer_changed / invoice_updated
-    // (via credit-notes/service emitters).
-    // A plan DOWNGRADE swap lands here too (term reset charges the full new plan, so
-    // net > 0) — which is exactly why this credit belongs in the transaction: its
-    // refusal used to leave the sub swapped onto the cheaper plan with the old term's
-    // money neither credited nor charged.
-    let resetCreditNote: Awaited<ReturnType<typeof issueCurrentTermCredit>> = [];
-    if (plan.resetCreditItems.length > 0) {
-      resetCreditNote = await issueCurrentTermCredit({
-        organizationId,
-        businessId,
-        subscription: plan.sub,
-        items: plan.resetCreditItems,
-        reasonCode: "subscription_change",
-        reason: "Unused time credited on plan change",
-        // A reset credits EVERY item's unused time, so this is the one caller whose
-        // credit may be spread across the term's invoices (D1).
-        wholeTerm: true,
-        // The reset's window starts at `resetStart` (the new term's start), which is
-        // exactly the boundary the amounts were cut on — see `creditUnused` in the plan
-        // phase — and ends at the OLD term end, because that is what the credited
-        // invoices billed. NOT `newPeriodEnd`: the new term is what gets CHARGED.
-        creditedPeriod: changeCreditedPeriod(plan),
-        tx,
-      });
-    }
-
-    // No credit note could be attached (`issueCurrentTermCredit` found no live
-    // invoice to credit against). The caller then falls back to booking the
-    // unused-term credit as NEGATIVE invoice lines — which is fine while the credit
-    // is smaller than the new charge, and catastrophic when it is not.
-    //
-    // On any plan-swap DOWNGRADE it is not: the old term's unused time (3000) exceeds
-    // the full new-plan charge (1000), the fallback lines drive the invoice subtotal
-    // negative, and `createInvoiceFromLines` throws a bare `Error` — AFTER this
-    // transaction has committed. Measured: the subscription came out swapped onto the
-    // cheaper plan with its MRR restated, no invoice, no credit note, and a 500 to the
-    // caller. Silent corruption, and the retry re-runs a change that has already been
-    // applied.
-    //
-    // Decided HERE, inside the transaction, so a rejection rolls the item change back
-    // instead of stranding it.
-    if (plan.resetTerm && !plan.inTrial)
-      await bookEarlyEndCommitment(tx, plan.sub, plan.resetStart, plan.bizMode);
-    let resetCreditDropped = false;
-    if (plan.resetCreditItems.length > 0 && resetCreditNote.length === 0) {
-      const [everBilled] = await tx
-        .select({ id: invoices.id })
-        .from(invoices)
-        .where(and(eq(invoices.businessId, businessId), eq(invoices.subscriptionId, plan.sub.id)))
-        .limit(1);
-      const creditTotal = plan.resetCreditItems.reduce((s, i) => s + i.amountMinor, 0n);
-      if (!everBilled) {
-        // The term was never invoiced, so no money was ever taken for it and there is
-        // nothing to give back. Crediting unused time on a term the customer was never
-        // charged for invents money. Drop it and bill the new plan alone — this is the
-        // never-billed subscription (an import with no invoice history, an offline
-        // subscription whose first invoice has not been raised).
-        resetCreditDropped = true;
-      } else if (creditTotal > net) {
-        // An invoice EXISTS but no credit note could be attached to the term, so the
-        // money is real and in flight — dropping the credit would keep money the
-        // customer is owed. We cannot net it onto this invoice either. Refuse, in this
-        // module's taxonomy so the caller gets a 400 naming the reason rather than a
-        // 500 that invites a retry.
-        //
-        // ── THE MESSAGE HAS TO NAME THE CONDITION THAT ACTUALLY FAILED (2026-09-01) ──
-        // It used to read "the term's invoice cannot be credited (it is pending or
-        // voided). Settle or void that invoice first, or cancel and re-subscribe." Both
-        // halves were wrong, and an operator acts on this text.
-        //
-        // WRONG CONDITION. Pending/voided is only ONE of the ways `issueCurrentTermCredit`
-        // returns nothing. Reading it: no live invoice at all (every row voided, pending,
-        // or zero-total → `live.length === 0`); or a live invoice whose credit
-        // `creditOneInvoice` declined because the split had nothing cashable AND nothing
-        // to hand back to a bucket — "reachable only when the invoice was settled by
-        // neither cash nor credit — e.g. fully withheld or written off", and equally when
-        // its capacity has already been spent by earlier notes; or, on this whole-term
-        // path, an invoice with no chargeable lines / a non-positive subtotal. A PAID,
-        // fully-credited invoice lands here and is told it is "pending or voided".
-        //
-        // WRONG ADVICE, and actively harmful. "Void that invoice" GUARANTEES the failure
-        // forever: `issueCurrentTermCredit` filters `voided` out of `live` before it looks
-        // at anything, so voiding removes the only document the credit could ever attach
-        // to. "Settle it" does nothing for the already-paid case and is not even the
-        // operation a `pending` invoice needs (pending is "open, still accreting lines" —
-        // it has to be CLOSED, not paid). And "cancel and re-subscribe" throws away the
-        // term, the schedule and the subscription id to work around a proration artefact.
-        //
-        // WHAT ACTUALLY WORKS, and is why the actions below are the ones named:
-        //   · `prorate: false` — measured in the reset branch of the plan phase above:
-        //     "freq change + prorate=false → term resets, 6000 charged, no credit note".
-        //     `creditUnused` becomes 0, `resetCreditItems` comes out empty, this guard is
-        //     never reached, and the change applies charging the full new term. The
-        //     unused time is then not handed back, which is the trade the operator is
-        //     being asked to make knowingly rather than have it silently dropped.
-        //   · schedule it for the term end — no unused time exists at the boundary, so
-        //     there is nothing to credit and nothing to refuse.
-        // Neither destroys a document, which is the property the old advice lacked.
-        throw new ProrationError(
-          "We cannot apply this plan change. The unused time on the current term is worth " +
-            `${creditTotal} against the new term's charge of ${net} (minor units). No ` +
-            "invoice on that term can carry the credit. Each invoice is voided, pending or " +
-            "zero-total, or its collected amount is already credited or withheld. " +
-            "Apply the change again with prorate: false to charge the new term in full " +
-            "without a credit for the " +
-            "unused time. Or schedule the change for the end of the current term. Do NOT void the " +
-            "invoice of the term. You can never credit a voided invoice, so the problem becomes " +
-            "permanent.",
+      if (late.skipped.size || late.skippedRequestKeys.size)
+        throw new ProrationConflictError(
+          "Another request changed the subscription at the same time. We did not apply the change. Retry the request.",
         );
-      }
+      holding = false;
     }
-    return {
-      billableLines,
-      net,
-      downgradeCreditNote: [] as CreditNote[],
-      resetCreditNote,
-      resetCreditDropped,
-      upgradeCreditNote,
-      upgradeGrossed,
-      upgradeCreditedPriceIds,
-      insertedByRequestKey,
-    };
+    return { ...out, held: holding };
   }).catch((e: unknown) => {
     // 1a: a refused credit is a VALIDATABLE condition, not an internal fault, and
     // nothing was written (the transaction above rolled back). Re-raise it inside
@@ -5323,6 +5732,9 @@ async function applyChange(input: {
   });
 
   const { net } = applied;
+  // Held (`apply_when_paid`): the invoice below is the change's; the change waits for it.
+  const held = applied.held === true;
+  if (held) input.hold!.held = true;
   // A requested ADD's line could not carry its item id in the read phase — the row did not
   // exist yet. It does now, so a one-time add's line becomes a `one_time` line carrying the
   // id `markItemsBilled` needs, exactly like the change path's own one-time lines.
@@ -5357,10 +5769,10 @@ async function applyChange(input: {
   // promotional credit gets to re-apply PRE-tax to it (see the apply phase's note,
   // and scripts/probe-change-promo-tax-retention.ts).
   //
-  // A downgrade that could NOT be grossed (`downgradeGrossed` false — the term's
-  // invoice cannot fund the whole credit) took the netted shape instead: its credit
-  // note already carries `charge − credit`, so billing the charge on top would charge
-  // the customer twice. Nothing is left to invoice at all.
+  // A downgrade that was NOT grossed (`downgradeGrossed` false — `one_credit_note`, a term
+  // never billed, or the unset rule's fallback) took the netted shape:
+  // its credit note already carries `charge − credit`, so billing the charge on top would
+  // charge the customer twice. Nothing is left to invoice at all.
   const chargeableLines =
     net < 0n
       ? applied.downgradeGrossed === true
@@ -5417,6 +5829,7 @@ async function applyChange(input: {
       ? applied.downgradeCreditNote
       : [...applied.resetCreditNote, ...(applied.upgradeCreditNote ?? [])];
   if (billableLines.length === 0) {
+    if (held) throw new Error("a held change raised no invoice");
     // A pure downgrade with nothing to charge (a removal, a quantity cut): the credit
     // note IS the whole outcome, exactly as before.
     return {
@@ -5498,7 +5911,9 @@ async function applyChange(input: {
   // ── INVOICING OPTION: invoice now, or book to unbilled charges ───────────────
   // `invoiceImmediately` was resolved before the apply transaction (see the note
   // there) because the downgrade branch inside it needs the same answer.
-  if (!invoiceImmediately) {
+  // A grossed net credit (net < 0) is always invoiced now: see the apply phase's note.
+  if (!invoiceImmediately && net > 0n) {
+    if (held) throw new Error("a held change raised no invoice");
     // Same lines, queued instead of invoiced. They fold into the next renewal
     // invoice (invoicing/service.ts), which is where tax, coupons and the
     // customer's credit balances are then applied — so nothing is applied twice
@@ -5625,11 +6040,34 @@ async function applyChange(input: {
     // pair (both fold into invoice_generated). Not suppressed when no credit note
     // was created (nothing to be redundant with).
     suppressCreditDrawEvents: issuedCreditNotes.length > 0,
-    collect: true,
+    // A held change on session is collected on session after the row lands (`pending-change.ts`).
+    collect: !(held && input.hold?.onSession),
     subscription: plan.sub,
     periodStart: plan.resetTerm ? plan.resetStart : plan.prorationNow,
     periodEnd: invoicePeriodEnd,
     ...(holdToTermEnd ? { retryHoldUntil: plan.sub.currentPeriodEnd } : {}),
+    // Held: the pending change lands with its invoice, before the collection.
+    ...(held
+      ? {
+          inTx: async (tx: Tx, created: { invoice: Invoice }) => {
+            const { recordPendingChange, composePlanOf } = await import("./pending-change");
+            await recordPendingChange(tx, {
+              organizationId,
+              businessId,
+              sub: plan.sub,
+              invoice: created.invoice,
+              hold: input.hold!,
+              kind: "change",
+              plan: composePlanOf(plan, {
+                ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+                ...(input.resetOverrides ? { resetOverrides: input.resetOverrides } : {}),
+              }),
+              creditNoteIds: issuedCreditNotes.map((n) => n.publicId),
+              requestedAt: now,
+            });
+          },
+        }
+      : {}),
   });
   return {
     prorationInvoice,
@@ -5784,6 +6222,7 @@ export async function prorateTermChange(input: {
       country: customer?.country,
       state: customer?.state,
       applyCredit: true,
+      applyCoupons: await midTermCouponsFor(organizationId, businessId, "edit"),
       collect: input.invoiceImmediately,
       subscription: sub,
       originToken: input.originToken ?? null,

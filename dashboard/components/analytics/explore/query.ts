@@ -18,6 +18,7 @@
 
 import type { AnalyticsMeasure, AnalyticsQuery, Grain } from "@/lib/analytics-api";
 import { EXPLORE_RANGES } from "@/components/analytics/cut-options";
+import { enumLabel } from "@/lib/labels";
 
 /**
  * `/v1/analytics/measures` publishes `value_as_of` — `computed_at` means the figure is the
@@ -94,7 +95,7 @@ export function offerDimensions(selected: MeasureMeta[], label: (d: string) => s
   });
 }
 
-/** Grains every chosen measure declares. One that any measure lacks is disabled, with the why. */
+/** Grains every chosen measure declares, labelled "Month"; `phrase` words the reason. One that any measure lacks is disabled, with the why. */
 export function offerGrains(selected: MeasureMeta[], phrase: Record<string, string>): Offer[] {
   const union = [...new Set(selected.flatMap((m) => m.grains))];
   const order: Grain[] = ["day", "week", "month", "quarter", "year"];
@@ -104,7 +105,7 @@ export function offerGrains(selected: MeasureMeta[], phrase: Record<string, stri
       const missing = selected.filter((m) => !m.grains.includes(g));
       return {
         id: g,
-        label: phrase[g] ?? g,
+        label: enumLabel(g),
         disabled: missing.length > 0,
         reason:
           missing.length > 0

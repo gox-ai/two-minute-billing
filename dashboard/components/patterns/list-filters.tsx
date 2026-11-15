@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { utcToDateValue } from "@/lib/tz";
+import { fmtDate } from "@/lib/format-date";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -498,6 +499,7 @@ export function describeFilter<T>(
   row: FilterRow,
   field: ListFilterField<T> | undefined,
   server: boolean,
+  tz?: string | null,
 ): string {
   if (!field) return "";
   const def = opDef(field, row.op, server);
@@ -507,7 +509,9 @@ export function describeFilter<T>(
   const labelOf = (v: string) =>
     fieldType(field) === "boolean"
       ? (BOOLEAN_OPTIONS.find((o) => o.value === v)?.label ?? v)
-      : (field.options?.find((o) => o.value === v)?.label ?? v);
+      : fieldType(field) === "date"
+        ? fmtDate(v, tz)
+        : (field.options?.find((o) => o.value === v)?.label ?? v);
   if (def.range) return `${field.label} ${def.label} ${parts.map(labelOf).join(" and ")}`;
   if (def.set) {
     const shown = parts.slice(0, 2).map(labelOf).join(", ");
@@ -810,7 +814,7 @@ export function FilterBuilder<T>({
   };
 
   return (
-    <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+    <div className="space-y-3 rounded-xl border bg-muted/30 p-3">
       {draft.length === 0 ? (
         <p className="text-sm text-muted-foreground">No filters. Add one below.</p>
       ) : null}
@@ -889,7 +893,7 @@ export function FilterBuilder<T>({
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" className="text-primary" onClick={addRow}>
-          <Plus className="size-3.5" /> Add Filter
+          <Plus className="size-3.5" /> Add filter
         </Button>
         <Button
           variant="ghost"
@@ -903,7 +907,7 @@ export function FilterBuilder<T>({
 
       <div className="flex flex-wrap items-center gap-2 border-t pt-3">
         <Button size="sm" onClick={onApply}>
-          Apply Filter
+          Apply filter
         </Button>
         <Button variant="ghost" size="sm" className="text-primary" onClick={onDiscard}>
           Discard
@@ -927,18 +931,20 @@ export function AppliedFilterPills<T>({
   applied,
   fieldsById,
   server,
+  tz,
   onRemove,
 }: {
   applied: FilterRow[];
   fieldsById: Record<string, ListFilterField<T>>;
   server: boolean;
+  tz?: string | null;
   onRemove: (key: number) => void;
 }) {
   if (applied.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {applied.map((r) => {
-        const text = describeFilter(r, fieldsById[r.field], server);
+        const text = describeFilter(r, fieldsById[r.field], server, tz);
         if (!text) return null;
         return (
           <span

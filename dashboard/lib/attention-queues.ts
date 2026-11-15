@@ -4,7 +4,7 @@
 import { listInvoices, type ListFilterParam } from "@/lib/api";
 import { listEmails } from "@/lib/api/emails";
 import { listDisputes } from "@/lib/api/disputes";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { G } from "@/components/analytics/glossary";
 import type { AttentionItem } from "@/components/analytics/home/parts";
 

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
+import { Chip } from "@/components/patterns/chip";
 import { getTestLimits, type TestLimits, type TestLimitUsage } from "@/lib/api/test-limits";
 
 type Kind = "customers" | "subscriptions";
@@ -38,7 +39,7 @@ export async function TestLimitNotice({
       className="mb-6"
       title={`This test business is ${at ? "at" : "near"} its ${noun} limit`}
       action={
-        <Link href={`/businesses/${biz}/transfer`} className="font-medium underline">
+        <Link href={`/businesses/${biz}/transfer?tab=test`} className="font-medium underline">
           View test data
         </Link>
       }
@@ -51,20 +52,52 @@ export async function TestLimitNotice({
   );
 }
 
-/** The usage rows in the test-data area of the transfer page. */
+/** One usage row: the figures, and a bar that turns amber from the warning threshold. */
+function UsageRow({ label, u }: { label: string; u: TestLimitUsage }) {
+  const near = u.limit != null && u.used >= u.limit * NEAR;
+  const pct = u.limit ? Math.min(100, (u.used / u.limit) * 100) : 0;
+  return (
+    <div className="flex flex-col gap-2 px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="flex items-center gap-2 font-medium">
+          {label}
+          {near ? (
+            <Chip tone={u.used >= (u.limit ?? 0) ? "red" : "tan"}>
+              {u.used >= (u.limit ?? 0) ? "At the limit" : "Near the limit"}
+            </Chip>
+          ) : null}
+        </span>
+        <span className="tabular-nums">{usageText(u)}</span>
+      </div>
+      {u.limit != null ? (
+        <div
+          className="h-2 w-full overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-label={`${label} used`}
+          aria-valuemin={0}
+          aria-valuemax={u.limit}
+          aria-valuenow={u.used}
+        >
+          <div
+            className={near ? "h-full bg-warning" : "h-full bg-solid"}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The usage rows in the test-data tab of the transfer page. Rows of a `SettingsCard`. */
 export function TestLimitsSummary({ limits }: { limits: TestLimits }) {
   return (
-    <div className="space-y-3 text-sm">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
-        <dt className="text-muted-foreground">Customers</dt>
-        <dd className="tabular-nums">{usageText(limits.customers)}</dd>
-        <dt className="text-muted-foreground">Subscriptions</dt>
-        <dd className="tabular-nums">{usageText(limits.subscriptions)}</dd>
-      </dl>
-      <p className="text-muted-foreground">
+    <>
+      <UsageRow label="Customers" u={limits.customers} />
+      <UsageRow label="Subscriptions" u={limits.subscriptions} />
+      <p className="m-0 px-5 py-4 text-xs text-muted-foreground">
         All customers count, archived customers too. All subscriptions count, cancelled
         subscriptions too. To make space, delete test data.
       </p>
-    </div>
+    </>
   );
 }

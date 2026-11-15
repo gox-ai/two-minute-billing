@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { MFA_CODES_COOKIE, SESSION_COOKIE } from "@/lib/auth-cookies";
 import { forwardedFor } from "@/lib/forwarded-for";
+import { signInUrl } from "@/lib/sign-in-url";
 
 /**
  * MFA reads for the account page (audit M3).
@@ -17,7 +18,7 @@ const MFA_SETUP_COOKIE = "tmb_mfa_setup";
 
 async function get(path: string): Promise<{ ok: boolean; json: Record<string, unknown> }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}${path}`, {
     headers: { cookie: `${SESSION_COOKIE}=${token}`, ...(await forwardedFor()) },
     cache: "no-store",

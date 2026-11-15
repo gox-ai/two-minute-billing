@@ -1,5 +1,6 @@
 "use client";
 
+import { plural } from "@/lib/labels";
 import * as React from "react";
 import { toast } from "sonner";
 import { Plus, Trash2 } from "lucide-react";
@@ -14,6 +15,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -70,21 +72,16 @@ export function AddCodesDialog({ biz, set }: { biz: string; set: string }) {
                 className="tabular-nums"
               />
             </Field>
-            <Field name="code_prefix" label="Code prefix" className="flex-1">
-              <Input
-                name="code_prefix"
-                maxLength={20}
-                placeholder="Optional"
-                className="font-mono"
-              />
+            <Field name="code_prefix" label="Code prefix" help="Optional." className="flex-1">
+              <Input name="code_prefix" maxLength={20} className="font-mono" />
             </Field>
           </div>
-          <div className="flex justify-end gap-2 pt-1">
+          <DialogFooter className="pt-1">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <SubmitButton>Add codes</SubmitButton>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>
@@ -127,7 +124,7 @@ export function DeleteUnusedCodesButton({
         open={open}
         onOpenChange={setOpen}
         title="Delete all unused codes?"
-        description={`This permanently deletes ${unusedCount} unredeemed code(s) from this set. We keep redeemed and archived codes. You cannot undo this.`}
+        description={`This permanently deletes ${plural(unusedCount, "unredeemed code")} from this set. We keep redeemed and archived codes. You cannot undo this.`}
         confirmLabel="Delete unused codes"
         destructive
         onConfirm={confirm}
@@ -167,12 +164,12 @@ export function RenameCouponSetDialog({
           <Field name="name" label="Name" required>
             <Input name="name" defaultValue={name} maxLength={200} required />
           </Field>
-          <div className="flex justify-end gap-2 pt-1">
+          <DialogFooter className="pt-1">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <SubmitButton>Rename</SubmitButton>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>

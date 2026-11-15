@@ -3,6 +3,7 @@
  * the access-check evaluator (hard limits), reached states (once per limit, subject and
  * interval) and tiers reached from lifetime paid (never demoted).
  */
+import { countsAsUsage } from "@/modules/metering/usage-sql";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { withTenant } from "@/platform/db";
@@ -522,7 +523,7 @@ async function checkBuyerCeiling(
   if (ceiling != null && f.amountMinor > ceiling) {
     const m = formatMoney(ceiling, f.currency);
     throw new UsageControlRuleError(
-      `We could not save the limit. Your provider's limit is ${m}. Set a limit of ${m} or less.`,
+      `We could not save the limit. This business set a limit of ${m}. Set a limit of ${m} or less.`,
       "amount_minor",
     );
   }
@@ -641,7 +642,7 @@ export async function updateSpendLimit(input: {
     if (!cur || !cur.active)
       throw new UsageControlNotFoundError(`No such spend limit: ${input.limit}`);
     if (input.asBuyer && cur.setBy !== "customer")
-      throw new UsageControlConflictError("You cannot change a limit that your provider set.");
+      throw new UsageControlConflictError("You cannot change a limit that this business set.");
     const next = { ...cur, amountMinor: input.amountMinor ?? cur.amountMinor };
     if (input.amountMinor != null) {
       await checkNesting(tx, input.customerId, next);
@@ -681,7 +682,7 @@ export async function deleteSpendLimit(input: {
     if (!cur || !cur.active)
       throw new UsageControlNotFoundError(`No such spend limit: ${input.limit}`);
     if (input.asBuyer && cur.setBy !== "customer")
-      throw new UsageControlConflictError("You cannot delete a limit that your provider set.");
+      throw new UsageControlConflictError("You cannot delete a limit that this business set.");
     const [u] = await tx
       .update(spendLimits)
       .set({ active: false })
@@ -1143,11 +1144,11 @@ async function propertyValuesSeen(
   input: { businessId: string; customerId: string; key: string; from: Date; to: Date },
 ): Promise<string[]> {
   const rows = (await tx.execute(sql`
-    select distinct properties ->> ${input.key}::text as v from usage_events
-    where business_id = ${input.businessId} and customer_id = ${input.customerId}
-      and voided_at is null and "timestamp" >= ${input.from.toISOString()}::timestamptz
-      and "timestamp" < ${input.to.toISOString()}::timestamptz
-      and properties ? ${input.key}::text
+    select distinct e.properties ->> ${input.key}::text as v from usage_events e
+    where e.business_id = ${input.businessId} and e.customer_id = ${input.customerId}
+      and ${countsAsUsage("e")} and e."timestamp" >= ${input.from.toISOString()}::timestamptz
+      and e."timestamp" < ${input.to.toISOString()}::timestamptz
+      and e.properties ? ${input.key}::text
     limit 1000`)) as unknown as Array<{ v: string | null }>;
   return rows.map((r) => r.v).filter((v): v is string => v != null);
 }

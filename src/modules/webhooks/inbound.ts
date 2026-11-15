@@ -87,6 +87,9 @@ import type {
 } from "@/providers/types";
 import { gatewayDefinition } from "@/providers/gateway-catalog";
 import { refundUnappliedExcess } from "@/modules/refunds/excess";
+import { adoptTraceLogsIntoSpan } from "@/providers/http";
+import { getTraceId, joinSpan } from "@/platform/trace";
+import { spanForProviderEvent } from "./event-span";
 
 const log = createLogger("webhooks.inbound");
 
@@ -301,6 +304,11 @@ export interface InboundContext {
    * NULL, the outcome of a row stored before processing (`webhook.processAfterAnswer`).
    */
   rerunIf?: (outcome: string | null) => boolean;
+  /**
+   * The delivery carried only this event, so the trace's span-less gateway calls made before
+   * it was applied (signature check, object read) are this event's. They join its span.
+   */
+  soleEventOfDelivery?: boolean;
 }
 
 /**
@@ -380,10 +388,32 @@ export async function handleProviderEvent(
         .where(providerEventKey(providerKey, ev.providerEventId, ctx?.businessId))
         .limit(1);
       if (!prior || !rerunIf(prior.outcome)) return "duplicate" as const;
-      return applyProviderEvent(providerKey, ev, ctx);
+      return applyInRecordSpan(providerKey, ev, ctx);
     });
   }
-  return applyProviderEvent(providerKey, ev, ctx);
+  return applyInRecordSpan(providerKey, ev, ctx);
+}
+
+/**
+ * Apply under the span of the attempt or transaction the event is about, keeping the
+ * delivery's trace, so the record's "Request/response logs" show the webhook's calls too.
+ * Gateway-neutral: matched on the ids every adapter normalizes.
+ */
+async function applyInRecordSpan(
+  providerKey: string,
+  ev: NormalizedProviderEvent,
+  ctx?: InboundContext,
+): Promise<HandleResult> {
+  const spanId = await spanForProviderEvent(ev, ctx?.businessId ?? null).catch((e: unknown) => {
+    log.warn("could not resolve the span of a gateway event", { type: ev.type, error: String(e) });
+    return null;
+  });
+  if (!spanId) return applyProviderEvent(providerKey, ev, ctx);
+  // Only a delivery's own `hook-` trace: a retry queued by the clock pass runs in the tick's.
+  const traceId = getTraceId();
+  if (ctx?.soleEventOfDelivery && traceId?.startsWith("hook-"))
+    adoptTraceLogsIntoSpan({ traceId, spanId, gatewayKey: providerKey });
+  return joinSpan(spanId, () => applyProviderEvent(providerKey, ev, ctx));
 }
 
 /** Apply an event whose log row exists and is ours to run, then record its outcome. */
@@ -3704,6 +3734,7 @@ export async function rearmReversedInvoice(
   const dunCtx = {
     hasSubscription: inv0.subscriptionId != null,
     subscriptionStatus: sub?.status ?? null,
+    purpose: inv0.purpose,
   };
   // Reopening a settled invoice starts dunning again, so the exclusion and the
   // minimum (on what the reversal left owing) decide whether it may.

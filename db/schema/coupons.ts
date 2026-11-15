@@ -14,6 +14,8 @@ import {
 import { sql } from "drizzle-orm";
 import { organizations, businesses } from "./tenancy";
 import { subscriptions } from "./subscriptions";
+import { customers } from "./customers";
+import { invoices } from "./invoices";
 
 /**
  * A coupon definition (business-scoped). Either percentage-off (basis points) or
@@ -48,6 +50,8 @@ export const coupons = pgTable(
     maxRedemptions: integer("max_redemptions"),
     // Cap on redemptions by ONE customer, across their subscriptions (0302). Null = no cap.
     maxRedemptionsPerCustomer: integer("max_redemptions_per_customer"),
+    // 0520: count that cap by customer row, or by the customer's email (guest stores).
+    perCustomerLimitBy: text("per_customer_limit_by").notNull().default("customer"), // customer | email
     timesRedeemed: integer("times_redeemed").notNull().default(0),
     redeemBy: timestamp("redeem_by", { withTimezone: true }),
     // CAT-5: coupon becomes applicable at valid_from (null = immediately).
@@ -95,6 +99,8 @@ export const couponItemConstraints = pgTable(
     constraintType: text("constraint_type").notNull(), // all | specific | none
     productIds: jsonb("product_ids"), // string[] of product slug ids (for 'specific')
     priceIds: jsonb("price_ids"), // 0315: string[] of price slug ids (for 'specific')
+    // 0516: BillingPeriod[]; the line's price must bill on one of them. null = any.
+    billingPeriods: jsonb("billing_periods"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
@@ -170,9 +176,12 @@ export const couponSetCodes = pgTable(
 );
 
 /**
- * A coupon applied to a subscription (Stripe-style: at most one active discount
- * per subscription). `remainingPeriods` counts down for `repeating` duration;
- * status goes active → exhausted when consumed.
+ * One redemption of a coupon (or a manual discount). `scope` (0520):
+ *   subscription — attached to `subscriptionId`; `remainingPeriods` counts down;
+ *   invoice      — redeemed on one invoice with no subscription (`invoiceId`); born exhausted;
+ *   customer     — attached to the customer only (no subscription, no invoice).
+ * Status: active → exhausted when consumed; removed; released (a voided one-off invoice
+ * gave it back — released rows count toward no limit).
  */
 export const appliedCoupons = pgTable(
   "applied_coupons",
@@ -188,11 +197,19 @@ export const appliedCoupons = pgTable(
       .references(() => businesses.id, { onDelete: "cascade" }),
     // Null for manual (couponless) discounts — see `source` below.
     couponId: uuid("coupon_id").references(() => coupons.id, { onDelete: "restrict" }),
-    subscriptionId: uuid("subscription_id")
+    // Null for invoice- and customer-scope rows (0520).
+    subscriptionId: uuid("subscription_id").references(() => subscriptions.id, {
+      onDelete: "cascade",
+    }),
+    // The payer; the per-customer limit counts on it (0520).
+    customerId: uuid("customer_id")
       .notNull()
-      .references(() => subscriptions.id, { onDelete: "cascade" }),
+      .references(() => customers.id, { onDelete: "cascade" }),
+    // The invoice an invoice-scope redemption was spent on (0520).
+    invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    scope: text("scope").notNull().default("subscription"), // subscription | invoice | customer
     publicId: text("public_id").notNull(), // disc_…
-    status: text("status").notNull().default("active"), // active | exhausted | removed
+    status: text("status").notNull().default("active"), // active | exhausted | removed | released
     remainingPeriods: integer("remaining_periods"), // null = unlimited (forever)
 
     /**
@@ -239,6 +256,10 @@ export const appliedCoupons = pgTable(
   (t) => [
     uniqueIndex("applied_coupons_public_id_uq").on(t.publicId),
     index("applied_coupons_sub_idx").on(t.subscriptionId, t.status),
+    index("applied_coupons_coupon_customer_idx").on(t.couponId, t.customerId),
+    index("applied_coupons_invoice_idx")
+      .on(t.invoiceId)
+      .where(sql`invoice_id IS NOT NULL`),
     index("applied_coupons_coupon_created_idx").on(
       t.couponId,
       t.createdAt.desc(),
@@ -251,6 +272,10 @@ export const appliedCoupons = pgTable(
     uniqueIndex("applied_coupons_active_uq")
       .on(t.couponId, t.subscriptionId)
       .where(sql`status = 'active' AND coupon_id IS NOT NULL`),
+    // At most ONE active application of a coupon to a customer (0520).
+    uniqueIndex("applied_coupons_customer_active_uq")
+      .on(t.customerId, t.couponId)
+      .where(sql`scope = 'customer' AND status = 'active'`),
     // At most ONE active manual discount per subscription (concurrency
     // backstop for the app-level "a discount already exists" guard).
     uniqueIndex("applied_coupons_active_manual_uq")

@@ -1593,10 +1593,21 @@ export const payuFixture: GatewayFixture = {
         const h = (g: typeof gc, t: Date) =>
           g.kind === "wait" ? (g.until.getTime() - t.getTime()) / 3_600_000 : -1;
         const [cardH, upiH] = [h(gc, now), h(gu, now2)];
+        // Card: the engine asks for a debit 24 h + its 10-minute margin out, PayU keeps it
+        // (moved to the next IST day when less than an hour of that day is left), and the
+        // gate waits the margin again past `executableAfter`: 24 h 20 min at most hours.
+        const { payuDebitSchedule } = await import("@/providers/payu");
+        const margin = 10 * 60_000;
+        const asked = new Date(now.getTime() + 24 * 3_600_000 + margin);
+        const cardWantH =
+          (payuDebitSchedule(now, asked, 24, false).executableAfter.getTime() +
+            margin -
+            now.getTime()) /
+          3_600_000;
         return {
-          // Card: 24 h + the engine's 10-minute margin. UPI: at least 25 h (NPCI hours may add more).
-          pass: cardH >= 24 && cardH < 24.5 && upiH >= 25,
-          detail: `card waits ${cardH.toFixed(2)} h, UPI ${upiH.toFixed(2)} h`,
+          // UPI: at least 25 h (NPCI hours may add more).
+          pass: cardH >= 24 && Math.abs(cardH - cardWantH) < 0.05 && upiH >= 25,
+          detail: `card waits ${cardH.toFixed(2)} h (want ${cardWantH.toFixed(2)}), UPI ${upiH.toFixed(2)} h`,
         };
       },
     },

@@ -34,10 +34,12 @@ Refunds are grouped here because a refund follows a credit note: issue one again
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/close`](/help/developers/api-reference/invoices/close) | Close (finalize) a pending invoice |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/collect`](/help/developers/api-reference/invoices/attempt-collection-on-an-open-invoice-now) | Attempt collection on an open invoice now |
 | `GET` | [`/v1/businesses/{biz}/invoices/{inv}/dunning_journey`](/help/developers/api-reference/invoices/an-invoice-s-dunning-journey) | An invoice's dunning journey |
+| `GET` | [`/v1/businesses/{biz}/invoices/{inv}/explanation`](/help/developers/api-reference/invoices/explain-an-invoice) | Explain an invoice |
 | `GET` | [`/v1/businesses/{biz}/invoices/{inv}/html`](/help/developers/api-reference/invoices/rich-print-friendly-html-invoice) | Rich print-friendly HTML invoice |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/pause_dunning`](/help/developers/api-reference/invoices/pause-dunning-until-a-given-time) | Pause dunning until a given time |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/pay`](/help/developers/api-reference/invoices/record-an-offline-manual-payment) | Record an offline/manual payment |
 | `GET` | [`/v1/businesses/{biz}/invoices/{inv}/pdf`](/help/developers/api-reference/invoices/download-the-invoice-as-a-pdf) | Download the invoice as a PDF |
+| `GET` | [`/v1/businesses/{biz}/invoices/{inv}/refund_gateway_account`](/help/developers/api-reference/invoices/get-the-gateway-account-a-refund-of-this-invoice) | Get the gateway account a refund of this invoice goes through |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/regenerate`](/help/developers/api-reference/invoices/regenerate-a-voided-invoice-into-a-fresh-invoice) | Regenerate a voided invoice into a fresh invoice for the same period |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/resume_dunning`](/help/developers/api-reference/invoices/resume-a-paused-dunning-run) | Resume a paused dunning run |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/retry`](/help/developers/api-reference/invoices/dunning-retry-now) | Dunning "retry now" |

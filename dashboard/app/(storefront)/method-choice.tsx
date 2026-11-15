@@ -6,6 +6,9 @@ import { cn } from "@/lib/utils";
 import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
 import { PaymentMark } from "@/components/brand/payment-mark";
 import { Glyph } from "./chrome";
+import { cardNetworksHint, railsForCurrency } from "./storefront-text";
+
+export { railsForCurrency };
 
 /**
  * WHERE future invoices get paid from — the rail chooser both hosted surfaces show
@@ -76,7 +79,8 @@ const OPTIONS: ReadonlyArray<{
   {
     value: "card",
     label: "Credit or debit card",
-    hint: "Visa, Mastercard, RuPay",
+    // Replaced per currency below (`cardNetworksHint`).
+    hint: "Visa, Mastercard",
     icon: (
       <Glyph>
         <CreditCard />
@@ -184,12 +188,19 @@ export function MethodTypeChoice({
   allowed,
   heading,
   notice,
+  currency,
   className,
 }: {
   value: MethodType;
   onValueChange: (next: MethodType) => void;
   /** What this gateway actually supports — a rail it cannot do must not be offered. */
   allowed: string[];
+  /**
+   * The currency the buyer pays in. It names the card networks (RuPay for rupees only) and
+   * drops a rail that cannot move it (UPI outside INR). Callers should also pass their list
+   * through `railsForCurrency` so the value they post is one this group offers.
+   */
+  currency?: string | null;
   /**
    * Visible label over the group. Omitted where the block above already says it, which
    * is why the group keeps an `aria-label` of its own regardless.
@@ -208,17 +219,25 @@ export function MethodTypeChoice({
    * would debit. The specific name wins because only it can carry a truthful hint.
    * RazorPay advertises `bank_transfer` alone, so its netbanking row is untouched.
    */
-  const collapsed = allowed.includes("us_bank_account")
-    ? allowed.filter((m) => m !== "bank_transfer")
-    : allowed;
-  const options = OPTIONS.filter((o) => collapsed.includes(o.value));
+  const usable = railsForCurrency(allowed, currency);
+  const collapsed = usable.includes("us_bank_account")
+    ? usable.filter((m) => m !== "bank_transfer")
+    : usable;
+  const options = OPTIONS.filter((o) => collapsed.includes(o.value)).map((o) =>
+    o.value === "card" ? { ...o, hint: cardNetworksHint(currency) } : o,
+  );
+  // A value dropped for the currency (UPI for a buyer paying in dollars) moves to the first
+  // rail offered, so the form never posts a rail the buyer cannot see.
+  const first = options[0]?.value;
+  const dropped = allowed.includes(value) && !usable.includes(value);
+  React.useEffect(() => {
+    if (dropped && first) onValueChange(first);
+  }, [dropped, first, onValueChange]);
+  // One option is not a choice.
+  if (options.length < 2) return null;
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      {heading ? (
-        <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-          {heading}
-        </div>
-      ) : null}
+      {heading ? <div className="text-sm font-medium">{heading}</div> : null}
       <RadioGroup
         value={value}
         onValueChange={(v) => onValueChange(v as MethodType)}

@@ -50,12 +50,40 @@ invoice_amount|each_specified_item, item constraints), coupon sets, coupon codes
   → invoice %; within a class, oldest applied first.
 - `apply_on: each_specified_item` discounts only matching lines (pre-tax, per line); `invoice_amount`
   applies to the invoice total. Item constraints are per item-type (all/specific/none).
-- Item constraints are create-only today (updateBody doesn't accept edits — a known backend gap).
+- **Billing periods (0516)** narrow a plan/addon constraint: a line matches only when its price's
+  `(interval, interval_count)` is listed. The engine never sees the period on a line — the loaders
+  (`peekDiscounts`, `peekCouponCodes`, `assertCouponMatchesAnItem`) call `resolvePeriodScope`, which
+  turns the periods into `periodPriceIds` from the line prices. A new loader must call it too:
+  unresolved means no line matches (it under-discounts, never over).
 - **`coupon_set_codes.status` has THREE values** — `not_redeemed | redeemed | archived`. Never derive
   availability as `total - redeemed`: that counts archived codes as still redeemable. `listCouponSets`
   returns each population counted directly off the status.
 
 ## Changelog
+- **2026-11-10** — `coupon.update` audit rows carry `item_constraints` (normalized) before and after.
+- **2026-11-10** — A redeemed coupon's `item_constraints` may only grow (`scopeRemovals` refuses a
+  removal and names it). A scope change recomputes MRR for the coupon's active holders.
+- **2026-11-10** — `updateCoupon`: on a redeemed coupon, a rule field or `item_constraints` equal to the
+  stored value is not a change, so a form that resends the whole coupon can still rename it. An
+  unchanged scope is not rewritten.
+- **2026-11-10** — **The item match is the default on every apply.** `requireItemMatch` (opt-in, set
+  only by `POST …/discount`) is now `skipItemMatch` (opt-out). `assertCouponMatchesAnItem` takes a
+  `CouponItemSet` (the subscription's items, or projected price ids; `addonsMayFollow` for a signup
+  whose mandatory add-ons are not listed yet). New: `assertCouponCodeMatchesAnItem` (read-only
+  pre-check by code), `assertAppliedCouponMatchesAnItem` (`/change`, after the items move, same tx),
+  `couponItemIndexes` (which items each item-scoped coupon discounts, for MRR).
+- **2026-11-10** — **Billing-period limits on item constraints (0516).** `billing_periods:
+  [{interval, interval_count}]` on a plan or addon `item_constraints` entry, with `all` or `specific`
+  (a yearly-only coupon is `{item_kind: plan, constraint_type: all, billing_periods: [{interval:
+  year}]}`). Prices created later are covered when their period matches, which `price_ids` cannot do.
+  Refused on charges and on `none`. `couponCoversPlan` (plan_change_coupons) drops a period-limited
+  coupon when the new plan price bills on another period. The four hand-copied row→constraint
+  mappings are one `toConstraint`. Dashboard (`coupon-item-picker.tsx`, labels in
+  `dashboard/lib/coupon-scope.ts`): "Specific" is a searchable multi-select grouped by product group;
+  a product row takes the whole product (`product_ids`) and expands to its prices (currency ×
+  period) for `price_ids`; searching "yearly" then "Select all results" takes every yearly price
+  shown. The form does not set `billing_periods` (an API-set one shows as a note with Remove), and
+  it now keeps API-set `price_ids` on edit (it used to drop them).
 - **2026-11-03** — `applyCouponToSubscription({ requireItemMatch })`: an `each_specified_item` coupon that
   matches none of the subscription's current items is refused (same rule as `couponMatchesLine`).
   The `/subscriptions/:sub/discount` route sets it; plan changes do not (items move after).
@@ -275,3 +303,37 @@ invoice_amount|each_specified_item, item constraints), coupon sets, coupon codes
 - **2026-10-08** — `removeDiscountInTx` runs a removal on the caller's transaction; `removeDiscount` wraps it. A removal is a price change, so it now emits one `subscription_changed` (not `settings_only`, carrying `coupon_removed`) unless the caller suppresses it — `/change` (its own summary event), checkout (one event per edit) and the reactivation rollback do. `peekDiscounts` takes `pending.removeActive` to price as if the active discounts were gone.
 - **2026-11-03 (0495)** — `applied_coupons.entered_by_customer` marks a code the customer entered (portal, or checkout at signup); `customer-cap.ts` counts them against `businesses.max_customer_coupon_codes`. Operator discounts never count.
 - **2026-11-04** — The API refuses a new coupon code (and a code added to a set) outside `^[A-Za-z0-9_-]+$` (`couponCodeField`, `src/api/limits.ts`); the dashboard form checks the same rule. Stored codes, imported ones included, still apply, read and update. Generated set codes already fit. Gate: `verify:strict-params` § F.
+- **2026-11-10** — Redemption rows carry `customer_name` and `invoice_number` (nullable), so the redemption history shows names, not ids.
+- **2026-11-12 (0520)** — **Coupons on invoices with no subscription.** `applied_coupons` gains
+  `customer_id` (NOT NULL, backfilled), `invoice_id` and `scope` (`subscription` | `invoice` |
+  `customer`); `subscription_id` is nullable; status `released` is new. One redeem step
+  (`redeemCode`) serves `applyCouponToSubscription` (unchanged) and the new
+  `redeemCouponsForInvoice` (rows born `exhausted`, remaining 0, total 1: every duration applies
+  once). `priceCouponCodesForInvoice` runs the same checks with no writes, for previews.
+  `releaseInvoiceRedemptions` (called by `voidInvoice`) marks the invoice's rows `released`, takes
+  one off `times_redeemed` (floor 0) and frees a claimed set code; `restoreDiscountPeriod` skips
+  invoice rows. A fixed coupon in another currency is refused on an invoice. The per-customer cap
+  counts subscription and invoice redemptions, excludes `released`, and counts by customer or by
+  email (`coupons.per_customer_limit_by`; trimmed, lower-cased, `+tag` kept), with the advisory
+  lock on (coupon, customer) or (coupon, email). Redemption list and `has_used_discount` read
+  `customer_id`, so invoice redemptions show. Gate: `verify:coupons-invoice`.
+- **2026-11-12 (0520)** — **Coupons on every kind of billing.** One-off invoice redemptions
+  (scope `invoice`): every duration applies once, and a fixed coupon in another currency is
+  refused. `per_customer_limit_by` = `customer` | `email` (email trimmed and lower-cased, `+tag`
+  kept), with the lock on (coupon, key) in the redeem transaction. A void releases invoice-scope
+  redemptions only. **Customer coupons:** `applyCouponToCustomer` / `removeCustomerDiscount` /
+  `listCustomerDiscounts`; `customerCouponStack` + `stackWithCustomerCoupons` price them with the
+  others by the business's `customer_coupons` rule (`fallback` | `stack`); each invoice a customer
+  coupon discounts spends one use, a void gives it back; unique index
+  `applied_coupons_customer_active_uq`. `recomputeCustomerCouponMrr` restates the MRR of a
+  business's holders, called when a business PATCH changes `customer_coupons`. **Credit lines:**
+  coupons net across them on change invoices — `creditPaidBasis` restates each credit at what was
+  paid for that time, the coupons discount the net (never more), and the handed-back share returns
+  to the coupon's period allowance (`settlePeriodDiscount`). Gates: `verify:coupons-invoice`,
+  `verify:coupons-customer`, `verify:coupons-proration`.
+- **2026-11-14** — `undoSubscriptionCouponEdit`: hosted checkout's undo when its change is reverted
+  (`failed_change_charge: revert`). Coupons applied since the given snapshot become `released`
+  (counted by no limit, `times_redeemed` down by one, a set code redeemable again, via
+  `giveBackRedemptions`, shared with `releaseInvoiceRedemptions`) and emit `coupon_removed`;
+  coupons removed since are `active` again; MRR is recomputed. Gate: `verify:change-invoice-revert`
+  §2.

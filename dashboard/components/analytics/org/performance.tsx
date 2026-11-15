@@ -21,6 +21,7 @@ import {
 } from "@/components/analytics/home/parts";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EMPTY_FIGURE, EmptyFigure } from "@/components/patterns/record-page";
 import { InfoTip } from "@/components/analytics/info-tip";
 import { explain, type CardInfo } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
@@ -160,14 +161,14 @@ export function OrgPerformance({
         {note ? <span className="block text-xs tabular-nums">{note}</span> : null}
       </span>
       <span className={cn("text-2xl font-semibold tabular-nums", warn && "text-warning")}>
-        {value}
+        {value === EMPTY_FIGURE ? <EmptyFigure /> : value}
       </span>
     </div>
   );
 
   return (
     <>
-      <Grid>
+      <Grid even>
         <Block
           span={8}
           title="MRR trend"
@@ -250,7 +251,7 @@ export function OrgPerformance({
         </div>
       </Grid>
 
-      <Grid>
+      <Grid even>
         <Block
           span={6}
           title="New accounts"
@@ -274,7 +275,7 @@ export function OrgPerformance({
               labels={points(created).labels}
               values={points(created).values}
               seriesLabel="New accounts"
-              tone="soft"
+              tone="brand"
               kind="count"
             />
           </div>
@@ -286,13 +287,7 @@ export function OrgPerformance({
           action={<BlockLink href={metrics("mrr_churn")}>Explore</BlockLink>}
         >
           <Lead
-            value={
-              churnedMrr == null
-                ? "—"
-                : churnedMrr === 0
-                  ? moneyCompact(0, currency)
-                  : `−${moneyCompact(churnedMrr, currency)}`
-            }
+            value={churnedMrr == null ? "—" : signedMoney(-churnedMrr, currency)}
             title={churnedMrr == null ? undefined : money(churnedMrr, currency)}
             tone={churnedMrr ? "loss" : undefined}
             note="churned MRR"
@@ -302,7 +297,7 @@ export function OrgPerformance({
               labels={points(churn).labels}
               values={points(churn).values}
               seriesLabel="Churned MRR"
-              tone="loss"
+              tone="soft"
               kind="money"
               currency={churn?.currency ?? currency}
             />
@@ -310,7 +305,7 @@ export function OrgPerformance({
         </Block>
       </Grid>
 
-      <Grid>
+      <Grid even>
         <Block
           span={4}
           title="Cash"

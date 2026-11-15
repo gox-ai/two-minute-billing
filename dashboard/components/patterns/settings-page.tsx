@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Lightbulb } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
-import { SelectField } from "@/components/ui/select-field";
+import { SelectField, type SelectOption } from "@/components/ui/select-field";
 import { SwitchField } from "@/components/ui/switch";
 
 /**
@@ -60,7 +60,9 @@ export function SettingsPage({
           ) : null}
           {children}
         </div>
-        {aside ? <aside className="hidden w-64 shrink-0 xl:block">{aside}</aside> : null}
+        {aside ? (
+          <aside className="hidden w-64 shrink-0 @min-[56.875rem]/main:block">{aside}</aside>
+        ) : null}
       </div>
     </div>
   );
@@ -79,7 +81,7 @@ export function SettingsSection({
   return (
     <section className={cn("space-y-2", className)}>
       {title ? <h2 className="pt-2 text-sm font-semibold text-foreground/80">{title}</h2> : null}
-      <div className="divide-y divide-border overflow-hidden rounded-lg border bg-card">
+      <div className="divide-y divide-border overflow-hidden rounded-xl border bg-card">
         {children}
       </div>
     </section>
@@ -120,51 +122,86 @@ export function SettingRow({
 }
 
 /**
- * Inline dropdown answer: reads as blue text + chevron, not a boxed input. Built on the Select primitive but styled as an inline link, so it keeps
- * the settings-row look without shipping an unstyled OS widget. Posts with the
- * surrounding server-action form via SelectField's hidden input.
+ * Inline dropdown answer: reads as link-coloured text + chevron, not a boxed input, and
+ * ends on the row's right edge. Built on SelectField, so it posts through its hidden
+ * input and survives the form's post-save reset. Controlled (`value`) or not.
  */
 export function SelectAnswer({
   name,
+  id,
   defaultValue,
+  value,
+  onValueChange,
   options,
+  ariaLabel,
+  placeholder,
+  disabled,
   className,
 }: {
-  name: string;
+  name?: string;
+  /** Trigger id; defaults to `name`, so `<label htmlFor={name}>` names it. */
+  id?: string;
   defaultValue?: string;
-  options: Array<{ value: string; label: string }>;
+  value?: string;
+  onValueChange?: (value: string) => void;
+  options: SelectOption[];
+  /** Accessible name: the row's label text. Falls back to `name`. */
+  ariaLabel?: string;
+  placeholder?: string;
+  disabled?: boolean;
   className?: string;
 }) {
   return (
-    <span className={cn("relative inline-flex items-center", className)}>
+    <span className={cn("relative inline-flex max-w-full min-w-0 items-center", className)}>
       <SelectField
         name={name}
+        id={id}
         defaultValue={defaultValue}
-        ariaLabel={name}
+        value={value}
+        onValueChange={onValueChange}
+        ariaLabel={ariaLabel ?? name}
+        placeholder={placeholder}
+        disabled={disabled}
         options={options}
         className={cn(
-          "h-auto w-auto justify-end gap-1 border-transparent bg-transparent py-1 pr-1 pl-2 shadow-none",
+          "w-auto max-w-full justify-end gap-1 border-transparent bg-transparent pr-1 pl-2 shadow-none dark:bg-transparent",
           "text-sm font-medium text-primary hover:border-border hover:bg-muted/40",
-          "[&>svg]:text-primary",
+          "*:data-[slot=select-value]:truncate [&>svg]:text-primary [&>svg]:opacity-100",
         )}
       />
     </span>
   );
 }
 
-/** Switch answer, on the Switch primitive. Posts via SwitchField's
- *  hidden input, so `formData.get(name) === 'on'` is unchanged. */
+/** Switch answer, on the Switch primitive. Posts via SwitchField's hidden input, so
+ *  `formData.get(name) === 'on'` is unchanged. Controlled (`checked`) or not. */
 export function ToggleAnswer({
   name,
   defaultChecked,
+  checked,
+  onCheckedChange,
+  disabled,
   label,
 }: {
-  name: string;
+  name?: string;
   defaultChecked?: boolean;
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
+  disabled?: boolean;
   /** Accessible name — the question text is not programmatically tied to the input. */
   label: string;
 }) {
-  return <SwitchField name={name} defaultChecked={defaultChecked} ariaLabel={label} />;
+  return (
+    <SwitchField
+      name={name}
+      defaultChecked={defaultChecked}
+      checked={checked}
+      onCheckedChange={onCheckedChange}
+      disabled={disabled}
+      ariaLabel={label}
+      className="touch-target relative"
+    />
+  );
 }
 
 /** Contextual tip card in the right rail. */
@@ -176,7 +213,7 @@ export function SettingsTip({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border bg-muted/20 p-4">
+    <div className="rounded-xl border bg-muted/20 p-4">
       <Lightbulb className="mb-2 size-4 text-warning" aria-hidden />
       <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
       {action ? <div className="mt-2 text-xs">{action}</div> : null}

@@ -5,7 +5,8 @@ import { useDefaultState } from "@/lib/use-default-state";
 import { RefreshButton } from "@/components/refresh-button";
 import { StatusChip } from "@/components/patterns/chip";
 import { Alert } from "@/components/ui/alert";
-import { money, fmtDate, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import type { PaymentMethod } from "@/lib/api";
 import { AttentionCard, type AttentionItem } from "@/components/patterns/record-page";
 import { CollectInvoiceDialog } from "@/components/invoices/collect-invoice-dialog";
@@ -214,6 +215,7 @@ export function InvoiceAttention({
     created_at: string | null;
     due_date: string | null;
     currency: string;
+    usage_closes_at?: string | null;
   };
   open: boolean;
   canClose: boolean;
@@ -229,7 +231,25 @@ export function InvoiceAttention({
   const owed = data.status === "payment_due" || data.status === "not_paid";
   const items: AttentionItem[] = [];
 
-  if (canClose && data.status === "pending") {
+  if (canClose && data.status === "pending" && invoice.usage_closes_at) {
+    // A held renewal invoice (usage grace window): it finalizes by itself.
+    items.push({
+      key: "pending",
+      tone: "warning",
+      title: `Finalizes on ${fmtDateTime(invoice.usage_closes_at, tz)}`,
+      detail:
+        "This invoice waits for late usage events of its period. At this time it finalizes. If auto-collection is on, we then charge it, as for each new invoice. Usage events that arrive before then go on this invoice. To finalize it now, select Close invoice now.",
+      actions: (
+        <CloseInvoiceButton
+          biz={biz}
+          inv={invoice.id}
+          label="Close invoice now"
+          variant="outline"
+          className=""
+        />
+      ),
+    });
+  } else if (canClose && data.status === "pending") {
     items.push({
       key: "pending",
       tone: "warning",

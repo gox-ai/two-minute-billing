@@ -4,7 +4,6 @@ import { getBusiness } from "@/lib/api/business-settings";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
 import {
   SettingRow,
   SettingsCard,
@@ -12,7 +11,7 @@ import {
   SettingsPage,
   SettingsSummary,
 } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { DocumentNumberingFields } from "@/components/settings/document-numbering-fields";
 import { composeDocumentNumber } from "@/lib/document-numbering";
 import { businessTz } from "@/lib/business-tz-server";
@@ -82,7 +81,7 @@ export default async function InvoiceSettings({ params }: { params: Promise<{ bi
   });
 
   const toggle = (name: keyof typeof fields, label: string) => (
-    <SettingSwitch name={name} label={label} defaultChecked={fields[name]} />
+    <ToggleAnswer name={name} label={label} defaultChecked={fields[name]} />
   );
 
   return (
@@ -129,11 +128,12 @@ export default async function InvoiceSettings({ params }: { params: Promise<{ bi
               label="Invoice title"
               htmlFor="invoice_title"
               help="India's GST regime requires “TAX INVOICE” on a taxable supply."
+              placement="end"
               control={
-                <SelectField
+                <SelectAnswer
                   name="invoice_title"
+                  ariaLabel="Invoice title"
                   defaultValue={title}
-                  className="w-full sm:w-56"
                   options={[
                     { value: "invoice", label: "INVOICE" },
                     { value: "tax_invoice", label: "TAX INVOICE" },
@@ -209,7 +209,7 @@ export default async function InvoiceSettings({ params }: { params: Promise<{ bi
               help="New invoices print the purchase order number set on their subscription. A PO number set on the invoice itself always prints. Invoices that already exist do not change."
               placement="end"
               control={
-                <SettingSwitch
+                <ToggleAnswer
                   name="inherit_subscription_po_number"
                   label="Print the subscription's PO number"
                   defaultChecked={b.inherit_subscription_po_number ?? false}

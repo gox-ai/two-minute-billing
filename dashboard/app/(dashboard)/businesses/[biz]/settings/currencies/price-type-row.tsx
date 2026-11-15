@@ -1,7 +1,7 @@
 "use client";
 
 import { useDefaultState } from "@/lib/use-default-state";
-import { SelectField } from "@/components/ui/select-field";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import { SettingRow } from "@/components/settings/settings-layout";
 
 /** The dashboard's starting price type for a new price, with what the current choice does. */
@@ -11,16 +11,17 @@ export function PriceTypeRow({ saved }: { saved: "exclusive" | "inclusive" }) {
     <SettingRow
       label="Default price type"
       htmlFor="default_tax_behavior"
+      placement="end"
       help="What a new price starts as when you create it in the dashboard. You can change it on each price."
       control={
-        <SelectField
+        <SelectAnswer
           name="default_tax_behavior"
+          ariaLabel="Default price type"
           value={value}
           onValueChange={setValue}
-          className="w-full sm:w-96"
           options={[
-            { value: "exclusive", label: "Tax exclusive — tax added on top" },
-            { value: "inclusive", label: "Tax inclusive — price already includes tax" },
+            { value: "exclusive", label: "Tax exclusive" },
+            { value: "inclusive", label: "Tax inclusive" },
           ]}
         />
       }

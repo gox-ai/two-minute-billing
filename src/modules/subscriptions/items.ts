@@ -53,6 +53,7 @@ import {
 } from "./service";
 import { loadBillingMode, prorationWindowStart } from "@/modules/subscriptions/billing-mode";
 import { settleMeteredUsage } from "./usage-settlement";
+import { midTermCouponsFor } from "./mid-term-coupons";
 import { COMMITMENT_CHARGE } from "./commitment";
 import { emitEvent, emitOrDefer, type DeferredEvents } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
@@ -289,6 +290,157 @@ async function loadSubAndCustomer(orgId: string, subscriptionId: string) {
 }
 
 /**
+ * `addSubscriptionItem` under `failed_change_charge: apply_when_paid`, or a repeat of a pending
+ * add. Returns null when the add is not held (it then inserts and bills as before).
+ */
+async function holdItemAdd(input: {
+  organizationId: string;
+  businessId: string;
+  price: typeof prices.$inferSelect;
+  quantity: number;
+  customAmountMinor?: number | null;
+  invoiceImmediately?: boolean;
+  now: Date;
+  sub: typeof subscriptions.$inferSelect;
+  customer: { country?: string | null; state?: string | null } | null | undefined;
+  snapshot: PriceSnapshot;
+}): Promise<{
+  item: typeof subscriptionItems.$inferSelect;
+  invoice: Invoice | null;
+  payment: Payment | null;
+} | null> {
+  const { organizationId, businessId, sub, snapshot } = input;
+  const pending = await import("./pending-change");
+  const { PendingChangeError } = await import("./proration");
+  const request = {
+    kind: "item_add",
+    price: input.price.publicId,
+    quantity: input.quantity,
+    unit_price_minor: input.customAmountMinor ?? null,
+    invoice_immediately: input.invoiceImmediately ?? null,
+  };
+  const addedItem = async () => {
+    const [row] = await withTenant(organizationId, (tx) =>
+      tx
+        .select()
+        .from(subscriptionItems)
+        .where(
+          and(
+            eq(subscriptionItems.subscriptionId, sub.id),
+            eq(subscriptionItems.priceId, input.price.id),
+          ),
+        )
+        .orderBy(sql`${subscriptionItems.createdAt} desc`)
+        .limit(1),
+    );
+    return row!;
+  };
+  const repeat = await pending.pendingBeforeChange(organizationId, businessId, sub.id, request);
+  if (repeat) {
+    const r = await pending.collectHeldAgain(organizationId, businessId, repeat);
+    if (!r.applied) throw new PendingChangeError(r.held);
+    return { item: await addedItem(), invoice: r.invoice, payment: null };
+  }
+  const { resolveBillingRulesConfig, loadBillingRulesRow } = await import("./billing-rules-config");
+  const rule = resolveBillingRulesConfig(
+    await loadBillingRulesRow(organizationId, businessId),
+  ).failedChangeCharge;
+  if (rule !== "apply_when_paid" || billsAtTrialEnd(sub)) return null;
+  const isOneTime = snapshot.type === "one_time";
+  const invoiceImmediately =
+    input.invoiceImmediately ??
+    (await defaultInvoiceImmediately(
+      organizationId,
+      businessId,
+      isOneTime ? "onOneTimeCharge" : "onChange",
+    ));
+  if (!invoiceImmediately) return null;
+  // The same amount the unheld path bills below.
+  const from = await itemProrationWindowStart(
+    organizationId,
+    businessId,
+    input.now,
+    sub.currentPeriodStart,
+  );
+  const fullAmount = fixedChargeMinor(
+    snapshot,
+    ratableFromSnapshot(snapshot, null),
+    input.quantity,
+  );
+  const amountDue = isOneTime
+    ? fullAmount
+    : prorate(fullAmount, from, requireTerm(sub).start, requireTerm(sub).end);
+  if (amountDue <= 0n) return null;
+  const [product] = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ kind: products.kind, name: products.name })
+      .from(prices)
+      .innerJoin(products, eq(prices.productId, products.id))
+      .where(eq(prices.id, input.price.id))
+      .limit(1),
+  );
+  const { currentChannel } = await import("@/platform/event-context");
+  const hold: import("./pending-change").ChangeHold = {
+    source: currentChannel() === "dashboard" ? "dashboard" : "api",
+    request,
+  };
+  const { invoice } = await createInvoiceFromLines({
+    organizationId,
+    businessId,
+    customerId: sub.customerId,
+    subscriptionId: sub.id,
+    currency: sub.currency,
+    lines: [
+      {
+        description: isOneTime
+          ? priceLabel(input.price, product)
+          : `${priceLabel(input.price, product)} - Prorated Charges`,
+        amountMinor: amountDue,
+        priceId: input.price.id,
+        quantity: input.quantity,
+        kind: isOneTime ? "one_time" : "proration",
+      },
+    ],
+    applyTax: true,
+    country: input.customer?.country,
+    state: input.customer?.state,
+    applyCredit: true,
+    applyCoupons: await midTermCouponsFor(organizationId, businessId, "charge"),
+    collect: true,
+    subscription: sub,
+    ...(isOneTime ? {} : { periodStart: from, periodEnd: requireTerm(sub).end }),
+    inTx: (tx, created) =>
+      pending.recordPendingChange(tx, {
+        organizationId,
+        businessId,
+        sub,
+        invoice: created.invoice,
+        hold,
+        kind: "item_add",
+        plan: pending.packJson({
+          priceId: input.price.id,
+          quantity: input.quantity,
+          snapshot,
+          isOneTime,
+        }) as Record<string, unknown>,
+        creditNoteIds: [],
+        requestedAt: input.now,
+      }),
+  });
+  const r = await pending.settleHeldInvoice({
+    organizationId,
+    businessId,
+    invoiceId: invoice.id,
+    announce: true,
+  });
+  if (!r.applied) throw new PendingChangeError(r.held);
+  const [paid] = await withTenant(organizationId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.id, invoice.id)).limit(1),
+  );
+  return { item: await addedItem(), invoice: paid ?? invoice, payment: null };
+}
+
+/**
  * Add an item (add-on/charge) to a subscription mid-period. Inserts the item with
  * a price snapshot, then bills it now: a RECURRING price is prorated to the
  * remaining period, a ONE-TIME price is charged in FULL (it buys no span of time,
@@ -338,6 +490,7 @@ export async function addSubscriptionItem(input: {
 }> {
   const { organizationId, businessId, now } = input;
   const { sub, customer } = await loadSubAndCustomer(organizationId, input.subscriptionId);
+  await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (input.price.currency !== sub.currency)
     throw new SubscriptionError("Item currency must match the subscription currency");
   // The cadence guard is the currency guard's twin: the subscription bills on one
@@ -366,6 +519,10 @@ export async function addSubscriptionItem(input: {
   const snapshot = await withTenant(organizationId, (tx) =>
     effectiveAddSnapshotTx(tx, input.subscriptionId, input.price, input.customAmountMinor),
   );
+  // A pending change (`apply_when_paid`): a repeat of this add collects its invoice again; any
+  // other request replaces it. A held add inserts nothing until its invoice is paid.
+  const held = await holdItemAdd({ ...input, sub, customer, snapshot });
+  if (held) return held;
   // The insert, the cached-MRR recompute and the `subscription_changed` event are ONE
   // transaction: they are three descriptions of a single composition change, and the
   // MRR recompute used to run in a transaction of its own — so a failure between them
@@ -560,6 +717,7 @@ export async function addSubscriptionItem(input: {
     country: customer?.country,
     state: customer?.state,
     applyCredit: true,
+    applyCoupons: await midTermCouponsFor(organizationId, businessId, "charge"),
     collect: true,
     subscription: sub,
     // 🔴 This invoice consumes the one-time item's single billing cycle (bug,
@@ -582,6 +740,26 @@ export async function addSubscriptionItem(input: {
     // 2026-08-25), and a one-time fee carries no service window at all.
     ...(isOneTime ? {} : { periodStart: from, periodEnd: requireTerm(sub).end }),
   });
+  // A hard decline at once follows `failed_change_charge`, as a plan change does.
+  const { resolveBillingRulesConfig, loadBillingRulesRow } = await import("./billing-rules-config");
+  const rule = resolveBillingRulesConfig(
+    await loadBillingRulesRow(organizationId, businessId),
+  ).failedChangeCharge;
+  const settle = await import("./change-revert");
+  if (rule === "revert") {
+    const reverted = await settle.settleExhaustedAdd({
+      organizationId,
+      businessId,
+      itemId: item.id,
+      invoicePublicId: invoice.publicId,
+      now,
+    });
+    if (reverted) {
+      const { ChangeRevertedError } = await import("./proration");
+      throw new ChangeRevertedError(reverted);
+    }
+  } else if (rule === "start_dunning")
+    await settle.finalActionIfExhausted(organizationId, businessId, invoice.publicId);
   return { item, invoice, payment };
 }
 
@@ -678,6 +856,7 @@ export async function fireActivationCharges(input: {
   const [customer] = await withTenant(organizationId, (tx) =>
     tx.select().from(customers).where(eq(customers.id, sub.customerId)).limit(1),
   );
+  const applyCoupons = await midTermCouponsFor(organizationId, businessId, "charge");
   let fired = 0;
   for (const it of resolved.items) {
     // Fire-once claim (in its own tx). charge_once items claim the bare event
@@ -725,6 +904,7 @@ export async function fireActivationCharges(input: {
         country: customer?.country,
         state: customer?.state,
         applyCredit: true,
+        applyCoupons,
         collect: true,
         subscription: sub,
       });
@@ -901,6 +1081,7 @@ export async function triggerAttachedItemCharge(input: {
       country: customer?.country,
       state: customer?.state,
       applyCredit: true,
+      applyCoupons: await midTermCouponsFor(organizationId, businessId, "charge"),
       collect: true,
       subscription: sub,
     });
@@ -950,6 +1131,11 @@ export async function removeSubscriptionItem(input: {
 }): Promise<{ creditNote: CreditNote | null; creditNotes: CreditNote[] }> {
   const { organizationId, businessId, now } = input;
   const { sub } = await loadSubAndCustomer(organizationId, input.subscriptionId);
+  await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
+  // A change held for payment was priced on these items: it ends first (409 while it is paid).
+  await (
+    await import("./pending-change")
+  ).endPendingForSubscription(organizationId, businessId, sub.id, "replaced");
   const item = await withTenant(organizationId, async (tx) => {
     const [row] = await tx
       .select()
@@ -1218,6 +1404,8 @@ export interface AdHocChargeInput {
    * its own price link and no entity_type.
    */
   entityType?: string;
+  /** Already net of the subscription's coupons: the invoice that bills it takes none off. */
+  discounted?: boolean;
 }
 
 /**
@@ -1284,6 +1472,7 @@ export async function addAdHocCharges(input: {
       country: customer?.country,
       state: customer?.state,
       applyCredit: true,
+      applyCoupons: await midTermCouponsFor(organizationId, businessId, "charge"),
       collect: true,
       subscription: sub,
       ...(input.markItemsBilled?.length ? { markItemsBilled: input.markItemsBilled } : {}),
@@ -1311,6 +1500,7 @@ export async function addAdHocCharges(input: {
           entityType: l.entityType ?? (l.priceId ? "charge_item_price" : "adhoc"),
           periodStart: l.periodStart ?? null,
           periodEnd: l.periodEnd ?? null,
+          discounted: l.discounted === true,
         })),
       )
       .returning();
@@ -1341,6 +1531,7 @@ export async function addAdHocCharge(input: {
   priceId?: string | null;
   periodStart?: Date | null;
   periodEnd?: Date | null;
+  discounted?: boolean;
 }): Promise<
   | { object: "invoice"; invoice: Invoice; payment: Payment | null }
   | { object: "unbilled_charge"; charge: typeof unbilledCharges.$inferSelect }
@@ -1366,7 +1557,11 @@ export async function addAdHocCharge(input: {
 export async function recurringChargeMinor(
   organizationId: string,
   subscriptionId: string,
-): Promise<bigint> {
+): Promise<{
+  amountMinor: bigint;
+  /** Net of a coupon: book the charge `discounted`, so no invoice discounts it again. */
+  discounted: boolean;
+}> {
   return withTenant(organizationId, async (tx) => {
     const rows = await tx
       .select({
@@ -1375,6 +1570,7 @@ export async function recurringChargeMinor(
         productKind: products.kind,
         productPublicId: products.publicId,
         currency: subscriptions.currency,
+        businessId: subscriptions.businessId,
       })
       .from(subscriptionItems)
       .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
@@ -1410,14 +1606,17 @@ export async function recurringChargeMinor(
       });
       total += amt;
     }
-    if (total <= 0n || lines.length === 0) return total;
-    // Apply the sub's active coupons (G backlog: this rated gross, ignoring
-    // discounts). NON-mutating peek — the folded unbilled charge is a one-time line
-    // that the coupon won't re-discount at billing, so discounting here is correct.
+    if (total <= 0n || lines.length === 0) return { amountMinor: total, discounted: false };
+    // Gross when `mid_term_coupons` discounts unbilled charges: the invoice that bills
+    // this charge takes the coupons, so netting here too would discount it twice.
+    if (await midTermCouponsFor(organizationId, rows[0]!.businessId, "unbilled", tx))
+      return { amountMinor: total, discounted: false };
+    // Otherwise net of the sub's active coupons (a non-mutating peek). The charge is then
+    // booked `discounted`, so the renewal that folds it in takes no coupon off it again.
     const currency = rows[0]?.currency;
     const disc = await peekDiscounts(tx, subscriptionId, lines, currency);
     const net = total - disc.totalMinor;
-    return net > 0n ? net : 0n;
+    return { amountMinor: net > 0n ? net : 0n, discounted: disc.totalMinor > 0n };
   });
 }
 
@@ -1466,6 +1665,7 @@ export async function invoiceUnbilledCharges(input: {
     country: customer?.country,
     state: customer?.state,
     applyCredit: true,
+    applyCoupons: await midTermCouponsFor(organizationId, businessId, "unbilled"),
     collect: false,
     subscription: sub,
     // Claimed in the invoice's transaction: only these rows, and only if still pending.
@@ -1475,7 +1675,7 @@ export async function invoiceUnbilledCharges(input: {
 }
 
 /** A pending charge as the invoice line `/charges` with `invoice_now: true` would write. */
-function unbilledChargeLine(c: typeof unbilledCharges.$inferSelect) {
+export function unbilledChargeLine(c: typeof unbilledCharges.$inferSelect) {
   return {
     description: c.description,
     amountMinor: c.amountMinor,
@@ -1492,6 +1692,7 @@ function unbilledChargeLine(c: typeof unbilledCharges.$inferSelect) {
     priceId: c.priceId ?? null,
     periodStart: c.periodStart ?? null,
     periodEnd: c.periodEnd ?? null,
+    ...(c.discounted ? { discounted: true } : {}),
   };
 }
 
@@ -1547,6 +1748,7 @@ export async function invoiceUnbilledChargesNow(input: {
 > {
   const { organizationId, businessId } = input;
   const bySub = await pendingChargesBySubscription(organizationId, businessId, input.scope);
+  const applyCoupons = await midTermCouponsFor(organizationId, businessId, "unbilled");
   const out = [];
   for (const [subscriptionId, charges] of bySub) {
     const { sub, customer } = await loadSubAndCustomer(organizationId, subscriptionId);
@@ -1561,6 +1763,7 @@ export async function invoiceUnbilledChargesNow(input: {
       country: customer?.country,
       state: customer?.state,
       applyCredit: true,
+      applyCoupons,
       collect: true,
       subscription: sub,
       markUnbilledChargesBilled: charges.map((c) => c.id),
@@ -1582,6 +1785,7 @@ export async function estimateInvoiceUnbilledChargesNow(input: {
 }) {
   const { organizationId, businessId } = input;
   const bySub = await pendingChargesBySubscription(organizationId, businessId, input.scope);
+  const applyCoupons = await midTermCouponsFor(organizationId, businessId, "unbilled");
   const out = [];
   // Invoices are raised in turn, so each draws on what the previous left (per currency).
   const left = new Map<string, CustomerBalances>();
@@ -1595,6 +1799,7 @@ export async function estimateInvoiceUnbilledChargesNow(input: {
       currency: sub.currency,
       lines: charges.map(unbilledChargeLine),
       balances: left.get(sub.currency),
+      applyCoupons,
     });
     left.set(sub.currency, preview.balancesAfter);
     out.push({ subscription: sub, charges, preview });

@@ -32,7 +32,7 @@ export default async function ReportsAllLayout({
       <div className="contents *:row-3 *:min-w-0 lg:*:col-2 lg:*:row-2 [&>*:first-child]:row-1 lg:[&>*:first-child]:col-span-full lg:[&>*:first-child]:row-1">
         {children}
       </div>
-      <aside className="row-2 max-h-72 min-w-0 overflow-y-auto lg:sticky lg:top-4 lg:col-1 lg:max-h-[calc(100vh-6rem)] lg:self-start">
+      <aside className="row-2 max-h-72 min-w-0 overflow-y-auto lg:sticky lg:top-[calc(var(--compact-h,0px)+1rem)] lg:col-1 lg:max-h-[calc(100vh-6rem)] lg:self-start">
         <ReportsRail biz={biz} reports={reports.data} />
       </aside>
     </div>

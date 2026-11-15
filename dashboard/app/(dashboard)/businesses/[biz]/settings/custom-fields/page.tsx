@@ -1,6 +1,6 @@
 import { requirePermission } from "@/lib/session";
 import { listCustomFieldDefinitions, type CustomFieldDefinition } from "@/lib/api/custom-fields";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Table,
@@ -61,7 +61,7 @@ export default async function CustomFieldsSettings({
     <SettingsPage
       title="Custom fields"
       crumbs={crumbs}
-      description="Typed fields that you define for customers and subscriptions. Each field shows as cf_<name> on the record and in the API. Custom fields are separate from metadata."
+      description="Typed fields that you define for customers and subscriptions. Each field shows on the record and in the API. Custom fields are separate from metadata."
     >
       {ENTITIES.map((ent) => {
         const rows = defs.filter((d) => d.entity_type === ent.key);
@@ -109,10 +109,10 @@ export default async function CustomFieldsSettings({
                       </TableCell>
                       <TableCell>
                         <span className="flex flex-wrap gap-1">
-                          {d.required && <Badge variant="secondary">Required</Badge>}
-                          {d.is_pii && <Badge variant="secondary">Personal data</Badge>}
-                          {d.show_in_portal && <Badge variant="secondary">Portal flag</Badge>}
-                          {d.archived && <Badge variant="outline">Archived</Badge>}
+                          {d.required && <Chip>Required</Chip>}
+                          {d.is_pii && <Chip>Personal data</Chip>}
+                          {d.show_in_portal && <Chip>Portal flag</Chip>}
+                          {d.archived && <Chip>Archived</Chip>}
                         </span>
                       </TableCell>
                       <TableCell className="pr-5 text-right">

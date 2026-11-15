@@ -230,6 +230,14 @@ analytics sync's 163 million calls fall from 218 minutes to 11. Separately, the 
 401 days while a 12-month report with a comparison needs about 730, so the comparison window was
 reconstructed from raw subscriptions; backfilling took `total_mrr` from 2,998 ms to 821 ms.
 
+**An organization reads each business at its own day (2026-11-15).** `metric_daily` rows are
+business-local days and cannot be re-cut to another zone. An organization answer reads every
+business at its own local today and sums them (`dayGroups`, `metrics/daily/public-query.ts`), so
+it equals the sum of the business answers at any hour. Periods are labelled on the earliest of
+those days; a later day of a business that is ahead folds into the last period. Before, the
+whole organization was read at the earliest local today, so a business already on the next day
+showed yesterday's figures there.
+
 **What this does not change.** ADR-002 (Postgres) and ADR-003 (RLS) stand, unamended. The
 equivalence gate is worth keeping whatever happens to the analytics module: it compares two row
 sources in integer minor units and will hold any future change to the read path.
@@ -259,246 +267,151 @@ transfer reference the same object across test and live businesses.
 
 ---
 
-## 4. System diagram
+## 4. System diagrams
 
-<!-- BEGIN GENERATED: architecture-mermaid -->
-_Generated from [architecture.json](architecture/architecture.json). Arrows point at dependencies._
+### 4.1 System overview
+
+Clients reach one API. The billing worker runs the durable billing clock from the Postgres job
+queue: renewals, dunning, the daily report fold, and the outboxes that deliver webhooks and
+email. Money moves only through the gateway adapter interface (`src/providers/types.ts`).
 
 ```mermaid
-flowchart TD
-  subgraph layer_foundation["Foundation modules"]
-    audit["audit"]
-    auth["auth"]
-    comments["comments"]
-    emails["emails"]
-    events["events"]
-    hubspot["hubspot"]
-    integrations["integrations"]
-    ledger["ledger"]
-    list_views["list-views"]
-    ops["ops"]
-    request_log["request-log"]
-    tenancy["tenancy"]
-    webhooks["webhooks"]
+flowchart LR
+  subgraph clients["Clients"]
+    dash["Dashboard<br/>Next.js, for operators"]
+    hosted["Hosted checkout<br/>and customer portal"]
+    app["Your app<br/>REST API · SDK<br/>MCP · CLI"]
   end
-  subgraph layer_catalog["Catalog & pricing"]
-    catalog["catalog"]
-    coupons["coupons"]
-    custom_fields["custom-fields"]
-    entitlements["entitlements"]
-    reason_codes["reason-codes"]
-    tax["tax"]
-  end
-  subgraph layer_customer["Customers & balances"]
-    checkout["checkout"]
-    credit_notes["credit-notes"]
-    credits["credits"]
-    customer_portal["customer-portal"]
-    customers["customers"]
-    metadata_rules["metadata-rules"]
-    segments["segments"]
-    usage_controls["usage-controls"]
-    wallet["wallet"]
-  end
-  subgraph layer_billing["Subscriptions & billing"]
-    dunning_policies["dunning-policies"]
-    invoicing["invoicing"]
-    metering["metering"]
-    metrics["metrics"]
-    model_prices["model-prices"]
-    subscriptions["subscriptions"]
-    team_alerts["team-alerts"]
-  end
-  subgraph layer_payments["Payments & gateway"]
-    disputes["disputes"]
-    gateway["gateway"]
-    payment_intents["payment-intents"]
-    payment_methods["payment-methods"]
-    payment_requests["payment-requests"]
-    payments["payments"]
-    receipts["receipts"]
-    refunds["refunds"]
-    transactions["transactions"]
-  end
-  subgraph layer_tooling["Ops tooling"]
-    migration["migration"]
-    time_travel["time-travel"]
-    transfer["transfer"]
-  end
-  auth --> tenancy
-  emails --> events
-  emails --> customers
-  emails --> invoicing
-  hubspot --> events
-  hubspot --> customers
-  integrations --> events
-  integrations --> hubspot
-  list_views --> audit
-  list_views --> custom_fields
-  ops --> subscriptions
-  tenancy --> audit
-  tenancy --> gateway
-  webhooks --> audit
-  webhooks --> events
-  webhooks --> invoicing
-  webhooks --> ledger
-  webhooks --> payments
-  webhooks --> subscriptions
-  webhooks --> transactions
-  catalog --> audit
-  catalog --> events
-  catalog --> webhooks
-  coupons --> catalog
-  coupons --> events
-  coupons --> webhooks
-  entitlements --> events
-  checkout --> catalog
-  checkout --> customers
-  checkout --> payment_methods
-  checkout --> subscriptions
-  checkout --> emails
-  checkout --> metadata_rules
-  credit_notes --> customers
-  credit_notes --> events
-  credit_notes --> invoicing
-  credit_notes --> ledger
-  credit_notes --> refunds
-  credit_notes --> webhooks
-  credits --> customers
-  credits --> events
-  credits --> invoicing
-  credits --> ledger
-  credits --> metering
-  credits --> webhooks
-  customer_portal --> payment_methods
-  customer_portal --> customers
-  customer_portal --> invoicing
-  customer_portal --> checkout
-  customers --> events
-  customers --> invoicing
-  customers --> ledger
-  customers --> payment_methods
-  customers --> webhooks
-  customers --> metadata_rules
-  metadata_rules --> tenancy
-  segments --> customers
-  segments --> custom_fields
-  segments --> metrics
-  segments --> subscriptions
-  usage_controls --> catalog
-  usage_controls --> credits
-  usage_controls --> customers
-  usage_controls --> emails
-  usage_controls --> events
-  usage_controls --> invoicing
-  usage_controls --> metering
-  usage_controls --> payment_methods
-  usage_controls --> payments
-  usage_controls --> subscriptions
-  usage_controls --> webhooks
-  wallet --> customers
-  wallet --> events
-  wallet --> gateway
-  wallet --> invoicing
-  wallet --> ledger
-  wallet --> payments
-  wallet --> transactions
-  wallet --> webhooks
-  dunning_policies --> audit
-  dunning_policies --> events
-  dunning_policies --> subscriptions
-  invoicing --> audit
-  invoicing --> catalog
-  invoicing --> coupons
-  invoicing --> credit_notes
-  invoicing --> customers
-  invoicing --> events
-  invoicing --> gateway
-  invoicing --> ledger
-  invoicing --> metering
-  invoicing --> payment_methods
-  invoicing --> subscriptions
-  invoicing --> tax
-  invoicing --> transactions
-  invoicing --> webhooks
-  metering --> catalog
-  metering --> subscriptions
-  metrics --> catalog
-  metrics --> metering
-  model_prices --> metering
-  model_prices --> catalog
-  model_prices --> emails
-  subscriptions --> audit
-  subscriptions --> catalog
-  subscriptions --> coupons
-  subscriptions --> credit_notes
-  subscriptions --> customers
-  subscriptions --> events
-  subscriptions --> invoicing
-  subscriptions --> ledger
-  subscriptions --> metering
-  subscriptions --> metrics
-  subscriptions --> tax
-  subscriptions --> webhooks
-  subscriptions --> metadata_rules
-  team_alerts --> tenancy
-  team_alerts --> invoicing
-  team_alerts --> webhooks
-  team_alerts --> emails
-  disputes --> audit
-  disputes --> events
-  disputes --> ledger
-  gateway --> events
-  gateway --> webhooks
-  payment_intents --> events
-  payment_intents --> gateway
-  payment_intents --> invoicing
-  payment_intents --> ledger
-  payment_intents --> transactions
-  payment_intents --> webhooks
-  payment_methods --> events
-  payment_methods --> webhooks
-  payment_requests --> customers
-  payment_requests --> events
-  payment_requests --> gateway
-  payment_requests --> invoicing
-  payment_requests --> ledger
-  payment_requests --> payments
-  payment_requests --> receipts
-  payment_requests --> transactions
-  payments --> events
-  payments --> invoicing
-  payments --> ledger
-  payments --> subscriptions
-  payments --> wallet
-  payments --> webhooks
-  receipts --> customers
-  receipts --> events
-  receipts --> invoicing
-  refunds --> events
-  refunds --> ledger
-  refunds --> transactions
-  refunds --> webhooks
-  transactions --> events
-  transactions --> payments
-  transactions --> webhooks
-  migration --> catalog
-  migration --> coupons
-  migration --> customers
-  migration --> invoicing
-  migration --> ledger
-  migration --> metrics
-  migration --> subscriptions
-  migration --> wallet
-  transfer --> audit
-  transfer --> auth
-  transfer --> catalog
-  transfer --> coupons
-  transfer --> customers
-  transfer --> emails
-  transfer --> invoicing
-  transfer --> tax
+  worker["Billing worker<br/>durable billing clock"]
+  api["API<br/>Fastify · auth<br/>Idempotency-Key"]
+  hooks["Your webhook<br/>endpoints"]
+  mail["Email<br/>SMTP or SES"]
+  pg[("Postgres<br/>tenant data, RLS by organization<br/>ledger: double-entry, append-only<br/>metric_daily: report facts<br/>job queue and outbox rows")]
+  adapters["Gateway adapters<br/>one interface"]
+  gws["Payment gateways<br/>Stripe · Razorpay · PayPal<br/>TM Test · 10 more"]
+  worker -->|"delivers events"| hooks
+  worker -->|"sends"| mail
+  worker -->|"runs jobs, renews,<br/>folds each day"| pg
+  dash -->|"calls, server side"| api
+  hosted -->|"calls"| api
+  app -->|"calls"| api
+  api -->|"reads, writes, enqueues"| pg
+  worker --->|"charges renewals, retries"| adapters
+  api --->|"charges, refunds"| adapters
+  adapters -->|"provider API"| gws
+  gws -.->|"gateway webhooks"| api
 ```
+
+The hosted checkout and the customer portal are pages of the dashboard app (`dashboard/app/(storefront)`).
+Both the API and the worker charge: the API for a request (a subscribe, a plan change, a
+collect), the worker for renewals and retries.
+
+
+### 4.2 The money path
+
+```mermaid
+flowchart LR
+  subgraph starts["What starts a charge"]
+    usage["Usage events<br/>meters"]
+    clock["Billing clock<br/>renewal"]
+    change["Subscribe or plan change<br/>API · checkout · portal"]
+  end
+  subgraph docs["Invoice, credit and balances"]
+    cr["Credits and holds<br/>grants, drawdown"]
+    inv["Invoice<br/>lines · discounts · tax"]
+    cn["Credit notes<br/>unused time, refunds"]
+    bal["Customer balances<br/>promotional · refundable<br/>excess payments"]
+  end
+  subgraph collect["Collection"]
+    col["Collect the<br/>amount due"]
+    gw["Gateway adapter<br/>charge"]
+    pay["Payment"]
+    fail{"Declined"}
+  end
+  rev["Plan change undone<br/>invoice voided"]
+  dun["Dunning<br/>retries, then final action"]
+  held["Plan change held<br/>until paid, or expires"]
+  led[("Ledger<br/>double-entry<br/>append-only")]
+  usage -->|"credits taken<br/>at ingest"| cr
+  usage -->|"usage lines"| inv
+  clock -->|"term lines"| inv
+  change -->|"prorated lines"| inv
+  change -->|"unused time"| cn
+  cr -->|"pays lines"| inv
+  cn -->|"refundable credit"| bal
+  bal -->|"applied"| inv
+  inv --> col
+  col --> gw
+  gw -->|"approved"| pay
+  gw --> fail
+  fail -->|"revert, on a<br/>hard decline"| rev
+  fail -->|"renewal, start_dunning,<br/>next_renewal"| dun
+  fail -->|"apply_when_paid"| held
+  dun -.->|"retry"| col
+  held -.->|"pays again: the<br/>change applies"| col
+  docs -->|"entries"| led
+  pay -->|"entries"| led
+```
+
+- Every line is integer minor units. Promotional credit and discounts apply before tax;
+  refundable credit and excess payments after (§6.4).
+- A declined **renewal** goes to dunning. A declined **plan change** follows
+  `billing_rules_config.failed_change_charge`: `apply_when_paid` (the default for new
+  businesses) holds the change in `subscription_pending_changes` and applies it only when its
+  invoice is paid, else voids the invoice at expiry; `revert` undoes the change and voids the
+  invoice in the same transaction; `start_dunning` and `next_renewal` keep the change and retry
+  (`next_renewal` from the term end).
+- Nothing is updated in the ledger. A void or a refund posts compensating entries.
+
+### 4.3 Modules by layer
+
+<!-- BEGIN GENERATED: architecture-mermaid -->
+_Generated from [architecture.json](architecture/architecture.json). Each box is a layer and lists its modules. A link joins two layers when a module in one imports a module in the other; its label counts those module pairs, both ways. The arrowheads point at the imported side. The table below gives each direction._
+
+```mermaid
+flowchart TB
+  subgraph sg_tooling["Ops tooling (7)"]
+    tooling["assistant · assistant-docs<br/>assistant-tools<br/>migration · oauth<br/>time-travel · transfer"]
+  end
+  subgraph sg_customer["Customers & balances (9)"]
+    customer["checkout · credit-notes<br/>credits · customer-portal<br/>customers · metadata-rules<br/>segments · usage-controls<br/>wallet"]
+  end
+  subgraph sg_payments["Payments & gateway (9)"]
+    payments["disputes · gateway<br/>payment-intents<br/>payment-methods<br/>payment-requests<br/>payments · receipts<br/>refunds · transactions"]
+  end
+  subgraph sg_billing["Subscriptions & billing (7)"]
+    billing["dunning-policies<br/>invoicing · metering<br/>metrics · model-prices<br/>subscriptions<br/>team-alerts"]
+  end
+  subgraph sg_catalog["Catalog & pricing (6)"]
+    catalog["catalog · coupons<br/>custom-fields<br/>entitlements<br/>reason-codes · tax"]
+  end
+  subgraph sg_foundation["Foundation modules (13)"]
+    foundation["audit · auth · comments<br/>emails · events · hubspot<br/>integrations · ledger<br/>list-views · ops<br/>request-log · tenancy<br/>webhooks"]
+  end
+  tooling <-->|6| customer
+  tooling -->|2| payments
+  tooling -->|6| billing
+  tooling -->|6| catalog
+  tooling <-->|9| foundation
+  customer <-->|28| payments
+  customer <-->|33| billing
+  customer <-->|14| catalog
+  customer <-->|34| foundation
+  payments <-->|22| billing
+  payments <-->|37| foundation
+  billing <-->|11| catalog
+  billing <-->|29| foundation
+  catalog <-->|10| foundation
+```
+
+| From \ to | Foundation modules | Catalog & pricing | Customers & balances | Subscriptions & billing | Payments & gateway | Ops tooling |
+|---|---|---|---|---|---|---|
+| **Foundation modules** | · | 4 | 12 | 12 | 15 | 1 |
+| **Catalog & pricing** | 6 | · | 3 | 2 |  |  |
+| **Customers & balances** | 22 | 11 | · | 19 | 14 | 1 |
+| **Subscriptions & billing** | 17 | 9 | 14 | · | 11 |  |
+| **Payments & gateway** | 22 |  | 14 | 11 | · |  |
+| **Ops tooling** | 8 | 6 | 5 | 6 | 2 | · |
 <!-- END GENERATED: architecture-mermaid -->
 
 Machine-readable module graph: [`architecture/architecture.json`](./architecture/architecture.json). Interactive
@@ -569,8 +482,8 @@ Money system (append-only):
 ## 6. Core flows
 
 ### 6.1 The billing clock (the engine loop)
-`billing_clock_tick` (graphile-worker cron, every minute): apply scheduled changes →
-`runBillingClockTick` (renewals) → `runDunningPass` → `deliverPending` (webhooks); observed via
+`billing_clock_tick` (graphile-worker cron, every minute): apply scheduled changes → apply or
+expire plan changes held for payment (`pending_changes`) → `runBillingClockTick` (renewals) → `runDunningPass` → `deliverPending` (webhooks); observed via
 `clock_ticks`. For each subscription whose period has ended: roll the term forward (decrement
 `remaining_billing_cycles`), then generate the invoice through the ordered pipeline
 (`billSubscriptionPeriod`):
@@ -597,6 +510,16 @@ invoice line items + ledger entries); mid-cycle charges to invoice-now or unbill
 estimates; calendar billing anchors (per customer and per subscription). **Dunning is
 invoice-side**: a subscription can survive `not_paid` (configurable final action); the sub
 carries dues counters, not a `past_due` status.
+
+**A declined plan-change charge** follows `billing_rules_config.failed_change_charge`, per
+business. `apply_when_paid` (the default for new businesses) prices the change and raises its
+invoice, but holds the change in `subscription_pending_changes`: it applies, as of the request,
+only when that invoice is paid, and expires at the earliest of the term end and
+`pending_change_expiry_hours` (or `_slow` for slow methods), which voids the invoice.
+`revert` applies the change, then undoes it on a hard decline and voids the invoice in the same
+transaction. `start_dunning` (unset) keeps the change and retries the invoice on the dunning
+schedule (a hard decline that ends dunning at once runs the final action); `next_renewal` holds
+the retries until the term end.
 
 ### 6.3 Invoice lifecycle
 Statuses: `pending | posted | payment_due | not_paid | paid | voided` (+ internal `credited`),

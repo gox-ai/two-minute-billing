@@ -172,7 +172,22 @@ export const USAGE_PATHS = {
         "with status `duplicate` and changes nothing, even if its timestamp or values differ. " +
         "Keys are kept 35 days. The `Idempotency-Key` header is not used. The event is stored " +
         "before we answer. An event whose customer key matches no customer is kept as " +
-        "unmatched and bills once you add the key to a customer. Needs `usage_events:manage`.",
+        "unmatched and bills once you add the key to a customer. Needs `usage_events:manage`.\n\n" +
+        "**A meter with a credit cost.** The event's credits are taken from the customer's balance " +
+        "in the same transaction that stores the event. A credit grant pays only while its " +
+        "window contains the time the event arrives: a grant that starts later does not pay, and " +
+        "a grant that ended pays only a late event, as described below. When the customer does " +
+        "not have sufficient credit, the policy decides. Under `bill` with a money price (the " +
+        "meter's own usage price on the customer's subscription, else the credit unit's price " +
+        "per credit) the event is accepted: credits pay what they can and the rest is billed on " +
+        "the next invoice of the subscription (`credit.credits_uncovered`). Otherwise the " +
+        "balance may go below zero down to the overdraft limit (default 0); the next grant or " +
+        "top-up pays that part first. Past the limit the answer is 402 `insufficient_credit`: " +
+        "the event is stored, it is not billed, and a `credit_usage_refused` event is written, " +
+        "with the `policy` that applied. A repeat of its key answers 402 again. An event that arrives within the business's `late_event_grace_hours` (default " +
+        "12) of its `timestamp` is paid first by a credit grant that was live at that timestamp, " +
+        "even if the grant ended since; a later event is paid by the balance at arrival. Send " +
+        "`backfill: true` to record usage and spend no credits.",
       parameters: [biz],
       requestBody: {
         required: true,
@@ -188,6 +203,9 @@ export const USAGE_PATHS = {
           headers: rateLimitHeaders,
         },
         "400": err("The body is not correct."),
+        "402": err(
+          "`insufficient_credit`: a meter with a credit cost, and the customer does not have sufficient credit. The event is stored and is not billed.",
+        ),
         "422": err(
           "The event was refused: `timestamp_too_old`, `timestamp_in_future` or `invalid_value`.",
         ),
@@ -202,7 +220,8 @@ export const USAGE_PATHS = {
       description:
         "One result for each event, in order. A refused event does not stop the others. The " +
         "batch counts as one request against the rate limit. 400 only for a malformed body or " +
-        "more than 500 events.",
+        "more than 500 events. An event refused with `insufficient_credit` (a meter with a " +
+        "credit cost) is stored and is not billed.",
       parameters: [biz],
       requestBody: {
         required: true,
@@ -225,7 +244,11 @@ export const USAGE_PATHS = {
       description:
         "Allowed while no finalized invoice bills the event's period. The event stays on record " +
         "with `voided_at`; send a replacement with a new key. `timestamp` is required for an " +
-        "event older than 35 days.",
+        "event older than 35 days. Credits the event took go back to the customer's balance. " +
+        "Credits a settlement already drew are given back by a correcting settlement: the grant " +
+        "gets them back (a grant that ended since gives them as a new grant that expires in 12 " +
+        "months) and the revenue they booked is reversed. Refused while an invoice bills the " +
+        "event's usage beyond the credits: issue a credit note instead.",
       parameters: [biz],
       requestBody: {
         required: true,
@@ -234,7 +257,9 @@ export const USAGE_PATHS = {
       responses: {
         "200": json("UsageEventResult", "The voided event."),
         "404": err("No such event."),
-        "409": err("An invoice already bills its period. Issue a credit note instead."),
+        "409": err(
+          "An invoice already bills its period or its usage beyond the credits (issue a credit note instead).",
+        ),
       },
     },
   },
@@ -276,6 +301,58 @@ export const USAGE_PATHS = {
       responses: {
         "200": json("UsageKey", "The removed usage key."),
         "404": err("The customer has no such key."),
+      },
+    },
+  },
+  "/v1/businesses/{biz}/meters/{meter}/credit_cost": {
+    get: {
+      tags: ["Usage"],
+      summary: "Retrieve a meter's credit cost",
+      parameters: [biz, meterParam],
+      responses: {
+        "200": json("MeterCreditCost", "The credit cost."),
+        "404": err("No such meter, or the meter has no credit cost."),
+        "409": err("A price on a subscription bills the meter."),
+      },
+    },
+    put: {
+      tags: ["Usage"],
+      summary: "Set a meter's credit cost",
+      description:
+        "States what one unit of the meter costs in credits of a credit unit that has no money " +
+        "rate, for example `1` credit for an image and `0.5` for an edit. From then on each usage " +
+        "event of the meter takes its credits from the customer's balance when it arrives. " +
+        "`overrides` change the cost for a plan or for one subscription: a subscription's cost " +
+        "applies first, then a plan's, then the meter's. The request replaces the whole cost: an " +
+        "override that is not in `overrides` is removed. A usage price of the meter (a rate, " +
+        "not event amounts) then bills only the usage that credits do not pay. Refused for a " +
+        "credit unit that has a money rate, for a meter that a price on a subscription already " +
+        "bills in money, and for a meter that does not count events or add a value. " +
+        "Needs `meters:manage`.",
+      parameters: [biz, meterParam],
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: ref("MeterCreditCostSet") } },
+      },
+      responses: {
+        "200": json("MeterCreditCost", "The credit cost."),
+        "400": err("The body is not correct, or the credit unit has a money rate."),
+        "404": err("No such meter, credit unit, product or subscription."),
+        "409": err(
+          "A price on a subscription bills the meter in money, or the meter was paid in a different unit.",
+        ),
+      },
+    },
+    delete: {
+      tags: ["Usage"],
+      summary: "Remove a meter's credit cost",
+      description:
+        "Events received from then on spend no credits. Credits already taken stay taken. " +
+        "Refused while a price on a subscription bills the meter. Needs `meters:manage`.",
+      parameters: [biz, meterParam],
+      responses: {
+        "200": json("MeterCreditCostDeleted", "The credit cost was removed."),
+        "404": err("No such meter, or the meter has no credit cost."),
       },
     },
   },
@@ -355,10 +432,43 @@ const meterFields = {
         type: "string",
         description: "Or: the group key that names the token type.",
       },
+      unit: {
+        type: "string",
+        enum: [
+          "token",
+          "request",
+          "image",
+          "video_second",
+          "audio_second",
+          "character",
+          "page",
+          "pixel",
+        ],
+        description:
+          "The list unit an event quantity counts, such as `audio_second` or `image`. Not set: `token`, else `request`.",
+      },
+      quality: {
+        type: "string",
+        description:
+          "The price tier for every event, such as `hd`. Stored trimmed and in lower case.",
+      },
+      quality_key: {
+        type: "string",
+        description: "Or: the group key that names the quality.",
+      },
+      resolution: {
+        type: "string",
+        description:
+          "The resolution tier for every event, such as `1024x1024`. Stored trimmed and in lower case.",
+      },
+      resolution_key: {
+        type: "string",
+        description: "Or: the group key that names the resolution.",
+      },
     },
     example: { provider: "openai", token_type_key: "token_type" },
     description:
-      "Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. Can change after the meter has usage.",
+      "Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. With a quality or resolution, the price is the row with both tiers, else the same quality only, else the same resolution only, else the row with no tier. Can change after the meter has usage.",
   },
   cost_currency: {
     type: "string",
@@ -441,6 +551,12 @@ export const USAGE_SCHEMAS = {
         type: "boolean",
         description: "True once the meter has a counted event or a price: only `name` can change.",
       },
+      credit_cost: {
+        allOf: [ref("MeterCreditCost")],
+        nullable: true,
+        description:
+          "What one unit of the meter costs in credits. Null = the meter has no credit cost. Set it with `PUT …/meters/{meter}/credit_cost`.",
+      },
       created_at: { type: "string", format: "date-time" },
       updated_at: { type: "string", format: "date-time" },
       resource_version: { type: "integer" },
@@ -459,7 +575,120 @@ export const USAGE_SCHEMAS = {
   UsageEventCreate: {
     type: "object",
     required: ["key", "customer", "event_name"],
-    properties: eventProps,
+    properties: {
+      ...eventProps,
+      backfill: {
+        type: "boolean",
+        default: false,
+        description:
+          "For a meter with a credit cost: record the usage and spend no credits. No effect on any other meter.",
+      },
+    },
+  },
+  MeterCreditCostSet: {
+    type: "object",
+    required: ["unit", "credits_per_unit"],
+    properties: {
+      unit: {
+        type: "string",
+        example: "credit",
+        description: "The id of a credit unit that has no money rate. A meter keeps its unit.",
+      },
+      credits_per_unit: {
+        type: "string",
+        example: "0.5",
+        description:
+          "Credits for one unit of the meter: more than 0, at most 6 decimal places. A number is accepted too.",
+      },
+      overrides: {
+        type: "array",
+        maxItems: 500,
+        items: ref("MeterCreditCostOverride"),
+        description: "The cost for a plan or for one subscription. Omit for none.",
+      },
+    },
+  },
+  MeterCreditCostOverride: {
+    type: "object",
+    required: ["credits_per_unit"],
+    description: "Send `product` (a plan) or `subscription`, not both.",
+    properties: {
+      product: { type: "string", example: "pro-plan", description: "A plan's product id." },
+      subscription: { type: "string", example: "sub_XXXXXXXXXXXX01" },
+      credits_per_unit: { type: "string", example: "0.4" },
+    },
+  },
+  MeterCreditCost: {
+    type: "object",
+    required: ["unit", "credits_per_unit", "overrides"],
+    properties: {
+      object: { type: "string", enum: ["meter_credit_cost"] },
+      meter: { type: "string", example: "illustrations" },
+      unit: { type: "string", example: "credit" },
+      credits_per_unit: { type: "string", example: "1" },
+      overrides: { type: "array", items: ref("MeterCreditCostOverride") },
+    },
+  },
+  MeterCreditCostDeleted: {
+    type: "object",
+    required: ["object", "meter", "deleted"],
+    properties: {
+      object: { type: "string", enum: ["meter_credit_cost"] },
+      meter: { type: "string" },
+      deleted: { type: "boolean", enum: [true] },
+    },
+  },
+  UsageEventCredit: {
+    type: "object",
+    description: "What a meter with a credit cost did with the event.",
+    properties: {
+      meter: { type: "string" },
+      unit: { type: "string" },
+      status: {
+        type: "string",
+        enum: ["taken", "pending", "settled", "refused", "skipped"],
+        description:
+          "`taken`: the credits left the balance and wait for settlement. `pending`: a credit grant that ended pays, and its grace window is open. `settled`: drawn from the grants. `refused` and `skipped`: no credits were spent, and the event is never billed.",
+      },
+      reason: {
+        type: "string",
+        nullable: true,
+        enum: ["insufficient_credit", "backfill", "unmatched_customer", "voided", null],
+        description: "Why no credits were spent. Null for a billed event.",
+      },
+      quantity: { type: "string", description: "The event's quantity on the meter." },
+      credits_per_unit: { type: "string" },
+      cost_source: { type: "string", enum: ["meter", "plan", "subscription"] },
+      credits_due: { type: "string", description: "What the event costs." },
+      credits_taken: { type: "string" },
+      credits_from_closed_grant: {
+        type: "string",
+        description: "The part a credit grant that ended paid, in its grace window.",
+      },
+      credits_uncovered: {
+        type: "string",
+        description:
+          "The part that credits did not pay and that is billed in money (see `overage_basis`). Under `bill`, when the meter or the credit unit has a money price, the event is accepted and this part goes on the next invoice of the customer's subscription as a usage line.",
+      },
+      overage_basis: {
+        type: "string",
+        nullable: true,
+        enum: ["meter", "unit", null],
+        description:
+          "What bills `credits_uncovered`: `meter`, the meter's own usage price on the customer's subscription (it wins); `unit`, the credit unit's price per credit. Null when nothing bills it.",
+      },
+      credits_overdrawn: {
+        type: "string",
+        description:
+          "The part taken below zero, inside the overdraft limit, that no grant has paid back and no invoice bills yet. The next grant or top-up pays it first.",
+      },
+      covered_by_hold: { type: "boolean" },
+      credits_past_hold: {
+        type: "string",
+        description:
+          "The part past the hold that the capture did not charge, when `credit_config.capture_over_hold` is `cap_at_hold`. It is recorded and never billed. `credits_taken` does not include it.",
+      },
+    },
   },
   UsageEventBatchCreate: {
     type: "object",
@@ -499,6 +728,19 @@ export const USAGE_SCHEMAS = {
       created_at: { type: "string", format: "date-time", description: "When we received it." },
       voided_at: { type: "string", format: "date-time", nullable: true },
       void_reason: { type: "string", nullable: true },
+      refused_at: {
+        type: "string",
+        format: "date-time",
+        nullable: true,
+        description:
+          "Set when a meter that is paid in credits refused the event because the customer did not have sufficient credit. The event is stored and listed. It does not count in usage totals. Its cost still counts in cost and margin reports.",
+      },
+      credit: {
+        type: "array",
+        items: ref("UsageEventCredit"),
+        description:
+          "Present only when a meter with a credit cost counted the event: one entry for each such meter.",
+      },
     },
   },
   UsageEventResult: {
@@ -528,7 +770,8 @@ export const USAGE_SCHEMAS = {
                 code: {
                   type: "string",
                   example: "timestamp_too_old",
-                  description: "timestamp_too_old, timestamp_in_future, invalid_value, …",
+                  description:
+                    "timestamp_too_old, timestamp_in_future, invalid_value, insufficient_credit (stored, not billed), …",
                 },
                 message: { type: "string" },
               },
@@ -691,8 +934,8 @@ export const USAGE_CLOSE_DELAY_FIELD = {
   usage_close_delay_minutes: {
     type: "integer",
     minimum: 0,
-    maximum: 24,
+    maximum: 43200,
     description:
-      "Extra minutes before a period's usage closes, for apps that buffer events. Usage closes about 6 minutes after the period ends plus this wait, never more than 30 minutes.",
+      "The usage grace window in minutes, 0 to 43200 (30 days), for apps that send events late. A metered subscription renews on time and its new period's plan credits start on time; only the invoice of the period that closed waits, for this long after the period ends plus about 6 minutes, so usage that arrives in the grace bills on it. The wait is never more than half the plan's billing interval or half the new period. Usage that arrives after the invoice finalizes bills on the next invoice. Only an invoice with metered usage waits. 0 = the invoice finalizes about 6 minutes after the period ends.",
   },
 };

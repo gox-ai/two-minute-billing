@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, parseYmd, todayYmd, type DateRange, type Ymd } from "@/components/ui/calendar";
+import { Calendar, todayYmd, type DateRange, type Ymd } from "@/components/ui/calendar";
 import { useNavPending } from "@/components/navigation/nav-pending";
 import { useDefaultState } from "@/lib/use-default-state";
 import { parseTypedDate, type BoardOption } from "@/components/reports/board-range-picker";
+import { fmtRange } from "@/lib/format-date";
 
 /**
  * The board's window: presets on the left, a custom period on the right. The trigger names
@@ -20,17 +21,6 @@ import { parseTypedDate, type BoardOption } from "@/components/reports/board-ran
 /** Days in an inclusive calendar range. */
 function spanDays(start: Ymd, end: Ymd): number {
   return Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
-}
-
-function pretty(d: string): string {
-  const dt = parseYmd(d) ?? (Number.isNaN(Date.parse(d)) ? null : new Date(d));
-  if (!dt) return d;
-  return dt.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 }
 
 /** `YYYY-MM-DD` → `DD/MM/YYYY`, the form the date fields show and accept. */
@@ -131,11 +121,10 @@ export function PeriodPicker({
 
   const isCustom = custom.start != null && custom.end != null;
   const label = isCustom
-    ? `${pretty(custom.start!)} – ${pretty(custom.end!)}`
+    ? fmtRange(custom.start!, custom.end!)
     : (ranges.find((r) => r.id === range)?.label ?? "Period");
   // A custom label already IS the window; a preset's is only known once answered.
-  const answered =
-    !isCustom && resolved ? `${pretty(resolved.start)} – ${pretty(resolved.end)}` : null;
+  const answered = !isCustom && resolved ? fmtRange(resolved.start, resolved.end) : null;
 
   const go = (href: string) => {
     setOpen(false);
@@ -243,7 +232,7 @@ export function PeriodPicker({
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
             <span className="text-xs text-muted-foreground tabular-nums">
               {draft.start && draft.end
-                ? `${pretty(draft.start)} – ${pretty(draft.end)} · ${spanDays(draft.start, draft.end)} days`
+                ? `${fmtRange(draft.start, draft.end)} · ${spanDays(draft.start, draft.end)} days`
                 : draft.start
                   ? "Now select the end date"
                   : "Select the start date"}
@@ -265,7 +254,7 @@ export function PeriodPicker({
           </div>
           {resolved ? (
             <p className="mt-2 text-xs text-muted-foreground tabular-nums">
-              Showing {pretty(resolved.start)} – {pretty(resolved.end)}
+              Showing {fmtRange(resolved.start, resolved.end)}
             </p>
           ) : null}
         </form>

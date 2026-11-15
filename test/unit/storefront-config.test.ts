@@ -30,6 +30,10 @@ describe("resolveStorefrontConfig — defaults (0243)", () => {
       cancelTiming: "end_of_term",
       allowPauseResume: false,
       allowReactivate: false,
+      allowRestart: false,
+      restartPrice: "current",
+      restartWindowDays: null,
+      restartOpenInvoices: "pay_first",
       allowSkipRenewal: false,
       skipRenewalLimit: 3,
       hideZeroValueLines: false,
@@ -358,6 +362,15 @@ describe("pause / resume / reactivate (2026-09-09)", () => {
   it("both default OFF — every one of these is a new action", () => {
     expect(cfg(null).allowPauseResume).toBe(false);
     expect(cfg(null).allowReactivate).toBe(false);
+    // Restart (2026-11-10): only literal values opt in; junk falls back to the defaults.
+    expect(cfg({ allow_restart: "true" }).allowRestart).toBe(false);
+    expect(cfg({ restart_price: "keep" }).restartPrice).toBe("keep");
+    expect(cfg({ restart_price: "old" }).restartPrice).toBe("current");
+    expect(cfg({ restart_window_days: 30 }).restartWindowDays).toBe(30);
+    expect(cfg({ restart_window_days: 0 }).restartWindowDays).toBe(null);
+    expect(cfg({ restart_window_days: 2.5 }).restartWindowDays).toBe(null);
+    expect(cfg({ restart_open_invoices: "allow" }).restartOpenInvoices).toBe("allow");
+    expect(cfg({ restart_open_invoices: "ignore" }).restartOpenInvoices).toBe("pay_first");
   });
 
   it("pause and resume are ONE key, so a buyer can never be trapped paused", () => {

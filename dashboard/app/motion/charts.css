@@ -1,0 +1,62 @@
+/* Motion: charts. Owned by the matching component; tokens from globals.css only. */
+
+/* lib/chart-draw.ts. Classes are `chart-*`, not `anim-*`: a chart is content, so it still
+   draws on a page entered by navigation. Each mark's base style is its end state and the
+   fill is `backwards`, so a skipped animation never leaves a half-drawn line. */
+
+/* `--draw-dur` is the line's draw; the wash and the marker wait on it. */
+.chart-short {
+  --draw-dur: var(--dur);
+}
+
+/* A trend line draws left to right. `pathLength="1"` makes one dash the whole path. */
+.chart-line {
+  animation: chart-draw var(--draw-dur, var(--dur-slow)) var(--ease-glide) backwards;
+}
+@keyframes chart-draw {
+  from {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* The same draw as a wipe, for a non-scaling stroke: there, `pathLength` misreads the
+   length (measured in Chrome: offset .5 left most of the line drawn). */
+.chart-wipe {
+  animation: chart-wipe var(--draw-dur, var(--dur-slow)) var(--ease-glide) backwards;
+}
+@keyframes chart-wipe {
+  from {
+    clip-path: inset(0 100% 0 0) view-box;
+  }
+  to {
+    clip-path: inset(0 0 0 0) view-box;
+  }
+}
+
+/* The wash under the line fades in as the line lands. */
+.chart-area {
+  animation: m-fade-in var(--dur) var(--ease-out) calc(var(--draw-dur, var(--dur-slow)) * 0.6)
+    backwards;
+}
+
+/* Markers pop last. */
+.chart-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: m-mark var(--dur) var(--ease-spring) var(--draw-dur, var(--dur-slow)) backwards;
+}
+
+/* A bar grows from its baseline, one 40ms turn per bar (`--bar-turn`, capped at 11). */
+.chart-bar {
+  transform-origin: left center;
+  animation: r2-grow var(--dur-slow) var(--ease-glide) calc(var(--bar-turn, 0) * 40ms) backwards;
+}
+/* A bar whose baseline is its right edge (a diverging bar's left half). */
+.chart-bar-end {
+  transform-origin: right center;
+}

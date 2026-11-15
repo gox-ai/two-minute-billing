@@ -23,7 +23,7 @@ export function SettingsHub({
   children: React.ReactNode;
   className?: string;
 }) {
-  return <div className={cn("space-y-10 pb-10", className)}>{children}</div>;
+  return <div className={cn("space-y-8", className)}>{children}</div>;
 }
 
 export function SettingsGroup({
@@ -59,7 +59,7 @@ export function SettingsGroup({
       </div>
       <div
         className={cn(
-          "divide-y divide-border overflow-hidden rounded-lg border bg-card",
+          "divide-y divide-border overflow-hidden rounded-xl border bg-card",
           contentClassName,
         )}
       >

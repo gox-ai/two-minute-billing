@@ -81,7 +81,19 @@ amount_minor). Ledger accounts: `credit_adjustments`, refundable-credit balance,
   rata to its tax. The note being written counts, so both in one note are netted too.
 
 ## Changelog
+- **2026-11-14** — `voidCreditNote` takes an optional `tx` and voids inside it (the change
+  revert voids the change's notes in its own transaction).
+- **2026-11-13 (0530)** — `pack_refund: full` on an active pack in a unit with no rate: the used credits are drawn again from the customer's other grants and the rest written off (credits README), so `credits/pack-refund.ts` no longer refuses that pack while other credit is left. Other packs keep the 0529 rule. One path: the stored field and the writers' `packRefund`.
 
+- **2026-11-13 (0529)** — `pack_refund: full` on a credit note: a credit pack line can take its
+  whole value, used credits too (`lineCreditableAmounts` takes `{ packRefund }`; the writers store
+  `credit_notes.pack_refund`). The unused part is voided as before; refused while the customer has
+  other credit left in the unit (`credits/pack-refund.ts`). The note returns `pack_refund`. Gate:
+  `verify:credit-settings-reports` § 4.
+
+- **2026-11-12** — `payOutRefundsPayable` no longer emits `refund_failed` for a `RefundError`
+  that `refundPayment` already reported (`eventEmitted`), so one declined payout is one event. Its
+  own event (raw provider throws, validation refusals) names the credit note by public id, not uuid.
 - **2026-11-03** — A payout refund the gateway accepted but has not settled counts as paid out
   (`succeededRefundTotal` reads `pending` too, and `gatewayRefundableForInvoice` no longer offers
   that money again). The earmark of a pending refund was reversed, so a refund that later landed
@@ -923,3 +935,13 @@ amount_minor). Ledger accounts: `credit_adjustments`, refundable-credit balance,
 - **2026-11-05** — `invoiceRefundGatewayAccount`: the one gateway account a refund of an invoice goes
   through (each payment `gatewayRefundableForInvoice` scans, resolved by `refundGatewayAccount`).
   Served as `GET …/invoices/:inv/refund_gateway_account`; the refund dialogs read its balance.
+- **2026-11-11** — A credit note states its tax once. `CreditNoteItemInput.kind` writes
+  `credit_note_items.kind` (`"tax"` on the change path's tax-reversal item, `proration.ts`; supply
+  lines stay NULL). `tax-items.ts` holds the one rule (`itemsStatedAsTax`, plus `creditNoteTaxTotal`,
+  moved here and re-exported from `document.ts`): items marked `tax`, or unmarked items with the
+  tax-reversal wording and no invoice line, leave the line table only when they sum exactly to the
+  ladder's tax. `assembleCreditNoteDocument` (PDF, email) prints the rest; `getCreditNoteDetail`
+  passes the same ids, so the read returns `items[].stated_in_taxes` (detail only) and
+  `items[].kind` (every read). No stored row or amount changes. Gate: `verify:proration` §K.
+- **2026-11-13** — The credit-note document sets the new `meta.holdUntil` to null (a held invoice is
+  an invoice-only state). No output change.

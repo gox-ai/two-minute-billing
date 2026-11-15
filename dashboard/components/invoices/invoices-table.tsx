@@ -1,6 +1,5 @@
 "use client";
 
-import { PaletteSearchHint } from "@/components/palette-hints";
 import * as React from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
@@ -16,8 +15,9 @@ import { cn } from "@/lib/utils";
 import { StatusChip, Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 import type { InvoiceExtras } from "@/lib/api/invoices";
-import { fmtDateShort, fmtDateTimeShort } from "@/lib/format";
-import { Receipt } from "lucide-react";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
+import { CreditCard, FileDown, Receipt, User } from "lucide-react";
+import { RowMenu, copyIdItem } from "@/components/patterns/row-menu";
 import type { Invoice } from "@/lib/api";
 import { TREATMENT_SHORT } from "@/lib/tax-format";
 import { moneyCell } from "@/lib/table-export";
@@ -104,8 +104,8 @@ const MINOR_HINT = "Integer minor units. For example, 129900 is 1,299.00 in a tw
 const STATUS_OPTIONS = [
   { value: "pending", label: "Pending" },
   { value: "posted", label: "Posted" },
-  { value: "payment_due", label: "Payment Due" },
-  { value: "not_paid", label: "Not Paid" },
+  { value: "payment_due", label: "Payment due" },
+  { value: "not_paid", label: "Not paid" },
   { value: "paid", label: "Paid" },
   { value: "voided", label: "Voided" },
 ];
@@ -185,14 +185,16 @@ export function InvoicesTable({
             <InfoCell
               title={<span className={cn(!i.number && "font-mono")}>{i.number ?? i.id}</span>}
               href={`/businesses/${biz}/invoices/${i.id}`}
-              // A number-less invoice already shows its id as the title.
-              sub={i.number ? i.id : undefined}
               trailing={
-                i.imported ? (
-                  <Chip tone="slate" className="px-1.5 py-0 text-xs uppercase">
-                    Imported
-                  </Chip>
-                ) : null
+                <>
+                  {i.imported ? (
+                    <Chip tone="slate" className="px-1.5 py-0 text-xs uppercase">
+                      Imported
+                    </Chip>
+                  ) : null}
+                  {/* Neutral, as on the invoice page: a kind of invoice, not an action. */}
+                  {i.purpose === "late_usage" ? <Chip>Late usage</Chip> : null}
+                </>
               }
             />
           );
@@ -201,7 +203,18 @@ export function InvoicesTable({
       {
         accessorKey: "status",
         header: "Status",
-        cell: ({ row }) => <StatusChip status={row.original.status} />,
+        // A held renewal invoice (usage grace window) says when it finalizes.
+        cell: ({ row }) =>
+          row.original.status === "pending" && row.original.usage_closes_at ? (
+            <span className="flex flex-col items-start gap-0.5">
+              <StatusChip status={row.original.status} />
+              <span className="text-xs text-muted-foreground">
+                Finalizes on {fmtDateTime(row.original.usage_closes_at, tz)}
+              </span>
+            </span>
+          ) : (
+            <StatusChip status={row.original.status} />
+          ),
       },
       {
         id: "total",
@@ -209,6 +222,7 @@ export function InvoicesTable({
         accessorFn: (i) => i.total_minor,
         meta: {
           align: "right",
+          phone: "aside",
           exportAs: [
             moneyCell<InvoiceRow>(
               "Amount",
@@ -224,7 +238,7 @@ export function InvoicesTable({
       },
       {
         id: "due",
-        header: "Amount Due",
+        header: "Amount due",
         accessorFn: (i) => (OPEN.includes(i.status) ? (i.amount_due_minor ?? i.total_minor) : 0),
         // Blank unless the invoice is open, as on screen.
         meta: {
@@ -258,28 +272,26 @@ export function InvoicesTable({
         header: "Created",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.created_at ? fmtDateTimeShort(row.original.created_at, tz) : null}
+            {row.original.created_at ? fmtDateTime(row.original.created_at, tz) : null}
           </TextCell>
         ),
       },
       {
         accessorKey: "period_end",
-        header: "Period End",
+        header: "Period end",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.period_end ? fmtDateShort(row.original.period_end, tz) : null}
+            {row.original.period_end ? fmtDate(row.original.period_end, tz) : null}
           </TextCell>
         ),
       },
       {
         id: "retry",
-        header: "Next Retry",
+        header: "Next retry",
         accessorFn: (i) => i.next_attempt_at ?? "",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.next_attempt_at
-              ? fmtDateTimeShort(row.original.next_attempt_at, tz)
-              : null}
+            {row.original.next_attempt_at ? fmtDateTime(row.original.next_attempt_at, tz) : null}
           </TextCell>
         ),
       },
@@ -299,38 +311,36 @@ export function InvoicesTable({
       },
       {
         id: "paid_at",
-        header: "Paid On",
+        header: "Paid on",
         accessorFn: (i) => i.paid_at ?? "",
         cell: ({ row }) => (
-          <TextCell>
-            {row.original.paid_at ? fmtDateTimeShort(row.original.paid_at, tz) : null}
-          </TextCell>
+          <TextCell>{row.original.paid_at ? fmtDateTime(row.original.paid_at, tz) : null}</TextCell>
         ),
       },
       {
         id: "voided_at",
-        header: "Voided On",
+        header: "Voided on",
         accessorFn: (i) => i.voided_at ?? "",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.voided_at ? fmtDateTimeShort(row.original.voided_at, tz) : null}
+            {row.original.voided_at ? fmtDateTime(row.original.voided_at, tz) : null}
           </TextCell>
         ),
       },
       {
         id: "po_number",
-        header: "PO Number",
+        header: "PO number",
         accessorFn: (i) => i.po_number ?? "",
         cell: ({ row }) => <TextCell>{row.original.po_number ?? null}</TextCell>,
       },
     ],
-    [biz],
+    [biz, tz],
   );
 
   // The invoice views (these were status chips above the table before).
   const segments = React.useMemo<ListSegment<InvoiceRow>[]>(
     () => [
-      { id: "all", label: "All Invoices" },
+      { id: "all", label: "All invoices" },
       // Everything still owed us, whether or not it is late — the set the Business Home
       // "Unpaid Invoices" card counts, and that card links here. `posted` is in it because
       // it means finalized but not yet due (Net-D inside its terms), which is money owed.
@@ -347,12 +357,12 @@ export function InvoicesTable({
       { id: "posted", label: "Posted", filters: [{ field: "status", op: "is", value: "posted" }] },
       {
         id: "payment_due",
-        label: "Payment Due",
+        label: "Payment due",
         filters: [{ field: "status", op: "is", value: "payment_due" }],
       },
       {
         id: "not_paid",
-        label: "Not Paid",
+        label: "Not paid",
         filters: [{ field: "status", op: "is", value: "not_paid" }],
       },
       { id: "paid", label: "Paid", filters: [{ field: "status", op: "is", value: "paid" }] },
@@ -371,7 +381,7 @@ export function InvoicesTable({
       // Net-D term, and the real balance test so a fully paid Net-30 invoice drops out.
       {
         id: "due_soon",
-        label: "Due in the Next 7 Days",
+        label: "Due in the next 7 days",
         filters: [
           { field: "due_date", op: "in_next", value: "7" },
           { field: "amount_due_minor", op: "gt", value: "0" },
@@ -381,7 +391,7 @@ export function InvoicesTable({
       // yet and one three retries in; only `dunning_status` separates them.
       {
         id: "in_dunning",
-        label: "In Dunning",
+        label: "In dunning",
         filters: [{ field: "dunning_status", op: "in", value: "in_progress,parked" }],
       },
       // Bad debt. `status` reads `paid` on these because the write-off note zeroed the
@@ -389,7 +399,7 @@ export function InvoicesTable({
       // the list tells them apart from money that actually arrived.
       {
         id: "written_off",
-        label: "Written Off",
+        label: "Written off",
         filters: [{ field: "written_off", op: "is", value: "true" }],
       },
     ],
@@ -403,11 +413,11 @@ export function InvoicesTable({
    */
   const filterFields = React.useMemo<ListFilterField<Invoice>[]>(
     () => [
-      { id: "number", label: "Invoice Number", group: "Identity", serverOps: TEXT_OPS },
-      { id: "id", label: "Invoice Id", group: "Identity", serverOps: TEXT_OPS_NN },
+      { id: "number", label: "Invoice number", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Invoice ID", group: "Identity", serverOps: TEXT_OPS_NN },
       {
         id: "po_number",
-        label: "PO Number",
+        label: "PO number",
         group: "Identity",
         serverOps: TEXT_OPS,
         keywords: "purchase order",
@@ -423,7 +433,7 @@ export function InvoicesTable({
       },
       {
         id: "written_off",
-        label: "Written Off",
+        label: "Written off",
         type: "boolean",
         group: "Status",
         serverOps: ["is"],
@@ -431,16 +441,16 @@ export function InvoicesTable({
         keywords: "bad debt write-off",
       },
 
-      { id: "customer", label: "Customer Id", group: "Customer", serverOps: TEXT_OPS_NN },
-      { id: "customer_name", label: "Customer Name", group: "Customer", serverOps: TEXT_OPS },
-      { id: "customer_email", label: "Customer Email", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer", label: "Customer ID", group: "Customer", serverOps: TEXT_OPS_NN },
+      { id: "customer_name", label: "Customer name", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_email", label: "Customer email", group: "Customer", serverOps: TEXT_OPS },
 
       // `is empty` here is how "one-off invoices only" gets asked. The engine has no
       // `recurring` column and no `recurring` field in the response, so there is no
       // second field of that name — one predicate, one name.
       {
         id: "subscription",
-        label: "Subscription Id",
+        label: "Subscription ID",
         group: "Subscription",
         serverOps: TEXT_OPS,
         hint: "Empty means a one-off invoice with no subscription behind it",
@@ -458,7 +468,7 @@ export function InvoicesTable({
       },
       {
         id: "subtotal_minor",
-        label: "Sub Total (minor units)",
+        label: "Sub total (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -475,7 +485,7 @@ export function InvoicesTable({
       },
       {
         id: "promotional_discount_minor",
-        label: "Promotional Discount (minor units)",
+        label: "Promotional discount (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -484,7 +494,7 @@ export function InvoicesTable({
       },
       {
         id: "credits_applied_minor",
-        label: "Credits Applied (minor units)",
+        label: "Credits applied (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -492,7 +502,7 @@ export function InvoicesTable({
       },
       {
         id: "amount_paid_minor",
-        label: "Amount Paid (minor units)",
+        label: "Amount paid (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -500,7 +510,7 @@ export function InvoicesTable({
       },
       {
         id: "amount_due_minor",
-        label: "Amount Due (minor units)",
+        label: "Amount due (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -527,20 +537,20 @@ export function InvoicesTable({
       },
       {
         id: "period_start",
-        label: "Period Start",
+        label: "Period start",
         type: "date",
         group: "Dates",
         serverOps: DATE_OPS,
       },
       // Compared as the list PRINTS it: a business that reports period ends inclusively
       // stores 26-Aug 00:00 for a row showing "25 Aug", and the engine backs that off.
-      { id: "period_end", label: "Period End", type: "date", group: "Dates", serverOps: DATE_OPS },
-      { id: "paid_at", label: "Paid On", type: "date", group: "Dates", serverOps: DATE_OPS },
-      { id: "voided_at", label: "Voided On", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "period_end", label: "Period end", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "paid_at", label: "Paid on", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "voided_at", label: "Voided on", type: "date", group: "Dates", serverOps: DATE_OPS },
 
       {
         id: "due_date",
-        label: "Due Date",
+        label: "Due date",
         type: "date",
         group: "Collection",
         serverOps: DATE_OPS,
@@ -548,7 +558,7 @@ export function InvoicesTable({
       },
       {
         id: "expected_payment_date",
-        label: "Expected Payment Date",
+        label: "Expected payment date",
         type: "date",
         group: "Collection",
         serverOps: DATE_OPS,
@@ -556,7 +566,7 @@ export function InvoicesTable({
       },
       {
         id: "dunning_status",
-        label: "Dunning Status",
+        label: "Dunning status",
         type: "select",
         group: "Collection",
         options: DUNNING_OPTIONS,
@@ -565,7 +575,7 @@ export function InvoicesTable({
       },
       {
         id: "ar_bucket",
-        label: "Ageing Bucket",
+        label: "Ageing bucket",
         type: "select",
         group: "Collection",
         options: AR_BUCKET_OPTIONS,
@@ -575,21 +585,21 @@ export function InvoicesTable({
       },
       {
         id: "attempt_count",
-        label: "Dunning Attempts",
+        label: "Dunning attempts",
         type: "number",
         group: "Collection",
         serverOps: NUM_OPS_NN,
       },
       {
         id: "next_attempt_at",
-        label: "Next Retry",
+        label: "Next retry",
         type: "date",
         group: "Collection",
         serverOps: DATE_OPS,
       },
       {
         id: "dunning_exhausted_at",
-        label: "Retries Exhausted On",
+        label: "Retries exhausted on",
         type: "date",
         group: "Collection",
         serverOps: DATE_OPS,
@@ -600,7 +610,7 @@ export function InvoicesTable({
       // result set the operator already exported.
       {
         id: "tax_treatment",
-        label: "Tax Treatment",
+        label: "Tax treatment",
         type: "select",
         group: "Tax",
         options: TREATMENT_OPTIONS,
@@ -608,7 +618,7 @@ export function InvoicesTable({
       },
       {
         id: "place_of_supply_code",
-        label: "Place of Supply",
+        label: "Place of supply",
         group: "Tax",
         serverOps: ENUM_OPS,
         hint: "Subdivision code at issue, for example TN, KA or CA",
@@ -616,14 +626,14 @@ export function InvoicesTable({
       },
       {
         id: "seller_state_code",
-        label: "Seller State Code",
+        label: "Seller state code",
         group: "Tax",
         serverOps: ENUM_OPS,
         hint: "The seller state that selected CGST+SGST or IGST. It does not change after issue",
       },
       {
         id: "tax_note",
-        label: "Tax Note",
+        label: "Tax note",
         group: "Tax",
         serverOps: TEXT_OPS,
         keywords: "reverse charge sez export",
@@ -651,9 +661,9 @@ export function InvoicesTable({
       data={rows}
       server={{ total, hasMore, nextCursor, fetchPage }}
       segments={segments}
-      // Voided On and PO Number are optional columns — present in the chooser,
-      // off by default so the default view stays readable.
-      initialHidden={["voided_at", "po_number"]}
+      // Optional columns, in the chooser and off by default, so the table fits its card
+      // at 1440px with the customer in view.
+      initialHidden={["due", "dunning", "period_end", "retry", "paid_at", "voided_at", "po_number"]}
       filterFields={filterFields}
       initialFilters={initialFilters}
       savedViews={{ entity: "invoices", biz }}
@@ -661,23 +671,63 @@ export function InvoicesTable({
         { id: "created_at", label: "Created" },
         { id: "total_minor", label: "Amount" },
         { id: "status", label: "Status" },
-        { id: "period_end", label: "Period End" },
+        { id: "period_end", label: "Period end" },
         // Backed by `LIST_SORTS.due_date`; the two due-date views above are far more
         // useful ordered by when the money is expected than by when we billed.
-        { id: "due_date", label: "Due Date" },
+        { id: "due_date", label: "Due date" },
       ]}
       createSlot={createSlot}
-      searchPlaceholder="Search for number / ID…"
-      searchHint={<PaletteSearchHint />}
+      searchPlaceholder="Search by number or ID"
       exportName="invoices"
       persistKey={`invoices:${biz}`}
       enableSelection
       rowHref={(i) => `/businesses/${biz}/invoices/${i.id}`}
+      rowMenu={(i) => {
+        const base = `/businesses/${biz}/invoices/${i.id}`;
+        return (
+          <RowMenu
+            label={i.number ?? i.id}
+            groups={[
+              {
+                label: "References",
+                items: [
+                  i.customer
+                    ? {
+                        label: "View customer",
+                        icon: <User className="size-4" />,
+                        href: `/businesses/${biz}/customers/${i.customer}`,
+                      }
+                    : null,
+                  i.subscription
+                    ? {
+                        label: "View subscription",
+                        icon: <CreditCard className="size-4" />,
+                        href: `/businesses/${biz}/subscriptions/${i.subscription}`,
+                      }
+                    : null,
+                ],
+              },
+              {
+                label: "Quick actions",
+                items: [
+                  { label: "View invoice", icon: <Receipt className="size-4" />, href: base },
+                  {
+                    label: "Download PDF",
+                    icon: <FileDown className="size-4" />,
+                    download: `${base}/pdf`,
+                  },
+                  copyIdItem("invoice", i.id),
+                ],
+              },
+            ]}
+          />
+        );
+      }}
       emptyState={
         <EmptyState
           icon={<Receipt />}
           title="No invoices"
-          description="No invoices match this view or search."
+          description="There are no invoices in this view."
         />
       }
     />

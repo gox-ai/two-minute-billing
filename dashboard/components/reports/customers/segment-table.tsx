@@ -7,9 +7,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { StatusChip } from "@/components/patterns/chip";
+import { Chip, StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDate, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import type { SegmentCustomer } from "@/lib/api/segments";
 
 /**
@@ -31,7 +32,7 @@ import type { SegmentCustomer } from "@/lib/api/segments";
  * page, and its statuses are the API statuses, so a row reading "Non-renewing" reads
  * the same here as on the subscriptions list.
  *
- * Country and Signed up hide at xl only, where the table shares its row with the rail.
+ * Country and Signed up hide while the table shares its row with the rail, until the column reaches 72.875rem.
  */
 export function SegmentCustomerTable({
   biz,
@@ -64,10 +65,14 @@ export function SegmentCustomerTable({
         <TableHeader>
           <TableRow>
             <TableHead>Customer</TableHead>
-            <TableHead className="xl:hidden 2xl:table-cell">Country</TableHead>
+            <TableHead className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
+              Country
+            </TableHead>
             <TableHead className="text-right">Subscriptions</TableHead>
             <TableHead className="text-right">MRR</TableHead>
-            <TableHead className="xl:hidden 2xl:table-cell">Signed up</TableHead>
+            <TableHead className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
+              Signed up
+            </TableHead>
             <TableHead>Status</TableHead>
           </TableRow>
         </TableHeader>
@@ -85,12 +90,12 @@ export function SegmentCustomerTable({
                   <Link
                     href={`/businesses/${biz}/customers/${c.id}`}
                     title={c.name || c.company || c.email || c.id}
-                    className="block truncate font-medium"
+                    className="block truncate font-medium text-primary hover:underline"
                   >
                     {c.name || c.company || c.email || c.id}
                   </Link>
                 </TableCell>
-                <TableCell className="xl:hidden 2xl:table-cell">
+                <TableCell className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
                   {c.address?.country ?? "—"}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{live}</TableCell>
@@ -104,17 +109,23 @@ export function SegmentCustomerTable({
                         .map((cur) => money(facts.mrr[cur]!, cur))
                         .join(" · ")}
                 </TableCell>
-                <TableCell className="xl:hidden 2xl:table-cell">
+                <TableCell className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
                   {fmtDate(c.created_at, tz)}
                 </TableCell>
                 <TableCell>
-                  {/* A buyer with no subscription: when they last bought says more than "none". */}
-                  {!dominantStatus(facts.statuses) && facts.last_order_at ? (
-                    <span className="text-sm text-muted-foreground">
-                      Last order {fmtDate(facts.last_order_at, tz)}
-                    </span>
-                  ) : (
+                  {/* A chip in every row. A buyer with no subscription gets "No subscription",
+                      and when they last bought under it: that says more than "none". */}
+                  {dominantStatus(facts.statuses) ? (
                     <StatusChip status={dominantStatus(facts.statuses)} />
+                  ) : (
+                    <span className="flex items-center gap-2 whitespace-nowrap">
+                      <Chip>No subscription</Chip>
+                      {facts.last_order_at ? (
+                        <span className="text-xs text-muted-foreground">
+                          Last order {fmtDate(facts.last_order_at, tz)}
+                        </span>
+                      ) : null}
+                    </span>
                   )}
                 </TableCell>
               </TableRow>

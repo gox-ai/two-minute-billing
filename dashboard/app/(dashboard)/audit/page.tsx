@@ -1,3 +1,4 @@
+import { listBusinesses } from "@/lib/api";
 import { listAuditLogs } from "@/lib/api/audit";
 import { requirePermission } from "@/lib/session";
 import { orgTz } from "@/lib/org-tz-server";
@@ -15,12 +16,18 @@ export default async function AuditLogPage() {
   const tz = await orgTz();
 
   let logs;
+  let businessNames: Record<string, string> = {};
   try {
     logs = await listAuditLogs({ limit: 50 });
+    const businesses = await listBusinesses().catch(() => null);
+    businessNames = Object.fromEntries((businesses?.data ?? []).map((b) => [b.id, b.name]));
   } catch (e) {
     return (
       <>
-        <PageHeader title="Audit Log" />
+        <PageHeader
+          title="Audit log"
+          breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Audit log" }]}
+        />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -33,7 +40,8 @@ export default async function AuditLogPage() {
       {/* Chrome stays visible at zero rows — the table owns its empty state. */}
       <AuditTable
         page={{
-          title: "Audit Log",
+          title: "Audit log",
+          breadcrumbs: [{ label: "Overview", href: "/" }, { label: "Audit log" }],
           description: "All actions across every business in this organization.",
           actions: <span className="text-xs text-muted-foreground">Times in {tz}</span>,
         }}
@@ -42,6 +50,7 @@ export default async function AuditLogPage() {
         hasMore={logs.has_more}
         nextCursor={logs.next_cursor}
         showBusiness
+        businessNames={businessNames}
       />
     </>
   );

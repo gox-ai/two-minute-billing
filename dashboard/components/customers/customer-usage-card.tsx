@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { RecordCard } from "@/components/patterns/record-page";
 import { getCustomerCurrentUsage } from "@/lib/api/current-usage";
-import { fmtDate, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtRange } from "@/lib/format-date";
 
 /**
  * Usage so far on each of the customer's metered subscriptions, with totals per currency.
@@ -53,9 +54,7 @@ export async function CustomerUsageCard({
                   {u.subscription}
                 </Link>
                 <span className="text-muted-foreground">
-                  {u.window
-                    ? `${fmtDate(u.window.start, tz)} to ${fmtDate(u.window.end, tz)}`
-                    : "—"}
+                  {u.window ? fmtRange(u.window.start, u.window.end, tz) : "—"}
                 </span>
                 <span className="text-right">{money(u.total_minor, u.currency)}</span>
                 <span className="text-right text-muted-foreground">

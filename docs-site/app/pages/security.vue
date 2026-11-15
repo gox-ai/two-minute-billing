@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * Security. Only what the code enforces: no certifications, backups, residency, uptime or
- * hosting-encryption claims, and no legal links.
+ * hosting-encryption claims. Links the sub-processor list (/sub-processors), nothing else legal.
  */
 import MkIllustration from "~/components/marketing/MkIllustration.vue";
 import MkCta from "~/components/marketing/MkCta.vue";
@@ -95,7 +95,7 @@ const audit = [
   {
     icon: "i-lucide-user-check",
     title: "The person or the key",
-    body: "Dashboard changes name the signed-in person. API changes name the key that made them.",
+    body: "Dashboard changes name the signed-in person. API changes name the key that made them. A change made through Billy names the member, via Billy.",
   },
   {
     icon: "i-lucide-diff",
@@ -112,6 +112,50 @@ const audit = [
     title: "Signed webhooks",
     body: "HMAC-SHA256 over the raw body. Rotate the signing secret at any time.",
   },
+];
+
+const billy = [
+  {
+    icon: "i-lucide-user-check",
+    title: "The member's permissions",
+    body: "Each look-up goes through the API with the member's sign-in. Billy never has more access than the member.",
+  },
+  {
+    icon: "i-lucide-eye-off",
+    title: "Private conversations",
+    body: "A member's conversations are their own. No other member sees them.",
+  },
+  {
+    icon: "i-lucide-image",
+    title: "Screenshots are images only",
+    body: "PNG, JPEG or WebP. Deleted with the conversation, and in all cases after 90 days.",
+  },
+  {
+    icon: "i-lucide-shield",
+    title: "Changes need a click",
+    body: "Off until an owner or admin turns them on. Money changes need a second switch and a second confirmation.",
+  },
+  {
+    icon: "i-lucide-cpu",
+    title: "Your choice of model",
+    body: "On Cloud, Billy uses OpenAI, or your own model provider when you add your own key.",
+  },
+  {
+    icon: "i-lucide-power",
+    title: "An owner can turn it off",
+    body: "For the whole organization, in Settings → Billy. AI tools that you connect through MCP are read-only.",
+  },
+];
+
+/** The Settings → Billy card, as the dashboard labels it. */
+const billySettings = [
+  { label: "Billy", hint: "Members can ask Billy questions.", on: true },
+  {
+    label: "Let Billy take actions",
+    hint: "Billy prepares changes that a member confirms.",
+    on: false,
+  },
+  { label: "Allow money actions", hint: "Refunds, credit notes and payments.", on: false },
 ];
 
 const apiKeys = [
@@ -203,6 +247,11 @@ const faq = [
       "Yes. Admins can require it for the whole organization. Each person uses an authenticator app or a passkey, with recovery codes.",
   },
   {
+    label: "Does Billy send my billing data to an AI provider?",
+    content:
+      "Yes. To answer, Billy sends your question and the records it read for it to the AI model: OpenAI on Cloud, or your own provider when you add your own key. On a self-hosted installation, you can use a local model, and the data stays on your servers. Every company that processes your data is on our sub-processors page.",
+  },
+  {
     label: "How do I report a vulnerability?",
     content: "Report it to us privately through the contact page, not in a public issue.",
   },
@@ -226,7 +275,7 @@ useMarketingSeo({
   <div>
     <MkPageHero
       eyebrow="Billing security"
-      title="Billing security: PCI DSS SAQ-A scope, a ledger and an audit log"
+      title="Billing security that keeps card numbers off your servers"
       description="Card numbers never reach our servers, so your PCI DSS scope stays at SAQ-A. Money is recorded in an append-only ledger, every change has a name next to it in the audit log, and test data can never touch live."
       :secondary="{ label: 'Your team and the audit log', to: '/help/guides/your-team' }"
     >
@@ -371,6 +420,62 @@ useMarketingSeo({
     </MkPageZig>
 
     <MkPageZig
+      id="billy"
+      kicker="AI assistant"
+      title="Billy reads only what your role allows, and changes nothing without a click"
+      accent="without a click"
+      description="Billy is the AI assistant in the dashboard. It reads through our API with each member's own sign-in. An owner or admin decides if Billy can prepare changes at all."
+      :points="billy"
+      :links="[
+        { label: 'Billy and your data', to: '/help/guides/ask-billy#where-your-data-goes' },
+        { label: 'Sub-processors', to: '/sub-processors' },
+      ]"
+    >
+      <div class="mk-surface overflow-hidden" role="img" aria-labelledby="sec-billy">
+        <span id="sec-billy" class="sr-only"
+          >Settings, Billy: Billy is on, Let Billy take actions is off, Allow money actions is off.
+          The model is included with your plan, or your own key. 12% of this month's included use is
+          used.</span
+        >
+        <div aria-hidden="true">
+          <div
+            class="flex items-center gap-2 border-b border-default px-5 py-3.5 text-sm font-semibold text-highlighted"
+          >
+            <UIcon name="i-lucide-sparkles" class="size-4 text-(--mk-plain)" />
+            Settings · Billy
+          </div>
+          <ul class="divide-y divide-default">
+            <li
+              v-for="b in billySettings"
+              :key="b.label"
+              class="flex items-center gap-3 px-5 py-3 text-sm"
+            >
+              <span class="min-w-0 flex-1">
+                <span class="block text-highlighted">{{ b.label }}</span>
+                <span class="block text-xs text-muted">{{ b.hint }}</span>
+              </span>
+              <span class="sec-tog" :class="{ 'is-on': b.on }" />
+            </li>
+            <li class="flex items-center gap-3 px-5 py-3 text-sm">
+              <span class="min-w-0 flex-1">
+                <span class="block text-highlighted">Model</span>
+                <span class="block text-xs text-muted"
+                  >Included with your plan, or your own key</span
+                >
+              </span>
+            </li>
+            <li class="flex items-center gap-3 px-5 py-3.5 text-xs text-muted">
+              <span class="shrink-0">Included use this month</span>
+              <span class="sec-track"><i /></span>
+              <span class="tabular-nums">12%</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </MkPageZig>
+
+    <MkPageZig
+      flip
       kicker="Keys and tokens"
       title="Read-only API keys, keys for each mode, and tokens stored as hashes"
       accent="API keys"
@@ -407,6 +512,45 @@ useMarketingSeo({
 </template>
 
 <style scoped>
+/* Switches in the drawn settings card: the status green when on, never the brand fill. */
+.sec-tog {
+  position: relative;
+  flex: none;
+  width: 2.125rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: var(--ui-border-accented);
+}
+.sec-tog::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+}
+.sec-tog.is-on {
+  background: var(--mk-ok);
+}
+.sec-tog.is-on::after {
+  left: calc(100% - 1rem - 2px);
+}
+.sec-track {
+  flex: 1;
+  height: 0.3125rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ui-bg-accented);
+}
+.sec-track i {
+  display: block;
+  width: 12%;
+  height: 100%;
+  background: var(--mk-plain);
+}
 .sec-on {
   background: color-mix(in oklab, var(--mk-ok) 14%, transparent);
   color: var(--mk-ok);

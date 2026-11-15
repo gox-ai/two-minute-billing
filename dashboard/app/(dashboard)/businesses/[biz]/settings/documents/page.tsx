@@ -1,11 +1,8 @@
-import Link from "next/link";
 import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
 import {
   SettingRow,
   SettingsCard,
@@ -13,12 +10,12 @@ import {
   SettingsPage,
   SettingsSummary,
 } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { AddressFormatField } from "@/components/settings/address-format-field";
 import { SignatureImageField } from "@/components/settings/signature-image-field";
 import { brandImageSupport } from "@/lib/api/brand-images";
-import { saveDocumentFieldsAction, savePaymentInstructionSettingsAction } from "../actions";
-import { PaymentInstructionRows } from "./payment-instruction-rows";
+import { saveDocumentFieldsAction } from "../actions";
+import { PaymentInstructionSettings } from "./payment-instruction-rows";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +76,7 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
   const piPersonalize = pi?.personalize ?? false;
 
   const toggle = (name: keyof typeof fields, label: string) => (
-    <SettingSwitch name={name} label={label} defaultChecked={fields[name]} />
+    <ToggleAnswer name={name} label={label} defaultChecked={fields[name]} />
   );
 
   return (
@@ -88,39 +85,42 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
       crumbs={[{ label: "Settings", href: base }, { label: "Documents" }]}
       description="What appears on both your invoices and your credit notes."
     >
-      <SettingsColumns
-        summary={
-          <SettingsSummary
-            items={[
-              {
-                label: "Shows",
-                value: shown.length
-                  ? capitalise(shown.map((k) => FIELD_NAMES[k]).join(", "))
-                  : "None of the optional fields",
-              },
-              { label: "Seller address", value: ADDRESS_FORMAT[addressFormat] },
-              {
-                label: "Signature",
-                value: sigParts.length
-                  ? `${capitalise(sigParts.join(" and "))} · ${position === "bottom_left" ? "bottom left" : "bottom right"}`
-                  : "None",
-              },
-              {
-                label: "Payment instructions",
-                value: `${piMode === "preferred_offline" ? "Customer's preferred method" : "All"}${
-                  piPersonalize ? ", matched to the invoice" : ""
-                }`,
-              },
-            ]}
-          />
-        }
-      >
-        <ActionForm action={saveDocumentFieldsAction} className="flex flex-col gap-5">
-          <input type="hidden" name="biz" value={biz} />
-          {b.resource_version != null ? (
-            <input type="hidden" name="expected_version" value={b.resource_version} />
-          ) : null}
-
+      <ActionForm action={saveDocumentFieldsAction}>
+        <input type="hidden" name="biz" value={biz} />
+        {b.resource_version != null ? (
+          <input type="hidden" name="expected_version" value={b.resource_version} />
+        ) : null}
+        <SettingsColumns
+          summary={
+            <SettingsSummary
+              items={[
+                {
+                  label: "Shows",
+                  value: shown.length
+                    ? capitalise(shown.map((k) => FIELD_NAMES[k]).join(", "))
+                    : "None of the optional fields",
+                },
+                { label: "Seller address", value: ADDRESS_FORMAT[addressFormat] },
+                {
+                  label: "Signature",
+                  value: sigParts.length
+                    ? `${capitalise(sigParts.join(" and "))} · ${position === "bottom_left" ? "bottom left" : "bottom right"}`
+                    : "None",
+                },
+                {
+                  label: "Payment instructions",
+                  value: `${piMode === "preferred_offline" ? "Customer's preferred method" : "All"}${
+                    piPersonalize ? ", matched to the invoice" : ""
+                  }`,
+                },
+              ]}
+            />
+          }
+          save={{
+            label: "Save document fields",
+            note: "The changes show on every invoice and credit note that someone views or downloads, including past ones.",
+          }}
+        >
           <SettingsCard title="Shared fields" meta="On invoices and credit notes">
             <SettingRow
               label="Customer ID"
@@ -165,6 +165,7 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
             defaultFormat={addressFormat}
             defaultCustom={common?.custom_address ?? ""}
             address={b.address ?? null}
+            profileHref={`${base}/business-profile`}
           />
 
           <SettingsCard title="Signature" meta="At the foot of every invoice and credit note">
@@ -173,11 +174,12 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
               htmlFor="signature_position"
               // Pinned to the PDF page foot so a short invoice does not sign halfway up.
               help="Pinned to that corner at the foot of the page, above your contact line."
+              placement="end"
               control={
-                <SelectField
+                <SelectAnswer
                   name="signature_position"
+                  ariaLabel="Signature position"
                   defaultValue={position}
-                  className="w-full sm:w-56"
                   options={[
                     { value: "bottom_right", label: "Bottom right" },
                     { value: "bottom_left", label: "Bottom left" },
@@ -189,14 +191,16 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
               label="Signature line"
               htmlFor="signature_caption"
               errorFor="signature_caption"
-              help="Plain text, for example “Authorised by Acme Billing”. Maximum 500 characters."
+              help="Plain text, for example “Authorized by Brightline Studio”. Maximum 500 characters."
+              placement="end"
               control={
                 <Input
                   id="signature_caption"
                   name="signature_caption"
                   defaultValue={signature?.caption ?? ""}
                   maxLength={500}
-                  placeholder="Authorised by …"
+                  placeholder="Authorized by …"
+                  className="w-full sm:w-72"
                 />
               }
             />
@@ -209,34 +213,15 @@ export default async function DocumentSettings({ params }: { params: Promise<{ b
             </div>
           </SettingsCard>
 
-          <div>
-            <SubmitButton>Save document fields</SubmitButton>
-          </div>
-        </ActionForm>
-
-        <ActionForm action={savePaymentInstructionSettingsAction}>
-          <input type="hidden" name="biz" value={biz} />
-          {b.resource_version != null ? (
-            <input type="hidden" name="expected_version" value={b.resource_version} />
-          ) : null}
-          <SettingsCard
-            title="Payment instructions"
-            meta="Which of your instructions print on an invoice"
-            actions={
-              <Link href={`${base}/payment-instructions`} className="text-primary hover:underline">
-                Manage instructions
-              </Link>
-            }
-            footer={
-              <SubmitButton size="sm" variant="outline">
-                Save payment instruction settings
-              </SubmitButton>
-            }
-          >
-            <PaymentInstructionRows mode={piMode} personalize={piPersonalize} />
-          </SettingsCard>
-        </ActionForm>
-      </SettingsColumns>
+          <PaymentInstructionSettings
+            biz={biz}
+            version={b.resource_version}
+            mode={piMode}
+            personalize={piPersonalize}
+            manageHref={`${base}/payment-instructions`}
+          />
+        </SettingsColumns>
+      </ActionForm>
     </SettingsPage>
   );
 }

@@ -1,15 +1,9 @@
 import { Alert } from "@/components/ui/alert";
+import { fmtDate } from "@/lib/format-date";
 
 /** "8 Oct 2026", in UTC like the email that announced it. */
 function day(iso: string): string | null {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  return Number.isNaN(Date.parse(iso)) ? null : fmtDate(iso, "UTC");
 }
 
 /**

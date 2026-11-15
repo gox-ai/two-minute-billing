@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus } from "lucide-react";
 import * as React from "react";
 import { createCouponSetAction } from "@/app/actions";
 import { ActionForm } from "@/components/form/action-form";
@@ -35,12 +36,24 @@ function couponLabel(c: Coupon): string {
 }
 
 /** The coupon-set list's create action: a batch of single-use codes for one coupon. */
-export function GenerateCouponSetDialog({ biz, coupons }: { biz: string; coupons: Coupon[] }) {
+export function GenerateCouponSetDialog({
+  biz,
+  coupons,
+  variant = "default",
+}: {
+  biz: string;
+  coupons: Coupon[];
+  /** `outline` where the list header already carries the solid button (the empty state). */
+  variant?: "default" | "outline";
+}) {
   const [open, setOpen] = React.useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>Generate coupon set</Button>
+        <Button size="sm" variant={variant}>
+          <Plus className="size-4" />
+          Generate coupon set
+        </Button>
       </DialogTrigger>
       <DialogContent size="md">
         <DialogHeader>

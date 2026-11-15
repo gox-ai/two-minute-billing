@@ -34,7 +34,7 @@ import {
 const specsFor = (small: boolean): Array<BizSpec & { tax: TaxSetup }> => [
   {
     key: "acme",
-    name: "Acme Analytics",
+    name: "Halyard Analytics",
     currency: "USD",
     region: "US",
     timezone: "America/New_York",

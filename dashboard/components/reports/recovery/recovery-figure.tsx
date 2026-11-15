@@ -31,7 +31,7 @@ export function RecoveryFigure({
   span: Span;
 }) {
   return (
-    <Card className={cn("anim-rise flex min-w-0 flex-col gap-0 p-6", spanClass(span))}>
+    <Card className={cn("anim-rise flex min-w-0 flex-col gap-0 self-stretch p-6", spanClass(span))}>
       <span className="flex items-center gap-1">
         <span className={KPI_LABEL}>{label}</span>
         {info ? <InfoTip label={label} info={info} /> : null}

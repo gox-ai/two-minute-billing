@@ -9,6 +9,7 @@
 
 export interface TmbillingOptions {
   apiKey: string;
+  /** Your API host. Default: Two Minute Billing Cloud. A self-hosted install passes its own. */
   baseUrl?: string;
   fetch?: typeof fetch;
 }
@@ -177,6 +178,8 @@ export interface PriceFields {
   markup_base?: "list" | "cost" | null;
   /** Meter prices: the rate card. Replaced whole on update. */
   rates?: PriceRateWrite[];
+  /** Credit this price grants: a `per_cycle` grant on a recurring price, a `pack` on a one-time one. */
+  grants_credit?: Record<string, unknown> | null;
 }
 /** One rate-card row: group values over some of the meter's `group_by`, and their rate. */
 export interface PriceRateWrite {
@@ -243,9 +246,9 @@ export interface CheckoutSessionCreate {
   quantity?: number;
   items?: Array<{ price: string; quantity?: number }>;
   coupons?: string[];
-  /** `create` (default) subscribes a new customer; `change` edits `subscription`; `purchase` sells one-time items. */
+  /** `create` (default) subscribes a new customer, or `customer_id`; `change` edits `subscription`; `purchase` sells one-time items. */
   mode?: "create" | "change" | "purchase";
-  /** mode `purchase`: an existing customer. */
+  /** An existing customer: `create` subscribes them, `purchase` sells to them. Not with `change`. */
   customer_id?: string;
   /** mode `change`: the subscription to change. */
   subscription?: string;
@@ -314,6 +317,13 @@ export interface MeterPriceList {
   model_key?: string;
   token_type?: string;
   token_type_key?: string;
+  /** The list unit. Absent: tokens, else requests. */
+  unit?: ModelPriceUnit;
+  /** Price tier: a fixed value or the property that holds it. */
+  quality?: string;
+  quality_key?: string;
+  resolution?: string;
+  resolution_key?: string;
 }
 export interface Meter extends Required<Omit<MeterWrite, "filters">> {
   object: "meter";
@@ -327,6 +337,15 @@ export interface Meter extends Required<Omit<MeterWrite, "filters">> {
 // ── Model prices, your cost and margin (G1b) ───────────────────────────────────
 // Hand-written until the routes are in sdk/schema.d.ts. Decimals are strings; amounts are
 // minor units per `quantity_divisor` units ("300" per 1000000 = $3.00 per 1M tokens).
+export type ModelPriceUnit =
+  | "token"
+  | "request"
+  | "image"
+  | "video_second"
+  | "audio_second"
+  | "character"
+  | "page"
+  | "pixel";
 export interface ModelPrice {
   object: "model_price";
   /** mpr_… — the id an invoice line cites in `rating.segments[].model_price_id`. */
@@ -334,6 +353,12 @@ export interface ModelPrice {
   provider: string;
   model: string;
   token_type: string;
+  /** The same value as `token_type`. */
+  price_kind: string;
+  unit: ModelPriceUnit;
+  /** Null = no tier. */
+  quality: string | null;
+  resolution: string | null;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: number | string;
@@ -351,6 +376,10 @@ export interface ModelCostOverride {
   provider: string | null;
   model: string;
   token_type: string;
+  price_kind: string;
+  unit: ModelPriceUnit;
+  quality: string | null;
+  resolution: string | null;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: number | string;
@@ -358,11 +387,18 @@ export interface ModelCostOverride {
   effective_to: string | null;
   note: string | null;
 }
-export interface ModelCostOverrideCreate {
+/** Set `token_type` or `price_kind` (the same field under its new name). */
+export type ModelCostOverrideCreate = ModelCostOverrideCreateFields &
+  ({ token_type: string; price_kind?: string } | { price_kind: string; token_type?: string });
+export interface ModelCostOverrideCreateFields {
   /** Omit to use the cost for the model under any provider. */
   provider?: string;
   model: string;
-  token_type: string;
+  /** Default `token`. */
+  unit?: ModelPriceUnit;
+  /** Optional tier, such as `hd` or `1024x1024`. */
+  quality?: string | null;
+  resolution?: string | null;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor?: number | string;
@@ -370,14 +406,35 @@ export interface ModelCostOverrideCreate {
   effective_from?: string;
   note?: string;
 }
-export interface UsageMarginRow {
-  key: string;
-  label?: string | null;
+export interface UsageMarginFigures {
+  currency: string;
   revenue_minor: number;
   cost_minor: number;
   margin_minor: number;
   margin_percent: string | null;
+  lines: number;
   lines_without_cost: number;
+  /** `scope: "all"` only. */
+  total_revenue_minor?: number;
+  cost_only_minor?: number;
+  cost_only_rows?: number;
+  cost_only_rows_without_cost?: number;
+  total_cost_minor?: number;
+  total_margin_minor?: number;
+  total_margin_percent?: string | null;
+  /** `scope: "all"` and `groupBy: "plan"` only. */
+  plan_fee_minor?: number;
+  subscribers?: number;
+}
+/** The row's key sits under the group's name: `customer`, `model`, `meter` or `plan`. */
+export interface UsageMarginRow extends UsageMarginFigures {
+  customer?: string;
+  customer_name?: string | null;
+  model?: string;
+  meter?: string;
+  meter_name?: string | null;
+  plan?: string;
+  plan_name?: string | null;
 }
 
 export interface UsageEventInput {
@@ -394,7 +451,11 @@ export interface UsageEventInput {
   amount?: string;
   cost?: string;
   currency?: string;
+  /** For a meter with a credit cost: record the usage and spend no credits. */
+  backfill?: boolean;
 }
+/** What a meter with a credit cost did with the event. */
+export type UsageEventCredit = S["UsageEventCredit"];
 export interface UsageEvent {
   object: "usage_event";
   id: string;
@@ -416,7 +477,31 @@ export interface UsageEvent {
   created_at: string;
   voided_at: string | null;
   void_reason: string | null;
+  /** Only when a meter with a credit cost counted the event: one entry for each such meter. */
+  credit?: UsageEventCredit[];
 }
+// ── Credit units, meter credit cost and credit usage ─────────────────────────
+export type CreditUnit = S["CreditUnit"];
+/** `minor_per_unit` is required: a rate, or null for a unit with no money value. */
+export type CreditUnitCreate = S["CreditUnitCreate"];
+/** After the first grant in the unit, only the names can change. */
+export type CreditUnitUpdate = S["CreditUnitUpdate"];
+export type MeterCreditCost = S["MeterCreditCost"];
+export type MeterCreditCostSet = S["MeterCreditCostSet"];
+export type MeterCreditCostOverride = S["MeterCreditCostOverride"];
+export type MeterCreditCostDeleted = S["MeterCreditCostDeleted"];
+/** One settlement of usage paid in credits: a customer, a meter and a window. */
+export type CreditUsage = S["CreditUsage"];
+/** A plan or customer override of a unit's overdraft limit. */
+export type CreditOverdraftLimit = S["CreditOverdraftLimit"];
+/** The overdraft limit that applies to a customer in a unit, and where it comes from. */
+export type CustomerCreditOverdraftLimit = S["CustomerCreditOverdraftLimit"];
+export type CreditVoidReason = S["CreditVoidReason"];
+export type CreditGrantVoid = S["CreditGrantVoid"];
+export type CreditGrantActivity = S["CreditGrantActivity"];
+export type CreditDeferredRevenue = S["CreditDeferredRevenue"];
+export type CreditRefusedDemand = S["CreditRefusedDemand"];
+export type CreditRunwayUnits = S["CreditRunwayUnits"];
 export interface UsageKey {
   object: "usage_key";
   key: string;
@@ -438,7 +523,7 @@ export class Tmbilling {
 
   constructor(opts: TmbillingOptions) {
     this.apiKey = opts.apiKey;
-    this.baseUrl = (opts.baseUrl ?? "http://localhost:4000").replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? "https://api.twominutebilling.com").replace(/\/$/, "");
     this.fetchImpl = opts.fetch ?? fetch;
   }
 
@@ -521,6 +606,8 @@ export class Tmbilling {
         dunning_retry_days?: number[] | null;
         /** Checkout and portal presentation; omitted keys keep their defaults. */
         storefront_config?: Record<string, unknown> | null;
+        /** Credit grants and holds; replaced whole, null = the defaults. Needs `credits:manage`. */
+        credit_config?: S["CreditConfig"];
       },
     ) => this.request<Business>({ method: "PATCH", path: `/v1/businesses/${biz}`, body }),
   };
@@ -1038,6 +1125,8 @@ export class Tmbilling {
         on_charge_failure?: "start_dunning" | "next_renewal";
         coupons?: "keep" | "drop" | "keep_if_valid";
         downgrade_credit?: "credit_balance" | "refund";
+        /** A change that nets to a credit: a credit note and an invoice, or one credit note. */
+        net_credit_documents?: "credit_note_and_invoice" | "one_credit_note";
         /** `prorated` is upgrade only (400 on a downgrade). */
         plan_credits?: "full" | "prorated" | "next_window";
         /** Upgrade only (400 on a downgrade). */
@@ -1077,6 +1166,8 @@ export class Tmbilling {
         coupons?: "keep" | "drop" | "keep_if_valid";
         /** As on `change`: decides `change_policy.credit_handling`. */
         downgrade_credit?: "credit_balance" | "refund";
+        /** As on `change`: the documents the preview prices for a net credit. */
+        net_credit_documents?: "credit_note_and_invoice" | "one_credit_note";
       },
     ) =>
       this.request<Estimate>({
@@ -1617,6 +1708,254 @@ export class Tmbilling {
         path: `/v1/businesses/${biz}/meters/${meter}/archive`,
         idempotencyKey: opts?.idempotencyKey,
       }),
+    /** What one unit of the meter costs in credits. 404 when the meter has no credit cost. */
+    getCreditCost: (biz: string, meter: string) =>
+      this.request<MeterCreditCost>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/meters/${meter}/credit_cost`,
+      }),
+    /** Replaced whole. The unit must have no money rate; a meter keeps its unit. */
+    setCreditCost: (
+      biz: string,
+      meter: string,
+      body: MeterCreditCostSet,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<MeterCreditCost>({
+        method: "PUT",
+        path: `/v1/businesses/${biz}/meters/${meter}/credit_cost`,
+        body,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    deleteCreditCost: (biz: string, meter: string, opts?: { idempotencyKey?: string }) =>
+      this.request<MeterCreditCostDeleted>({
+        method: "DELETE",
+        path: `/v1/businesses/${biz}/meters/${meter}/credit_cost`,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+  };
+
+  /** Credit units: your own unit of credit. The id is a slug you choose. */
+  creditUnits = {
+    create: (biz: string, body: CreditUnitCreate, opts?: { idempotencyKey?: string }) =>
+      this.request<CreditUnit>({
+        method: "POST",
+        path: `/v1/businesses/${biz}/credit_units`,
+        body,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    /** Paged by id: pass the previous `next_cursor` as `startingAfter`. */
+    list: (
+      biz: string,
+      opts?: { limit?: number; startingAfter?: string; status?: "active" | "archived" },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts?.limit != null) qs.set("limit", String(opts.limit));
+      if (opts?.startingAfter) qs.set("starting_after", opts.startingAfter);
+      if (opts?.status) qs.set("status", opts.status);
+      const q = qs.toString();
+      return this.request<List<CreditUnit> & { has_more: boolean; next_cursor: string | null }>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/credit_units${q ? `?${q}` : ""}`,
+      });
+    },
+    get: (biz: string, unit: string) =>
+      this.request<CreditUnit>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/credit_units/${unit}`,
+      }),
+    /** `minor_per_unit: null` removes the rate. Refused once the unit is locked. */
+    update: (
+      biz: string,
+      unit: string,
+      body: CreditUnitUpdate,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<CreditUnit>({
+        method: "PATCH",
+        path: `/v1/businesses/${biz}/credit_units/${unit}`,
+        body,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    /** The unit takes no new grant. Grants that use it stay as they are. */
+    archive: (biz: string, unit: string, opts?: { idempotencyKey?: string }) =>
+      this.request<CreditUnit>({
+        method: "POST",
+        path: `/v1/businesses/${biz}/credit_units/${unit}/archive`,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+  };
+
+  /** Usage paid in credits: one row for each settlement of a customer, a meter and a window. */
+  creditUsage = {
+    /** Newest first. Pass the previous `next_cursor` as `startingAfter`. */
+    list: (
+      biz: string,
+      cus: string,
+      opts?: { limit?: number; startingAfter?: string; meter?: string },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts?.limit != null) qs.set("limit", String(opts.limit));
+      if (opts?.startingAfter) qs.set("starting_after", opts.startingAfter);
+      if (opts?.meter) qs.set("meter", opts.meter);
+      const q = qs.toString();
+      return this.request<List<CreditUsage> & { has_more: boolean; next_cursor: string | null }>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_usage${q ? `?${q}` : ""}`,
+      });
+    },
+  };
+
+  /** Credit grants: void with a reason, and one grant's activity. */
+  creditGrants = {
+    /** Books out what is left of a promotional grant. `reason` is stored on the grant. */
+    void: (
+      biz: string,
+      cus: string,
+      grant: string,
+      body?: CreditGrantVoid,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<S["CreditGrant"]>({
+        method: "POST",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_grants/${grant}/void`,
+        body: body ?? {},
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    /** Totals and movements of one grant, oldest first. */
+    activity: (
+      biz: string,
+      cus: string,
+      grant: string,
+      opts?: { limit?: number; startingAfter?: string },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts?.limit != null) qs.set("limit", String(opts.limit));
+      if (opts?.startingAfter) qs.set("starting_after", opts.startingAfter);
+      const q = qs.toString();
+      return this.request<CreditGrantActivity>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_grants/${grant}/activity${q ? `?${q}` : ""}`,
+      });
+    },
+  };
+
+  /**
+   * Overdraft limits of a unit with no rate. The unit's own limit is `overdraft_limit` on the
+   * credit unit; a plan and a customer can override it (customer, then plan, then unit).
+   */
+  creditOverdraftLimits = {
+    /** The plan and customer overrides of a unit. */
+    list: (
+      biz: string,
+      unit: string,
+      opts?: { level?: "plan" | "customer"; limit?: number; startingAfter?: string },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts?.level) qs.set("level", opts.level);
+      if (opts?.limit != null) qs.set("limit", String(opts.limit));
+      if (opts?.startingAfter) qs.set("starting_after", opts.startingAfter);
+      const q = qs.toString();
+      return this.request<
+        List<CreditOverdraftLimit> & { has_more: boolean; next_cursor: string | null }
+      >({
+        method: "GET",
+        path: `/v1/businesses/${biz}/credit_units/${unit}/overdraft_limits${q ? `?${q}` : ""}`,
+      });
+    },
+    setForPlan: (
+      biz: string,
+      unit: string,
+      product: string,
+      overdraftLimit: number,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<CreditOverdraftLimit>({
+        method: "PUT",
+        path: `/v1/businesses/${biz}/credit_units/${unit}/overdraft_limits/plans/${product}`,
+        body: { overdraft_limit: overdraftLimit },
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    removeForPlan: (
+      biz: string,
+      unit: string,
+      product: string,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<S["CreditOverdraftLimitDeleted"]>({
+        method: "DELETE",
+        path: `/v1/businesses/${biz}/credit_units/${unit}/overdraft_limits/plans/${product}`,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    /** For each unit with no rate: the limit that applies to the customer now. */
+    forCustomer: (biz: string, cus: string) =>
+      this.request<List<CustomerCreditOverdraftLimit>>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_overdraft_limits`,
+      }),
+    setForCustomer: (
+      biz: string,
+      cus: string,
+      unit: string,
+      overdraftLimit: number,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<CustomerCreditOverdraftLimit>({
+        method: "PUT",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_overdraft_limits/${unit}`,
+        body: { overdraft_limit: overdraftLimit },
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+    removeForCustomer: (
+      biz: string,
+      cus: string,
+      unit: string,
+      opts?: { idempotencyKey?: string },
+    ) =>
+      this.request<CustomerCreditOverdraftLimit>({
+        method: "DELETE",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_overdraft_limits/${unit}`,
+        idempotencyKey: opts?.idempotencyKey,
+      }),
+  };
+
+  /** Credit reports: deferred revenue, refused usage, runway in units. */
+  creditReports = {
+    /** Paid credit at cost per month: opening + sold − recognised − breakage − refunds = closing. */
+    deferredRevenue: (
+      biz: string,
+      opts?: { from?: string; to?: string; currency?: string; unit?: string },
+    ) => {
+      const qs = new URLSearchParams();
+      if (opts?.from) qs.set("from", opts.from);
+      if (opts?.to) qs.set("to", opts.to);
+      if (opts?.currency) qs.set("currency", opts.currency);
+      if (opts?.unit) qs.set("unit", opts.unit);
+      const q = qs.toString();
+      return this.request<CreditDeferredRevenue>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/reports/credit_deferred_revenue${q ? `?${q}` : ""}`,
+      });
+    },
+    /** Usage refused for lack of credit. `from` and `to` are ISO 8601 with an offset. */
+    refusedDemand: (
+      biz: string,
+      opts: { from: string; to: string; groupBy?: "meter" | "day" | "customer"; limit?: number },
+    ) => {
+      const qs = new URLSearchParams({ from: opts.from, to: opts.to });
+      if (opts.groupBy) qs.set("group_by", opts.groupBy);
+      if (opts.limit != null) qs.set("limit", String(opts.limit));
+      return this.request<CreditRefusedDemand>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/reports/credit_refused_demand?${qs.toString()}`,
+      });
+    },
+    /** Days of credit left in a unit with no rate, at the last 7 days' use. */
+    runwayInUnits: (biz: string, cus: string, unit: string) =>
+      this.request<CreditRunwayUnits>({
+        method: "GET",
+        path: `/v1/businesses/${biz}/customers/${cus}/credit_runway?unit=${encodeURIComponent(unit)}`,
+      }),
   };
 
   /**
@@ -1708,6 +2047,7 @@ export class Tmbilling {
       provider?: string;
       model?: string;
       tokenType?: string;
+      unit?: ModelPriceUnit;
       /** Only rows with your cost. */
       hasCost?: boolean;
       /** Only models in usage of the last 35 days. */
@@ -1720,6 +2060,7 @@ export class Tmbilling {
       if (opts?.provider) qs.set("provider", opts.provider);
       if (opts?.model) qs.set("model", opts.model);
       if (opts?.tokenType) qs.set("token_type", opts.tokenType);
+      if (opts?.unit) qs.set("unit", opts.unit);
       if (opts?.hasCost) qs.set("has_cost", "true");
       if (opts?.used) qs.set("used", "true");
       if (opts?.asOf) qs.set("as_of", opts.asOf);
@@ -1737,10 +2078,16 @@ export class Tmbilling {
     get: (id: string) =>
       this.request<ModelPrice>({ method: "GET", path: `/v1/organization/model_prices/${id}` }),
     /** Every dated list row and cost row for one model. */
-    history: (opts: { model: string; provider?: string; tokenType?: string }) => {
+    history: (opts: {
+      model: string;
+      provider?: string;
+      tokenType?: string;
+      unit?: ModelPriceUnit;
+    }) => {
       const qs = new URLSearchParams({ model: opts.model });
       if (opts.provider) qs.set("provider", opts.provider);
       if (opts.tokenType) qs.set("token_type", opts.tokenType);
+      if (opts.unit) qs.set("unit", opts.unit);
       return this.request<{
         object: "model_price_history";
         prices: ModelPrice[];
@@ -1770,9 +2117,18 @@ export class Tmbilling {
         body,
         idempotencyKey: opts?.idempotencyKey,
       }),
-    list: (opts?: { model?: string; limit?: number; startingAfter?: string }) => {
+    list: (opts?: {
+      model?: string;
+      unit?: ModelPriceUnit;
+      /** false: only costs whose key has no row on the price list. true: only the others. */
+      listed?: boolean;
+      limit?: number;
+      startingAfter?: string;
+    }) => {
       const qs = new URLSearchParams();
       if (opts?.model) qs.set("model", opts.model);
+      if (opts?.unit) qs.set("unit", opts.unit);
+      if (opts?.listed != null) qs.set("listed", String(opts.listed));
       if (opts?.limit != null) qs.set("limit", String(opts.limit));
       if (opts?.startingAfter) qs.set("starting_after", opts.startingAfter);
       const q = qs.toString();
@@ -1823,26 +2179,35 @@ export class Tmbilling {
         }>;
       }>({ method: "GET", path: `/v1/businesses/${biz}/customers/${cus}/usage?${qs}` });
     },
-    /** Revenue after discounts and line credit notes, before tax, minus cost. */
+    /**
+     * Revenue after discounts and line credit notes, before tax, minus cost. `scope: "all"` adds
+     * usage no invoice line bills and, by customer and plan, every revenue line.
+     */
     margin: (
       biz: string,
       opts: {
         from: string;
         to: string;
         currency?: string;
-        groupBy?: "customer" | "model" | "meter";
+        groupBy?: "customer" | "model" | "meter" | "plan";
+        scope?: "billed" | "all";
         customer?: string;
       },
     ) => {
       const qs = new URLSearchParams({ from: opts.from, to: opts.to });
       if (opts.currency) qs.set("currency", opts.currency);
       if (opts.groupBy) qs.set("group_by", opts.groupBy);
+      if (opts.scope) qs.set("scope", opts.scope);
       if (opts.customer) qs.set("customer", opts.customer);
       return this.request<{
         object: "usage_margin";
-        currency: string;
-        rows: UsageMarginRow[];
-        totals: Omit<UsageMarginRow, "key" | "label">;
+        group_by: "customer" | "model" | "meter" | "plan";
+        scope: "billed" | "all";
+        from: string;
+        to: string;
+        data: UsageMarginRow[];
+        /** One per currency: currencies are never added together. */
+        totals: UsageMarginFigures[];
       }>({ method: "GET", path: `/v1/businesses/${biz}/reports/usage_margin?${qs}` });
     },
   };

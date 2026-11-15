@@ -1,4 +1,5 @@
-import { listBusinesses, listProducts } from "@/lib/api";
+import { listBusinesses, listPrices, listProductGroups, listProducts } from "@/lib/api";
+import type { Price, ProductGroup } from "@/lib/api";
 import { getCoupon } from "@/lib/api/coupons";
 import type { Product } from "@/lib/api/coupons";
 import { requirePermission } from "@/lib/session";
@@ -19,13 +20,19 @@ export default async function NewCouponPage({
   const { biz } = await params;
   const { clone: cloneId } = await searchParams;
 
-  let businesses, products;
+  let businesses, products, prices, groups;
   try {
-    [businesses, products] = await Promise.all([listBusinesses(), listProducts(biz)]);
+    [businesses, products, prices, groups] = await Promise.all([
+      listBusinesses(),
+      listProducts(biz),
+      // Optional context for the item picker: the form still works without it.
+      listPrices(biz).catch(() => ({ data: [] as Price[] })),
+      listProductGroups(biz).catch(() => ({ data: [] as ProductGroup[] })),
+    ]);
   } catch (e) {
     return (
       <>
-        <PageHeader title="Create Coupon" />
+        <PageHeader title="Create coupon" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -43,11 +50,13 @@ export default async function NewCouponPage({
       currencies={business?.currencies}
       defaultCurrency={business?.default_currency}
       products={products.data as Product[]}
+      prices={prices.data}
+      productGroups={groups.data}
       clone={clone}
       backHref={listHref}
       crumbs={[
         { label: name, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: "Coupons", href: listHref },
         { label: clone ? "Clone coupon" : "New coupon" },
       ]}

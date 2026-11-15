@@ -29,6 +29,7 @@ import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { scanBusinessFilter } from "@/platform/clock";
 import { config } from "@/platform/config";
 import { createLogger } from "@/platform/logger";
+import { joinSpan, joinSpanIfAny } from "@/platform/trace";
 import { invoices, paymentMethods, paymentRequests, payments, transactions } from "@db/schema";
 import type { ChargeInitiator, ChargeResult } from "@/providers/types";
 import { setTransactionStatus } from "@/modules/transactions/service";
@@ -144,7 +145,9 @@ export async function resolveLostAnswers(
       adapter = null;
     }
     if (txn.idAtGateway) {
-      await resolveStranded(txn, adapter, now, out, seen.has(txn.id), deferLater);
+      await joinSpanIfAny(txn.spanId, () =>
+        resolveStranded(txn, adapter, now, out, seen.has(txn.id), deferLater),
+      );
       continue;
     }
     if (!adapter?.locateCharge || !txn.ownershipRef || !txn.idempotencyKey) {
@@ -176,7 +179,9 @@ export async function resolveLostAnswers(
     }
 
     try {
-      await locateAndBook(txn, adapter, gate?.kind === "ok" ? gate.replay : undefined);
+      await joinSpanIfAny(txn.spanId, () =>
+        locateAndBook(txn, adapter, gate?.kind === "ok" ? gate.replay : undefined),
+      );
     } finally {
       if (gate?.kind === "ok") await releaseCollection(txn.organizationId, gate.invoiceId);
     }
@@ -478,7 +483,9 @@ export async function adoptLostAnswerByLookup(
     const adapter = await adapterForTransaction(txn).catch(() => null);
     // A replay-only lookup creates; a webhook never triggers one.
     if (!adapter?.locateCharge || adapter.capabilities.locateByReplay) continue;
-    const found = await adapter.locateCharge(await locateInput(txn)).catch(() => null);
+    // Each candidate's own span, never the event's: most of them are not this charge.
+    const input = await locateInput(txn);
+    const found = await joinSpan(txn.spanId, () => adapter.locateCharge!(input)).catch(() => null);
     if (found?.providerChargeId !== chargeId) continue;
     const adopted = await withTenant(txn.organizationId, async (tx) => {
       const cur = await lockLostAnswer(tx, txn);

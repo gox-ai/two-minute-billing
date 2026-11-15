@@ -1,0 +1,15 @@
+/* Motion: rail-pill. Owned by the matching component; tokens from globals.css only. */
+
+/* RailPill (components/SideNav.tsx): ONE highlight per nav list. It slides only when the
+   selected row changes (`data-glide`); any other move is instant. */
+.rail-pill[data-glide] {
+  transition:
+    transform var(--dur) var(--ease-glide),
+    width var(--dur) var(--ease-glide),
+    height var(--dur) var(--ease-glide);
+}
+/* Once placed, the pill is the selected row's background. Hover, press and the pending
+   highlight (globals.css) still paint on the other rows. */
+[data-rail-pill-ready] .nav-row[aria-current="page"] {
+  background-color: transparent;
+}

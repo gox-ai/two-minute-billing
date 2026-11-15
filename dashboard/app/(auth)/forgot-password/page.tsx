@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { forgotPasswordAction } from "@/app/auth-actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,7 +25,9 @@ export default async function ForgotPasswordPage({
       </div>
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Reset your password</CardTitle>
+          <CardTitle className="text-xl">
+            <h1>Reset your password</h1>
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
             We send you an email with a link to choose a new one.
           </p>
@@ -78,9 +81,9 @@ export default async function ForgotPasswordPage({
           )}
 
           <p className="text-center text-sm text-muted-foreground">
-            <a href="/login" className="text-primary hover:underline">
+            <Link href="/login" className="text-primary hover:underline">
               Back to sign in
-            </a>
+            </Link>
           </p>
         </CardContent>
       </Card>

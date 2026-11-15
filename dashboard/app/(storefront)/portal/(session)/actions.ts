@@ -15,6 +15,7 @@ import {
   type PortalChangeRequest,
   type PortalChangeResult,
   portalSubscriptionLifecycle,
+  portalRestartSubscription,
   portalCancelFlow,
   portalTakeRetentionOffer,
   type PortalCancelFlow,
@@ -139,8 +140,8 @@ export async function portalRemoveAction(
   const res = await portalRemove(token, pm);
   revalidatePath(PORTAL_PATH);
   return res.ok
-    ? actionOk("Payment method removed")
-    : actionError(res.error ?? "We could not remove the payment method.");
+    ? actionOk("Payment method deleted.")
+    : actionError(res.error ?? "We could not delete the payment method.");
 }
 
 /**
@@ -202,11 +203,13 @@ export async function portalCompleteVaultAction(
   const token = await readStorefrontToken("portal");
   if (!token) return { ok: false, error: NO_SESSION };
   if (!(completion.paymentIntent ?? completion.providerToken)) {
-    return { ok: false, error: "We could not save your card. Try again." };
+    return { ok: false, error: "We could not save your payment method. Try again." };
   }
   const res = await portalCompleteVault(token, completion, gatewayAccount);
   revalidatePath(PORTAL_PATH);
-  return res.ok ? { ok: true } : { ok: false, error: res.error ?? "We could not save your card." };
+  return res.ok
+    ? { ok: true }
+    : { ok: false, error: res.error ?? "We could not save your payment method." };
 }
 
 /**
@@ -629,6 +632,25 @@ export async function portalSubscriptionLifecycleAction(
   revalidatePath(PORTAL_PATH);
   if (!res.ok) return { ok: false, error: res.error ?? LIFECYCLE_FAILED[action] };
   return { ok: true };
+}
+
+/** Restart an ended subscription: returns the checkout URL where the buyer pays the new term. */
+export async function portalRestartAction(
+  origin: string,
+  sub: string,
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const token = await readStorefrontToken("portal");
+  if (!token) return { ok: false, error: EXPIRED };
+  const back = `${origin}${PORTAL_PATH}`;
+  const res = await portalRestartSubscription(
+    token,
+    sub,
+    `${back}?restarted=${encodeURIComponent(sub)}`,
+    back,
+  );
+  return res.ok && res.data?.url
+    ? { ok: true, url: res.data.url }
+    : { ok: false, error: res.error ?? "We could not open the restart page." };
 }
 
 export async function portalCancelFlowAction(

@@ -9,29 +9,26 @@ import {
   type ListSegment,
   type ListPageHeader,
 } from "@/components/patterns/list-page";
-import { InfoCell, TextCell } from "@/components/patterns/list-cells";
+import { InfoCell } from "@/components/patterns/list-cells";
 import { CouponRowMenu } from "@/components/catalog/coupon-row-menu";
 import { EmptyState } from "@/components/states";
-import { money, fmtDateShort, couponDurationLabel } from "@/lib/format";
+import { money } from "@/lib/format";
+import { plural } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { Percent } from "lucide-react";
 import type { CouponDetail } from "@/lib/api/coupons";
-import { moneyCell } from "@/lib/table-export";
-import { useBusinessTz } from "@/components/business-tz";
 
-const APPLY_ON_LABEL: Record<string, string> = {
-  invoice_amount: "Invoice amount",
-  each_specified_item: "Each specified item",
-};
-
-const durationSuffix = (c: CouponDetail): string =>
-  couponDurationLabel(c.duration_type, c.duration_in_periods);
+/** "15% for 3 periods", "₹500.00, forever", "50% once". */
 function discountDetails(c: CouponDetail, fallback: string): string {
   const amount =
     c.kind === "percentage"
       ? `${(c.percent_off_bps ?? 0) / 100}%`
       : money(c.amount_off_minor ?? 0, c.currency ?? fallback);
-  return `${amount} for ${durationSuffix(c)}`;
+  if (c.duration_type === "once") return `${amount} once`;
+  if (c.duration_type === "forever") return `${amount}, forever`;
+  return c.duration_in_periods
+    ? `${amount} for ${plural(c.duration_in_periods, "period")}`
+    : `${amount} for a limited period`;
 }
 
 /** Distinct, sorted select options from the loaded rows. */
@@ -57,17 +54,15 @@ export function CouponsTable({
   /** e.g. the show-archived toggle. */
   topBarExtras?: React.ReactNode;
 }) {
-  // Dates render in the business timezone, not UTC (see components/business-tz).
-  const tz = useBusinessTz();
   const columns = React.useMemo<ColumnDef<CouponDetail>[]>(
     () => [
       {
         accessorKey: "name",
-        header: "Coupon Info",
+        header: "Coupon info",
         // `id` is the coupon code on this list (see the cell).
         meta: {
           exportAs: [
-            { header: "Coupon Code", value: (c) => c.id },
+            { header: "Coupon code", value: (c) => c.id },
             { header: "Name", value: (c) => c.name ?? "" },
           ],
         },
@@ -90,37 +85,10 @@ export function CouponsTable({
           );
         },
       },
-      {
-        id: "invoice_name",
-        header: "Invoice Name",
-        accessorFn: (c) => c.invoice_name ?? "",
-        cell: ({ row }) => (
-          <span className="block max-w-80 text-sm wrap-anywhere">
-            {row.original.invoice_name || "—"}
-          </span>
-        ),
-      },
-      {
-        id: "apply_on",
-        header: "Apply On",
-        accessorFn: (c) => c.apply_on ?? "",
-        // Blank, not "Invoice amount". `GET /v1/businesses/:biz/coupons` is served by
-        // `serializeCoupon` in src/api/portal-routes.ts, which does NOT emit `apply_on`
-        // — so this cell printed a fabricated default on every row, which CLAUDE.md
-        // forbids outright ("never preselect a fake default"). The column stays; it
-        // fills in the moment the list serializer carries the field (the WRITE
-        // serializer in coupon-routes.ts already does).
-        cell: ({ row }) => (
-          <TextCell>
-            {row.original.apply_on
-              ? (APPLY_ON_LABEL[row.original.apply_on] ?? row.original.apply_on)
-              : null}
-          </TextCell>
-        ),
-      },
+      // No invoice-name, apply-on or valid-until columns: the list serializer does not emit them.
       {
         id: "discount",
-        header: "Discount Details",
+        header: "Discount details",
         accessorFn: (c) => discountDetails(c, currency),
         cell: ({ row }) => (
           <span className="text-sm">{discountDetails(row.original, currency)}</span>
@@ -136,26 +104,16 @@ export function CouponsTable({
           </span>
         ),
       },
-      {
-        id: "valid_till",
-        header: "Valid Till",
-        accessorFn: (c) => c.redeem_by ?? "",
-        cell: ({ row }) => (
-          <TextCell className="tabular-nums">
-            {row.original.redeem_by ? fmtDateShort(row.original.redeem_by, tz) : null}
-          </TextCell>
-        ),
-      },
     ],
     [biz, currency],
   );
 
   const segments = React.useMemo<ListSegment<CouponDetail>[]>(
     () => [
-      { id: "all", label: "All Coupons" },
-      { id: "active", label: "Active Coupons", match: (c) => c.active },
-      { id: "archived", label: "Archived Coupons", match: (c) => !c.active },
-      { id: "percentage", label: "Percentage Discounts", match: (c) => c.kind === "percentage" },
+      { id: "all", label: "All coupons" },
+      { id: "active", label: "Active coupons", match: (c) => c.active },
+      { id: "archived", label: "Archived coupons", match: (c) => !c.active },
+      { id: "percentage", label: "Percentage discounts", match: (c) => c.kind === "percentage" },
       { id: "fixed", label: "Fixed-amount Discounts", match: (c) => c.kind !== "percentage" },
       // Was "With an Expiry Date", on `!!c.redeem_by` — a field this list's serializer
       // does not emit, so the view was permanently EMPTY under a label that promised
@@ -163,7 +121,7 @@ export function CouponsTable({
       // against the business wall clock), so these two ask the same questions and can
       // actually answer them.
       { id: "expired", label: "Expired", match: (c) => c.status === "expired" },
-      { id: "future", label: "Not Started Yet", match: (c) => c.status === "future" },
+      { id: "future", label: "Not started yet", match: (c) => c.status === "future" },
     ],
     [],
   );
@@ -184,7 +142,7 @@ export function CouponsTable({
       { id: "name", label: "Name", group: "Identity", value: (c) => c.name },
       // `id` IS the coupon code on this endpoint (`id: c.code`), which is why the label
       // says Code — the operator types the thing printed in the Coupon Info cell.
-      { id: "id", label: "Coupon Code", group: "Identity", value: (c) => c.id },
+      { id: "id", label: "Coupon code", group: "Identity", value: (c) => c.id },
       {
         id: "status",
         label: "Status",
@@ -210,7 +168,7 @@ export function CouponsTable({
       },
       {
         id: "kind",
-        label: "Discount Type",
+        label: "Discount type",
         type: "select",
         group: "Configuration",
         options: [
@@ -282,7 +240,7 @@ export function CouponsTable({
       savedViews={{ entity: "coupons", biz }}
       createAction={createAction("Coupon", `/businesses/${biz}/catalog/coupons/new`)}
       topBarExtras={topBarExtras}
-      searchPlaceholder="Search for ID / Name…"
+      searchPlaceholder="Search by ID or name"
       exportName="coupons"
       persistKey={`coupons:${biz}`}
       rowHref={(c) => `/businesses/${biz}/catalog/coupons/${c.id}`}

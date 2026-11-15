@@ -16,14 +16,11 @@
  *   · `/login?x=https://…` embedding a scheme is fine as a path, but pointing back
  *     at an auth route is a redirect loop, not a destination.
  *
- * ── What is carried, and what is deliberately not ─────────────────────────────
- * The PATH only. `proxy.ts` has always dropped the original query on its way to
- * /login, and its reason still holds: a query can carry ids and filters belonging
- * to a tenant this visitor was never authenticated for. The path is different in
- * kind — the visitor just requested it, so echoing it back to them discloses
- * nothing they did not already have — and `requirePermission()` still gates the
- * destination once they arrive. If they may not see it, they get the usual refusal
- * rather than a silent landing.
+ * ── What is carried ───────────────────────────────────────────────────────────
+ * The path AND its query, so the visitor returns to the same tab and filters (user
+ * decision 2026-11-15; until then only the path was carried). It is the visitor's own
+ * request echoed back to them, and `requirePermission()` still gates the destination
+ * once they arrive: if they may not see it, they get the usual refusal.
  */
 
 export const REDIRECT_PARAM = "redirectTo";
@@ -43,7 +40,7 @@ export function safeRedirectTo(raw: string | null | undefined): string | null {
   if (typeof raw !== "string" || raw.length === 0) return null;
   // A long value is either a mistake or an attempt; either way it is not a path
   // this app serves.
-  if (raw.length > 512) return null;
+  if (raw.length > 2048) return null;
 
   // Control characters (including an encoded newline that survived decoding) can
   // split a header downstream. Nothing legitimate here contains one.

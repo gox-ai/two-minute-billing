@@ -27,7 +27,6 @@ export function AutoCloseRow({ defaultValue }: { defaultValue: number | null }) 
             max={365}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="never"
             className="w-24 text-right tabular-nums"
           />
           <span className="text-sm text-muted-foreground">days</span>

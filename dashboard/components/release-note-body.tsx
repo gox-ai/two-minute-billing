@@ -19,7 +19,10 @@ function Spans({ spans }: { spans: Span[] }) {
             return <React.Fragment key={i}>{s.text}</React.Fragment>;
           case "code":
             return (
-              <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+              <code
+                key={i}
+                className="rounded-md bg-muted px-1 py-0.5 font-mono text-[0.9em] wrap-anywhere"
+              >
                 {s.text}
               </code>
             );
@@ -115,7 +118,7 @@ export function ReleaseNoteBody({ blocks }: { blocks: Block[] }) {
             return (
               <pre
                 key={i}
-                className="overflow-x-auto rounded-lg bg-muted/60 p-3 font-mono text-sm text-foreground/90"
+                className="overflow-x-auto rounded-xl bg-muted/60 p-3 font-mono text-sm text-foreground/90"
               >
                 {b.text}
               </pre>

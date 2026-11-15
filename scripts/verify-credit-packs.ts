@@ -7,7 +7,11 @@
  *  - price rules: a paid pack needs a tax treatment; a custom unit is taxed at purchase;
  *  - a manual paid grant raises an invoice, stays pending, and with mark_paid is active at once;
  *    paid credit without an invoice fails the CHECK;
- *  - plan credits over 3 renewals for each rollover shape; a re-run of a period grants once.
+ *  - plan credits over 3 renewals for each rollover shape; a re-run of a period grants once;
+ *  - a coupon on a pack: same credit, cost basis after every discount share, deferred revenue
+ *    and recognition on use at that cost, a 100% coupon defers nothing, a void releases the
+ *    code; the portal quotes and carries a buyer's code;
+ *  - a flat pack with quantity 2 charges, shows and grants two packs.
  *
  *   pnpm verify:all:fresh -- --suite credit-packs
  */
@@ -18,8 +22,10 @@ import { signup } from "@/modules/auth/service";
 import { createBusiness } from "@/modules/tenancy/service";
 import { CatalogError, createPrice, createProduct, updatePrice } from "@/modules/catalog/service";
 import { createSubscription } from "@/modules/subscriptions/service";
-import { billSubscriptionPeriod } from "@/modules/invoicing/service";
-import { createManualInvoice, recordOfflinePayment } from "@/modules/invoicing/ops";
+import { billSubscriptionPeriod, type InvoiceLineInput } from "@/modules/invoicing/service";
+import { createManualInvoice, recordOfflinePayment, voidInvoice } from "@/modules/invoicing/ops";
+import { createCoupon } from "@/modules/coupons/service";
+import { recordUsage } from "@/modules/metering/service";
 import { addPromotionalCredits, recordExcessPayment } from "@/modules/customers/balances";
 import { applyCreditOnFile } from "@/modules/customers/collect";
 import { createCheckoutSession, CheckoutError } from "@/modules/checkout/service";
@@ -33,10 +39,15 @@ import { createPortalSession } from "@/modules/customer-portal/service";
 import { runBillingClockTick } from "@/modules/subscriptions/renewal";
 import { E12 } from "@/modules/credits/units";
 import {
+  appliedCoupons,
   businesses,
+  checkoutSessions,
+  coupons,
   CREDIT_LEDGER_ACCOUNTS as A,
   creditGrantMovements,
   creditGrants,
+  invoiceLineDiscounts,
+  invoiceLineItems,
   invoices,
   prices,
   subscriptionItems,
@@ -814,6 +825,364 @@ console.log("5. permissions");
     "credits:manage alone still gives promotional credit (201)",
     promo.statusCode === 201,
     promo.body,
+  );
+  await app.close();
+}
+
+// ── 6. A coupon on a pack: the credit stays, its cost basis is what was paid ────
+console.log("6. coupons on credit packs");
+{
+  const tag = Date.now().toString(36).toUpperCase();
+  const code = (s: string) => `${s}${tag}`;
+  await createCoupon({
+    ...ids,
+    code: code("PACK20"),
+    kind: "percentage",
+    percentOffBps: 2000,
+    maxRedemptionsPerCustomer: 1,
+  });
+  await createCoupon({ ...ids, code: code("PACK100"), kind: "percentage", percentOffBps: 10000 });
+  await createCoupon({
+    ...ids,
+    code: code("PACKITEM"),
+    kind: "fixed_amount",
+    amountOffMinor: 100,
+    currency: "USD",
+    applyOn: "each_specified_item",
+    itemConstraints: [
+      { itemKind: "charge", constraintType: "specific", priceIds: [moneyPack.publicId] },
+    ],
+  });
+  const offCustomer = (t: string) =>
+    createCustomer({ ...ids, email: `${t}-${Date.now()}@example.com`, autoCollection: "off" });
+  const couponPack = (customerId: string, codes: string[], extra: InvoiceLineInput[] = []) =>
+    createManualInvoice({
+      ...ids,
+      customerId,
+      currency: "USD",
+      coupons: { codes },
+      lines: [
+        {
+          description: "Credit",
+          priceId: moneyPack.id,
+          quantity: 1,
+          amountMinor: 1000n,
+          kind: "one_time",
+        },
+        ...extra,
+      ],
+    });
+
+  // 20% off a 1,000 money pack: 1,000 of credit for 800.
+  const c = await offCustomer("cp20");
+  const inv = (await couponPack(c.id, [code("PACK20")])).invoice;
+  const [g] = await grantsOf(inv.id);
+  check(
+    "20% coupon: the invoice charges 800 and the grant keeps 1,000 of credit at cost 800",
+    inv.totalMinor === 800n &&
+      g?.amount === 1000n &&
+      g.faceMinor === 1000n &&
+      g.costBasisMinor === 800n,
+    { total: inv.totalMinor, g },
+  );
+  const a = await accounts(c.id);
+  check(
+    "20% coupon: deferred (credit_grants_pending) is 800, revenue less discounts nets to 0",
+    -(a[A.pending] ?? 0n) === 800n && (a.revenue ?? 0n) + (a.discounts ?? 0n) === 0n,
+    a,
+  );
+  await recordOfflinePayment({ ...ids, invoicePublicId: inv.publicId, method: "wire" });
+  const paidA = await accounts(c.id);
+  check(
+    "20% coupon: activation moves 800 to credit_grants_paid",
+    (paidA[A.pending] ?? 0n) === 0n && -(paidA[A.paid] ?? 0n) === 800n,
+    paidA,
+  );
+
+  // Use 50 of the 1,000: recognised at 50 × 800 ÷ 1,000 = 40.
+  const flat = await createPrice({
+    ...ids,
+    productId: product.id,
+    id: `cp-flat-${Date.now()}`,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 1000,
+    interval: "month",
+  });
+  const metered = await createPrice({
+    ...ids,
+    productId: product.id,
+    id: `cp-use-${Date.now()}`,
+    type: "recurring",
+    model: "usage",
+    currency: "USD",
+    amountMinor: 5,
+    interval: "month",
+    usageAggregation: "sum",
+  });
+  const T = Date.now();
+  const H = 3_600_000;
+  const sub = await createSubscription({
+    ...ids,
+    customerId: c.id,
+    now: new Date(),
+    items: [
+      { price: flat, quantity: 1 },
+      { price: metered, quantity: 1 },
+    ],
+  });
+  await setTerm(sub.subscription.id, new Date(T - 2 * H), new Date(T - H));
+  await systemDb
+    .update(creditGrants)
+    .set({ effectiveAt: new Date(T - 3 * H) })
+    .where(eq(creditGrants.id, g!.id));
+  await recordUsage({
+    ...ids,
+    subscriptionItemId: sub.items.find((i) => i.priceId === metered.id)!.id,
+    quantity: 10,
+    timestamp: new Date(T - 90 * 60_000),
+  });
+  await tick(biz.id);
+  const draws = await systemDb
+    .select()
+    .from(creditGrantMovements)
+    .where(and(eq(creditGrantMovements.grantId, g!.id), eq(creditGrantMovements.kind, "draw")));
+  const drawn = draws.reduce(
+    (s, m) => ({ face: s.face - m.faceMinor, cost: s.cost - m.costMinor }),
+    { face: 0n, cost: 0n },
+  );
+  const usedA = await accounts(c.id);
+  check(
+    "20% coupon: using 50 of credit recognises 40 (cost in proportion), deferred falls to 760",
+    drawn.face === 50n && drawn.cost === 40n && -(usedA[A.paid] ?? 0n) === 760n,
+    { drawn, paid: usedA[A.paid] },
+  );
+
+  // 100% off: the credit is free, so nothing is deferred and nothing is recognised.
+  const c100 = await offCustomer("cp100");
+  const inv100 = (await couponPack(c100.id, [code("PACK100")])).invoice;
+  const [g100] = await grantsOf(inv100.id);
+  const a100 = await accounts(c100.id);
+  check(
+    "100% coupon: the invoice is paid at 0 and the grant is active with 1,000 of credit at cost 0",
+    inv100.totalMinor === 0n &&
+      inv100.status === "paid" &&
+      g100?.status === "active" &&
+      g100.amount === 1000n &&
+      g100.costBasisMinor === 0n,
+    { inv: inv100.status, total: inv100.totalMinor, g100 },
+  );
+  check(
+    "100% coupon: nothing deferred (pending and paid credit accounts stay at 0)",
+    (a100[A.pending] ?? 0n) === 0n && (a100[A.paid] ?? 0n) === 0n,
+    a100,
+  );
+
+  // A void reverses the sale and gives the code back.
+  const cv = await offCustomer("cpvoid");
+  const invV = (await couponPack(cv.id, [code("PACK20")])).invoice;
+  const timesBefore = (
+    await systemDb
+      .select()
+      .from(coupons)
+      .where(eq(coupons.code, code("PACK20")))
+  )[0]!.timesRedeemed;
+  await voidInvoice(orgId, biz.id, invV.publicId);
+  const [gV] = await grantsOf(invV.id);
+  const aV = await accounts(cv.id);
+  const [redemption] = await systemDb
+    .select()
+    .from(appliedCoupons)
+    .where(eq(appliedCoupons.invoiceId, invV.id));
+  const timesAfter = (
+    await systemDb
+      .select()
+      .from(coupons)
+      .where(eq(coupons.code, code("PACK20")))
+  )[0]!.timesRedeemed;
+  check(
+    "void: the pending grant is voided and every account nets to 0",
+    gV?.status === "voided" && Object.values(aV).every((v) => v === 0n),
+    { g: gV?.status, aV },
+  );
+  check(
+    "void: the redemption is released and times_redeemed goes down by 1",
+    redemption?.status === "released" && timesAfter === timesBefore - 1,
+    { status: redemption?.status, timesBefore, timesAfter },
+  );
+  const again = (await couponPack(cv.id, [code("PACK20")])).invoice;
+  check(
+    "void: the buyer can use the released code again (per-customer limit 1)",
+    again.totalMinor === 800n,
+    again.totalMinor,
+  );
+
+  // Item-level and document-level together, beside a charge that is not a pack.
+  const other = await createPrice({
+    ...ids,
+    productId: packProduct.id,
+    id: `cp-other-${Date.now()}`,
+    type: "one_time",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 1000,
+  });
+  const cm = await offCustomer("cpmix");
+  await addPromotionalCredits({ ...ids, customer: cm, amountMinor: 5000, currency: "USD" });
+  const invM = (
+    await couponPack(
+      cm.id,
+      [code("PACKITEM"), code("PACK20")],
+      [
+        {
+          description: "Setup",
+          priceId: other.id,
+          quantity: 1,
+          amountMinor: 1000n,
+          kind: "one_time",
+        },
+      ],
+    )
+  ).invoice;
+  const [gM] = await grantsOf(invM.id);
+  const [packLine] = await systemDb
+    .select()
+    .from(invoiceLineItems)
+    .where(
+      and(eq(invoiceLineItems.invoiceId, invM.id), eq(invoiceLineItems.priceId, moneyPack.id)),
+    );
+  const shares = await systemDb
+    .select()
+    .from(invoiceLineDiscounts)
+    .where(eq(invoiceLineDiscounts.invoiceLineItemId, packLine!.id));
+  const shareSum = shares.reduce((s, r) => s + r.amountMinor, 0n);
+  check(
+    "item + document coupon: cost basis = pack line − every discount share on it (1,000 − 100 − 180)",
+    shares.some((r) => r.scope === "item_level") &&
+      shares.some((r) => r.scope !== "item_level") &&
+      gM?.costBasisMinor === 1000n - shareSum &&
+      gM.costBasisMinor === 720n,
+    { cost: gM?.costBasisMinor, shares },
+  );
+  check(
+    "item + document coupon: promotional credit pays only the other charge's net (800), never the pack",
+    invM.promotionalCreditsAppliedMinor === 800n && invM.amountDueMinor === 720n,
+    { promo: invM.promotionalCreditsAppliedMinor, due: invM.amountDueMinor },
+  );
+
+  // Portal: quote a code, then Buy carries it onto the checkout as the buyer's own.
+  await systemDb
+    .update(businesses)
+    .set({ allowCustomerCoupons: true })
+    .where(eq(businesses.id, biz.id));
+  const cp = await offCustomer("cpportal");
+  const app = await buildApp({ logger: false });
+  const link = await createPortalSession({ ...ids, customerId: cp.id });
+  const sess = await app.inject({
+    method: "POST",
+    url: "/portal/v1/session",
+    headers: { authorization: `Bearer ${link.accessToken}` },
+  });
+  const auth = { authorization: `Bearer ${JSON.parse(sess.body).token}` };
+  const list = await app.inject({ method: "GET", url: "/portal/v1/credits", headers: auth });
+  check(
+    "portal: the credits list says the buyer may enter a code",
+    list.statusCode === 200 && JSON.parse(list.body).allow_coupons === true,
+    list.body,
+  );
+  const quote = await app.inject({
+    method: "POST",
+    url: "/portal/v1/credits/quote",
+    headers: auth,
+    payload: { price: moneyPack.publicId, quantity: 1, coupon: code("PACK20") },
+  });
+  const q = quote.statusCode === 200 ? JSON.parse(quote.body) : null;
+  check(
+    "portal quote: a pack with 20% off shows 1,000 less 200 = 800",
+    q?.subtotal_minor === 1000 && q.discount_minor === 200 && q.total_minor === 800,
+    quote.body,
+  );
+  const bad = await app.inject({
+    method: "POST",
+    url: "/portal/v1/credits/quote",
+    headers: auth,
+    payload: { price: moneyPack.publicId, coupon: `NOPE${tag}` },
+  });
+  check(
+    "portal quote: an unknown code is a 400 the field can show",
+    bad.statusCode === 400,
+    bad.body,
+  );
+  const buy = await app.inject({
+    method: "POST",
+    url: "/portal/v1/credits/purchase",
+    headers: { ...auth, "idempotency-key": `cp-buy-${tag}` },
+    payload: { price: moneyPack.publicId, quantity: 1, coupon: code("PACK20") },
+  });
+  const [session] = await systemDb
+    .select()
+    .from(checkoutSessions)
+    .where(eq(checkoutSessions.resultingCustomerId, cp.id));
+  // Without PORTAL_BASE_URL the route answers 503, after the session and its code exist.
+  check(
+    "portal Buy: the checkout holds the code as one the buyer entered",
+    (buy.statusCode === 200 || buy.statusCode === 503) &&
+      !!session?.couponCodes.includes(code("PACK20")) &&
+      (session.customerCouponCodes as string[]).includes(code("PACK20")),
+    { status: buy.statusCode, body: buy.body, session: session?.couponCodes },
+  );
+  // A flat pack's price is one pack: quantity 2 charges two, as it grants two.
+  const q2 = await app.inject({
+    method: "POST",
+    url: "/portal/v1/credits/quote",
+    headers: auth,
+    payload: { price: moneyPack.publicId, quantity: 2 },
+  });
+  check(
+    "flat pack × 2: the portal quote charges two packs (2,000)",
+    q2.statusCode === 200 && JSON.parse(q2.body).subtotal_minor === 2000,
+    q2.body,
+  );
+  const ref2 = await createCheckoutSession({
+    ...ids,
+    mode: "purchase",
+    priceId: moneyPack.publicId,
+    quantity: 2,
+    customerId: cp.publicId,
+  });
+  const view2 = await app.inject({
+    method: "GET",
+    url: "/checkout/v1/session",
+    headers: { authorization: `Bearer ${ref2.token}` },
+  });
+  const pv2 = view2.statusCode === 200 ? JSON.parse(view2.body).purchase : null;
+  check(
+    "flat pack × 2: the purchase checkout charges two packs (2,000)",
+    pv2?.subtotal_minor === 2000,
+    view2.body,
+  );
+  const inv2 = (await packInvoice(cp.id, moneyPack, 2)).invoice;
+  const [g2x] = await grantsOf(inv2.id);
+  check(
+    "flat pack × 2: the grant is two packs at the price of two (2,000 credit, cost 2,000)",
+    g2x?.amount === 2000n && g2x.costBasisMinor === 2000n && inv2.subtotalMinor === 2000n,
+    g2x && { amount: g2x.amount, cost: g2x.costBasisMinor, sub: inv2.subtotalMinor },
+  );
+  await systemDb
+    .update(businesses)
+    .set({ allowCustomerCoupons: false })
+    .where(eq(businesses.id, biz.id));
+  const refused = await app.inject({
+    method: "POST",
+    url: "/portal/v1/credits/quote",
+    headers: auth,
+    payload: { price: moneyPack.publicId, coupon: code("PACK20") },
+  });
+  check(
+    "portal: a code is refused (403) when the business does not accept buyer codes",
+    refused.statusCode === 403,
+    refused.body,
   );
   await app.close();
 }

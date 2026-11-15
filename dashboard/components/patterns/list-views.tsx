@@ -278,10 +278,16 @@ export function ViewsMenu({
   );
 
   return (
+    // Narrow list card: the trigger takes the toolbar row's free width, so the controls stay
+    // on one row.
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
-          {label}
+        <Button
+          variant="outline"
+          size="sm"
+          className="list-narrow:min-w-0 list-narrow:flex-[1_1_0] list-narrow:justify-between"
+        >
+          <span className="truncate">{label}</span>
           <ChevronDown className="size-3.5 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
@@ -464,7 +470,7 @@ export function SaveViewDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={submit} disabled={!name.trim() || saving}>
@@ -553,7 +559,7 @@ export function ManageViewsDialog({
                 You have not saved a view here yet. Filter the list, then select Save view.
               </p>
             ) : (
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y rounded-xl border">
                 {mine.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 p-2.5">
                     {editing === v.id ? (
@@ -662,7 +668,7 @@ export function ManageViewsDialog({
               <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Shared with the organization
               </h3>
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y rounded-xl border">
                 {shared.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 p-2.5">
                     <span className="flex-1 truncate text-sm font-medium">{v.name}</span>
@@ -688,7 +694,7 @@ export function ManageViewsDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Done
           </Button>
         </DialogFooter>

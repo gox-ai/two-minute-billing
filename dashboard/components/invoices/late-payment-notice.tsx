@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { Transaction } from "@/lib/api/payments";
 import { Alert } from "@/components/ui/alert";
-import { money, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 
 /**
  * A charge that completed after its invoice was voided. The engine books it as the

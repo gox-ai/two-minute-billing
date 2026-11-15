@@ -5,7 +5,13 @@ import { ErrorState, EmptyState } from "@/components/states";
 import { buttonVariants } from "@/components/ui/button";
 import { StatusChip } from "@/components/patterns/chip";
 import { ActionButton } from "@/components/action-button";
-import { SettingsCard, SettingsPage } from "@/components/settings/settings-layout";
+import {
+  SettingRow,
+  SettingsCard,
+  SettingsPage,
+  SettingsSaveBar,
+} from "@/components/settings/settings-layout";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import {
   Table,
   TableBody,
@@ -18,8 +24,6 @@ import { listDunningPolicies, type DunningPolicy } from "@/lib/api/dunning-polic
 import { listProducts } from "@/lib/api";
 import { getBusiness } from "@/lib/api/business-settings";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
-import { SelectField } from "@/components/ui/select-field";
 import { archiveDunningPolicyAction, savePlanDunningPoliciesAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +58,8 @@ export default async function DunningPoliciesPage({
   ]);
   const planPolicies = business?.dunning_config?.plan_policies ?? {};
   const live = policies.filter((p) => !p.archived);
+  // With plans, the plan form owns the page's one filled button (its Save bar).
+  const hasPlans = !!plans && plans.length > 0;
 
   const base = `/businesses/${biz}/settings`;
   const listHref = `${base}/dunning/policies`;
@@ -68,7 +74,10 @@ export default async function DunningPoliciesPage({
       ]}
       description="A policy is a named set of dunning settings. Assign it to a customer or to a plan to use it in place of the business dunning settings. A customer’s policy comes before its plan’s. Customers that are excluded from dunning stay excluded."
       actions={
-        <Link href={`${listHref}/new`} className={buttonVariants({ size: "sm" })}>
+        <Link
+          href={`${listHref}/new`}
+          className={buttonVariants({ size: "sm", variant: hasPlans ? "outline" : "default" })}
+        >
           Create policy
         </Link>
       }
@@ -149,52 +158,52 @@ export default async function DunningPoliciesPage({
         )}
       </SettingsCard>
 
-      {plans && plans.length > 0 ? (
-        <SettingsCard title="Plans" meta="A policy for every subscription on a plan">
-          <ActionForm action={savePlanDunningPoliciesAction}>
-            <input type="hidden" name="biz" value={biz} />
-            {business?.resource_version != null ? (
-              <input type="hidden" name="expected_version" value={business.resource_version} />
-            ) : null}
-            <p className="m-0 px-5 pt-4 text-sm text-muted-foreground">
+      {/* Last on the page: the Save bar ends the plan form. */}
+      {plans && hasPlans ? (
+        <ActionForm action={savePlanDunningPoliciesAction}>
+          <input type="hidden" name="biz" value={biz} />
+          {business?.resource_version != null ? (
+            <input type="hidden" name="expected_version" value={business.resource_version} />
+          ) : null}
+          <SettingsCard title="Plans" meta="A policy for every subscription on a plan">
+            <p className="m-0 px-5 py-3 text-xs text-muted-foreground">
               An invoice uses its customer&rsquo;s policy first. If the customer has no policy, it
               uses the policy of its subscription&rsquo;s plan. If the plan has no policy, it uses
               the business dunning settings.
             </p>
-            <ul className="m-0 flex list-none flex-col divide-y p-0">
-              {plans.map((plan) => {
-                const current = planPolicies[plan.id] ?? "";
-                const options = [
-                  { value: "", label: "No policy (business settings)" },
-                  ...live.map((p) => ({ value: p.id, label: p.name })),
-                  ...(current && !live.some((p) => p.id === current)
-                    ? [{ value: current, label: `${current} (archived)` }]
-                    : []),
-                ];
-                return (
-                  <li
-                    key={plan.id}
-                    className="grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-5 py-3 sm:grid-cols-[minmax(0,1fr)_16rem]"
-                  >
-                    <div className="min-w-0">
-                      <p className="m-0 text-sm font-medium">{plan.name}</p>
-                      <p className="m-0 font-mono text-xs text-muted-foreground">{plan.id}</p>
-                    </div>
-                    <SelectField
+            {plans.map((plan) => {
+              const current = planPolicies[plan.id] ?? "";
+              const options = [
+                { value: "", label: "No policy (business settings)" },
+                ...live.map((p) => ({ value: p.id, label: p.name })),
+                ...(current && !live.some((p) => p.id === current)
+                  ? [{ value: current, label: `${current} (archived)` }]
+                  : []),
+              ];
+              return (
+                <SettingRow
+                  key={plan.id}
+                  label={plan.name}
+                  htmlFor={`plan_policy:${plan.id}`}
+                  help={<span className="font-mono">{plan.id}</span>}
+                  placement="end"
+                  control={
+                    <SelectAnswer
                       name={`plan_policy:${plan.id}`}
                       ariaLabel={`Dunning policy for ${plan.name}`}
                       defaultValue={current}
                       options={options}
                     />
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="flex justify-end border-t px-5 py-3">
-              <SubmitButton size="sm">Save plan policies</SubmitButton>
-            </div>
-          </ActionForm>
-        </SettingsCard>
+                  }
+                />
+              );
+            })}
+          </SettingsCard>
+          <SettingsSaveBar
+            label="Save plan policies"
+            note="Applies to the next payment that fails on a subscription to the plan."
+          />
+        </ActionForm>
       ) : null}
     </SettingsPage>
   );

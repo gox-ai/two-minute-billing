@@ -6,7 +6,9 @@ import type { SeriesPolarity } from "@/components/analytics/series-format";
 
 /**
  * A series drawn the way Home draws it: a FLOW (an amount per period) as one bar per bucket,
- * a stock or a rate as a line. Bars are neutral, or loss-red when a rise is bad news.
+ * a stock or a rate as a line. Bars take the brand hue (`--chart-1`), the same as the lines,
+ * or `--chart-4` when a rise is bad news (churn): red is kept for the involuntary share,
+ * which only the cancellations report can split out.
  * Props stay serializable so a server component can render it.
  */
 export function SeriesChart({
@@ -36,7 +38,7 @@ export function SeriesChart({
       labels={data.map((d) => d.label)}
       values={data.map((d) => d.value)}
       seriesLabel={seriesLabel}
-      tone={polarity === "up_bad" ? "loss" : "soft"}
+      tone={polarity === "up_bad" ? "soft" : "brand"}
       kind={kind}
       currency={currency}
       height={height}

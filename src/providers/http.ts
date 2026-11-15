@@ -6,6 +6,7 @@
  * (the insert is fire-and-forget).
  */
 import { createHash } from "node:crypto";
+import { and, eq, isNull } from "drizzle-orm";
 import { systemDb } from "@/platform/db";
 import { gatewayRequestLogs } from "@db/schema";
 import { currentGatewayLogContext } from "./log-context";
@@ -248,6 +249,37 @@ export function logGatewayRequest(entry: GatewayLogInsert): void {
     });
   inFlightLogInserts.add(pending);
   // `finally` on the already-caught promise, so the registry drains on failure too.
+  void pending.finally(() => inFlightLogInserts.delete(pending));
+}
+
+/**
+ * Put a trace's span-less rows of one gateway under `spanId`: the reads a webhook made before
+ * its event named the attempt (signature check, object read). Fire-and-forget like the insert,
+ * after the inserts already in flight; `flushGatewayRequestLogs` waits for it too.
+ */
+export function adoptTraceLogsIntoSpan(input: {
+  traceId: string;
+  spanId: string;
+  gatewayKey: string;
+}): void {
+  const earlier = [...inFlightLogInserts];
+  const pending = Promise.allSettled(earlier)
+    .then(() =>
+      systemDb
+        .update(gatewayRequestLogs)
+        .set({ spanId: input.spanId })
+        .where(
+          and(
+            eq(gatewayRequestLogs.traceId, input.traceId),
+            eq(gatewayRequestLogs.gatewayKey, input.gatewayKey),
+            isNull(gatewayRequestLogs.spanId),
+          ),
+        ),
+    )
+    .catch((err: unknown) => {
+      log.warn("gateway_request_logs span adoption failed:", err);
+    });
+  inFlightLogInserts.add(pending);
   void pending.finally(() => inFlightLogInserts.delete(pending));
 }
 

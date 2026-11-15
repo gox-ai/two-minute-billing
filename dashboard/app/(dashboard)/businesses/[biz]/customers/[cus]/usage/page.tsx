@@ -11,6 +11,7 @@ import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 import { Alert } from "@/components/ui/alert";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 import {
   Table,
   TableBody,
@@ -21,7 +22,8 @@ import {
 } from "@/components/ui/table";
 import { UsageDailyChart, type DailyPoint } from "@/components/usage/usage-daily-chart";
 import { UnpricedModelsBanner, type UnpricedKey } from "@/components/usage/unpriced-models-banner";
-import { fmtDate, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtRange } from "@/lib/format-date";
 import { formatDecimalQuantity } from "@/lib/meters";
 import {
   PRICE_SOURCE_LABEL,
@@ -289,9 +291,10 @@ export default async function CustomerUsagePage({
 
       <RecordCard
         title="Usage by day"
-        meta={`${fmtDate(from, "UTC")} to ${fmtDate(to, "UTC")}${tz ? ` · ${tz}` : ""}`}
+        meta={`${fmtRange(from, to, "UTC")}${tz ? ` · ${tz}` : ""}`}
         actions={
           <nav className={SEGMENT_TRACK} aria-label="Range">
+            <SegmentIndicator />
             {RANGES.map((d) => (
               <Link key={d} href={`?days=${d}`} className={segmentItem(d === days)} scroll={false}>
                 {d} days

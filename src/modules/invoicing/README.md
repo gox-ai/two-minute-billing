@@ -78,7 +78,42 @@ date; `attemptCount`/`nextAttemptAt`) + invoice line items (`recurring|proration
 - Money = integer minor units; ledger append-only.
 
 ## Changelog
+- **2026-11-14** — `voidInvoiceInTx(tx, …)`: the same void inside the caller's transaction
+  (no pending-debit cancel). `voidInvoice` keeps its behaviour; both share `applyVoid`. The
+  change revert uses it so the revert and the void commit together.
+- **2026-11-14** — A manual collect that is an invoice's first failure counts as attempt 1, as an
+  automatic one does (`recordFailedPayment`). Held at 0, the first scheduled retry reused offset 1:
+  1, 3, 5, 7 ran on days 1, 2, 3, 5, 7. Hand attempts during dunning still hold the count. Gate:
+  `verify:dunning-policies` P10, `verify:manual-collect` 2D.
 
+- **2026-11-13 (0530)** — The period invoice queues usage beyond the credits as `credit_overage` charges just before it is planned (`chargeCreditOverage`; not for previews, interim or late-usage invoices) and bills them as usage lines; it skips the meter price of a meter with a credit cost. `voidInvoice` forgives a one-off overage invoice's overshoot (`forgiveVoidedOverageInvoice`).
+
+- **2026-11-13** — A credit pack line on the single-invoice read carries
+  `pack_full_creditable_minor`: the most a note with `pack_refund: full` can credit. Gate:
+  `verify:credit-settings-reports` § 4.
+
+- **2026-11-13** — `InvoiceDocument.creditUsage`: the `credit_usage` lines (amount 0) as
+  sentences. The PDF prints them under "USAGE PAID WITH CREDITS", outside the line-item table,
+  with no amount; the totals and the tax lines do not read them. Gate: `verify:invoice-pdf`.
+
+- **2026-11-13** — `BillSubscriptionPeriodInput.lateOnly` (`{ originToken, meterIds }`): a
+  late-usage invoice of a cancelled subscription. Only late lines of those meters over a
+  zero-length `usagePeriod` (probed: `rateMeterItem` and `readCombos` give no current line and
+  no zero placeholder), `usage_through` unchanged; no fixed, minimum, pending-charge, commitment
+  or coupon lines; no net terms; `purpose: late_usage` (0521) + origin token; no plan credits.
+  A preview of it under a clock pin widens the peeked cutoff by the fold grace, as
+  `takeMeterCutoff` does. A `late_usage` invoice is never dunned: `dunningAppliesTo` returns
+  false for it (failed charge → `not_paid`, no retry), and `collectPeriodInvoice` leaves an
+  auto-collection-off one alone (no offline dunning).
+
+- **2026-11-12** — `linked_payments[].payment`: the `pay_…` id of the payment a transaction
+  belongs to (a refund: the payment it reverses), joined in `relations.ts`; null without a payment
+  row. The refund route takes it, so an API client needs no `GET /transactions/{txn}`. Additive.
+- **2026-11-06** — `GET …/invoices/:inv/explanation` (`explain.ts`, pure over the detail view):
+  the totals ladder with a `holds` check, each line's facts (kind, period, price, discounts, tax
+  or why untaxed), and the change from the same subscription's previous non-voided invoice
+  (`previousInvoicePublicId`), grouped by kind + price. The retrieve and the explanation share
+  `invoiceDetailView`. Gate: `verify:explain` § A (feat/mcp-server).
 - **2026-11-05** — `collectOutstandingForNewPaymentMethod` takes `collectOpenInvoices`, a
   per-call override of `collectOnPaymentMethodUpdate` (omitted = the business rule; the config
   is not loaded when it is set). Route field `collect_open_invoices`. Gate: `verify:create-gating` 10d.
@@ -1518,3 +1553,61 @@ estimate.ts`'s in-trial and term-reset preview branches gained the SAME cap chec
   (`platform/public-metadata.ts`): an imported invoice's `metadata.source_payload` (the raw source
   record) stays stored and is no longer returned by the API. Gate: `verify:migration-history`.
 - **2026-11-05** — `recordOfflinePayment` takes `shortfall` (`write_off` | `leave_due`) and `excess` (`credit` | `refund`) for one call; route fields on `POST …/invoices/:inv/pay`. `leave_due` never writes off; `write_off` keeps the business amount and percent caps and is refused (400, nothing booked) when the shortfall does not fit — decided before any write (`offlineShortfallWriteOff`). Omitted shortfall = the rule. `excess: refund` books the excess as credit, then draws it straight back (dr `excess_payment_balance` / cr cash, source `excess_refund_reserve`) with a succeeded offline `refund` transaction; response `excess_refunded_minor`. Omitted excess = `credit`, as before (`payment_application.excess_payment` governs gateway payments only). Gates: `verify:settings-dunning-p2` (2.12 per call), `verify:settings-payment-application` 4H.
+- **2026-11-11** — Retry rows carry `collection` (`charge` | `reminder`), from `autoCollectionOffSql`
+  (the subscription's auto-collection, else the customer's), the fact the clock uses to send a
+  reminder instead of a charge. `listRetriesPage` left-joins `subscriptions` for it. Gate:
+  `verify:dunning-offline` case 16.
+- **2026-11-12 (0520)** — `createInvoiceFromLines({ coupons: { codes, enteredByCustomer } })`
+  redeems codes on the invoice inside its transaction (`redeemCouponsForInvoice`), with or without a
+  subscription; with `applyCoupons` too, both are priced in one `peekDiscounts` pass (its
+  `pending.redeemed`). The rows get `invoice_id` once the invoice exists and are not consumed again.
+  `previewInvoiceFromLines({ coupons })` prices
+  them with no writes and returns `discountMinor` / `discounts`; `subtotalMinor` is now after the
+  item-level stage, as stored. `createManualInvoice` passes `coupons` through; `voidInvoice` calls
+  `releaseInvoiceRedemptions`. Gate: `verify:coupons-invoice` (preview = create, exclusive and
+  inclusive tax with promo credit).
+- **2026-11-12 (0520)** — `createInvoiceFromLines` / `createManualInvoice` /
+  `previewInvoiceFromLines` take `coupons`; the preview returns `discountMinor` / `discounts` and
+  matches the create. `previewInvoiceFromLines({ applyCoupons })` prices the subscription's coupons
+  against the current period allowance. `customerCoupons` (default on for an invoice with no
+  subscription; a manual paid grant opts out) adds the customer's coupons. With credit lines and
+  `applyCoupons`, both the create and the preview restate each credit at its paid basis
+  (`creditPaidBasis`) and the coupons discount the net. `zero_invoice_paid_event`
+  (`zero-invoice-paid.ts`): `oneOff`, set by `createManualInvoice` and the automatic top-up, is
+  read only by `one_off`; the event is emitted in the paying transaction. A zero-total paid
+  invoice activates its pending pack grants in that transaction, once. A line marked `discounted`
+  (an unbilled charge booked net of the coupons) takes no coupon, on the renewal and on an
+  unbilled-charge invoice. `POST /invoices` takes `coupons` (`CouponError` → 400) and rates a flat
+  credit pack × quantity (`packAwareLineAmount`).
+
+- **2026-11-13** — **Held renewal invoices (0523).** `invoices.hold_until` (+ partial index
+  `invoices_hold_until_idx`). A `pending_draft` plan with `hold` writes `hold_until` and
+  `metadata.held`, and (not for `closing`) grants the new cycle (`grantPlanCycle`) and the due
+  reset windows in the draft transaction. A finalize plan with `heldClose` settles the closed
+  cycle (`settlePlanCycles` keyed on the stored window end) instead of `applyPlanCredits`, and
+  opens credits held for a paid close, and takes `heldClose.at` as the invoice date for
+  `due_date` and posted/payment_due (so dunning, reminders and `due.ts` count from the close).
+  `runAutoClosePending` skips held rows and then runs
+  `runCloseHeldInvoices`; `closeInvoice` dispatches a held row to `finalizeHeldInvoice`. The
+  API shows `usage_closes_at` on a pending held invoice. Cover: `verify:usage-grace`.
+- **2026-11-13 (review fixes)** — `InvoiceDocument.meta.holdUntil`: set on a `pending` invoice with
+  `hold_until` (a held renewal). The PDF then prints "DRAFT", "Draft. Finalizes on <date>." (business
+  timezone) in the status slot, and no Invoice Amount or Amount Due row. Every other invoice prints
+  as before. Cover: `verify:invoice-pdf` (strings pdfkit draws, held and normal).
+- **2026-11-13 (held draft PDF, second pass)** — A held draft prints "Total so far" in place of
+  "Total" and no payment instructions: its total is not what will be due, so nothing asks for a
+  payment. Cover: `verify:invoice-pdf` (held and normal, with the same bank instruction).
+- **2026-11-13 (0526)** — `commitSubscriptionPeriodInvoice` settles usage paid in credits before
+  it loads the grants (`settleCustomerCreditUsage`) and, on a period invoice (no `purpose`),
+  writes the information lines (`insertCreditUsageLines`): kind `credit_usage`, amount 0, one per
+  meter, on the invoices of the customer's oldest subscription. No total, tax or ledger posting
+  changes. Gate: `verify:credits-own-unit` § 5.
+- **2026-11-13 (credit usage period)** — `InvoiceDocument.creditUsage` is `{ text, period }[]`:
+  `period` is the line's own window (when the usage arrived), with `end` the last day covered.
+  The PDF and the HTML print it under each sentence. Cover: `verify:invoice-pdf`.
+- **2026-11-13 (overage preview)** — `planSubscriptionPeriodInvoice({ creditOverage })`:
+  `preview` builds the usage lines of usage beyond the credits from `previewCreditOverage`
+  (`creditOverageLine`, shared with the queued charge) and marks the plan `previewOnly`;
+  `omit` leaves them out. Unset keeps the charge path. Cover: `verify:credit-overage` § 10.
+- **2026-11-15** — `applyVoid` ends a held change (`apply_when_paid`) whose invoice is voided by
+  hand, in the void's transaction (`onHeldInvoiceVoided`: its credit notes are voided too).

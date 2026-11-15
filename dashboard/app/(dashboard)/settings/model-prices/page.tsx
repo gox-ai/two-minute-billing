@@ -3,7 +3,9 @@ import {
   getModelPriceDrift,
   getModelPriceSource,
   listModelPrices,
+  listUnlistedCosts,
   type ModelPriceDrift,
+  type ModelPriceFeed,
   type ModelPriceSource,
 } from "@/lib/api/model-prices";
 import { allows, requirePermission } from "@/lib/session";
@@ -13,6 +15,7 @@ import {
   ModelPricesTable,
 } from "@/components/model-prices/model-prices-table";
 import { Alert } from "@/components/ui/alert";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/components/states";
 import {
   Table,
@@ -22,7 +25,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import {
+  feedTimes,
+  listFeedName,
+  shortVersion,
+  unlistedCostFilters,
+  unlistedCostKey,
+} from "@/lib/model-prices";
+import { providerName } from "@/lib/model-providers";
+import { fmtDateTime } from "@/lib/format-date";
 import { urlFilters } from "@/lib/list-source";
 import { orgTz } from "@/lib/org-tz-server";
 import { tzLabel } from "@/lib/tz";
@@ -40,53 +52,111 @@ function nextCheckUtc(now = new Date()): string {
   return `${String(h).padStart(2, "0")}:10 UTC`;
 }
 
-/** The source's version is an ETag: drop the weak marker and quotes, keep 8 characters. */
-function shortVersion(raw: string): string {
-  return raw.replace(/^W\//, "").replaceAll('"', "").slice(0, 8);
+/** The feeds, with the first one alone when the engine predates `sources`. */
+function feedsOf(source: ModelPriceSource): ModelPriceFeed[] {
+  return source.sources?.length
+    ? source.sources
+    : [
+        {
+          source: "genai-prices",
+          url: source.url,
+          licence: source.licence,
+          prices: "all",
+          checked_at: source.checked_at,
+          last_success_at: source.last_success_at,
+          check_error: source.check_error,
+          upstream_version: source.upstream_version,
+        },
+      ];
 }
 
 function SourceDetails({ source, tz }: { source: ModelPriceSource; tz: string }) {
   const at = (iso: string) => `${fmtDateTime(iso, tz)} ${tzLabel(tz)}`;
+  const feeds = feedsOf(source);
+  const failed = feeds.filter((f) => f.check_error);
+  const name = (f: ModelPriceFeed) => listFeedName(f.source);
   return (
     <div className="flex flex-col gap-3 text-sm">
-      {source.check_error ? (
+      {failed.length ? (
         <Alert tone="error" title="We could not update the price list">
-          The source did not answer. We try again at{" "}
-          {source.next_check_at ? at(source.next_check_at) : nextCheckUtc()}. Your bills use the
-          last prices.
+          {failed.length === feeds.length
+            ? "The source did not answer."
+            : `${failed.map(name).join(" and ")} did not answer.`}{" "}
+          We try again at {source.next_check_at ? at(source.next_check_at) : nextCheckUtc()}. Your
+          invoices use the most recent prices that we have.
         </Alert>
       ) : null}
-      <p className="m-0">
-        Prices from{" "}
-        <a href={source.url} className="text-primary hover:underline" rel="noreferrer">
-          genai-prices
-        </a>{" "}
-        · Updated {source.last_success_at ? at(source.last_success_at) : "never"}
-        {source.upstream_version ? (
-          <>
-            {" "}
-            · Version{" "}
-            <span className="font-mono text-xs" title={source.upstream_version}>
-              {shortVersion(source.upstream_version)}
-            </span>
-          </>
-        ) : null}
-      </p>
+      {feeds.map((f) => {
+        const { checked, updated } = feedTimes(f);
+        return (
+          <p key={f.source} className="m-0">
+            {f.prices === "media"
+              ? "Image, video, audio and character prices from "
+              : "Prices from "}
+            <a
+              data-document-link
+              href={f.url}
+              className="text-primary hover:underline"
+              rel="noreferrer"
+            >
+              {name(f)}
+            </a>
+            {checked ? ` · Checked ${at(checked)}` : " · Not checked yet"}
+            {updated ? ` · Updated ${at(updated)}` : null}
+            {f.upstream_version ? (
+              <>
+                {" "}
+                · Version{" "}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="font-mono text-xs">{shortVersion(f.upstream_version)}</span>
+                  </TooltipTrigger>
+                  <TooltipContent className="font-mono text-xs">
+                    {f.upstream_version}
+                  </TooltipContent>
+                </Tooltip>
+              </>
+            ) : null}
+          </p>
+        );
+      })}
+      {feeds.length > 1 ? (
+        <p className="m-0 text-muted-foreground">
+          When both sources give a price for an image, a video, audio or characters, we use{" "}
+          {name(feeds[1]!)}.
+        </p>
+      ) : null}
+      {source.last_success_at ? null : (
+        <p className="m-0 text-muted-foreground">We have not synced the prices yet.</p>
+      )}
       {source.held ? (
         <p className="m-0 text-muted-foreground">
           A price update is waiting. It applies on its own when the source keeps the same prices for
-          6 hours. Until then, your bills use the last prices.
+          6 hours. Until then, your invoices use the current prices.
         </p>
       ) : null}
       <p className="m-0 text-muted-foreground">
-        License of the price data: {source.licence || "MIT"}.
+        List prices are in USD. We do not convert them. For another currency, set your cost or a
+        fixed rate in that currency.
       </p>
-      <p className="m-0 text-muted-foreground">
-        List prices are in USD. We do not convert them to other currencies. For a business that
-        bills in another currency, set your cost or a fixed rate in that currency.
+      <p className="m-0 text-xs text-muted-foreground">
+        License of the price data:{" "}
+        {feeds.map((f) => `${name(f)}, ${f.licence || "MIT License"}`).join(". ")}.
       </p>
     </div>
   );
+}
+
+/**
+ * The oldest last success among the feeds that have one: a model only one feed lists reads as
+ * "not in the source" only after that feed has run since, so a failing feed never marks its
+ * models as gone.
+ */
+function oldestSuccess(source: ModelPriceSource | null): string | null {
+  const all = source
+    ? feedsOf(source).flatMap((f) => (f.last_success_at ? [f.last_success_at] : []))
+    : [];
+  return all.length ? all.reduce((a, b) => (Date.parse(a) < Date.parse(b) ? a : b)) : null;
 }
 
 /**
@@ -114,9 +184,17 @@ export default async function ModelPricesPage({
     used: one("used") === "on",
   };
 
-  let page, source, businesses, tz, drift;
+  // The cost card follows the list's own search and provider and unit filters.
+  const filterParam = sp.filter;
+  const costFilters = unlistedCostFilters(
+    one("q"),
+    Array.isArray(filterParam) ? filterParam : filterParam ? [filterParam] : [],
+  );
+  let page, source, businesses, tz, drift, unlisted;
+  // When the rows were read: a cost is "ended" against this, so each reload decides again.
+  const loadedAt = new Date().getTime();
   try {
-    [page, source, businesses, tz, drift] = await Promise.all([
+    [page, source, businesses, tz, drift, unlisted] = await Promise.all([
       listModelPrices({
         business: scope.business,
         has_cost: scope.hasCost,
@@ -129,14 +207,12 @@ export default async function ModelPricesPage({
       getModelPriceDrift(scope.business)
         .then((d) => d.data.filter((r) => Math.abs(r.difference_percent) >= DRIFT_SHOWN_PERCENT))
         .catch(() => [] as ModelPriceDrift[]),
+      listUnlistedCosts(costFilters).catch(() => ({ rows: [], nextCursor: null })),
     ]);
   } catch (e) {
     return (
       <SettingsPage title="Model prices" crumbs={CRUMBS}>
-        <ErrorState
-          title="We could not load the price list"
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
-        />
+        <ErrorState title="We could not load the price list." error={e} retry />
       </SettingsPage>
     );
   }
@@ -156,7 +232,7 @@ export default async function ModelPricesPage({
   return (
     <SettingsPage
       title="Model prices"
-      description="The price of each AI model and token type, from a public price list that we update every hour. Your cost is the price that you negotiated with a provider."
+      description="The price of each AI model, by type and unit, from a public price list that we check every hour. Your cost is the price that you negotiated with a provider."
       crumbs={CRUMBS}
       actions={
         businesses?.data.length ? (
@@ -179,8 +255,9 @@ export default async function ModelPricesPage({
           meta={businessName ? businessName : "All businesses"}
         >
           <p className="m-0 px-5 py-4 text-sm text-muted-foreground">
-            These models cost a different amount from the list in the last 7 days. We compare the
-            cost that your calls reported with the list price of the same tokens.
+            In the last 7 days, these models cost at least {DRIFT_SHOWN_PERCENT}% more or less than
+            the list price. We compare the cost that your calls reported with the list price of the
+            same tokens.
           </p>
           <Table>
             <TableHeader>
@@ -195,7 +272,7 @@ export default async function ModelPricesPage({
             <TableBody>
               {drift.map((d) => (
                 <TableRow key={`${d.provider}/${d.model}`}>
-                  <TableCell className="pl-5">{d.provider}</TableCell>
+                  <TableCell className="pl-5">{providerName(d.provider)}</TableCell>
                   <TableCell className="font-mono">{d.model}</TableCell>
                   <TableCell className="text-right">
                     {money(d.reported_cost_minor, "USD")}
@@ -222,7 +299,9 @@ export default async function ModelPricesPage({
         initialFilters={urlFilters(sp, {})}
         canManage={canManage}
         currencies={currencies}
-        sourceSuccessAt={source?.last_success_at ?? null}
+        sourceSuccessAt={oldestSuccess(source)}
+        unlistedCosts={{ ...unlisted, key: unlistedCostKey(costFilters) }}
+        loadedAt={loadedAt}
       />
     </SettingsPage>
   );

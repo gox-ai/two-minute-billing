@@ -74,6 +74,8 @@ export const FAMILY_SUMMARIES: Record<string, string> = {
     "Credit that a customer holds, in money or in your credit unit. Invoices use it in a fixed order, and it can expire.",
   credit_hold:
     "An amount of credit that your app reserved before a call. We send these events only to an endpoint that lists them by name.",
+  credit_usage:
+    "Usage of a meter that has a credit cost, paid in your credit unit when each usage event arrives.",
   spend_limit:
     "A spend limit on a customer, a subscription or a usage property. Sent once per limit, subject and interval when spend reaches the limit.",
   customer_limit_tier:
@@ -89,6 +91,10 @@ export const FAMILY_SUMMARIES: Record<string, string> = {
  * Only where the event type's name does not carry the meaning. Keyed by event type.
  */
 export const EVENT_SUMMARIES: Record<string, string> = {
+  invoice_paid:
+    "`content.invoice` holds the invoice's `id`, `amount_minor` and `currency` (plus `paid_with_credit` when credit paid it). Fetch the invoice for its lines, customer, `metadata` and status. Whether a total-0 invoice sends this event is the billing rule `zero_invoice_paid_event`.",
+  payment_failed:
+    "`content.payment` holds the payment's `id`, `amount_minor`, `currency`, the `invoice` id, a decline `code` and a `message` safe to show the payer.",
   model_prices_changed:
     "Sent once per price sync to each business whose meters used a changed model in the last 35 days. Each change gives the old and new price, the time the new price starts, and two flags: `bill_moves` (a live subscription bills that model from the list) and `cost_moves` (you have no cost of your own for it). Usage before the start time keeps the old price.",
   spend_limit_reached:
@@ -96,7 +102,11 @@ export const EVENT_SUMMARIES: Record<string, string> = {
   usage_alert_resolved:
     "The value moved back across a threshold, or the period ended (`reason: period_ended`). Each trigger has exactly one resolve.",
   credit_grant_applied:
-    "Sent once for each invoice that used credit grants. It lists each grant and the amount that the invoice used.",
+    "Sent once for each invoice that used credit grants. It lists each grant and the amount that the invoice used. Also sent for each settlement of usage paid in credits: `invoice` is then null and `settlement` holds the settlement's id.",
+  credit_usage_refused:
+    "A usage event arrived for a meter with a credit cost, and the customer did not have sufficient credit. The event is stored and is not billed. Carries the usage event's key, the customer, the meter, the credits due, the credits available and the `policy` that applied (`block` or `bill`; `bill` also refuses, because usage that credits do not pay has no money price yet).",
+  credit_usage_settled:
+    "A settlement drew the credits of a window of usage from the customer's credit grants. Carries the meter, the window, the quantity, the credits drawn and the revenue posted. We send this event only to an endpoint that lists it by name.",
   credit_grant_restored:
     "A voided invoice gave its credit back. When the grant had expired, the credit comes back as a new grant that expires in 12 months.",
   usage_event_unmatched:

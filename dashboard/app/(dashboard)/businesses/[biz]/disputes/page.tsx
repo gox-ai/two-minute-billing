@@ -78,6 +78,8 @@ export default async function DisputesPage({ params }: { params: Promise<{ biz: 
         rows={disputes.data}
         canManage={allows(user, "payments:refund", "manager")}
         gatewayNames={gatewayNames}
+        gatewayCatalog={catalog}
+        livemode={businesses.data.find((b) => b.id === biz)?.livemode ?? null}
       />
     </>
   );

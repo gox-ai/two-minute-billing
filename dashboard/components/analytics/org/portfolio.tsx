@@ -1,9 +1,18 @@
 import * as React from "react";
 import Link from "next/link";
 import { Block, BlockLink, Grid } from "@/components/analytics/layout";
-import { BarList, Headline, Lead, Meter, SegmentBar } from "@/components/analytics/home/parts";
+import {
+  BarList,
+  Headline,
+  Lead,
+  Meter,
+  SegmentBar,
+  signedMoney,
+} from "@/components/analytics/home/parts";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EMPTY_FIGURE } from "@/components/patterns/record-page";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import type { AnalyticsQuery, BatchEntry } from "@/lib/analytics-api";
 import {
   ok,
@@ -125,20 +134,22 @@ export function PortfolioCurrent({ answers, businesses }: { answers: Answers; bu
 
   return (
     <>
-      <Grid>
+      {/* Two by two on a phone: a card is ~170px there, room for each figure. Every card keeps
+          its stat row (a missing figure reads "—"), so the four figures stand on one line. */}
+      <Grid className="max-lg:gap-4 max-lg:*:col-span-6">
         <Headline
           span={3}
           label="Consolidated MRR"
           value={mrr?.total != null ? moneyCompact(mrr.total, cur) : "—"}
           title={mrr?.total != null ? money(mrr.total, cur) : undefined}
           stats={[
-            { label: "ARR", value: arr != null ? moneyCompact(arr, cur) : null },
+            { label: "ARR", value: arr != null ? moneyCompact(arr, cur) : "—" },
             {
               label: "30 days ago",
               value:
                 mrr?.compare?.previous_total != null
                   ? moneyCompact(mrr.compare.previous_total, cur)
-                  : null,
+                  : "—",
             },
           ]}
         />
@@ -148,7 +159,7 @@ export function PortfolioCurrent({ answers, businesses }: { answers: Answers; bu
           value={count(payingTotal)}
           stats={[
             { label: "Earning", value: `${positive(mrrBiz).length} of ${n}` },
-            { label: "Largest", value: largestPaying > 0 ? count(largestPaying) : null },
+            { label: "Largest", value: largestPaying > 0 ? count(largestPaying) : "—" },
           ]}
         />
         <Headline
@@ -158,7 +169,7 @@ export function PortfolioCurrent({ answers, businesses }: { answers: Answers; bu
           stats={[
             {
               label: "Unpaid invoices",
-              value: total(answers, "recv_n") != null ? count(total(answers, "recv_n")!) : null,
+              value: total(answers, "recv_n") != null ? count(total(answers, "recv_n")!) : "—",
             },
             { label: "Businesses", value: count(positive(recv).length) },
           ]}
@@ -293,7 +304,7 @@ function CurrencyExposure({ answers, currency }: { answers: Answers; currency: s
               <React.Fragment key={r.key}>
                 <span className="flex items-center gap-2 font-semibold">
                   <span
-                    className={cn("size-2 rounded-sm", CURRENCY_FILLS[i % CURRENCY_FILLS.length])}
+                    className={cn("size-2 rounded-xs", CURRENCY_FILLS[i % CURRENCY_FILLS.length])}
                     aria-hidden
                   />
                   {r.key}
@@ -331,7 +342,7 @@ export function PortfolioPerformance({
 }) {
   return (
     <>
-      <Grid>
+      <Grid even>
         <GrowthByBusiness answers={answers} businesses={businesses} currency={currency} />
         <CashAcrossBusinesses answers={answers} businesses={businesses} currency={currency} />
       </Grid>
@@ -365,44 +376,50 @@ function GrowthByBusiness({
     .sort((a, z) => z.nu + z.ch - (a.nu + a.ch));
   const widest = Math.max(1, ...moved.map((r) => Math.max(r.nu, r.ch)));
   const still = businesses.length - moved.length;
-  const netTotal = total(answers, "net_biz");
+  // The answer's own total; failing that, the rows that have a figure. A refused answer, or
+  // one with no stored figure at all, is unknown ("—"), not zero, so the three agree.
+  const sumOf = (key: string, m: Map<string, SplitRow>) => {
+    const t = total(answers, key);
+    if (t != null) return t;
+    const known = [...m.values()].filter((r) => r.total != null);
+    return known.length ? known.reduce((s, r) => s + r.total!, 0) : null;
+  };
+  const netTotal = sumOf("net_biz", net);
+  const newTotal = sumOf("new_biz", nu);
+  const churnTotal = sumOf("churn_biz", ch);
   const quick = total(answers, "quick");
-  const signed = (v: number) =>
-    `${v > 0 ? "+" : v < 0 ? "−" : ""}${moneyCompact(Math.abs(v), currency)}`;
+  const signed = (v: number) => signedMoney(v, currency);
 
   return (
     <Block span={8} title="Growth by business">
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground tabular-nums">
         <span>
           Net new MRR{" "}
-          <b
-            className={cn(
-              "font-semibold",
-              (netTotal ?? 0) < 0 ? "text-destructive" : "text-foreground",
-            )}
-          >
-            {netTotal != null ? signed(netTotal) : "—"}
-          </b>
+          {netTotal != null ? (
+            <b
+              className={cn("font-semibold", netTotal < 0 ? "text-destructive" : "text-foreground")}
+            >
+              {signed(netTotal)}
+            </b>
+          ) : (
+            EMPTY_FIGURE
+          )}
         </span>
         <span>
           New{" "}
-          <b className="font-semibold text-foreground">
-            +
-            {moneyCompact(
-              [...nu.values()].reduce((s, r) => s + (r.total ?? 0), 0),
-              currency,
-            )}
-          </b>
+          {newTotal != null ? (
+            <b className="font-semibold text-foreground">{signed(newTotal)}</b>
+          ) : (
+            EMPTY_FIGURE
+          )}
         </span>
         <span>
           Churn{" "}
-          <b className="font-semibold text-foreground">
-            −
-            {moneyCompact(
-              [...ch.values()].reduce((s, r) => s + (r.total ?? 0), 0),
-              currency,
-            )}
-          </b>
+          {churnTotal != null ? (
+            <b className="font-semibold text-foreground">{signed(-churnTotal)}</b>
+          ) : (
+            EMPTY_FIGURE
+          )}
         </span>
         {quick != null ? (
           <span>
@@ -411,7 +428,11 @@ function GrowthByBusiness({
         ) : null}
       </div>
       {moved.length === 0 ? (
-        <p className="mt-4 text-sm text-muted-foreground">No business moved MRR in this period.</p>
+        <p className="mt-4 text-sm text-muted-foreground">
+          {netTotal == null && newTotal == null && churnTotal == null
+            ? "We have no MRR figures for this period."
+            : "No business moved MRR in this period."}
+        </p>
       ) : (
         <div className="mt-4 grid grid-cols-[minmax(0,12rem)_minmax(6rem,1fr)_auto_auto_auto] items-center gap-x-4 gap-y-3 text-sm tabular-nums">
           <span className="text-xs text-muted-foreground">Business</span>
@@ -419,7 +440,7 @@ function GrowthByBusiness({
           <span className="text-right text-xs text-muted-foreground">New</span>
           <span className="text-right text-xs text-muted-foreground">Churn</span>
           <span className="text-right text-xs text-muted-foreground">Net</span>
-          {moved.map((r) => (
+          {moved.map((r, i) => (
             <React.Fragment key={r.b.id}>
               <Link
                 href={`/businesses/${r.b.id}?tab=recurring`}
@@ -430,20 +451,22 @@ function GrowthByBusiness({
               <span className="flex h-3.5 items-center" aria-hidden>
                 <span className="flex flex-1 justify-end">
                   <span
-                    className="anim-grow h-3.5 rounded-l-sm bg-chart-5"
-                    style={{ width: `${(r.ch / widest) * 100}%` }}
+                    key={drawKey([r.ch, widest])}
+                    className={cn(BAR_GROW, "chart-bar-end h-3.5 rounded-l-sm bg-chart-5")}
+                    style={barStyle((r.ch / widest) * 100, i)}
                   />
                 </span>
                 <span className="h-5 w-px bg-muted-foreground/50" />
                 <span className="flex-1">
                   <span
-                    className="anim-grow block h-3.5 rounded-r-sm bg-chart-1"
-                    style={{ width: `${(r.nu / widest) * 100}%` }}
+                    key={drawKey([r.nu, widest])}
+                    className={cn(BAR_GROW, "block h-3.5 rounded-r-sm bg-chart-1")}
+                    style={barStyle((r.nu / widest) * 100, i)}
                   />
                 </span>
               </span>
-              <span className="text-right text-primary">+{moneyCompact(r.nu, currency)}</span>
-              <span className="text-right text-destructive">−{moneyCompact(r.ch, currency)}</span>
+              <span className="text-right text-primary">{signed(r.nu)}</span>
+              <span className="text-right text-destructive">{signed(-r.ch)}</span>
               <span
                 className={cn(
                   "text-right font-semibold",
@@ -483,7 +506,8 @@ function CashAcrossBusinesses({
     .map((b) => ({ b, v: valueOf(recv, b.id) ?? 0 }))
     .filter((r) => r.v > 0)
     .sort((a, z) => z.v - a.v);
-  const recvTotal = owed.reduce((s, r) => s + r.v, 0);
+  // The same reading as the Receivables card: null is "not computed yet", never zero.
+  const recvTotal = total(answers, "recv_biz");
 
   return (
     <Block
@@ -506,7 +530,7 @@ function CashAcrossBusinesses({
         <div className="flex justify-between gap-4">
           <span className="text-muted-foreground">Failed payments</span>
           <span>
-            <b>{failures != null ? count(failures) : "—"}</b>
+            {failures != null ? <b>{count(failures)}</b> : EMPTY_FIGURE}
             {attempts ? (
               <span className="text-muted-foreground">
                 {" "}
@@ -518,7 +542,7 @@ function CashAcrossBusinesses({
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-muted-foreground">Receivables</span>
-          <b>{moneyCompact(recvTotal, currency)}</b>
+          {recvTotal != null ? <b>{moneyCompact(recvTotal, currency)}</b> : EMPTY_FIGURE}
         </div>
         {owed.length > 0 ? (
           <div className="flex justify-between gap-4">
@@ -591,6 +615,7 @@ function Scorecard({
   const att = rows(answers, "att_biz");
   const fail = rows(answers, "fail_biz");
   const recv = rows(answers, "recv_biz");
+  const recvKnown = total(answers, "recv_biz") != null;
   const dunning = rows(answers, "dunning_biz");
   const rate = (key: string) => {
     const r = ok(rates.get(key));
@@ -605,30 +630,35 @@ function Scorecard({
   return (
     <Block span={12} title="Business scorecard">
       <div className="-mx-6 overflow-x-auto px-6">
-        <div className="grid min-w-[60rem] grid-cols-[minmax(12rem,2fr)_repeat(9,minmax(0,1fr))_1rem] items-center gap-x-3 text-sm tabular-nums">
-          {[
-            "Business",
-            "MRR",
-            "Change",
-            "Net new",
-            "NRR",
-            "Customer churn",
-            "Collected",
-            "Failed",
-            "Receivables",
-            "Dunning",
-            "",
-          ].map((h, i) => (
-            <span
-              key={h || i}
-              className={cn(
-                "border-b pb-2 text-xs font-medium text-muted-foreground",
-                i > 0 && "text-right",
-              )}
-            >
-              {h}
-            </span>
-          ))}
+        {/* A figure column is never narrower than its head: "Customer churn" wrapped to two
+            lines and broke the head row's baseline. */}
+        <div className="grid min-w-[60rem] grid-cols-[minmax(12rem,2fr)_repeat(9,minmax(max-content,1fr))_1rem] items-center gap-x-5 text-sm tabular-nums">
+          {/* One head row on the same subgrid as the body rows, so its rule runs unbroken. */}
+          <div className="col-span-11 grid grid-cols-subgrid border-b pb-2">
+            {[
+              "Business",
+              "MRR",
+              "Change",
+              "Net new",
+              "NRR",
+              "Customer churn",
+              "Collected",
+              "Failed",
+              "Receivables",
+              "Dunning",
+              "",
+            ].map((h, i) => (
+              <span
+                key={h || i}
+                className={cn(
+                  "text-xs font-medium whitespace-nowrap text-muted-foreground",
+                  i > 0 && "text-right",
+                )}
+              >
+                {h}
+              </span>
+            ))}
+          </div>
           {ordered.map((b) => {
             const m = valueOf(mrr, b.id);
             const pts = (move.get(b.id)?.points ?? []).filter((p) => p.value != null);
@@ -651,7 +681,7 @@ function Scorecard({
             const collected = bl > 0 ? c / bl : null;
             const a = valueOf(att, b.id) ?? 0;
             const failed = a > 0 ? (valueOf(fail, b.id) ?? 0) / a : null;
-            const rv = valueOf(recv, b.id) ?? 0;
+            const rv = recvKnown ? (valueOf(recv, b.id) ?? 0) : null;
             const dn = valueOf(dunning, b.id) ?? 0;
             return (
               <Link
@@ -698,11 +728,7 @@ function Scorecard({
                         : "text-success",
                   )}
                 >
-                  {nn == null
-                    ? "—"
-                    : nn === 0
-                      ? "$0"
-                      : `${nn > 0 ? "+" : "−"}${moneyCompact(Math.abs(nn), currency)}`}
+                  {signedMoney(nn, currency)}
                 </span>
                 <Cell
                   muted={nrr == null}
@@ -746,7 +772,7 @@ function Scorecard({
                 >
                   {failed == null ? "—" : pctFromBps(Math.round(failed * 10000), 1)}
                 </Cell>
-                <Cell muted={rv === 0}>{rv === 0 ? "$0" : moneyCompact(rv, currency)}</Cell>
+                <Cell muted={!rv}>{rv == null ? EMPTY_FIGURE : moneyCompact(rv, currency)}</Cell>
                 <Cell
                   muted={dn === 0}
                   flag={dn > 0 ? "loss" : null}

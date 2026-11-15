@@ -1,6 +1,8 @@
 "use client";
 
 import { CommandPalette, GoToRow, type CommandAction } from "@/components/command-palette";
+import { ASSISTANT_NAME, openAssistant } from "@/lib/assistant";
+import { BillyMark } from "@/components/assistant/billy-mark";
 import { NavIcon, type NavItem } from "@/components/SideNav";
 import type { BizRef } from "@/components/AppNav";
 
@@ -24,9 +26,12 @@ export { GoToRow };
 export function AppShellPalette({
   navItems,
   businesses,
+  assistant = false,
 }: {
   navItems: NavItem[];
   businesses: BizRef[];
+  /** Offer the assistant — only where it can answer. */
+  assistant?: boolean;
 }) {
   const actions: CommandAction[] = navItems.map((n) => ({
     id: `nav:${n.href}`,
@@ -37,5 +42,29 @@ export function AppShellPalette({
     // The bare label too, so "metrics" matches as readily as "go to metrics".
     keywords: [n.label],
   }));
-  return <CommandPalette actions={actions} businesses={businesses} />;
+  if (assistant) {
+    actions.unshift({
+      id: "assistant",
+      label: `Ask ${ASSISTANT_NAME}`,
+      group: ASSISTANT_NAME,
+      icon: <BillyMark size={16} twinkle />,
+      keywords: ["ai", "assistant", "help", "question", "explain", "why"],
+      onSelect: () => openAssistant(),
+    });
+  }
+  return (
+    <CommandPalette
+      actions={actions}
+      businesses={businesses}
+      ask={
+        assistant
+          ? {
+              name: ASSISTANT_NAME,
+              icon: <BillyMark size={18} twinkle />,
+              onAsk: (question) => openAssistant({ ask: question }),
+            }
+          : undefined
+      }
+    />
+  );
 }

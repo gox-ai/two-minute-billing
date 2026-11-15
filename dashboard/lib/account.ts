@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE } from "@/lib/auth-cookies";
 import { forwardedFor } from "@/lib/forwarded-for";
 import { trustedBrowserHeader } from "@/lib/mfa-challenge";
+import { signInUrl } from "@/lib/sign-in-url";
 
 /**
  * Reads for the account page: the person's sessions and whether a photo can be uploaded.
@@ -13,7 +14,7 @@ const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
 async function get(path: string): Promise<{ ok: boolean; json: Record<string, unknown> }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}${path}`, {
     headers: { cookie: `${SESSION_COOKIE}=${token}`, ...(await forwardedFor()) },
     cache: "no-store",
@@ -49,7 +50,7 @@ export interface TrustedBrowser {
  */
 export async function getTrustedBrowsers(): Promise<TrustedBrowser[] | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}/auth/trusted_browsers`, {
     headers: {
       cookie: `${SESSION_COOKIE}=${token}`,

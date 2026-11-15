@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, ne, sql } from "drizzle-orm";
+import { notDeleted } from "@/modules/subscriptions/deleted-sql";
 import { systemDb, type Tx } from "@/platform/db";
 import { scanBusinessFilterNullable, fairShareFor } from "@/platform/clock";
 import { runBounded } from "@/platform/concurrency";
-import { registerEventSink, type EventRow } from "@/modules/events/emit";
+import { registerEventRefresher, registerEventSink, type EventRow } from "@/modules/events/emit";
 import { resourceTypeOf } from "@/modules/events/registry";
 import {
   emailMessages,
@@ -211,6 +212,8 @@ export function emailTypeForEvent(ev: EventRow): EmailType | null {
     // ── invoicing & payments ──
     case "invoice_generated":
       return "invoice_issued";
+    // Sent only for an invoice the customer pays themselves (gated in enqueueEmails). On an
+    // automatically collected invoice this event means a decline: `payment_failed` mails it.
     case "invoice_payment_due":
       return "invoice_overdue";
     // A payment-request child is one slice of one charge: the request's own
@@ -250,6 +253,8 @@ export function emailTypeForEvent(ev: EventRow): EmailType | null {
     // ── subscription lifecycle ──
     case "subscription_activated":
       return "subscription_activated";
+    case "subscription_reactivated":
+      return "subscription_reactivated";
     // A subscription that STARTS in trial is a welcome, not an activation — in-trial and
     // active subscriptions are separate mail. The same event
     // fires with `status: 'active'` when a future-dated subscription starts (renewal.ts),
@@ -453,7 +458,7 @@ function daysBetween(target: Date, from: Date): string {
  * whatever product is on it. Never empty: `planName` is an always-populated var, so a
  * missing product would otherwise ship "Your  subscription is now active".
  */
-async function planNameFor(tx: Tx, subscriptionId: string): Promise<string> {
+export async function planNameFor(tx: Tx, subscriptionId: string): Promise<string> {
   const rows = await tx
     .select({ name: products.name, kind: products.kind })
     .from(subscriptionItems)
@@ -750,9 +755,28 @@ async function resolveCard(c: EventCtx, emailType: EmailType): Promise<TypeVars 
   if (!pm) return null;
   const month = pm.expMonth ?? num(c.res.exp_month);
   const year = pm.expYear ?? num(c.res.exp_year);
+  // A refused restart invalidates the card of a customer with nothing live: say so, rather
+  // than "to keep your subscription active".
+  let subscriptionEnded: string | undefined;
+  if (emailType === "payment_method_invalid" || emailType === "mandate_expired") {
+    const [live] = await c.tx
+      .select({ id: subscriptions.id })
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.businessId, c.bizId),
+          eq(subscriptions.customerId, pm.customerId),
+          ne(subscriptions.status, "cancelled"),
+          notDeleted(),
+        ),
+      )
+      .limit(1);
+    if (!live) subscriptionEnded = "yes";
+  }
   return {
     customerId: pm.customerId,
     vars: {
+      ...(subscriptionEnded ? { subscriptionEnded } : {}),
       // "The {{cardBrand}} card ending …" — an unbranded method still has to read as a
       // sentence, so fall back to a word rather than to nothing.
       cardBrand: brandWords(pm.brand) ?? "payment",
@@ -863,7 +887,12 @@ async function resolveAutoTopup(c: EventCtx, emailType: EmailType): Promise<Type
     const reason = str(c.raw.decline_reason);
     return {
       customerId: row.id,
-      vars: { ...(amount ? { amount } : {}), ...(reason ? { declineReason: reason } : {}) },
+      vars: {
+        ...(amount ? { amount } : {}),
+        ...(reason ? { declineReason: reason } : {}),
+        // `auto_topup_on_hard_decline: keep_enabled`: the top-up is still on.
+        ...(c.raw.stays_enabled === true ? { staysOn: "yes" } : {}),
+      },
     };
   }
   // ISO 8601 on the event (unix seconds on an event written before 2026-11-02).
@@ -906,6 +935,8 @@ async function resolveSubscription(c: EventCtx, emailType: EmailType): Promise<T
   switch (emailType) {
     case "subscription_activated":
       return { customerId, vars: { ...base, renewalDate } };
+    case "subscription_reactivated":
+      return { customerId, vars: { ...base, reactivateDate: localDate(c.at, c.tz), renewalDate } };
     // A subscription set to cancel does not renew, so the "Next renewal" row would lie.
     case "subscription_changed":
       return {
@@ -916,13 +947,26 @@ async function resolveSubscription(c: EventCtx, emailType: EmailType): Promise<T
         },
       };
     case "subscription_renewed": {
-      // The renewal's own invoice is the latest one on the subscription.
-      const [inv] = await c.tx
-        .select({ totalMinor: invoices.totalMinor, currency: invoices.currency })
-        .from(invoices)
-        .where(and(eq(invoices.businessId, c.bizId), eq(invoices.subscriptionId, sub.id)))
-        .orderBy(desc(invoices.createdAt))
-        .limit(1);
+      // The amount is this renewal's OWN invoice: the one that opens the term just claimed.
+      // It is written after the event in the same transaction, so the first build finds none
+      // and `refreshEmails` builds the message again once it exists. A held (pending) or
+      // missing invoice states no amount; the invoice email carries it.
+      const [inv] = sub.currentPeriodStart
+        ? await c.tx
+            .select({ totalMinor: invoices.totalMinor, currency: invoices.currency })
+            .from(invoices)
+            .where(
+              and(
+                eq(invoices.businessId, c.bizId),
+                eq(invoices.subscriptionId, sub.id),
+                eq(invoices.periodStart, sub.currentPeriodStart),
+                eq(invoices.opensPeriod, true),
+                ne(invoices.status, "pending"),
+                ne(invoices.status, "voided"),
+              ),
+            )
+            .limit(1)
+        : [];
       return {
         customerId,
         vars: {
@@ -1152,6 +1196,7 @@ async function resolveRecipient(
       part = await resolveAutoTopup(c, emailType);
       break;
     case "subscription_activated":
+    case "subscription_reactivated":
     case "subscription_changed":
     case "subscription_renewed":
     case "subscription_paused":
@@ -1302,8 +1347,15 @@ export async function enqueueEmails(tx: Tx, event: EventRow): Promise<void> {
       : [];
     if (inv && (await isPayableOfflineInvoice(tx, inv))) emailType = "invoice_to_pay";
   }
-  // The pass checked this when it emitted; the invoice may have changed since.
-  if (emailType === "payment_due_reminder") {
+  /**
+   * Both are for an invoice the customer pays themselves. The reminder pass checked when it
+   * emitted, but the invoice may have changed since. `invoice_payment_due` on an
+   * automatically collected invoice means a charge just failed, and that failure's
+   * `payment_failed` mail already says so, with the next attempt and the way to pay: "past
+   * due" on top would be a second mail for one decline. A reopened late failure is the same.
+   */
+  if (emailType === "payment_due_reminder" || emailType === "invoice_overdue") {
+    if ((event.data as Record<string, unknown> | null)?.reopened === "late_failure") return;
     const pid = str(resourceOf(event).id) ?? event.resourceId;
     const [inv] = pid
       ? await tx
@@ -1438,6 +1490,23 @@ export async function enqueueEmails(tx: Tx, event: EventRow): Promise<void> {
 // Subscribe to emitted events (composition roots import this module so the sink
 // is registered before any event fires — same pattern as webhooks/outbox.ts).
 registerEventSink(enqueueEmails);
+
+/** Mail built from an event before its facts were complete: drop the unsent copy, build again. */
+async function refreshEmails(tx: Tx, event: EventRow): Promise<void> {
+  const dropped = await tx
+    .delete(emailMessages)
+    .where(
+      and(
+        eq(emailMessages.eventId, event.id),
+        eq(emailMessages.status, "pending"),
+        eq(emailMessages.attempts, 0),
+      ),
+    )
+    .returning({ id: emailMessages.id });
+  // Nothing queued (type off, no recipient) or already sent: leave it.
+  if (dropped.length) await enqueueEmails(tx, event);
+}
+registerEventRefresher(refreshEmails);
 
 /**
  * Deliver due email messages (driven by the billing clock, alongside webhook

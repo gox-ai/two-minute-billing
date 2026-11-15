@@ -18,6 +18,11 @@ export const CARD_LIMIT_CODE = "card_limit_exceeded";
 export const CARD_LIMIT_MESSAGE =
   "This invoice is more than the amount that we accept by card. Pay it by another method, for example a bank transfer. The invoice shows how to pay.";
 
+/** The same refusal for a buyer at checkout, where no invoice exists yet: reason, then next step. */
+export const CARD_LIMIT_CHECKOUT_REASON =
+  "The amount is more than the amount that we accept by card.";
+export const CARD_LIMIT_CHECKOUT_STEP = "Use a payment method that is not a card, or contact us.";
+
 /** The upper bound an operator may store: well inside bigint and JSON-safe as a number. */
 export const MAX_CARD_LIMIT_MINOR = Number.MAX_SAFE_INTEGER;
 

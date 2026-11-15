@@ -101,7 +101,7 @@ export function PortalPreview({ brand }: { brand: PreviewBrand }) {
             </div>
             <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">$1,240.00</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              2 open invoices · due 12-Sep-2026
+              2 open invoices · due 12 Sep 2026
             </div>
           </div>
           <div className="flex items-center gap-3 border-t px-4 py-3">
@@ -110,7 +110,7 @@ export function PortalPreview({ brand }: { brand: PreviewBrand }) {
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">INV-0042</div>
-              <div className="text-xs text-muted-foreground">21-Aug-2026</div>
+              <div className="text-xs text-muted-foreground">21 Aug 2026</div>
             </div>
             {/* The brand colour lands on the primary action, exactly as on the real page. */}
             <span className="rounded-md bg-solid px-2.5 py-1 text-xs font-medium text-solid-foreground">

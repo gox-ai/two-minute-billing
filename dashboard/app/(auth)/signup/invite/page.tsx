@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Wordmark } from "@/components/wordmark";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,8 +48,8 @@ export default async function SignupInvitePage() {
   const token = (await cookies()).get(SIGNUP_INVITE_COOKIE)?.value;
   const invite = token ? await readInvite(token) : null;
   const brand = (
-    <div className="text-center text-2xl font-bold tracking-tight">
-      tm<span className="text-brand">billing</span>
+    <div className="flex justify-center">
+      <Wordmark size="lg" />
     </div>
   );
 
@@ -58,7 +59,9 @@ export default async function SignupInvitePage() {
         {brand}
         <Card>
           <CardHeader className="text-center">
-            <CardTitle className="text-xl">This link is not valid</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>This link is not valid</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               A sign-up link works one time only, and it expires after 7 days. Open the link in the
               email again, or ask us for a new link.
@@ -80,7 +83,9 @@ export default async function SignupInvitePage() {
       {brand}
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Create your free account</CardTitle>
+          <CardTitle className="text-xl">
+            <h1>Create your free account</h1>
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
             Free while you make less than $1,000 a month. Every feature. No credit card required.
           </p>

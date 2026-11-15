@@ -16,11 +16,19 @@ export const TABLE_EDGE =
 
 const count = (n: number) => n.toLocaleString("en");
 
+/**
+ * One column of the summary: label, figure, note. Each column spans the summary's three rows
+ * as a subgrid, so a label that wraps moves every figure down together and the figures share
+ * one baseline whatever their size.
+ */
+const COLUMN = "row-span-3 grid min-w-0 grid-rows-subgrid gap-y-1";
+const FIGURE = "self-baseline font-semibold tabular-nums";
+
 function Side({ label, value, note }: { label: string; value: string; note: string }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 border-t pt-4 @xl:border-t-0 @xl:border-l @xl:pt-0 @xl:pl-6">
+    <div className={cn(COLUMN, "border-t pt-4 @xl:border-t-0 @xl:border-l @xl:pt-0 @xl:pl-6")}>
       <span className={KPI_LABEL}>{label}</span>
-      <span className="pt-1 text-lg font-semibold tabular-nums">{value}</span>
+      <span className={cn(FIGURE, "text-lg")}>{value}</span>
       <span className="text-xs text-muted-foreground">{note}</span>
     </div>
   );
@@ -51,15 +59,13 @@ export function DunningOutcomesCard({
       <div className="@container flex flex-col gap-6 py-1">
         {/* Three across only once the card itself is wide enough (a container query, since the
             card's width depends on the nav rail and the row, not on the viewport). */}
-        <div className="grid grid-cols-1 gap-4 @xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)] @xl:gap-6">
-          <div className="flex min-w-0 flex-col gap-1">
+        <div className="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <div className={COLUMN}>
             <span className="flex items-center gap-1">
               <span className={KPI_LABEL}>Recovery rate</span>
               <InfoTip label="Recovery rate" info={G.recoveryRate} />
             </span>
-            <span className="text-2xl font-semibold tabular-nums">
-              {pctFromBps(totals.rateBps, 1)}
-            </span>
+            <span className={cn(FIGURE, "text-2xl")}>{pctFromBps(totals.rateBps, 1)}</span>
             <span className="text-xs text-muted-foreground">
               <span className="tabular-nums">{count(totals.recovered)}</span> recovered ÷{" "}
               <span className="tabular-nums">{count(totals.everEntered)}</span> taken in.
@@ -90,7 +96,7 @@ export function DunningOutcomesCard({
             <div className="flex flex-wrap gap-x-6 gap-y-2">
               {parts.map((p) => (
                 <span key={p.key} className="flex min-w-0 items-start gap-2">
-                  <span className={cn("mt-1.5 size-2 shrink-0 rounded-sm", p.fill)} aria-hidden />
+                  <span className={cn("mt-1.5 size-2 shrink-0 rounded-xs", p.fill)} aria-hidden />
                   <span>
                     <span className="block text-sm font-semibold tabular-nums">
                       {count(p.value)}
@@ -112,10 +118,14 @@ export function DunningOutcomesCard({
 /** Each outcome with its count and share; a row opens that outcome's invoices. */
 export function ByOutcomeCard({ rows }: { rows: BreakdownRow[] }) {
   return (
-    <RecordCard title="By outcome" meta="opens the invoices" flush>
-      <div className={TABLE_EDGE}>
-        <ByOutcomeTable rows={rows} />
-      </div>
-    </RecordCard>
+    // Its own height, top-aligned, not stretched to the summary beside it (the analytics
+    // `Grid` rule: lists take their own height).
+    <div className="min-w-0 self-start">
+      <RecordCard title="By outcome" meta="opens the invoices" flush>
+        <div className={TABLE_EDGE}>
+          <ByOutcomeTable rows={rows} />
+        </div>
+      </RecordCard>
+    </div>
   );
 }

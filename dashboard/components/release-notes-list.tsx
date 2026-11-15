@@ -6,7 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Chip } from "@/components/patterns/chip";
 import { ReleaseNoteBody } from "@/components/release-note-body";
 import { RELEASE_TYPES, type ReleaseNote, type ReleaseType } from "@/lib/release-note-types";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 
 const ALL = "All";
 
@@ -33,7 +33,8 @@ export function ReleaseNotesList({ notes }: { notes: ReleaseNote[] }) {
   return (
     <div className="space-y-6">
       <Tabs value={type} onValueChange={setType}>
-        <TabsList>
+        {/* The assistant's map lists each type from `RELEASE_TYPES` (`OPTION_SOURCES`). */}
+        <TabsList data-map-options="release-types">
           <TabsTrigger value={ALL}>
             All <span className="text-muted-foreground tabular-nums">{notes.length}</span>
           </TabsTrigger>
@@ -45,7 +46,7 @@ export function ReleaseNotesList({ notes }: { notes: ReleaseNote[] }) {
         </TabsList>
       </Tabs>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_14rem]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_14rem]">
         {/* A reading measure, not the full table width — this page is prose. */}
         <div className="max-w-[760px] space-y-8">
           {shown.map((note) => (
@@ -54,10 +55,10 @@ export function ReleaseNotesList({ notes }: { notes: ReleaseNote[] }) {
                 <time dateTime={note.date} className="font-medium tabular-nums">
                   {fmtDate(note.date, "UTC")}
                 </time>
-                {/* The TYPE reads in a different register from the areas — uppercase and
-                    tracked, not coloured. A changelog category is not a status, and the
+                {/* The TYPE reads in a different register from the areas — bolder, not
+                    coloured. A changelog category is not a status, and the
                     semantic tones are reserved for states that need a human. */}
-                <Chip className="font-semibold tracking-wide uppercase">{note.type}</Chip>
+                <Chip className="font-semibold">{note.type}</Chip>
                 {note.version ? <Chip>{note.version}</Chip> : null}
                 {note.tags.map((tag) => (
                   <Chip key={tag}>{tag}</Chip>
@@ -81,7 +82,7 @@ export function ReleaseNotesList({ notes }: { notes: ReleaseNote[] }) {
         {/* Anchor jumps, so a long history stays navigable. Plain `#` links: instant, and
             nothing here sets `scroll-behavior: smooth`. */}
         <nav aria-label="Releases" className="max-lg:hidden">
-          <div className="sticky top-0 space-y-2">
+          <div className="sticky top-(--compact-h,0px) space-y-2">
             <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Releases
             </h2>

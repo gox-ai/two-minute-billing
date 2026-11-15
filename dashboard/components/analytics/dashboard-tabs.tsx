@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 
 /**
  * The `Dashboard | All <X>` switch above /transactions and /payment_intents.
@@ -48,6 +49,7 @@ export function DashboardTabs({
 
   return (
     <nav aria-label="Views" className={`${SEGMENT_TRACK} mb-6`}>
+      <SegmentIndicator />
       {tab("dashboard", "Dashboard")}
       {tab("list", listLabel)}
     </nav>

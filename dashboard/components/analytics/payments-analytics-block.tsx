@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { sentenceCase } from "@/lib/labels";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronDown, Info } from "lucide-react";
@@ -13,16 +14,22 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
-import { fmtDate, fmtDateTime } from "@/lib/format";
+import { fmtDateTime, fmtRange } from "@/lib/format-date";
 import { Delta } from "@/components/analytics/delta";
 import { TrendChart } from "@/components/analytics/trend-chart";
-import { SERIES_HINTS, StatTile } from "@/components/analytics/stat-tile";
+import { Headline, type HeadlineChange } from "@/components/analytics/home/parts";
+import { Grid } from "@/components/analytics/layout";
+import { changePct } from "@/components/analytics/format";
 import {
   BreakdownTable,
   type BreakdownColumn,
   type BreakdownRow,
 } from "@/components/analytics/breakdown-table";
-import { SERIES_POLARITY, seriesHeadline } from "@/components/analytics/series-format";
+import {
+  SERIES_HINTS,
+  SERIES_POLARITY,
+  seriesHeadline,
+} from "@/components/analytics/series-format";
 // From the client-safe SHAPE module, not the fetcher: this is a 'use client' file and
 // the two range constants are runtime values, so importing them from `./analytics`
 // would pull that module's server-only `@/lib/api` (and `next/headers`) into the
@@ -50,29 +57,31 @@ export interface PaymentsAnalyticsConfig {
   breakdowns: Array<"error_details" | "payment_methods" | "gateways">;
   /**
    * Presentation-only label overrides. The SAME measure is named differently per
-   * screen ("Gross Volume" on transactions, "Total Revenue" on payment intents);
+   * screen ("Gross volume" on transactions, "Total revenue" on payment intents);
    * the number behind it is identical.
    */
   labels?: Record<string, string>;
+  /** One line under the filters: what the figures count, where the page title could mislead. */
+  note?: string;
 }
 
 const BREAKDOWN_META = {
   error_details: {
-    title: "Error Details",
+    title: "Error details",
     dimensionHeader: "Cause",
     emptyTitle: "No failures in this period",
     emptyDescription: "Nothing was declined, so there are no errors to show.",
     hint: "Declined attempts grouped by the reason the gateway gave.",
   },
   payment_methods: {
-    title: "Payment Method Breakdown",
+    title: "Payment method breakdown",
     dimensionHeader: "Payment method",
     emptyTitle: "No transactions in this period",
     emptyDescription: "Nothing was attempted, so there are no payment methods to show.",
     hint: "Every gateway attempt grouped by the payment method used.",
   },
   gateways: {
-    title: "Gateway Breakdown",
+    title: "Gateway breakdown",
     dimensionHeader: "Gateway",
     emptyTitle: "No transactions in this period",
     emptyDescription: "Nothing was attempted, so there are no gateways to show.",
@@ -80,7 +89,22 @@ const BREAKDOWN_META = {
   },
 } as const;
 
-/** A labelled filter dropdown: `Duration: This Month`. */
+/**
+ * Sentence case for a label the API sends in title case: "Failure Rate" → "Failure rate".
+ * A word with two capitals ("MRR", "TM") is an acronym or a name and keeps its case.
+ */
+function sentence(label: string): string {
+  return label
+    .split(" ")
+    .map((w, i) => (i === 0 || /[A-Z].*[A-Z]/.test(w) ? w : w.toLowerCase()))
+    .join(" ");
+}
+
+/** The same, inside a sentence: "vs last month". */
+const inline = (label: string) =>
+  sentence(label).replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase());
+
+/** A labelled filter dropdown: `Duration: This month`. */
 function ScopeMenu({
   label,
   value,
@@ -153,11 +177,17 @@ export function PaymentsAnalyticsBlock({
     return m;
   }, [data.series]);
 
-  /** Labelled per config, else the label the API gave the series. */
-  const labelled = (s: PaymentsAnalyticsSeries): PaymentsAnalyticsSeries => {
-    const override = config.labels?.[s.key];
-    return override ? { ...s, label: override } : s;
-  };
+  // The period runs to its end ("1 Nov – 30 Nov"), but nothing has happened after `as_of`:
+  // those buckets are not zeros, so the series stops at now rather than drawing a flat line.
+  const asOf = Date.parse(data.as_of);
+  const toNow = (s: PaymentsAnalyticsSeries): PaymentsAnalyticsSeries => ({
+    ...s,
+    points: s.points.filter((p) => Date.parse(p.t) <= asOf),
+  });
+
+  /** Labelled per config, else the label the API gave the series; cut at `as_of`. */
+  const labelled = (s: PaymentsAnalyticsSeries): PaymentsAnalyticsSeries =>
+    toNow({ ...s, label: sentenceCase(config.labels?.[s.key] ?? s.label) });
 
   const lead = byKey.get(config.lead);
   const tiles = config.tiles
@@ -166,7 +196,7 @@ export function PaymentsAnalyticsBlock({
   const charts = (config.charts ?? [])
     .map((c) => {
       const s = byKey.get(c.key);
-      return s ? (c.label ? { ...s, label: c.label } : s) : null;
+      return s ? labelled(c.label ? { ...s, label: c.label } : s) : null;
     })
     .filter((s): s is PaymentsAnalyticsSeries => !!s);
 
@@ -189,11 +219,8 @@ export function PaymentsAnalyticsBlock({
 
   // `period.end` is the EXCLUSIVE next boundary, so rendering it raw shows the
   // first day of the following month. Step back an instant for the caption.
-  const spanOf = (p: { start: string; end: string }) => {
-    const first = fmtDate(p.start, data.timezone);
-    const last = fmtDate(new Date(Date.parse(p.end) - 1).toISOString(), data.timezone);
-    return first === last ? first : `${first} – ${last}`;
-  };
+  const spanOf = (p: { start: string; end: string }) =>
+    fmtRange(p.start, new Date(Date.parse(p.end) - 1).toISOString(), data.timezone);
   const spanLabel = spanOf(data.period);
   const previousSpan = spanOf(data.previous_period);
 
@@ -236,7 +263,7 @@ export function PaymentsAnalyticsBlock({
           value={data.range}
           options={PAYMENTS_ANALYTICS_RANGES.map((r) => ({
             key: r,
-            label: PAYMENTS_ANALYTICS_RANGE_LABELS[r],
+            label: sentence(PAYMENTS_ANALYTICS_RANGE_LABELS[r]),
           }))}
           onSelect={(key) => go({ range: key })}
         />
@@ -247,7 +274,7 @@ export function PaymentsAnalyticsBlock({
           onSelect={(key) => go({ gateway: key || null })}
         />
         <ScopeMenu
-          label="Payment Method"
+          label="Payment method"
           value={data.filters.payment_method ?? ""}
           options={withSelected(
             data.options.payment_methods,
@@ -258,6 +285,9 @@ export function PaymentsAnalyticsBlock({
         />
         <span className="text-xs text-muted-foreground">{spanLabel}</span>
       </div>
+      {config.note ? (
+        <p className="-mt-1 mb-4 text-sm text-muted-foreground">{config.note}</p>
+      ) : null}
 
       {/* A currency with no exchange rate is excluded from BOTH the money and the
           counts — and from all three sources the read sums (transactions, disputes,
@@ -287,11 +317,13 @@ export function PaymentsAnalyticsBlock({
         {lead ? <LeadCard series={labelled(lead)} currency={data.currency} /> : null}
 
         {tiles.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          // The KPI card every analytics screen uses (Home, Metrics), not a fourth style.
+          // Two by two on a phone: each tile holds a figure, a chip and one stat.
+          <Grid className="gap-4 max-lg:*:col-span-6">
             {tiles.map((s) => (
-              <StatTile key={s.key} series={labelled(s)} currency={data.currency} />
+              <KpiCard key={s.key} series={labelled(s)} currency={data.currency} />
             ))}
-          </div>
+          </Grid>
         ) : null}
 
         {charts.map((s) => (
@@ -323,13 +355,60 @@ export function PaymentsAnalyticsBlock({
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        {data.period.label} · {spanLabel} ({data.timezone}) · as of{" "}
+        {sentence(data.period.label)} · {spanLabel} ({data.timezone}) · as of{" "}
         {fmtDateTime(data.as_of, data.timezone)} ·{" "}
         {data.converted
           ? `money converted into ${data.currency} at the rates in Settings → Currencies`
           : `all figures in ${data.currency}`}
       </p>
     </div>
+  );
+}
+
+/**
+ * A supporting measure as a `Headline`: figure, change chip, and the previous period in the
+ * stat row. No sparkline: beside one, the chip's context wrapped in a quarter-width card, and
+ * the lead chart above already draws the trend.
+ */
+function KpiCard({ series, currency }: { series: PaymentsAnalyticsSeries; currency: string }) {
+  const { headline } = series;
+  const polarity = SERIES_POLARITY[series.key] ?? "neutral";
+  const hint = SERIES_HINTS[series.key];
+  const bps = headline.change_bps;
+  const down = bps != null && bps < 0;
+  const good = polarity === "neutral" ? null : polarity === "up_good" ? !down : down;
+  const change: HeadlineChange | null =
+    bps != null && headline.prev_label != null
+      ? {
+          value: changePct(Math.abs(bps)),
+          direction: bps === 0 ? "flat" : down ? "down" : "up",
+          tone: good == null || bps === 0 ? "neutral" : good ? "good" : "bad",
+          context: `vs ${inline(headline.prev_label)}`,
+        }
+      : null;
+  return (
+    <Headline
+      span={3}
+      label={series.label}
+      info={hint ? { text: hint } : undefined}
+      value={seriesHeadline(headline.value, headline.kind, currency)}
+      // No note when there is no change: the chip sits beside the figure, so a note under it
+      // would drop that card's figure out of line with the rest of the row.
+      change={change}
+      stats={
+        headline.prev_label != null
+          ? [
+              {
+                label: sentence(headline.prev_label),
+                value:
+                  headline.prev_value != null
+                    ? seriesHeadline(headline.prev_value, headline.kind, currency)
+                    : "—",
+              },
+            ]
+          : []
+      }
+    />
   );
 }
 
@@ -362,7 +441,7 @@ function LeadCard({ series, currency }: { series: PaymentsAnalyticsSeries; curre
           ) : null}
           {headline.prev_label != null && headline.prev_value != null ? (
             <span className="text-xs text-muted-foreground">
-              vs {headline.prev_label}{" "}
+              vs {inline(headline.prev_label)}{" "}
               {seriesHeadline(headline.prev_value, headline.kind, currency)}
             </span>
           ) : null}

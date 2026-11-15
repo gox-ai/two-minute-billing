@@ -17,6 +17,7 @@ import {
   sessionCookieOptions,
   signupCookieOptions,
 } from "@/lib/auth-cookies";
+import { THEME_COOKIE } from "@/lib/theme-cookie";
 import { LANDING_PATH } from "@/lib/redirect-to";
 
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
@@ -113,6 +114,7 @@ export async function signupInviteAction(
     return actionError(json.error?.message ?? "We could not create your account. Try again.");
   jar.set(SIGNUP_INVITE_COOKIE, "", expire(signupCookieOptions()));
   jar.set(SESSION_COOKIE, json.token, sessionCookieOptions());
+  jar.set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
   after(() => trackSignUp("email"));
   redirect(LANDING_PATH);
 }
@@ -150,6 +152,7 @@ export async function signupAction(
     if (!json.token) return actionError("We could not create your account. Try again.");
     jar.set(GOOGLE_SIGNUP_COOKIE, "", expire(signupCookieOptions()));
     jar.set(SESSION_COOKIE, json.token, sessionCookieOptions());
+    jar.set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
     after(() => trackSignUp("google"));
     redirect(LANDING_PATH);
   }
@@ -180,6 +183,7 @@ export async function confirmSignupAction(
       json.error?.message ?? "This link is not valid or is expired. Sign up again.",
     );
   jar.set(SESSION_COOKIE, json.token, sessionCookieOptions());
+  jar.set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
   after(() => trackSignUp("email"));
   redirect(LANDING_PATH);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus } from "lucide-react";
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -136,7 +137,10 @@ export function ProductGroupDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {triggerLabel ? (
         <DialogTrigger asChild>
-          <Button>{triggerLabel}</Button>
+          <Button size="sm">
+            <Plus className="size-4" />
+            {triggerLabel}
+          </Button>
         </DialogTrigger>
       ) : null}
       <DialogContent size="sm">
@@ -145,7 +149,7 @@ export function ProductGroupDialog({
           <DialogDescription>
             {group
               ? `${group.name}${productCount != null ? ` · ${productCount} product${productCount === 1 ? "" : "s"}` : ""}`
-              : "Group plans, addons and charges for reporting and for the catalog lists."}
+              : "Group plans, add-ons and charges for reporting and for the catalog lists."}
           </DialogDescription>
         </DialogHeader>
         {open ? (

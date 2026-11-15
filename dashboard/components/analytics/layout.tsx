@@ -2,6 +2,7 @@ import * as React from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import { InfoTip } from "@/components/analytics/info-tip";
 import type { CardInfo } from "@/components/analytics/card-info";
 
@@ -26,23 +27,46 @@ import type { CardInfo } from "@/components/analytics/card-info";
  * second hairline token would be a new token, not a use of the existing set.
  */
 
-/** 12 columns, 24px gutter. Every analytics block sits in one of these. */
-export function Grid({ className, children }: { className?: string; children: React.ReactNode }) {
-  return <div className={cn("grid grid-cols-12 gap-6", className)}>{children}</div>;
+/**
+ * 12 columns, 24px gutter. Every analytics block sits in one of these.
+ *
+ * A card takes its own height and aligns to the top of its row: a short list beside a long
+ * one ends where its content ends, instead of a frame half empty. Peers that read as one band
+ * share the row's height: KPI tiles (`Headline`, `FigureBlock`), a `fill` block, and every
+ * card in an `even` row (charts side by side, figure cards).
+ */
+export function Grid({
+  className,
+  even = false,
+  children,
+}: {
+  className?: string;
+  /** Every card in the row takes the row's height. */
+  even?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn("grid grid-cols-12 gap-6", even ? "items-stretch" : "items-start", className)}
+    >
+      {children}
+    </div>
+  );
 }
 
 /** The only spans a block may take. A width outside this list is the bug this file exists for. */
 export type Span = 3 | 4 | 6 | 8 | 9 | 12;
 
+// Wide steps query the page column (`@container/main`, layout.tsx), so a page narrowed by
+// Billy's panel reflows: 56.875rem is the column at a 1280px viewport, 64.375rem at 1400px.
+// Keep these in rem: Tailwind emits px container queries first, so a px step would lose.
 const SPAN: Record<Span, string> = {
-  // A quarter needs ~250px for a figure, its delta and a stat row: 1400px (87.5rem — rem, so it
-  // sorts after `lg:`; a px breakpoint is emitted first and loses) leaves that beside
-  // the rail. Halves until then; md halves were ~250px and cramped the same way.
-  3: "col-span-12 lg:col-span-6 min-[87.5rem]:col-span-3",
-  4: "col-span-12 lg:col-span-6 xl:col-span-4",
-  6: "col-span-12 xl:col-span-6",
-  8: "col-span-12 xl:col-span-8",
-  9: "col-span-12 xl:col-span-9",
+  // A quarter needs ~250px for a figure, its delta and a stat row. Halves until then.
+  3: "col-span-12 lg:col-span-6 @min-[64.375rem]/main:col-span-3",
+  4: "col-span-12 lg:col-span-6 @min-[56.875rem]/main:col-span-4",
+  6: "col-span-12 @min-[56.875rem]/main:col-span-6",
+  8: "col-span-12 @min-[56.875rem]/main:col-span-8",
+  9: "col-span-12 @min-[56.875rem]/main:col-span-9",
   12: "col-span-12",
 };
 
@@ -93,22 +117,26 @@ export function Block({
 }) {
   const head = title ? (
     // Wraps rather than squeezing: a narrow card drops its link to the next line instead of
-    // breaking the title or the link mid-phrase.
+    // breaking the title or the link mid-phrase. Below 640px the title (with its tip and
+    // chip) has a line of its own and may wrap there; the link or controls go under it.
     <div
       className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", !flat && "border-b px-5 py-3.5")}
     >
-      <span className="text-base font-medium whitespace-nowrap">{title}</span>
-      {info ? (
-        <InfoTip label={typeof title === "string" ? title : "This card"} info={info} />
-      ) : null}
-      {chip ? <Chip>{chip}</Chip> : null}
-      {action ? <div className="ml-auto whitespace-nowrap">{action}</div> : null}
+      <span className="flex min-w-0 items-center gap-x-2 max-sm:basis-full">
+        <span className="min-w-0 text-base font-medium sm:whitespace-nowrap">{title}</span>
+        {info ? (
+          <InfoTip label={typeof title === "string" ? title : "This card"} info={info} />
+        ) : null}
+        {chip ? <Chip>{chip}</Chip> : null}
+      </span>
+      {action ? <div className="whitespace-nowrap sm:ml-auto">{action}</div> : null}
     </div>
   ) : null;
   return (
     <Card
       className={cn(
         "anim-rise @container gap-0 overflow-hidden py-0",
+        fill && "self-stretch",
         flat && "p-5",
         spanClass(span),
         className,
@@ -242,7 +270,7 @@ export function FigureBlock({
   progress?: number | null;
 }) {
   return (
-    <Block span={span} footer={footer}>
+    <Block span={span} footer={footer} className="self-stretch">
       <div className="flex flex-col">
         <span className="flex items-center gap-1">
           <span className={KPI_LABEL}>{title}</span>
@@ -254,8 +282,9 @@ export function FigureBlock({
         {progress != null && Number.isFinite(progress) ? (
           <span className="mt-3 block h-1.5 rounded-full bg-muted" aria-hidden>
             <span
-              className="anim-grow block h-full rounded-full bg-chart-1"
-              style={{ width: `${Math.min(100, Math.max(0, progress * 100))}%` }}
+              key={drawKey([progress])}
+              className={cn(BAR_GROW, "block h-full rounded-full bg-chart-1")}
+              style={barStyle(Math.min(100, Math.max(0, progress * 100)))}
             />
           </span>
         ) : null}
@@ -289,12 +318,12 @@ export const LADDER = {
   secondary: "w-24 shrink-0 text-right tabular-nums",
 } as const;
 
-/** 32px head, 12px tracked labels, one hairline under it. */
+/** 32px head, 12px sentence-case labels, one hairline under it. */
 export function Head({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-row=""
-      className="flex h-8 min-w-max items-center gap-4 border-b text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+      className="flex h-8 min-w-max items-center gap-4 border-b text-xs font-medium text-muted-foreground"
     >
       {children}
     </div>
@@ -356,6 +385,7 @@ export function BarRow({
   count,
   tone = "neutral",
   last,
+  turn = 0,
 }: {
   label: React.ReactNode;
   href?: string | null;
@@ -365,6 +395,8 @@ export function BarRow({
   count?: string;
   tone?: "neutral" | "strong" | "warning" | "attention";
   last?: boolean;
+  /** The row's place in its chart, for the grow's stagger. */
+  turn?: number;
 }) {
   const fill =
     tone === "attention"
@@ -387,8 +419,9 @@ export function BarRow({
       )}
       <div className="h-2 min-w-0 flex-1 rounded-md bg-muted">
         <div
-          className={cn("anim-grow h-2 rounded-md", fill)}
-          style={{ width: `${Math.max(0, Math.min(100, Math.round(fraction * 100)))}%` }}
+          key={drawKey([fraction])}
+          className={cn(BAR_GROW, "h-2 rounded-md", fill)}
+          style={barStyle(Math.max(0, Math.min(100, Math.round(fraction * 100))), turn)}
         />
       </div>
       <span className={LADDER.amount}>{value}</span>

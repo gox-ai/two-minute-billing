@@ -111,15 +111,16 @@ export async function MetricContext({
   if (past.length <= 1 && planRows.length === 0 && !table && growth.length < 2) return null;
 
   // Columns follow the strip's length so none sits empty; two per row on a phone.
-  // Two per row until xl: beside the rail a fifth of the row is narrower than a full
-  // money figure. One row at xl, sized to the strip so no column sits empty.
+  // Two per row until the page column reaches 56.875rem (a 1280px viewport beside the rail):
+  // narrower, a fifth of the row is less than a full money figure. Then one row, sized to the
+  // strip so no column sits empty.
   const stripCols =
     past.length >= 5
-      ? "xl:grid-cols-5"
+      ? "@min-[56.875rem]/main:grid-cols-5"
       : past.length === 4
-        ? "xl:grid-cols-4"
+        ? "@min-[56.875rem]/main:grid-cols-4"
         : past.length === 3
-          ? "xl:grid-cols-3"
+          ? "@min-[56.875rem]/main:grid-cols-3"
           : "";
 
   return (
@@ -137,7 +138,7 @@ export async function MetricContext({
                 className={cn(
                   "flex min-w-0 flex-col gap-1.5 border-b px-5 py-4",
                   i % 2 === 1 && "border-l",
-                  i > 0 && "xl:border-l",
+                  i > 0 && "@min-[56.875rem]/main:border-l",
                 )}
               >
                 <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">

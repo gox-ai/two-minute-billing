@@ -1,10 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ShieldCheck } from "lucide-react";
-
-/** What the buyer enters now: the footer names it. */
-type Instrument = "card" | "bank" | "other";
+import { Mail, ShieldCheck } from "lucide-react";
+import { privacyText, supportEmail, websiteLink, type Instrument } from "./storefront-text";
 
 const BANK_ACCOUNT_TYPES = new Set([
   "bank_transfer",
@@ -45,22 +43,62 @@ export function useReportInstrument(methodType: string) {
   }, [set, instrument]);
 }
 
-const WHAT: Record<Instrument, string> = {
-  card: "Your card details",
-  bank: "Your bank account details",
-  other: "Your payment details",
-};
-
-/** The one claim worth making on a hosted page, and it is true: we never see the PAN. */
-export function StorefrontFooter({ business }: { business: string }) {
+/**
+ * The page footer: who never sees the buyer's payment details, and how to reach the business.
+ * `secure={false}` on a page where nothing is entered or bought. Contact lines render only
+ * when the business has set them.
+ */
+export function StorefrontFooter({
+  business,
+  supportEmail: email,
+  website,
+  secure = true,
+}: {
+  business: string;
+  supportEmail?: string | null;
+  website?: string | null;
+  secure?: boolean;
+}) {
   const instrument = React.useContext(InstrumentValue);
+  const mail = supportEmail(email);
+  const site = websiteLink(website);
+  if (!secure && !mail && !site) return null;
   return (
-    <footer className="flex items-start justify-center gap-2 px-4 pb-2 text-center text-xs text-muted-foreground">
-      <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />
-      <span>
-        {WHAT[instrument]} go directly to the payment provider. They never reach {business}&apos;s
-        servers.
-      </span>
+    <footer className="flex flex-col items-center gap-1.5 px-4 pb-2 text-center text-xs text-muted-foreground">
+      {secure ? (
+        <p className="flex items-start justify-center gap-2">
+          <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />
+          <span>{privacyText(business, instrument)}</span>
+        </p>
+      ) : null}
+      {mail || site ? (
+        <p className="flex flex-col items-center gap-1 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-x-2">
+          <span className="flex items-center gap-2">
+            <Mail className="size-3.5 shrink-0" aria-hidden />
+            Contact {business}:
+          </span>
+          {mail ? (
+            <a href={`mailto:${mail}`} className="text-primary hover:underline">
+              {mail}
+            </a>
+          ) : null}
+          {mail && site ? (
+            <span aria-hidden className="hidden sm:inline">
+              ·
+            </span>
+          ) : null}
+          {site ? (
+            <a
+              href={site.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              {site.label}
+            </a>
+          ) : null}
+        </p>
+      ) : null}
     </footer>
   );
 }

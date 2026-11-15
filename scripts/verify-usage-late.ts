@@ -3,8 +3,11 @@
  *  - usage of a billed window that arrives after its cutoff bills on the next invoice as
  *    "Usage from <period>", dated to the old period, inside the window and in its edge;
  *  - a max meter bills the difference; events received inside the fold grace bill next time;
- *  - a meter subscription renews ~6 min after period end plus the business delay, and by
- *    period end + 30 min with no fold at all; a subscription with no meter does not wait;
+ *  - tiered and volume prices re-rate the whole period: late = rate(period) − billed, and a
+ *    negative difference bills nothing (a correction is a credit note);
+ *  - a meter subscription renews ~6 min after period end, fold or no fold; with a business
+ *    grace its invoice holds as a pending draft until period end + 6 min + the grace
+ *    (`verify:usage-grace` covers the hold); a subscription with no meter does not wait;
  *  - a planned invoice that never commits loses nothing;
  *  - a recurring level carries from its snapshot after the events behind it are gone.
  *
@@ -16,6 +19,8 @@ import { createPrice } from "@/modules/catalog/service";
 import { createSubscription } from "@/modules/subscriptions/service";
 import { addSubscriptionItem, removeSubscriptionItem } from "@/modules/subscriptions/items";
 import { planSubscriptionPeriodInvoice } from "@/modules/invoicing/service";
+import { runAutoClosePending } from "@/modules/invoicing/pending";
+import { runWithClockScope } from "@/platform/clock";
 import { formatUsagePeriod } from "@/modules/metering/meter-rating";
 import { customerMeterBilling, subscriptions, usageMeterLevels } from "@db/schema";
 import {
@@ -52,7 +57,12 @@ const pointerOf = async (customerId: string, meterId: string) =>
       )
   )[0];
 
-async function meterSub(meterAgg: string, recurring = false, unit = "1") {
+async function meterSub(
+  meterAgg: string,
+  recurring = false,
+  unit = "1",
+  priceArgs: Partial<Parameters<typeof createPrice>[0]> = {},
+) {
   const meter = await createTestMeter(ids, { aggregation: meterAgg, recurring });
   const price = await createPrice({
     ...ids,
@@ -64,6 +74,7 @@ async function meterSub(meterAgg: string, recurring = false, unit = "1") {
     interval: "month",
     meter: meter.key,
     unitAmountDecimal: unit,
+    ...priceArgs,
   });
   const customer = await newCustomer(ids, meter.key);
   const sub = await createSubscription({
@@ -219,6 +230,67 @@ check(
   bNext?.lines,
 );
 
+// ── 2b. Tiered and volume: the whole period re-rates ───────────────────────────
+/** 90 units billed in [S, E), 30 more arrive late: the first and next invoices' usage lines. */
+async function lateOnTiers(model: "tiered" | "volume", tiers: Array<[string | null, string]>) {
+  const t = await meterSub("sum", false, "1", {
+    model,
+    unitAmountDecimal: undefined,
+    meterTiers: tiers.map(([up_to, unit_amount_decimal]) => ({ up_to, unit_amount_decimal })),
+  });
+  await t.send(mid, 90);
+  await tick(biz.id);
+  const tp = await pointerOf(t.customer.id, t.meter.id);
+  await t.send(mid, 30, tp!.cutoffAt!.getTime() - 5 * 60_000 + 500);
+  await sleep(1500);
+  await setTerm(t.sub.subscription.id, E, E2);
+  await tick(biz.id);
+  const [next, first] = await invoicesOf(orgId, t.sub.subscription.id);
+  const notes = (await systemDb.execute(
+    sql`select count(*)::int n from credit_notes where customer_id = ${t.customer.id}`,
+  )) as unknown as Array<{ n: number }>;
+  return {
+    billed: Number(usageLines(first?.lines ?? [])[0]?.amountMinor),
+    late: usageLines(next?.lines ?? []).find((l) => l.description.startsWith("Usage from ")),
+    next: usageLines(next?.lines ?? []),
+    notes: notes[0]?.n ?? -1,
+  };
+}
+const gr = await lateOnTiers("tiered", [
+  ["100", "10"],
+  [null, "5"],
+]);
+check(
+  "graduated (100 at 10, then 5): 90 billed 900, 30 late → 200 = rate(120) 1100 − 900, not 300",
+  gr.billed === 900 &&
+    Number(gr.late?.amountMinor) === 200 &&
+    Number(gr.late?.quantityDecimal) === 30,
+  { billed: gr.billed, late: gr.late?.amountMinor, qty: gr.late?.quantityDecimal },
+);
+const vn = await lateOnTiers("volume", [
+  ["100", "10"],
+  [null, "6"],
+]);
+check(
+  "volume (to 100 at 10, above at 6): rate(120) 720 − 900 = −180 bills no late line and no credit note",
+  vn.billed === 900 &&
+    vn.late === undefined &&
+    vn.notes === 0 &&
+    vn.next.every((l) => Number(l.amountMinor) === 0),
+  { billed: vn.billed, next: vn.next.map((l) => [l.description, l.amountMinor]), notes: vn.notes },
+);
+const vp = await lateOnTiers("volume", [
+  ["100", "10"],
+  [null, "9"],
+]);
+check(
+  "volume (to 100 at 10, above at 9): 90 billed 900, 30 late → 180 = rate(120) 1080 − 900",
+  vp.billed === 900 &&
+    Number(vp.late?.amountMinor) === 180 &&
+    Number(vp.late?.quantityDecimal) === 30,
+  { billed: vp.billed, late: vp.late?.amountMinor, qty: vp.late?.quantityDecimal },
+);
+
 // ── 3. Received inside the fold grace: next invoice ────────────────────────────
 const c = await meterSub("sum");
 await c.send(mid, 4);
@@ -341,17 +413,18 @@ const patchBiz = (payload: object) =>
     headers: { ...auth, "idempotency-key": `usage-close-${Date.now()}-${++keyN}` },
     payload,
   });
-const tooLong = await patchBiz({ usage_close_delay_minutes: 25 });
+const tooLong = await patchBiz({ usage_close_delay_minutes: 43201 });
 const fraction = await patchBiz({ usage_close_delay_minutes: 2.5 });
 check(
-  "the API refuses a delay of 25 or 2.5 minutes and says what to enter",
+  "the API refuses a grace of 43201 or 2.5 minutes and says what to enter",
   tooLong.statusCode === 400 &&
     fraction.statusCode === 400 &&
     JSON.parse(tooLong.body).error?.message ===
-      "usage_close_delay_minutes: Enter a whole number of minutes from 0 to 24.",
+      "usage_close_delay_minutes: Enter a whole number of minutes from 0 to 43200 (30 days).",
   [tooLong.body, fraction.statusCode],
 );
-async function waitCase(delay: number, before: number, after: number) {
+/** The term rolls at +6 min; with a grace the invoice is a pending draft until +6 + grace. */
+async function waitCase(delay: number) {
   const saved = await patchBiz({ usage_close_delay_minutes: delay });
   const got = await app.inject({
     method: "GET",
@@ -359,7 +432,7 @@ async function waitCase(delay: number, before: number, after: number) {
     headers: auth,
   });
   check(
-    `the API saves a delay of ${delay} and returns it`,
+    `the API saves a grace of ${delay} and returns it`,
     saved.statusCode === 200 && JSON.parse(got.body).usage_close_delay_minutes === delay,
     [saved.statusCode, saved.body.slice(0, 200)],
   );
@@ -371,25 +444,40 @@ async function waitCase(delay: number, before: number, after: number) {
     items: [{ price: wPrice, quantity: 1 }],
   });
   await setTerm(sub.subscription.id, PS, PE);
-  const count = async () => (await invoicesOf(w.orgId, sub.subscription.id)).length;
-  const start = await count();
-  await tick(w.biz.id, at(before));
-  const early = await count();
-  await tick(w.biz.id, at(after));
-  return { waited: early === start, renewed: (await count()) === start + 1 };
+  const all = () => invoicesOf(w.orgId, sub.subscription.id);
+  const start = (await all()).length;
+  await tick(w.biz.id, at(5));
+  const early = (await all()).length;
+  await tick(w.biz.id, at(6));
+  const rolled = await all();
+  const close = (min: number) =>
+    runWithClockScope({ onlyBusinessId: w.biz.id }, () => runAutoClosePending(at(min)));
+  await close(6 + delay - 1);
+  const stillHeld = (await all())[0]?.inv.status === "pending";
+  await close(6 + delay);
+  const final = (await all())[0]?.inv;
+  return {
+    waited: early === start,
+    renewed: rolled.length === start + 1,
+    held: rolled[0]?.inv.status === "pending" && rolled[0]?.inv.holdUntil != null,
+    stillHeld,
+    finalStatus: final?.status,
+  };
 }
-const d0 = await waitCase(0, 5, 6);
-check("delay 0: not at +5 min, renewed at +6 min", d0.waited && d0.renewed, d0);
-const d10 = await waitCase(10, 15, 16);
-check("delay 10: not at +15 min, renewed at +16 min", d10.waited && d10.renewed, d10);
+const d0 = await waitCase(0);
+check(
+  "grace 0: not at +5 min, renewed and finalized at +6 min (no hold)",
+  d0.waited && d0.renewed && !d0.held && d0.finalStatus !== "pending",
+  d0,
+);
 const [state] = (await systemDb.execute(
   sql`select 1 from usage_rollup_state where business_id = ${w.biz.id}`,
 )) as unknown as unknown[];
-const d24 = await waitCase(24, 29, 30);
+const d10 = await waitCase(10);
 check(
-  "no fold ever ran, delay 24: not at +29 min, renewed by the +30 min cap",
-  !state && d24.waited && d24.renewed,
-  { state, d24 },
+  "no fold ever ran, grace 10: the term rolls at +6 min; the invoice holds until +16 min",
+  !state && d10.waited && d10.renewed && d10.held && d10.stillHeld && d10.finalStatus !== "pending",
+  { state, d10 },
 );
 const plainCus = await newCustomer(wIds, "flat");
 const plainSub = await createSubscription({

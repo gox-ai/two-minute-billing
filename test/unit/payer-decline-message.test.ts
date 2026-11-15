@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   payerDeclineMessage,
+  payerRefusal,
   declineHiddenFromPayer,
   PAYER_SAFE_INTERNAL_FAILURE,
   PAYER_REASON_WITHHELD,
@@ -88,5 +89,39 @@ describe("round-off unit follows the currency's decimals", () => {
 
   it("off is off", () => {
     expect(roundingDeltaFor("none", 1049n, 100n)).toBe(0n);
+  });
+});
+
+describe("payerRefusal gives a present buyer one opening and one next step", () => {
+  const LEAD = "We could not start your subscription.";
+  const NEXT = "Try again, or use a different payment method.";
+  const openings = (m: string) => m.match(/We could not/g)?.length;
+
+  it("wraps a gateway reason", () => {
+    expect(payerRefusal(LEAD, "Your card was declined")).toBe(
+      `${LEAD} Your card was declined. We did not charge you. ${NEXT}`,
+    );
+  });
+  it("our own fault: no second opening, and no different payment method", () => {
+    const m = payerRefusal(LEAD, PAYER_SAFE_INTERNAL_FAILURE);
+    expect(m).toBe(
+      "We could not start your subscription because of a problem on our side. Your payment method is fine. We did not charge you. Try again in a few minutes.",
+    );
+    expect(openings(m)).toBe(1);
+  });
+  it("a withheld reason only repeats the lead, so it is dropped", () => {
+    expect(payerRefusal(LEAD, PAYER_REASON_WITHHELD)).toBe(
+      `${LEAD} We did not charge you. ${NEXT}`,
+    );
+  });
+  it("a reason that opens 'We could not' takes the place of the lead", () => {
+    const m = payerRefusal(LEAD, "We could not reach your bank.");
+    expect(m).toBe(`We could not reach your bank. We did not charge you. ${NEXT}`);
+    expect(openings(m)).toBe(1);
+  });
+  it("a reason that carries its next step gets no second one", () => {
+    expect(payerRefusal(LEAD, "The card has expired. Contact your bank.")).toBe(
+      `${LEAD} The card has expired. Contact your bank. We did not charge you.`,
+    );
   });
 });

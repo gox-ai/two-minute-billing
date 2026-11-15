@@ -1,6 +1,6 @@
-import Link from "next/link";
+import { Link2 } from "lucide-react";
 import { requirePermission } from "@/lib/session";
-import { listPrices, listProducts } from "@/lib/api";
+import { listBusinesses, listPrices, listProducts } from "@/lib/api";
 import { listPaymentLinks, type PaymentLink } from "@/lib/api/payment-links";
 import { paymentLinkPriceOptions } from "@/lib/payment-link-options";
 import { PageHeader } from "@/components/page-header";
@@ -8,6 +8,7 @@ import { EmptyState, ErrorState } from "@/components/states";
 import { Chip, StatusChip } from "@/components/patterns/chip";
 import { CopyButton } from "@/components/patterns/copy-button";
 import { ActionButton } from "@/components/action-button";
+import { ShowArchivedToggle } from "@/components/catalog/show-archived-toggle";
 import { PaymentLinkDialog } from "@/components/catalog/payment-link-dialog";
 import {
   Table,
@@ -40,14 +41,17 @@ export default async function PaymentLinksPage({
   const showArchived = archived === "1";
 
   let links: PaymentLink[];
+  let bizName: string;
   let picker: ReturnType<typeof paymentLinkPriceOptions>;
   try {
-    const [l, prices, products] = await Promise.all([
+    const [l, prices, products, businesses] = await Promise.all([
       listPaymentLinks(biz, { includeArchived: showArchived }),
       listPrices(biz),
       listProducts(biz),
+      listBusinesses(),
     ]);
     links = l.data;
+    bizName = businesses.data.find((b) => b.id === biz)?.name ?? biz;
     picker = paymentLinkPriceOptions(prices.data, products.data);
   } catch (e) {
     return (
@@ -64,7 +68,8 @@ export default async function PaymentLinksPage({
         title="Payment links"
         description="Reusable links for your website. Any visitor can open one, and each visitor gets their own checkout."
         breadcrumbs={[
-          { label: "Product Catalog", href: `/businesses/${biz}/catalog/plans` },
+          { label: bizName, href: `/businesses/${biz}` },
+          { label: "Product catalog", href: `/businesses/${biz}/catalog/plans` },
           { label: "Payment links" },
         ]}
         actions={
@@ -79,12 +84,10 @@ export default async function PaymentLinksPage({
                 View pricing page
               </a>
             ) : null}
-            <Link
-              href={`/businesses/${biz}/catalog/payment_links${showArchived ? "" : "?archived=1"}`}
-              className="text-sm text-primary hover:underline"
-            >
-              {showArchived ? "Hide archived" : "Show archived"}
-            </Link>
+            <ShowArchivedToggle
+              basePath={`/businesses/${biz}/catalog/payment_links`}
+              showing={showArchived}
+            />
             <PaymentLinkDialog biz={biz} options={picker.options} meta={picker.meta} />
           </div>
         }
@@ -92,8 +95,17 @@ export default async function PaymentLinksPage({
       <div className="overflow-hidden rounded-xl border bg-card">
         {links.length === 0 ? (
           <EmptyState
+            icon={<Link2 />}
             title="No payment links yet"
             description="Create a payment link, then put it on your website as a buy button."
+            action={
+              <PaymentLinkDialog
+                biz={biz}
+                options={picker.options}
+                meta={picker.meta}
+                variant="outline"
+              />
+            }
           />
         ) : (
           <Table>

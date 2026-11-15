@@ -49,6 +49,7 @@ import { recordOfflinePayment } from "@/modules/invoicing/ops";
 import { runWithClockScope } from "@/platform/clock";
 import { subscriptions, invoices, businesses, payments } from "@db/schema";
 import { retireFixtureRetries } from "./lib/fixture-retries";
+import { listRetriesPage, serializeRetry } from "@/modules/invoicing/retries";
 
 /** Every org `setup()` made, so the teardown can retire what they leave behind. */
 const fixtureOrgs: string[] = [];
@@ -888,6 +889,37 @@ async function main() {
       invoicePublicId: open.publicId,
       method: "cash",
     });
+  }
+
+  // ── 16. the Retries row says reminder, not charge ───────────────────────────
+  // An offline row reads `in_progress` with 0 attempts; `collection` says why. Derived
+  // from the same auto-collection fact the clock decides on, so flipping it flips the row.
+  {
+    const t = await setup("retry-row", { ...VOID_AND_CANCEL, dun_offline_invoices: true }, -1, now);
+    await runInvoiceDueTransitions(now);
+    const rowOf = async () => {
+      const page = await listRetriesPage(t.orgId, t.bizId, { limit: 100 });
+      const r = page.data.find((d) => d.invoice.id === t.invoice.id);
+      return r ? serializeRetry(r) : null;
+    };
+    const offline = await rowOf();
+    check(
+      "retry row of an auto-collection-off invoice says reminder",
+      offline?.collection === "reminder" && offline.attempt_count === 0,
+      `collection=${offline?.collection} attempts=${offline?.attempt_count}`,
+    );
+    await updateSubscriptionSettings({
+      organizationId: t.orgId,
+      businessId: t.bizId,
+      subscriptionPublicId: t.sub.publicId,
+      autoCollection: "on",
+    });
+    const charged = await rowOf();
+    check(
+      "retry row of an auto-collection-on invoice says charge",
+      charged?.collection === "charge",
+      `collection=${charged?.collection}`,
+    );
   }
 
   // Every case here ends with an invoice somebody would have to collect, and a fixture

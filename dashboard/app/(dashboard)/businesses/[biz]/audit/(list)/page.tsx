@@ -25,7 +25,7 @@ export default async function BusinessAuditLogPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Audit Log" />
+        <PageHeader title="Audit log" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -38,9 +38,9 @@ export default async function BusinessAuditLogPage({
   return (
     <>
       <PageHeader
-        title="Audit Log"
+        title="Audit log"
         description="All recorded actions for this business."
-        breadcrumbs={[{ label: name, href: `/businesses/${biz}` }, { label: "Audit Log" }]}
+        breadcrumbs={[{ label: name, href: `/businesses/${biz}` }, { label: "Audit log" }]}
       />
 
       <Card>

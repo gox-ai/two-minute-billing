@@ -197,14 +197,6 @@ export default async function BizHome({
     !custom && preset.countGrain
       ? { range: preset.range, grain: preset.countGrain }
       : { ...WHEN, grain: "month" as const };
-  // Written exactly as the picker writes a custom window, so the headings and the control agree.
-  const dayLabel = (d: string) =>
-    new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-      timeZone: "UTC",
-    });
   /** The period in the URL, carried by every link that should keep it. */
   const periodCarry: Record<string, string> = custom
     ? { start: custom.start, end: custom.end }
@@ -248,9 +240,7 @@ export default async function BizHome({
       : fiscal && p.id === "this_quarter"
         ? "This fiscal quarter"
         : p.label;
-  const periodLabel = custom
-    ? `${dayLabel(custom.start)} – ${dayLabel(custom.end)}`
-    : labelOf(preset);
+  const periodLabel = custom ? rangeLabel(custom.start, custom.end) : labelOf(preset);
   // Dates render in the business timezone: the engine's day boundaries are midnight there.
   const tz = business?.timezone ?? null;
   const baseCurrency = business?.default_currency ?? "USD";

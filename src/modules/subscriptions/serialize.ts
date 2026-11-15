@@ -140,6 +140,8 @@ export interface SubscriptionItemView {
    * item is simply at list price.
    */
   catalog_amount_minor: number | null;
+  /** The product's id: the dashboard links an item to its plan or add-on page with it. */
+  product: string;
   product_name: string;
   product_kind: string;
   /** CP-4 item depth: units billed at 0 before rating / fixed cycle cap. */
@@ -181,6 +183,8 @@ export interface SubscriptionDetail {
     status: string;
     remaining_periods: number | null;
   } | null;
+  /** The change held until its invoice is paid (`apply_when_paid`); null = none. */
+  pendingChange: Awaited<ReturnType<typeof import("./pending-change").pendingChangeView>>;
 }
 
 /**
@@ -256,6 +260,7 @@ export async function getSubscriptionDetail(
             ? (snap.catalogAmountMinor ??
               (price.amountMinor != null ? Number(price.amountMinor) : null))
             : null,
+        product: product.publicId,
         product_name: product.name,
         product_kind: product.kind,
         free_quantity: item.freeQuantity,
@@ -264,9 +269,12 @@ export async function getSubscriptionDetail(
     });
 
     const discount = await loadActiveDiscount(tx, s.id);
+    const { pendingChangeView } = await import("./pending-change");
+    const pendingChange = await pendingChangeView(tx, s.id);
 
     return {
       subscription: s,
+      pendingChange,
       customerPublicId: cus?.publicId ?? null,
       defaultPaymentMethodPublicId,
       shippingAddressPublicId,
@@ -371,6 +379,8 @@ export function serializeSubscription(
     recurring_amount_minor?: bigint | null;
     /** `renewalSkipViews`; omitted when the subscription has no scheduled skip. */
     renewalSkips?: RenewalSkipView;
+    /** The change held until its invoice is paid (`apply_when_paid`); null = none. */
+    pending_change?: Awaited<ReturnType<typeof import("./pending-change").pendingChangeView>>;
   },
 ) {
   return {
@@ -490,6 +500,8 @@ export function serializeSubscription(
       : {}),
     ...(extra?.items ? { items: extra.items } : {}),
     ...(extra?.discount !== undefined ? { discount: extra.discount } : {}),
+    // Omitted when the caller did not load it, like `discount`.
+    ...(extra?.pending_change !== undefined ? { pending_change: extra.pending_change } : {}),
     ...(extra?.dues
       ? {
           due_invoices_count: extra.dues.due_invoices_count,
@@ -588,6 +600,7 @@ export async function loadSubscriptionSnapshot(
           ? (snap.catalogAmountMinor ??
             (price.amountMinor != null ? Number(price.amountMinor) : null))
           : null,
+      product: product.publicId,
       product_name: product.name,
       product_kind: product.kind,
       free_quantity: item.freeQuantity,

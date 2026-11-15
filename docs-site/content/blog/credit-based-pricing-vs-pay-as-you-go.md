@@ -2,7 +2,7 @@
 title: "Credit-based pricing vs pay-as-you-go: how to choose"
 seoTitle: "Credit-based pricing vs pay-as-you-go"
 description: "Pay-as-you-go vs prepaid, worked through one customer's month: pack discounts, rollover, running out of credit, and how ASC 606 treats unused credit."
-date: "2026-11-02"
+date: "2026-11-09"
 category: Pricing and proration
 type: Guide
 draft: false

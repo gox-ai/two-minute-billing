@@ -105,6 +105,45 @@ ok(
   unusedChange.status === 200 && unusedChange.json.event_name === "api_request",
 );
 
+// A fixed tier is trimmed and lower-cased, like a cost row and an event value.
+const tierMeter = (id: string, price_list: Record<string, string>) =>
+  call("POST", "/meters", {
+    id,
+    name: id,
+    event_name: "image_made",
+    aggregation: "sum",
+    value_property: "images",
+    group_by: ["model"],
+    price_list: { token_type: "output", unit: "image", ...price_list },
+  });
+const upperTier = await tierMeter("tier-upper", { quality: " HD ", resolution: "1024X1024" });
+ok(
+  "§1 price_list takes a fixed tier in any case and stores it trimmed, lower-case",
+  upperTier.status === 201 &&
+    upperTier.json.price_list?.quality === "hd" &&
+    upperTier.json.price_list?.resolution === "1024x1024",
+  JSON.stringify(upperTier.json),
+);
+const patchedTier = await call("PATCH", "/meters/tier-upper", {
+  price_list: { token_type: "output", unit: "image", quality: "Ultra" },
+});
+ok(
+  "§1 …on a change too",
+  patchedTier.status === 200 && patchedTier.json.price_list?.quality === "ultra",
+  JSON.stringify(patchedTier.json),
+);
+const badTier = await tierMeter("tier-bad", { quality: "H D!" });
+const blankTier = await tierMeter("tier-blank", { quality: "  " });
+ok(
+  "§1 a tier with a character the list cannot hold, or only spaces → 400 with the tier message",
+  [badTier, blankTier].every(
+    (r) =>
+      r.status === 400 &&
+      /The quality in price_list can have 40 characters at most/.test(JSON.stringify(r.json)),
+  ),
+  JSON.stringify([badTier.json, blankTier.json]),
+);
+
 // ── §2 lock ───────────────────────────────────────────────────────────────────────────────
 const customer = await createCustomer({ ...ctx, email: `meters-${uniq}@example.com` });
 await addUsageKey({ ...ctx, customerId: customer.id, key: "ws" });

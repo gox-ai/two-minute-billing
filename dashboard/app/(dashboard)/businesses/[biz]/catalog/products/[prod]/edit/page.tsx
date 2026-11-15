@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 const KIND_META: Record<string, { plural: string; page: string }> = {
   plan: { plural: "Plans", page: "plans" },
-  addon: { plural: "Addons", page: "addons" },
+  addon: { plural: "Add-ons", page: "addons" },
   charge: { plural: "One-time products", page: "charges" },
 };
 
@@ -57,7 +57,7 @@ export default async function EditProductPage({
       imageSupport={imageSupport}
       crumbs={[
         { label: business?.name ?? biz, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: meta.plural, href: `/businesses/${biz}/catalog/${meta.page}` },
         { label: product.name, href: detailHref },
         { label: "Edit" },

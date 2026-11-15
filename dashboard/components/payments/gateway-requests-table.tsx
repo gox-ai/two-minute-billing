@@ -15,12 +15,17 @@ import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 import { EditDrawer } from "@/components/edit-drawer";
 import { Button } from "@/components/ui/button";
-import { fmtDateTime, fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
+import { enumLabel } from "@/lib/labels";
 import type { GatewayRequestLog } from "@/lib/api/payments";
 import { Activity } from "lucide-react";
 import { useBusinessTz } from "@/components/business-tz";
 import { mergeOptions, HTTP_METHOD_OPTIONS } from "@/lib/filter-options";
-import { gatewayFilterOptions, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
+import {
+  gatewayDisplayName,
+  gatewayFilterOptions,
+  type GatewayCatalogEntry,
+} from "@/components/gateways/gateway-meta";
 import { GatewayLabel } from "@/components/partner-logo";
 
 /** The declared gateways; `mergeOptions` adds anything the data carries beyond them. */
@@ -126,11 +131,12 @@ export function GatewayRequestsTable({
         accessorKey: "created_at",
         id: "created_at",
         header: "Time",
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
       {
         id: "method_url",
         header: "Request",
+        meta: { grow: true },
         accessorFn: (r) => `${r.method} ${r.url}`,
         cell: ({ row }) => (
           <span className="flex items-center gap-2">
@@ -151,7 +157,11 @@ export function GatewayRequestsTable({
         accessorKey: "gateway_key",
         header: "Gateway",
         cell: ({ row }) => (
-          <GatewayLabel gatewayKey={row.original.gateway_key} className="text-sm" />
+          <GatewayLabel
+            gatewayKey={row.original.gateway_key}
+            name={gatewayDisplayName(row.original.gateway_key, gatewayCatalog)}
+            className="text-sm"
+          />
         ),
       },
       {
@@ -166,7 +176,9 @@ export function GatewayRequestsTable({
         id: "source",
         header: "Source",
         accessorFn: (r) => r.source ?? "—",
-        cell: ({ row }) => <TextCell>{row.original.source}</TextCell>,
+        cell: ({ row }) => (
+          <TextCell>{row.original.source ? enumLabel(row.original.source) : null}</TextCell>
+        ),
       },
       {
         id: "status",
@@ -208,12 +220,12 @@ export function GatewayRequestsTable({
         ),
       },
     ],
-    [],
+    [gatewayCatalog, tz],
   );
 
   const segments = React.useMemo<ListSegment<GatewayRequestLog>[]>(
     () => [
-      { id: "all", label: "All Requests" },
+      { id: "all", label: "All requests" },
       // `between` is inclusive at both ends (filterSql), so one condition expresses the
       // band exactly — these were two off-by-one-flavoured `gt`/`lt` bounds each.
       {
@@ -250,7 +262,7 @@ export function GatewayRequestsTable({
   /** Every column in `GATEWAY_REQUEST_FILTERS` (src/modules/gateway/activity.ts). */
   const filterFields = React.useMemo<ListFilterField<GatewayRequestLog>[]>(
     () => [
-      { id: "id", label: "Request Log Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Request log ID", group: "Identity", serverOps: TEXT_OPS },
       // Filterable in the engine (GATEWAY_REQUEST_FILTERS.trace_id) — and the
       // field the payment-intent detail page deep-links on, so an attempt's
       // "View Request/Response Logs" narrows in SQL. Without the field here
@@ -311,7 +323,10 @@ export function GatewayRequestsTable({
         filterFields={filterFields}
         savedViews={{ entity: "gateway_requests", biz }}
         initialFilters={initialFilters}
-        searchPlaceholder="Search for gateway / operation / source / url…"
+        // Off by default so the view fits the card at 1280px; all stay in the chooser. The
+        // request URL names the gateway, and both stay filters.
+        initialHidden={["trace_id", "duration_ms", "source", "gateway_key"]}
+        searchPlaceholder="Search by gateway, operation, source or URL"
         exportName="gateway-requests"
         persistKey={`gateway_requests:${biz}`}
         rowMenu={(r) => (
@@ -343,7 +358,11 @@ export function GatewayRequestsTable({
                 </Chip>
               </DetailRow>
               <DetailRow label="Gateway">
-                <GatewayLabel gatewayKey={detail.gateway_key} fit />
+                <GatewayLabel
+                  gatewayKey={detail.gateway_key}
+                  name={gatewayDisplayName(detail.gateway_key, gatewayCatalog)}
+                  fit
+                />
               </DetailRow>
               <DetailRow label="Method">
                 <span className="font-mono text-xs">{detail.method}</span>
@@ -354,7 +373,7 @@ export function GatewayRequestsTable({
               <DetailRow label="Operation">
                 <span className="font-mono text-xs">{detail.operation ?? "—"}</span>
               </DetailRow>
-              <DetailRow label="Source">{detail.source ?? "—"}</DetailRow>
+              <DetailRow label="Source">{enumLabel(detail.source)}</DetailRow>
               <DetailRow label="Actor">{detail.actor ?? "—"}</DetailRow>
               <DetailRow label="Duration">
                 {detail.duration_ms != null ? `${detail.duration_ms} ms` : "—"}

@@ -19,7 +19,7 @@ import type {
   ResolveRate,
   SegmentCite,
 } from "./meter-rating";
-import { readMeterUsage } from "./read";
+import { readMeterUsage, type MeterUsageRow } from "./read";
 
 /**
  * Billing from the model price list (design G1b § 3.4) and the cost of a usage line (§ 3.7).
@@ -43,7 +43,21 @@ export function listKeyOf(
   const tokenType = m.token_type ?? (m.token_type_key ? group[m.token_type_key] : undefined);
   if (!model || !tokenType) return null;
   const provider = m.provider ?? (m.provider_key ? group[m.provider_key] || null : null);
-  return { provider, model, tokenType, currency };
+  // A tier read from an event is matched lower-case; a missing value is no tier.
+  const tier = (fixed?: string, key?: string) =>
+    fixed ?? (key ? (group[key] ?? "").trim().toLowerCase() : "");
+  // No unit and no tier in the map: the key is exactly what it was before 0524.
+  if (!m.unit && !m.quality && !m.quality_key && !m.resolution && !m.resolution_key)
+    return { provider, model, tokenType, currency };
+  return {
+    provider,
+    model,
+    tokenType,
+    currency,
+    unit: m.unit ?? null,
+    quality: tier(m.quality, m.quality_key),
+    resolution: tier(m.resolution, m.resolution_key),
+  };
 }
 
 /** Where a combination's selling rate comes from. */
@@ -245,11 +259,96 @@ export function priceListResolver(ctx: {
 }
 
 /**
- * Cost of one usage line in its currency (§ 3.7): Σ event cost + Σ quantity of events with
- * no cost × your cost (else the list) where that quantity fell. Rounded half-up once. Event
- * cost in another currency converts at the business's rate on the line's end; no rate →
- * `no_rate`. Summed and counted meters only; null for any other. `part` (an
- * `event_cost_or_list` line) counts only the events' own cost, or only the events without one.
+ * The cost rule of usage in one currency (§ 3.7), shared by `lineCost` and the daily cost fold:
+ * Σ event cost + Σ quantity of events with no cost × your cost (else the list) where that
+ * quantity fell. Rounded half-up once, in `result`. Event cost in another currency converts at
+ * the business's rate at `fxAt`; no rate → `no_rate`. `part` (an `event_cost_or_list` line)
+ * counts only the events' own cost, or only the events without one.
+ */
+export class UsageCost {
+  private total = 0n; // Fixed12 minor units of the currency
+  private fromList = false;
+  private fromEvents = false;
+  private unpriced = 0n;
+  private noRate = false;
+  private readonly minorScale: bigint;
+
+  constructor(
+    private readonly c: {
+      meter: Pick<MeterRow, "costCurrency">;
+      currency: string;
+      key: ModelKey | null;
+      book: ModelPriceBook | null;
+      fxAt: Date;
+      fx: () => Promise<RateTimeline>;
+      part?: "reported_cost" | "list";
+    },
+  ) {
+    this.minorScale = 10n ** BigInt(currencyExponent(c.currency));
+  }
+
+  /** The rows of one piece of time that starts at `at` (one rate per piece). */
+  async add(rows: readonly MeterUsageRow[], at: Date): Promise<void> {
+    const { meter, currency, part, key, book } = this.c;
+    if (this.noRate) return;
+    let uncosted = 0n;
+    for (const r of rows) {
+      // A split line: an event cost in another currency bills from the list (`mergeCurrencies`).
+      if (part && r.currency != null && r.currency !== currency) {
+        if (part === "list") uncosted += r.quantity;
+        continue;
+      }
+      uncosted += r.uncostedQuantity;
+      if (part === "list") continue;
+      if (r.quantity > r.uncostedQuantity || r.costSum !== 0n) this.fromEvents = true;
+      if (r.costSum === 0n) continue;
+      const cur = r.currency ?? meter.costCurrency ?? currency;
+      if (cur === currency) {
+        this.total += r.costSum * this.minorScale;
+        continue;
+      }
+      const fx = await this.c.fx();
+      const to = fx.rateAt(currency, this.c.fxAt);
+      const from = fx.rateAt(cur, this.c.fxAt);
+      if (!to || !from) {
+        this.noRate = true;
+        return;
+      }
+      // cost(cur) × rate(line) ÷ rate(cur), both per one unit of the business's base.
+      this.total += divHalfUp(
+        r.costSum * this.minorScale * fixed12FromNumeric(to),
+        fixed12FromNumeric(from),
+      );
+    }
+    if (uncosted <= 0n || part === "reported_cost") return;
+    const hit = key && book ? book.modelCost(key, at) : null;
+    if (hit?.kind) {
+      this.total += divHalfUp(uncosted * hit.unitAmount, hit.quantityDivisor * S);
+      this.fromList = true;
+    } else this.unpriced += uncosted;
+  }
+
+  result(): LineCost {
+    if (this.noRate) return { minor: null, basis: "no_rate" };
+    const minor = divHalfUp(this.total, S);
+    if (this.unpriced > 0n)
+      return this.fromList || this.fromEvents
+        ? { minor, basis: "partial" }
+        : { minor: null, basis: "none" };
+    return {
+      minor,
+      basis: this.fromList && this.fromEvents ? "mixed" : this.fromList ? "price_list" : "event",
+    };
+  }
+}
+
+/** Meters whose usage has a cost: summed and counted, not recurring. */
+export const meterHasCost = (m: Pick<MeterRow, "recurring" | "aggregation">): boolean =>
+  !m.recurring && (m.aggregation === "sum" || m.aggregation === "count");
+
+/**
+ * Cost of one usage line in its currency (`UsageCost`), at the business's rate on the line's
+ * end. Summed and counted meters only; null for any other.
  */
 export async function lineCost(ctx: {
   tx: Tx;
@@ -261,8 +360,7 @@ export async function lineCost(ctx: {
   part?: "reported_cost" | "list";
 }): Promise<LineCost | null> {
   const { tx, meter, line, currency, part } = ctx;
-  if (meter.recurring || (meter.aggregation !== "sum" && meter.aggregation !== "count"))
-    return null;
+  if (!meterHasCost(meter)) return null;
   const group: Record<string, string> = {};
   meter.groupBy.forEach((k, i) => (group[k] = line.group[i] ?? ""));
   const key = listKeyOf(meter, group, currency);
@@ -281,46 +379,20 @@ export async function lineCost(ctx: {
     },
   });
   const sameGroup = (g: readonly string[]) => JSON.stringify(g) === JSON.stringify(line.group);
-  const minorScale = 10n ** BigInt(currencyExponent(currency));
-  let total = 0n; // Fixed12 minor units of the line's currency
-  let fromList = false;
-  let fromEvents = false;
-  let unpriced = 0n;
   let fx: RateTimeline | null = null;
-  for (const seg of usage.segments) {
-    let uncosted = 0n;
-    for (const r of seg.rows) {
-      if (!sameGroup(r.groupValues)) continue;
-      // A split line: an event cost in another currency bills from the list (`mergeCurrencies`).
-      if (part && r.currency != null && r.currency !== currency) {
-        if (part === "list") uncosted += r.quantity;
-        continue;
-      }
-      uncosted += r.uncostedQuantity;
-      if (part === "list") continue;
-      if (r.quantity > r.uncostedQuantity || r.costSum !== 0n) fromEvents = true;
-      if (r.costSum === 0n) continue;
-      const cur = r.currency ?? meter.costCurrency ?? currency;
-      if (cur === currency) {
-        total += r.costSum * minorScale;
-        continue;
-      }
-      fx ??= await loadRateTimeline(tx, meter.businessId);
-      const to = fx.rateAt(currency, line.window.end);
-      const from = fx.rateAt(cur, line.window.end);
-      if (!to || !from) return { minor: null, basis: "no_rate" };
-      // cost(cur) × rate(line) ÷ rate(cur), both per one unit of the business's base.
-      total += divHalfUp(r.costSum * minorScale * fixed12FromNumeric(to), fixed12FromNumeric(from));
-    }
-    if (uncosted <= 0n || part === "reported_cost") continue;
-    const hit = key && book ? book.modelCost(key, seg.start) : null;
-    if (hit?.kind) {
-      total += divHalfUp(uncosted * hit.unitAmount, hit.quantityDivisor * S);
-      fromList = true;
-    } else unpriced += uncosted;
-  }
-  const minor = divHalfUp(total, S);
-  if (unpriced > 0n)
-    return fromList || fromEvents ? { minor, basis: "partial" } : { minor: null, basis: "none" };
-  return { minor, basis: fromList && fromEvents ? "mixed" : fromList ? "price_list" : "event" };
+  const cost = new UsageCost({
+    meter,
+    currency,
+    key,
+    book,
+    fxAt: line.window.end,
+    fx: async () => (fx ??= await loadRateTimeline(tx, meter.businessId)),
+    ...(part ? { part } : {}),
+  });
+  for (const seg of usage.segments)
+    await cost.add(
+      seg.rows.filter((r) => sameGroup(r.groupValues)),
+      seg.start,
+    );
+  return cost.result();
 }

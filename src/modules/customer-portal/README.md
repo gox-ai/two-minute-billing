@@ -129,6 +129,34 @@ carries the same argument from the browser side.
   attached to a DIFFERENT provider customer.
 
 ## Changelog
+
+- **2026-11-14** — The subscription list gives `has_credit_usage` (the customer's credit usage is
+  on this subscription); the page shows the usage block for it as for `has_metered_items`. The
+  usage block says what the next invoice bills past the credit balance and shows a negative
+  credit balance once per unit, read from the balance row.
+- **2026-11-13** — Every gateway error is shown on our page, even when the gateway's own form
+  shows it too (user decision). Add-card: a refusal after the Stripe form or the test-card form
+  shows in that dialog, not as a toast behind it. Every other add-card and Pay now refusal is an
+  Alert beside the action that failed (an invoice row's on its own line), kept until the next
+  try. A refused Pay-now return keeps the reason on the page ("Payment not received"). A thrown
+  server action on add-card or Pay now shows a message.
+- **2026-11-12** — Hosted-pages audit. Portal payload gains `business.{id,support_email,website,has_pricing_page}`
+  (also on `link_notice`), invoice `last_payment_error`, subscription `ended_at`, `items[].metered`,
+  `next_payment.usage_so_far` (renewal with usage recorded so far, when the renewal bills it),
+  `actions.pause_terms` and `restart.term` (`restartTerm`, the same `estimateReactivate` the restart
+  checkout quotes). Change options add `price_name`/`metered` (plans, add-ons) and `model` (add-ons);
+  a plan with no single price has `direction: null`. The change preview adds `new_period_end`,
+  `next_renewal` and, on `due_today`, `discount_minor`, `credited_period_*`, `next_invoice_at`. Engine
+  refusals of a change are logged and the buyer reads one sentence. A dead link's peek 401 carries
+  `business`.
+- **2026-11-10** — Restart an ended subscription (`restart.ts`, storefront `allow_restart` +
+  `restart_price`, `restart_window_days`, `restart_open_invoices`). `POST
+  /portal/v1/subscriptions/:sub/restart` mints a reactivating checkout and returns its `url`;
+  nothing changes until the buyer pays there. `restartEligibility` is the one rule behind the
+  route and the list's new `restart` block: refused when not offered, not ended, past the window,
+  with unpaid invoices (`pay_first`), collected by invoice, or on an archived price/product.
+  `/reactivate` on an ended subscription now points at the button when restarts are on.
+  Suite: `verify:portal-restart`.
 - **2026-11-05** — Security fixes. Resume is open to a customer only for a pause they took from
   the pause offer (`subscriptions.pause_source = retention_offer`, 0493); a later business pause
   stays the business's. The retention coupon is refused by the portal and checkout coupon boxes
@@ -670,3 +698,7 @@ carries the same argument from the browser side.
     the bot check, so requests without a token cannot use up a customer's hourly quota.
   Gates: `verify:portal-plan-changes`, `verify:portal-retention`, `verify:portal-access`.
 - **2026-11-03 (0495)** — The portal coupon cap is `businesses.max_customer_coupon_codes` and counts codes the customer entered (under a subscription row lock). At 1 it keeps the one-discount rule (operator discounts block the box); above 1 buyer codes stack up to the cap. The list returns `discounts[]` and `coupon_codes_left`; `DELETE …/coupon?code=` removes one named code. Gate: `verify:customer-portal` (0495 block).
+- **2026-11-15** — Portal plan change under `failed_change_charge: apply_when_paid`: an unpaid
+  invoice holds the change (`PendingChangeError` → a payer refusal, 400). A retry of the same
+  change, Pay on the invoice, or a new card that collects open invoices pays the same invoice and
+  the change applies. `pendingSource: portal`.

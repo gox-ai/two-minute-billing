@@ -63,7 +63,7 @@ function ZoneBones({ controls = 0 }: { controls?: number }) {
 /** Home's headline tile: label, figure, a labelled stat footer. */
 function HeadlineBones() {
   return (
-    <div className="col-span-12 rounded-xl border bg-card p-6 md:col-span-6 xl:col-span-3">
+    <div className="col-span-12 rounded-xl border bg-card p-6 md:col-span-6 @min-[56.875rem]/main:col-span-3">
       <Skeleton className="h-3 w-32" />
       <Skeleton className="mt-2.5 h-7 w-28" />
       <div className="mt-4 grid grid-cols-3 gap-3 border-t pt-3.5">
@@ -101,11 +101,11 @@ export function OrgHomeSkeleton() {
           <ZoneBones />
         </div>
         <Grid>
-          <CardBones span="col-span-12 xl:col-span-8">
+          <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-8">
             <Skeleton className="h-3.5 w-48" />
-            <Skeleton className="mt-3 h-[220px] w-full rounded-lg" />
+            <Skeleton className="mt-3 h-[220px] w-full rounded-xl" />
           </CardBones>
-          <CardBones span="col-span-12 xl:col-span-4 self-start">
+          <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-4 self-start">
             <Skeleton className="h-7 w-32" />
             <Skeleton className="mt-4 h-2 w-full" />
             <Skeleton className="mt-2 h-3 w-40" />
@@ -137,7 +137,7 @@ export function OrgMetricsSkeleton() {
           <CardBones span="col-span-12">
             <Skeleton className="h-7 w-36" />
             <Skeleton className="mt-2 h-3.5 w-72" />
-            <Skeleton className="mt-4 h-[240px] w-full rounded-lg" />
+            <Skeleton className="mt-4 h-[240px] w-full rounded-xl" />
           </CardBones>
         </Grid>
         <Grid>
@@ -152,11 +152,11 @@ export function OrgMetricsSkeleton() {
 export function PortfolioCurrentSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading portfolio" className="flex flex-col gap-6">
-      <Grid>
+      <Grid className="max-lg:gap-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="col-span-12 rounded-xl border bg-card p-6 md:col-span-6 xl:col-span-3"
+            className="col-span-6 rounded-xl border bg-card p-6 @min-[64.375rem]/main:col-span-3"
           >
             <Skeleton className="h-3 w-28" />
             <Skeleton className="mt-2.5 h-7 w-24" />
@@ -168,7 +168,7 @@ export function PortfolioCurrentSkeleton() {
         ))}
       </Grid>
       <Grid>
-        <CardBones span="col-span-12 xl:col-span-8">
+        <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-8">
           <Skeleton className="h-2 w-full" />
           <div className="mt-4 space-y-3">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -176,7 +176,7 @@ export function PortfolioCurrentSkeleton() {
             ))}
           </div>
         </CardBones>
-        <CardBones span="col-span-12 xl:col-span-4">
+        <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-4">
           <Skeleton className="h-2 w-full" />
           <div className="mt-4 space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -194,7 +194,7 @@ export function PortfolioPerformanceSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading performance" className="flex flex-col gap-6">
       <Grid>
-        <CardBones span="col-span-12 xl:col-span-8">
+        <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-8">
           <Skeleton className="h-3.5 w-80" />
           <div className="mt-4 space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -202,7 +202,7 @@ export function PortfolioPerformanceSkeleton() {
             ))}
           </div>
         </CardBones>
-        <CardBones span="col-span-12 xl:col-span-4 self-start">
+        <CardBones span="col-span-12 @min-[56.875rem]/main:col-span-4 self-start">
           <Skeleton className="h-7 w-32" />
           <Skeleton className="mt-4 h-2 w-full" />
           <Skeleton className="mt-2 h-3 w-40" />

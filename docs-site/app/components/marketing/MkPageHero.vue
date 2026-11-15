@@ -45,11 +45,7 @@ const primary = computed(() => props.primary ?? { label: "Start for free", to: s
           class="mt-8 flex flex-wrap items-center gap-3"
           :class="slots.default ? '' : 'justify-center'"
         >
-          <UButton
-            :to="primary.to"
-            size="xl"
-            :trailing-icon="primary.icon ?? 'i-lucide-arrow-up-right'"
-          >
+          <UButton :to="primary.to" size="xl" :trailing-icon="primary.icon">
             {{ primary.label }}
           </UButton>
           <UButton

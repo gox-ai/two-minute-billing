@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search } from "lucide-react";
+import { Plus, Search, X } from "lucide-react";
 import { createInvoiceAction, type PickerCustomer } from "@/app/actions";
 import { CustomerPicker } from "@/components/customers/customer-picker";
 import { Button } from "@/components/ui/button";
@@ -129,14 +129,15 @@ export function ManualInvoiceForm({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>Create invoice</Button>
+        <Button size="sm">
+          <Plus className="size-4" />
+          Create invoice
+        </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Create invoice</DialogTitle>
-          <DialogDescription>
-            Leave net days blank to make the invoice due on receipt.
-          </DialogDescription>
+          <DialogDescription>Add the items to bill to one customer.</DialogDescription>
         </DialogHeader>
         <ActionForm
           action={createInvoiceAction}
@@ -198,58 +199,83 @@ export function ManualInvoiceForm({
               which is what `linesJson` puts on the wire — the server action is
               unchanged. Qty is a count, not money. */}
           <div className="space-y-2">
-            {lines.map((l) => (
-              <div key={l.id} className="flex gap-2">
+            {/* One header for the three columns: a label on every row would repeat it. */}
+            <div className="flex gap-2 text-sm font-medium" aria-hidden="true">
+              <span className="flex-1">Item</span>
+              <span className="w-20 max-sm:w-16">Quantity</span>
+              <span className="w-40 text-right max-sm:w-28">Amount</span>
+              {lines.length > 1 ? <span className="w-8" /> : null}
+            </div>
+            {lines.map((l, i) => (
+              <div key={l.id} className="flex items-center gap-2">
                 <Input
-                  placeholder="description"
+                  aria-label={`Item ${i + 1} description`}
+                  placeholder="Description"
                   value={l.description}
                   onChange={(e) => upd(l.id, "description", e.target.value)}
                   maxLength={500}
                   className="flex-1"
                 />
                 <Input
-                  placeholder="qty"
+                  aria-label={`Item ${i + 1} quantity`}
                   type="number"
                   min={1}
                   step={1}
                   value={l.quantity}
                   onChange={(e) => upd(l.id, "quantity", e.target.value)}
-                  className="w-20 tabular-nums"
+                  className="w-20 tabular-nums max-sm:w-16 max-sm:px-2"
                 />
                 <MoneyInput
+                  aria-label={`Item ${i + 1} amount`}
                   currency={currency}
                   onMinorChange={(minor) => upd(l.id, "amount", minor)}
-                  className="w-40"
+                  className="w-40 max-sm:w-28"
                   inputClassName="text-right"
                 />
                 {lines.length > 1 ? (
                   <Button
                     type="button"
-                    variant="outline"
-                    size="sm"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove item ${i + 1}`}
                     onClick={() => setLines((rows) => rows.filter((r) => r.id !== l.id))}
                   >
-                    −
+                    <X className="size-4" />
                   </Button>
                 ) : null}
               </div>
             ))}
             <LinesError />
-          </div>
-          <div className="flex flex-wrap items-end gap-4">
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="-ml-2 text-primary"
               onClick={() => setLines((rows) => [...rows, newLine()])}
             >
-              + Add line
+              <Plus className="size-4" />
+              Add item
             </Button>
-            <CheckboxField name="collect" label="Collect now" />
-            <CheckboxField name="apply_tax" label="Apply tax" />
-            <Field name="net_days" label="Net days" help="Blank = due on receipt." className="w-28">
-              <Input name="net_days" type="number" min={1} max={3650} step={1} placeholder="days" />
+          </div>
+          <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
+            <Field
+              name="net_days"
+              label="Net days"
+              help="Leave blank to make the invoice due on receipt."
+            >
+              <Input
+                name="net_days"
+                type="number"
+                min={1}
+                max={3650}
+                step={1}
+                className="w-28 tabular-nums"
+              />
             </Field>
+            <div className="flex flex-col gap-2 sm:pt-7">
+              <CheckboxField name="collect" label="Collect now" />
+              <CheckboxField name="apply_tax" label="Apply tax" />
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

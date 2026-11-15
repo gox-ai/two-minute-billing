@@ -250,7 +250,7 @@ export function serializeInvoice(
     void_reason_code: inv.voidReasonCode ?? null,
     written_off: inv.writtenOff,
     dunning_status: inv.dunningStatus,
-    // 0474: usage_interim (a threshold invoice) | credit_purchase (automatic top-up); null otherwise.
+    // usage_interim (threshold) | credit_purchase (top-up) | late_usage (0521); null otherwise.
     purpose: inv.purpose ?? null,
     // Null both when no period is configured and when the detail read did not supply one, so
     // a consumer must not read "absent" as "the schedule alone decides" — see the extra above.
@@ -279,6 +279,8 @@ export function serializeInvoice(
     notes: inv.notes || null,
     net_term_days: inv.netTermDays ?? null,
     finalized_at: inv.finalizedAt ?? null,
+    // A held renewal invoice (usage grace window): when it finalizes. Null otherwise.
+    usage_closes_at: inv.status === "pending" ? (inv.holdUntil ?? null) : null,
     updated_at: inv.updatedAt,
     resource_version: inv.resourceVersion,
     recurring: inv.subscriptionId != null,
@@ -326,6 +328,8 @@ export function serializeInvoice(
             id_at_gateway: t.idAtGateway ?? null,
             error_code: t.errorCode ?? null,
             occurred_at: t.occurredAt ?? t.createdAt,
+            // The `pay_…` the refund route takes; on a refund, the payment it reverses.
+            payment: t.paymentPublicId,
           })),
         }
       : {}),
@@ -503,6 +507,9 @@ export function serializeInvoice(
               : {}),
             // What a credit note may still credit on this line, tax-inclusive (detail read only).
             ...(rel ? { creditable_minor: Number(rel.lineCreditable.get(l.publicId) ?? 0n) } : {}),
+            ...(rel?.lineFullCreditable.has(l.publicId)
+              ? { pack_full_creditable_minor: Number(rel.lineFullCreditable.get(l.publicId)) }
+              : {}),
             // …and the part of it that is INSIDE `subtotal_minor`. Split out because the
             // two need opposite treatment when displayed: the item-level part explains why
             // the subtotal is less than the lines and belongs beside them, while the

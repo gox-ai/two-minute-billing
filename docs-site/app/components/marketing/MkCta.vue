@@ -21,13 +21,16 @@ const props = withDefaults(
     accent?: string;
     /** Screenshot path without the `-light.webp` / `-dark.webp` suffix. */
     shot?: string;
+    /** How close the screenshot sits (MkPageBleed `scale`): higher shows less, larger. */
+    zoom?: number;
   }>(),
-  { shot: "/product/org-metrics" },
+  { shot: "/product/org-metrics", zoom: 1.25 },
 );
 
 /** Alt text per capture. The shot is aria-hidden (the copy beside it says the same), so this is for search. */
 const SHOT_ALT: Record<string, string> = {
   "org-metrics": "Organization metrics in the Two Minute Billing dashboard",
+  "business-home": "A business's MRR, customers and churn in the Two Minute Billing dashboard",
   gateways: "The payment gateways page in the Two Minute Billing dashboard",
   "hosted-pages": "Hosted page settings in the Two Minute Billing dashboard",
   "invoice-detail": "An invoice in the Two Minute Billing dashboard",
@@ -75,7 +78,7 @@ const parts = computed(() => {
               :to="first.to"
               size="xl"
               class="h-[3.375rem] px-6.5 text-[1.0625rem]"
-              :leading-icon="first.icon ?? 'i-lucide-arrow-up-right'"
+              :leading-icon="first.icon"
             >
               {{ first.label }}
             </UButton>
@@ -91,7 +94,7 @@ const parts = computed(() => {
         </div>
         <div class="relative min-h-[16.25rem] min-w-0 flex-[1_1_420px]" aria-hidden="true">
           <div class="mk-cta-shot">
-            <MkPageBleed :src="shot" :alt="shotAlt" :scale="1.25" />
+            <MkPageBleed :src="shot" :alt="shotAlt" :scale="zoom" />
           </div>
         </div>
       </div>

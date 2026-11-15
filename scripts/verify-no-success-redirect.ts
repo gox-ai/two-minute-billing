@@ -130,8 +130,8 @@ const ALLOW: Allow = {
 /** app/actions.ts — built once its conversion lands. */
 const ALLOW_APP_ACTIONS: Allow = {
   "app/actions.ts::createBusiness": {
-    n: 1,
-    why: "a free-plan org cannot change its live business, so it lands in the new test mode",
+    n: 2,
+    why: "a first business, or a free-plan org's, lands in its new test mode; a first business with no test mode lands on itself",
   },
   "app/actions.ts::openTestModeAction": {
     n: 1,

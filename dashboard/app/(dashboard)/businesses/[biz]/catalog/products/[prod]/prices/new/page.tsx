@@ -59,7 +59,7 @@ export default async function NewPrice({
         returnTo={detailHref}
         crumbs={[
           { label: business?.name ?? biz, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: product.name, href: detailHref },
           { label: "New price" },
         ]}

@@ -4,7 +4,7 @@
  * so parallel holds never overspend.
  */
 import { ensureCreditWindows } from "./credit-clock";
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { scanBusinessFilter, stampNow } from "@/platform/clock";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
@@ -12,6 +12,7 @@ import { createLogger } from "@/platform/logger";
 import {
   businesses,
   creditHolds,
+  creditUnits,
   customers,
   meters,
   prices,
@@ -43,6 +44,7 @@ import {
   type AccessCode,
   type EffectivePolicy,
 } from "./policy";
+import { formatSteps } from "./units";
 import { LIVE_SUBSCRIPTION_STATUSES, ratedUnbilledUsage } from "./usage";
 
 const log = createLogger("credits.holds");
@@ -155,7 +157,11 @@ export async function livePlanCredits(
  * A hold changed the customer's balance: mark it for the usage-controls check, whatever the
  * webhook subscriptions are (C5 governs webhooks only).
  */
-async function markHoldChanged(tx: Tx, businessId: string, customerIds: string[]): Promise<void> {
+export async function markHoldChanged(
+  tx: Tx,
+  businessId: string,
+  customerIds: string[],
+): Promise<void> {
   await markDirtyOnIngest(tx, { businessId, customerIds });
 }
 
@@ -167,8 +173,7 @@ export async function emitHoldEvent(
     businessId: string;
     type: Extract<EventType, `credit_hold_${string}`>;
     hold: CreditHold;
-    customerPublicId: string;
-    meterKey: string | null;
+    refs: HoldRefs;
   },
 ): Promise<boolean> {
   const listened = await subscribedEventTypes(tx, input.organizationId);
@@ -179,20 +184,35 @@ export async function emitHoldEvent(
     type: input.type,
     data: buildEventData(
       input.type,
-      serializeHold(input.hold, { customer: input.customerPublicId, meter: input.meterKey }),
+      serializeHold(input.hold, input.refs),
       input.hold.resourceVersion,
     ),
   });
   return true;
 }
 
-export function serializeHold(h: CreditHold, refs: { customer: string; meter: string | null }) {
+export interface HoldRefs {
+  customer: string;
+  meter: string | null;
+  /** Set for a hold in units. */
+  unit?: { key: string; decimals: number } | null;
+}
+
+export function serializeHold(h: CreditHold, refs: HoldRefs) {
+  const unit = h.unitId ? (refs.unit ?? null) : null;
+  const credits = (v: bigint | null) => (unit && v != null ? formatSteps(v, unit.decimals) : null);
   return {
     object: "credit_hold" as const,
     id: h.publicId,
     customer: refs.customer,
     currency: h.currency,
+    // 0 for a hold in units.
     amount_minor: Number(h.amountMinor),
+    unit: unit?.key ?? null,
+    units: credits(h.amountUnits),
+    // What the hold still reserves: less than `units` once a step of a lease is captured.
+    remaining_units: credits(h.remainingUnits),
+    captured_units: credits(h.capturedUnits),
     meter: refs.meter,
     scope: h.scope ?? null,
     status: h.status,
@@ -263,19 +283,23 @@ export async function resolveMeter(
 /**
  * Create a hold (§3.7). Refuses with `in_flight_limit` or `insufficient_credit` under the
  * `block` policy only; with `bill` the overage bills on the next invoice, so a hold only records.
+ * A meter with a credit cost takes a hold in units (`quantity` or `units`; `unit-holds.ts`).
  */
 export async function createCreditHold(input: {
   organizationId: string;
   businessId: string;
   customerId: string;
-  amountMinor: bigint;
+  amountMinor?: bigint | null;
+  /** A meter with a credit cost: the meter quantity the work will use, or the credits. */
+  quantity?: string | null;
+  units?: string | null;
   currency?: string;
   meterKey?: string | null;
   scope?: Record<string, string> | null;
   expiresInSeconds?: number;
   metadata?: Record<string, unknown> | null;
-}): Promise<{ hold: CreditHold; policy: EffectivePolicy; customerPublicId: string }> {
-  if (input.amountMinor <= 0n)
+}): Promise<{ hold: CreditHold; policy: EffectivePolicy; refs: HoldRefs }> {
+  if (input.amountMinor != null && input.amountMinor <= 0n)
     throw new HoldInputError("We could not create the hold. amount_minor must be more than 0.");
   const issue = scopeIssue(input.scope);
   if (issue) throw new HoldInputError(`We could not create the hold. ${issue}`);
@@ -294,6 +318,55 @@ export async function createCreditHold(input: {
       throw new HoldInputError(
         `We could not create the hold. expires_in must be a whole number of seconds from 1 to ${MAX_HOLD_SECONDS}.`,
       );
+    const inUnits = input.quantity != null || input.units != null;
+    const unitHolds = meter || inUnits ? await import("./unit-holds") : null;
+    const cost = meter
+      ? await unitHolds!.meterCreditCostFor(tx, { meterId: meter.id, customerId: ctx.customer.id })
+      : null;
+    if (cost) {
+      // The meter is paid in credits: the hold reserves units.
+      if (input.amountMinor != null || (input.quantity != null) === (input.units != null))
+        throw new HoldInputError(
+          "We could not create the hold. This meter is paid in credits. Send quantity or units, not both, and no amount_minor.",
+        );
+      const units = unitHolds!.requestedSteps(cost, input);
+      if (units === null || units <= 0n)
+        throw new HoldInputError(
+          `We could not create the hold. ${input.units != null ? "units" : "quantity"} must be a number that costs 1 or more of the smallest part of a ${cost.unitKey}.`,
+        );
+      const made = await unitHolds!.createUnitHold(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        ctx,
+        meter: meter!,
+        cost,
+        units,
+        ttlSeconds: ttl,
+        scope: input.scope ?? null,
+        metadata: input.metadata ?? null,
+      });
+      const unitRefs: HoldRefs = {
+        customer: ctx.customer.publicId,
+        meter: meter!.key,
+        unit: { key: cost.unitKey, decimals: cost.decimals },
+      };
+      await markHoldChanged(tx, input.businessId, [made.hold.customerId]);
+      await emitHoldEvent(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        type: "credit_hold_created",
+        hold: made.hold,
+        refs: unitRefs,
+      });
+      return { ...made, refs: unitRefs };
+    }
+    if (inUnits)
+      throw new HoldInputError(
+        "We could not create the hold. quantity and units are for a meter that is paid in credits. Send amount_minor.",
+      );
+    if (input.amountMinor == null)
+      throw new HoldInputError("We could not create the hold. Send amount_minor.");
+    const amountMinor = input.amountMinor;
     const currency = await holdCurrency(tx, ctx, meter?.id ?? null, input.currency);
 
     // Serialize with every other read-then-draw of this customer's credit.
@@ -339,15 +412,16 @@ export async function createCreditHold(input: {
         inFlightRefused({
           balanceBeforeHoldsMinor: before,
           openHoldsMinor: bal.openHoldsMinor,
-          amountMinor: input.amountMinor,
+          amountMinor,
           shareBps: cfg.in_flight_share_bps ?? CREDIT_CONFIG_DEFAULTS.in_flight_share_bps,
+          applies: cfg.in_flight_applies,
         })
       )
         throw new CreditRefusedError("in_flight_limit", {
           balance_minor: Number(before),
           open_holds_minor: Number(bal.openHoldsMinor),
         });
-      if (input.amountMinor > bal.availableMinor)
+      if (amountMinor > bal.availableMinor)
         throw new CreditRefusedError("insufficient_credit", {
           available_minor: Number(bal.availableMinor),
         });
@@ -360,7 +434,7 @@ export async function createCreditHold(input: {
         publicId: publicId("chd"),
         customerId: ctx.customer.id,
         currency,
-        amountMinor: input.amountMinor,
+        amountMinor,
         meterId: meter?.id ?? null,
         scope: input.scope ?? null,
         status: "held",
@@ -368,16 +442,16 @@ export async function createCreditHold(input: {
         metadata: input.metadata ?? null,
       })
       .returning();
+    const refs: HoldRefs = { customer: ctx.customer.publicId, meter: meter?.key ?? null };
     await markHoldChanged(tx, input.businessId, [hold!.customerId]);
     await emitHoldEvent(tx, {
       organizationId: input.organizationId,
       businessId: input.businessId,
       type: "credit_hold_created",
       hold: hold!,
-      customerPublicId: ctx.customer.publicId,
-      meterKey: meter?.key ?? null,
+      refs,
     });
-    return { hold: hold!, policy, customerPublicId: ctx.customer.publicId };
+    return { hold: hold!, policy, refs };
   });
 }
 
@@ -398,10 +472,7 @@ async function lockHold(tx: Tx, businessId: string, holdPublicId: string): Promi
   return row!;
 }
 
-async function refsOf(
-  tx: Tx,
-  hold: CreditHold,
-): Promise<{ customer: string; meter: string | null }> {
+export async function refsOf(tx: Tx, hold: CreditHold): Promise<HoldRefs> {
   const [c] = await tx
     .select({ publicId: customers.publicId })
     .from(customers)
@@ -410,7 +481,14 @@ async function refsOf(
   const [m] = hold.meterId
     ? await tx.select({ key: meters.key }).from(meters).where(eq(meters.id, hold.meterId)).limit(1)
     : [];
-  return { customer: c?.publicId ?? "", meter: m?.key ?? null };
+  const [u] = hold.unitId
+    ? await tx
+        .select({ key: creditUnits.key, decimals: creditUnits.decimals })
+        .from(creditUnits)
+        .where(eq(creditUnits.id, hold.unitId))
+        .limit(1)
+    : [];
+  return { customer: c?.publicId ?? "", meter: m?.key ?? null, unit: u ?? null };
 }
 
 /** A held row past its time is final: flip it and refuse. */
@@ -433,6 +511,9 @@ export class CaptureEventError extends Error {
  * Capture a hold with the real usage (§3.7): the event is ingested in this transaction and
  * `captured_minor` is the money it adds. The hold stops counting and the event starts counting
  * in one commit. More than the hold is accepted; past the overdraft limit it is flagged.
+ * A hold in units gives its units back and the event takes its own (`captureUnitHold`);
+ * `overdraft` then says that the event cost more than the balance had.
+ * A money hold does not cover an event of a meter that is paid in credits: the gate decides it.
  */
 export async function captureCreditHold(input: {
   organizationId: string;
@@ -440,16 +521,64 @@ export async function captureCreditHold(input: {
   holdPublicId: string;
   usageEvent?: unknown;
   usageEventKey?: string;
-}): Promise<{ hold: CreditHold; refs: { customer: string; meter: string | null } }> {
+  /** False: a step of a lease. The hold stays open with what the event did not use. */
+  final?: boolean;
+}): Promise<{ hold: CreditHold; refs: HoldRefs }> {
   if ((input.usageEvent == null) === (input.usageEventKey == null))
     throw new HoldInputError(
       "We could not capture the hold. Send usage_event or usage_event_id, not both.",
     );
   if (input.usageEvent != null) await ensureUsageMonthsFor(input.businessId, [input.usageEvent]);
   return withTenant(input.organizationId, async (tx) => {
+    // A hold in units may pay an event the gate refused, which then enters the usage totals:
+    // the fold's lock comes first, as in an event void.
+    if (input.usageEventKey != null) {
+      const [refused] = rowsOf<{ x: number }>(
+        await tx.execute(sql`
+          select 1 as x from usage_event_dedup d
+          join usage_events e on e.id = d.event_id and e."timestamp" = d.event_timestamp
+          join credit_holds h on h.business_id = d.business_id and h.public_id = ${input.holdPublicId}
+          where d.business_id = ${input.businessId} and d.key = ${input.usageEventKey}
+            and e.refused_at is not null and h.unit_id is not null`),
+      );
+      if (refused)
+        await tx.execute(sql`select 1 from usage_rollup_state
+          where business_id = ${input.businessId} for update`);
+    }
     const hold = await lockHold(tx, input.businessId, input.holdPublicId);
     const now = stampNow(input.businessId);
     await assertHeld(tx, hold, now);
+    if (hold.unitId) {
+      const { captureUnitHold } = await import("./unit-holds");
+      const r = await captureUnitHold(tx, { ...input, hold, now, final: input.final !== false });
+      // A step that leaves nothing reserved closes the hold.
+      const open = r.remainingUnits > 0n;
+      const [done] = await tx
+        .update(creditHolds)
+        .set({
+          ...(open ? {} : { status: "captured", capturedMinor: 0n }),
+          remainingUnits: r.remainingUnits,
+          capturedUnits: (hold.capturedUnits ?? 0n) + r.capturedUnits,
+          usageEventId: r.eventId,
+          overdraft: hold.overdraft || r.uncoveredUnits > 0n,
+        })
+        .where(eq(creditHolds.id, hold.id))
+        .returning();
+      const refs = await refsOf(tx, done!);
+      await markHoldChanged(tx, input.businessId, [done!.customerId]);
+      await emitHoldEvent(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        type: "credit_hold_captured",
+        hold: done!,
+        refs,
+      });
+      return { hold: done!, refs };
+    }
+    if (input.final === false)
+      throw new HoldInputError(
+        "We could not capture the hold. final: false is for a hold in units. A hold in money is captured one time.",
+      );
     const rate = (cutoffAt?: Date) =>
       ratedUnbilledUsage(tx, {
         customerId: hold.customerId,
@@ -476,6 +605,9 @@ export async function captureCreditHold(input: {
         businessId: input.businessId,
         events: [input.usageEvent],
       });
+      // A meter paid in credits refused the event: nothing is stored, the hold stays open.
+      if (r!.status === "error" && r!.error?.code === "insufficient_credit")
+        throw new CreditRefusedError("insufficient_credit");
       if (r!.status === "error") throw new CaptureEventError(r!.error!);
       if (r!.status === "duplicate")
         throw new CaptureEventError({
@@ -549,8 +681,7 @@ export async function captureCreditHold(input: {
       businessId: input.businessId,
       type: "credit_hold_captured",
       hold: done!,
-      customerPublicId: refs.customer,
-      meterKey: refs.meter,
+      refs,
     });
     return { hold: done!, refs };
   });
@@ -569,13 +700,14 @@ export async function releaseCreditHold(input: {
   organizationId: string;
   businessId: string;
   holdPublicId: string;
-}): Promise<{ hold: CreditHold; refs: { customer: string; meter: string | null } }> {
+}): Promise<{ hold: CreditHold; refs: HoldRefs }> {
   return withTenant(input.organizationId, async (tx) => {
     const hold = await lockHold(tx, input.businessId, input.holdPublicId);
     await assertHeld(tx, hold, stampNow(input.businessId));
+    if (hold.unitId) await (await import("./unit-holds")).returnHeldUnits(tx, hold);
     const [done] = await tx
       .update(creditHolds)
-      .set({ status: "released" })
+      .set({ status: "released", ...(hold.unitId ? { remainingUnits: 0n } : {}) })
       .where(eq(creditHolds.id, hold.id))
       .returning();
     const refs = await refsOf(tx, done!);
@@ -585,10 +717,52 @@ export async function releaseCreditHold(input: {
       businessId: input.businessId,
       type: "credit_hold_released",
       hold: done!,
-      customerPublicId: refs.customer,
-      meterKey: refs.meter,
+      refs,
     });
     return { hold: done!, refs };
+  });
+}
+
+/**
+ * Move a hold's expiry later (a lease that runs long): `expires_in` seconds from now, up to
+ * the maximum hold time. Never earlier than it is, never more units. A hold in units only.
+ */
+export async function extendCreditHold(input: {
+  organizationId: string;
+  businessId: string;
+  holdPublicId: string;
+  expiresInSeconds: number;
+}): Promise<{ hold: CreditHold; refs: HoldRefs }> {
+  const ttl = input.expiresInSeconds;
+  if (!Number.isInteger(ttl) || ttl < 1 || ttl > MAX_HOLD_SECONDS)
+    throw new HoldInputError(
+      `We could not extend the hold. expires_in must be a whole number of seconds from 1 to ${MAX_HOLD_SECONDS}.`,
+    );
+  return withTenant(input.organizationId, async (tx) => {
+    const hold = await lockHold(tx, input.businessId, input.holdPublicId);
+    const now = stampNow(input.businessId);
+    await assertHeld(tx, hold, now);
+    if (!hold.unitId)
+      throw new HoldInputError(
+        "We could not extend the hold. Only a hold in units can be extended.",
+      );
+    const expiresAt = new Date(now.getTime() + ttl * 1000);
+    if (expiresAt.getTime() <= hold.expiresAt.getTime())
+      throw new HoldInputError(
+        "We could not extend the hold. The new expiry must be later than the current expiry.",
+      );
+    const [done] = await tx
+      .update(creditHolds)
+      .set({ expiresAt })
+      .where(eq(creditHolds.id, hold.id))
+      .returning();
+    // A closed grant that keeps units for the hold keeps them as long as the hold is open.
+    await tx.execute(sql`
+      update credit_grant_grace set locks_at = ${expiresAt.toISOString()}::timestamptz
+      where customer_id = ${hold.customerId} and unit_id = ${hold.unitId}
+        and locked_at is null and held_steps > 0
+        and locks_at < ${expiresAt.toISOString()}::timestamptz`);
+    return { hold: done!, refs: await refsOf(tx, done!) };
   });
 }
 
@@ -596,7 +770,7 @@ export async function getCreditHold(
   tx: Tx,
   businessId: string,
   holdPublicId: string,
-): Promise<{ hold: CreditHold; refs: { customer: string; meter: string | null } } | null> {
+): Promise<{ hold: CreditHold; refs: HoldRefs } | null> {
   const [h] = await tx
     .select()
     .from(creditHolds)
@@ -632,10 +806,12 @@ export async function listCreditHolds(
     afterId = a?.id ?? null;
   }
   const rows = (await tx.execute(sql`
-    select h.*, c.public_id as customer_public_id, m.key as meter_key
+    select h.*, c.public_id as customer_public_id, m.key as meter_key,
+      u.key as unit_key, u.decimals as unit_decimals
     from credit_holds h
     join customers c on c.id = h.customer_id
     left join meters m on m.id = h.meter_id
+    left join credit_units u on u.id = h.unit_id
     where h.business_id = ${input.businessId}
       ${input.customerId ? sql`and h.customer_id = ${input.customerId}` : sql``}
       ${input.status ? sql`and h.status = ${input.status}` : sql``}
@@ -655,6 +831,10 @@ export async function listCreditHolds(
           customerId: r.customer_id as string,
           currency: r.currency as string,
           amountMinor: BigInt(r.amount_minor as string),
+          unitId: (r.unit_id as string | null) ?? null,
+          amountUnits: r.amount_units != null ? BigInt(r.amount_units as string) : null,
+          capturedUnits: r.captured_units != null ? BigInt(r.captured_units as string) : null,
+          remainingUnits: r.remaining_units != null ? BigInt(r.remaining_units as string) : null,
           meterId: (r.meter_id as string | null) ?? null,
           scope: (r.scope as Record<string, string> | null) ?? null,
           status: r.status as string,
@@ -667,28 +847,63 @@ export async function listCreditHolds(
           updatedAt: new Date(r.updated_at as string),
           resourceVersion: Number(r.resource_version),
         },
-        { customer: r.customer_public_id as string, meter: (r.meter_key as string | null) ?? null },
+        {
+          customer: r.customer_public_id as string,
+          meter: (r.meter_key as string | null) ?? null,
+          unit:
+            r.unit_key != null
+              ? { key: r.unit_key as string, decimals: Number(r.unit_decimals) }
+              : null,
+        },
       ),
     ),
   };
 }
 
-/** The `expire_credit_holds` pass: held rows past their time become `expired`. */
+/**
+ * The `expire_credit_holds` pass: held rows past their time become `expired`. A hold in units
+ * gives its units back under the customer lock (`expireLapsedUnitHolds`).
+ */
 export async function expireCreditHolds(now: Date): Promise<{ expired: number }> {
   // systemDb: the pass finds lapsed holds across organizations; each expires under withTenant.
   const scope = scanBusinessFilter(creditHolds.businessId);
+  const lapsed = and(eq(creditHolds.status, "held"), lte(creditHolds.expiresAt, now), scope);
+  let expired = 0;
+  const inUnits = await systemDb
+    .selectDistinct({
+      organizationId: creditHolds.organizationId,
+      customerId: creditHolds.customerId,
+      unitId: creditHolds.unitId,
+    })
+    .from(creditHolds)
+    .where(and(lapsed, isNotNull(creditHolds.unitId)));
+  for (const u of inUnits) {
+    try {
+      expired += await withTenant(u.organizationId, async (tx) => {
+        await lockCustomerBalances(tx, u.customerId);
+        const { expireLapsedUnitHolds } = await import("./unit-holds");
+        const rows = await expireLapsedUnitHolds(tx, {
+          customerId: u.customerId,
+          unitId: u.unitId!,
+          now,
+        });
+        return rows.length;
+      });
+    } catch (e) {
+      log.error(e, { event: "credit_unit_holds_expire_failed", customerId: u.customerId });
+    }
+  }
   const due = await systemDb
     .selectDistinct({ organization_id: creditHolds.organizationId })
     .from(creditHolds)
-    .where(and(eq(creditHolds.status, "held"), lte(creditHolds.expiresAt, now), scope));
-  let expired = 0;
+    .where(and(lapsed, isNull(creditHolds.unitId)));
   for (const { organization_id: org } of due) {
     try {
       expired += await withTenant(org, async (tx) => {
         const rows = await tx
           .update(creditHolds)
           .set({ status: "expired" })
-          .where(and(eq(creditHolds.status, "held"), lte(creditHolds.expiresAt, now), scope))
+          .where(and(lapsed, isNull(creditHolds.unitId)))
           .returning();
         for (const b of new Set(rows.map((h) => h.businessId)))
           await markHoldChanged(
@@ -704,8 +919,7 @@ export async function expireCreditHolds(now: Date): Promise<{ expired: number }>
               businessId: h.businessId,
               type: "credit_hold_expired",
               hold: h,
-              customerPublicId: refs.customer,
-              meterKey: refs.meter,
+              refs,
             });
           }
         }

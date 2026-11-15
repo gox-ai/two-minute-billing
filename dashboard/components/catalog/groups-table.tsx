@@ -16,7 +16,7 @@ import type { ProductGroup } from "@/lib/api";
 
 /**
  * Product groups list on the shared `ListPage` chrome. Our route/model is
- * `product_groups`; the display wording is "Product Group".
+ * `product_groups`; the display wording is "Product group".
  */
 export function GroupsTable({
   page,
@@ -29,7 +29,7 @@ export function GroupsTable({
   page?: ListPageHeader;
   biz: string;
   rows: ProductGroup[];
-  /** The "Create Product Group" dialog trigger (create is a modal here). */
+  /** The "Create product group" dialog trigger (create is a modal here). */
   createSlot?: React.ReactNode;
   /** The CSV import dialog trigger. */
   importSlot?: React.ReactNode;
@@ -38,7 +38,7 @@ export function GroupsTable({
     () => [
       {
         accessorKey: "name",
-        header: "Product Group",
+        header: "Product group",
         cell: ({ row }) => (
           <InfoCell
             title={<span className="block max-w-80 wrap-anywhere">{row.original.name}</span>}
@@ -58,7 +58,7 @@ export function GroupsTable({
 
   const segments = React.useMemo<ListSegment<ProductGroup>[]>(
     () => [
-      { id: "all", label: "All Product Groups" },
+      { id: "all", label: "All product groups" },
       { id: "active", label: "Active", match: (g) => g.active },
       { id: "archived", label: "Archived", match: (g) => !g.active },
     ],
@@ -74,12 +74,12 @@ export function GroupsTable({
   const filterFields = React.useMemo<ListFilterField<ProductGroup>[]>(
     () => [
       { id: "name", label: "Name", group: "Identity", value: (g) => g.name },
-      { id: "id", label: "Product Group Id", group: "Identity", value: (g) => g.id },
+      { id: "id", label: "Product group ID", group: "Identity", value: (g) => g.id },
       { id: "description", label: "Description", group: "Other", value: (g) => g.description },
       { id: "active", label: "Active", type: "boolean", group: "Status", value: (g) => g.active },
       {
         id: "created_at",
-        label: "Created At",
+        label: "Created at",
         type: "date",
         group: "Dates",
         value: (g) => g.created_at,
@@ -91,7 +91,7 @@ export function GroupsTable({
   return (
     <ListPage
       page={page}
-      entity={{ singular: "Product Group", plural: "Product Groups" }}
+      entity={{ singular: "Product group", plural: "Product groups" }}
       columns={columns}
       data={rows}
       segments={segments}
@@ -101,7 +101,7 @@ export function GroupsTable({
       savedViews={{ entity: "item_groups", biz }}
       createSlot={createSlot}
       importSlot={importSlot}
-      searchPlaceholder="Search for ID / Name…"
+      searchPlaceholder="Search by ID or name"
       exportName="product-groups"
       persistKey={`groups:${biz}`}
       rowHref={(g) => `/businesses/${biz}/catalog/product_groups/${g.id}`}

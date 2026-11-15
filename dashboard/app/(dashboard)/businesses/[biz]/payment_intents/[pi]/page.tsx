@@ -1,6 +1,7 @@
+import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
+import { listBusinesses, isApiNotFound, businessLabel } from "@/lib/api";
 import {
   getPaymentIntent,
   type PaymentAttemptWithMethod,
@@ -9,7 +10,9 @@ import {
 import { requirePermission } from "@/lib/session";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
 import { StatusChip, IdChip, Chip } from "@/components/patterns/chip";
+import { declineReading, INTENT_STATUS_WORD } from "@/lib/decline-reading";
 import { CopyButton } from "@/components/patterns/copy-button";
+import { IdText } from "@/components/patterns/id-text";
 import {
   AttentionCard,
   Facts,
@@ -35,9 +38,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { displayIntentStatus } from "@/lib/payment-intent-status";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { enumLabel } from "@/lib/labels";
+import { fmtDateTime } from "@/lib/format-date";
 import { Wallet } from "lucide-react";
-import { GatewayLabel } from "@/components/partner-logo";
+import { distinctAccountLabel, GatewayLabel } from "@/components/partner-logo";
+import {
+  gatewayDisplayName,
+  gatewayObjectUrl,
+  type GatewayCatalogEntry,
+} from "@/components/gateways/gateway-meta";
+import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import { gatewayLogsHref } from "@/lib/gateway-logs-href";
 
 export const dynamic = "force-dynamic";
@@ -55,22 +66,31 @@ export default async function PaymentIntentDetailPage({
   const { biz, pi } = await params;
   await requirePermission("payments:view", "ops");
 
-  let businesses, intent: PaymentIntentDetail;
+  let businesses, intent: PaymentIntentDetail, catalog: GatewayCatalogEntry[];
   try {
-    [businesses, intent] = await Promise.all([listBusinesses(), getPaymentIntent(biz, pi)]);
+    // The catalog names the gateway in the header ("Stripe", not the key "stripe").
+    [businesses, intent, catalog] = await Promise.all([
+      listBusinesses(),
+      getPaymentIntent(biz, pi),
+      getGatewayCatalogOrEmpty(),
+    ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <div className="flex flex-col gap-4">
         <RecordCrumbs
           items={[
-            { label: biz, href: `/businesses/${biz}` },
+            { label: await businessLabel(biz), href: `/businesses/${biz}` },
             { label: "Payment intents", href: `/businesses/${biz}/payment_intents` },
             { label: pi },
           ]}
           right={<PageRefresh />}
         />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="payment intent"
+          back={{ label: "View payment intents", href: `/businesses/${biz}/payment_intents` }}
+          retry
         />
       </div>
     );
@@ -82,6 +102,12 @@ export default async function PaymentIntentDetailPage({
   const tz = bizRow?.timezone ?? null;
 
   const attempts = intent.attempts ?? [];
+  const gatewayName = intent.gateway_key ? gatewayDisplayName(intent.gateway_key, catalog) : null;
+  const accountLabel = distinctAccountLabel(
+    intent.gateway_key,
+    intent.gateway_account_label,
+    gatewayName,
+  );
   /** The attempt that ended the intent, if one did — its `updated_at` is when. */
   const consumedAttempt = attempts.find((a) => a.status === "consumed");
 
@@ -119,6 +145,22 @@ export default async function PaymentIntentDetailPage({
     : "—";
   const nextAction = isObject(intent.next_action) ? intent.next_action : null;
 
+  // Why the newest attempt failed: our reading when we know the code, then the gateway's words.
+  const newest = attempts.length
+    ? attempts.reduce((acc, a) => (a.attempt_number > acc.attempt_number ? a : acc))
+    : null;
+  const refusedWhy = [
+    declineReading(newest?.error_code, newest?.error_text),
+    newest?.error_text
+      ? `${newest.error_text.replace(/[.!?]+$/, "")}${newest.error_code ? ` (${newest.error_code})` : ""}.`
+      : newest?.error_code
+        ? `Code ${newest.error_code}.`
+        : null,
+  ]
+    .filter(Boolean)
+    .map((s) => `${s} `)
+    .join("");
+
   const attention: AttentionItem[] = (
     [
       statusDiverges
@@ -126,8 +168,11 @@ export default async function PaymentIntentDetailPage({
             key: "refused",
             tone: "attention" as const,
             title: "The gateway refused the newest attempt",
-            detail:
-              "An intent has no failed status of its own. It stays open for another attempt. It expires at its expiry time unless someone retries or voids it.",
+            detail: `${refusedWhy}The intent stays open for another attempt. ${
+              intent.expires_at
+                ? `It expires on ${fmtDateTime(intent.expires_at, tz)} unless someone retries or voids it.`
+                : "It stays open until someone retries or voids it."
+            }`,
           }
         : null,
       // The gateway handed back a step the buyer still has to complete.
@@ -135,9 +180,9 @@ export default async function PaymentIntentDetailPage({
         ? {
             key: "next_action",
             tone: "warning" as const,
-            title: "Waiting for the buyer",
-            detail: `The gateway returned a next step that the buyer must still complete${
-              intent.expires_at ? ` · expires ${fmtDateTime(intent.expires_at, tz)}` : ""
+            title: "Waiting for the customer",
+            detail: `The gateway returned a next step that the customer must still complete.${
+              intent.expires_at ? ` It expires on ${fmtDateTime(intent.expires_at, tz)}.` : ""
             }`,
           }
         : null,
@@ -167,10 +212,10 @@ export default async function PaymentIntentDetailPage({
       ? { label: "Intent expired", date: fmtDateTime(intent.expires_at, tz) }
       : null,
     consumedAttempt
-      ? { label: "Intent consumed", date: fmtDateTime(consumedAttempt.updated_at, tz) }
+      ? { label: "Intent used", date: fmtDateTime(consumedAttempt.updated_at, tz) }
       : null,
     ...[...attempts].reverse().map((a) => ({
-      label: `Attempt ${a.attempt_number} · ${a.status.replace(/_/g, " ")}`,
+      label: `Attempt ${a.attempt_number} · ${enumLabel(INTENT_STATUS_WORD[a.status] ?? a.status)}`,
       date: fmtDateTime(a.created_at, tz),
     })),
     { label: "Intent created", date: fmtDateTime(intent.created_at, tz) },
@@ -198,7 +243,7 @@ export default async function PaymentIntentDetailPage({
         facts={[
           hasAmount ? (
             <span key="amt" className="tabular-nums">
-              {amountText} {intent.currency}
+              {amountText}
             </span>
           ) : null,
           hasCustomer && intent.customer ? (
@@ -210,7 +255,7 @@ export default async function PaymentIntentDetailPage({
               {customerLabel}
             </Link>
           ) : null,
-          intent.gateway_key ?? null,
+          gatewayName,
           fmtDateTime(intent.created_at, tz),
           <IdChip key="id" label="Intent ID" id={intent.id} />,
         ]}
@@ -276,10 +321,7 @@ export default async function PaymentIntentDetailPage({
                   label: "Amount",
                   // Blank, not $0.00: a setup intent has no amount.
                   value: hasAmount ? (
-                    <span className="tabular-nums">
-                      {amountText}{" "}
-                      <span className="text-xs text-muted-foreground">{intent.currency}</span>
-                    </span>
+                    <span className="tabular-nums">{amountText}</span>
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   ),
@@ -290,10 +332,14 @@ export default async function PaymentIntentDetailPage({
                       label: "Gateway",
                       value: (
                         <span>
-                          <GatewayLabel gatewayKey={intent.gateway_key} fit />
-                          {intent.gateway_account_label ? (
+                          <GatewayLabel
+                            gatewayKey={intent.gateway_key}
+                            name={gatewayName ?? undefined}
+                            fit
+                          />
+                          {accountLabel ? (
                             <span className="block text-xs text-muted-foreground">
-                              {intent.gateway_account_label}
+                              {accountLabel}
                             </span>
                           ) : null}
                         </span>
@@ -398,7 +444,8 @@ export default async function PaymentIntentDetailPage({
         ) : null}
       </Zone>
 
-      <Zone title="Attempts">
+      {/* No zone title: the card's own title says "Attempts". */}
+      <Zone>
         <Row span="12">
           <RecordCard
             id="attempts"
@@ -418,26 +465,39 @@ export default async function PaymentIntentDetailPage({
                 items={[...attempts]
                   .sort((a, b) => b.attempt_number - a.attempt_number)
                   .map((a) => (
-                    <AttemptRow key={a.id} biz={biz} attempt={a} tz={tz} />
+                    <AttemptRow
+                      key={a.id}
+                      biz={biz}
+                      attempt={a}
+                      tz={tz}
+                      gatewayUrl={gatewayObjectUrl(
+                        catalog,
+                        intent.gateway_key,
+                        a.id_at_gateway,
+                        bizRow?.livemode ?? null,
+                      )}
+                    />
                   ))}
               >
-                <Table className="table-fixed max-lg:min-w-3xl">
+                <Table phone="stack" className="table-fixed max-lg:min-w-3xl">
                   <colgroup>
-                    {/* Status fits "requires action" at the 1024px card width. */}
+                    {/* Status: 13% fits the "Requires action" chip (~113px) in the 1068px
+                        card at 1440. The id column fits its head on one line; Error takes
+                        the rest (~21%). */}
                     <col className="w-[13%]" />
-                    <col className="w-[20%]" />
                     <col className="w-[13%]" />
-                    <col className="w-[14%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[16%]" />
                     <col />
-                    <col className="w-[13%]" />
-                    <col className="w-[13%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[12%]" />
                   </colgroup>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Attempt</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead phone="aside">Status</TableHead>
                       <TableHead>Payment method</TableHead>
-                      <TableHead>Gateway transaction id</TableHead>
+                      <TableHead>Gateway transaction ID</TableHead>
                       <TableHead>Error</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="pr-5">Gateway calls</TableHead>
@@ -479,22 +539,23 @@ function AttemptRow({
   biz,
   attempt,
   tz,
+  gatewayUrl,
 }: {
   biz: string;
   attempt: PaymentAttemptWithMethod;
   tz: string | null;
+  /** The attempt's object on the gateway's own dashboard; null renders the id as text. */
+  gatewayUrl: string | null;
 }) {
   // The attempt's OWN instrument: a retry can use a different card.
   const hasMethod =
     attempt.payment_method_brand || attempt.payment_method_last4 || attempt.payment_method_type;
   return (
-    <TableRow className="align-top">
+    // Each cell sets `align-middle` itself, so the row's alignment has to reach the cells.
+    <TableRow className="[&>td]:align-top">
       <TableCell className="py-3 pl-5 whitespace-normal">
         <div className="font-medium">Attempt {attempt.attempt_number}</div>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1">
-          <span className="truncate font-mono text-xs text-muted-foreground">{attempt.id}</span>
-          <CopyButton value={attempt.id} className="shrink-0" />
-        </span>
+        <IdText id={attempt.id} className="mt-0.5 flex text-muted-foreground" />
       </TableCell>
       <TableCell className="py-3">
         <StatusChip status={attempt.status} />
@@ -510,7 +571,7 @@ function AttemptRow({
             />
             {attempt.payment_method_brand ?? attempt.payment_method_type}
             {attempt.payment_method_last4 ? (
-              <span className="text-muted-foreground">···· {attempt.payment_method_last4}</span>
+              <span className="text-muted-foreground">ending {attempt.payment_method_last4}</span>
             ) : null}
           </span>
         ) : (
@@ -519,22 +580,27 @@ function AttemptRow({
       </TableCell>
       <TableCell className="py-3 whitespace-normal">
         {attempt.id_at_gateway ? (
-          <span className="flex min-w-0 items-center gap-1">
-            <span className="font-mono text-xs wrap-anywhere">{attempt.id_at_gateway}</span>
-            <CopyButton value={attempt.id_at_gateway} className="shrink-0" />
-          </span>
+          <IdText id={attempt.id_at_gateway} href={gatewayUrl} />
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
       <TableCell className="py-3 whitespace-normal">
         {attempt.error_code || attempt.error_text ? (
-          <div className="flex min-w-0 flex-col gap-0.5 text-destructive">
-            {attempt.error_code ? (
-              <span className="font-mono text-xs wrap-anywhere">{attempt.error_code}</span>
+          // The message leads; the gateway's code is secondary.
+          <div className="flex min-w-0 flex-col gap-0.5">
+            {declineReading(attempt.error_code, attempt.error_text) ? (
+              <span className="font-medium">
+                {declineReading(attempt.error_code, attempt.error_text)}
+              </span>
             ) : null}
             {attempt.error_text ? (
-              <span className="wrap-anywhere">{attempt.error_text}</span>
+              <span className="wrap-break-word">{attempt.error_text}</span>
+            ) : null}
+            {attempt.error_code ? (
+              <span className="font-mono text-xs wrap-break-word text-muted-foreground">
+                {attempt.error_code}
+              </span>
             ) : null}
           </div>
         ) : (
@@ -555,12 +621,7 @@ function AttemptRow({
               <wbr />
               response logs
             </Link>
-            <span className="mt-0.5 flex min-w-0 items-center gap-1">
-              <span className="truncate font-mono text-xs text-muted-foreground">
-                {attempt.trace_id}
-              </span>
-              <CopyButton value={attempt.trace_id} className="shrink-0" />
-            </span>
+            <IdText id={attempt.trace_id} className="mt-0.5 flex text-muted-foreground" />
           </>
         ) : (
           <span className="text-xs text-muted-foreground">No traced gateway calls</span>

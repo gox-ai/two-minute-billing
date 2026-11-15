@@ -50,6 +50,8 @@ None — this module *defines* the taxonomy; `webhooks.emitEvent` writes the row
 - Keep the dashboard's `dashboard/lib/api/event-types.ts` copy in sync with this registry.
 
 ## Changelog
+- **2026-11-13** — `credit_usage_refused` carries `policy` (`block` or `bill`): `bill` also refuses until usage that credits do not cover has a money price.
+- **2026-11-13 (0526)** — Event types `credit_usage_refused` (a usage event stored and not billed: the customer has no credit left) and `credit_usage_settled` (one per settlement; written only when an endpoint lists it); resource family `credit_usage`. `credit_grant_applied` for a settlement carries `invoice: null` and `settlement`.
 - **2026-11-01** — Event type `model_prices_changed` (resource family `model_prices`): one per business per price sync that changed a model it uses (Tier 3 PR 1b, `modules/model-prices/notices.ts`).
 - **2026-10-25** — Registry: `receipt_created`, `payment_request_created|paid|payment_failed|canceled|expired`, `dunning_policy_created|updated|archived`; resource types `receipt`, `payment_request`, `dunning_policy`.
 - **2026-10-08** — **Changed events cover settings edits and skip no-ops.** `subscription_changed` now fires for settings PATCH (metadata, PO, collection, payment method, custom fields) and for `update_for_items`' metadata; `customer_updated` no longer fires for a re-save of the same values (`platform/effective-patch.ts`). Settings-only `subscription_changed` carries `settings_only: true` on the envelope. Gate: `verify:change-events`.
@@ -129,3 +131,10 @@ None — this module *defines* the taxonomy; `webhooks.emitEvent` writes the row
 - **2026-09-30** — `webhook_status[is|is_not|in|not_in]` filter over the same worst-wins rollup the list prints (not_configured / pending / failed / delivered), as SQL. Imported events count as not_configured. 0318 indexes `webhook_deliveries(event_id, status)` for the rollup and the filter.
 - **2026-10-21** — `prepareEvent` / `insertPreparedEvent`: the event snapshot is built before the invoice number is taken, so the numbering transaction holds the counter for less time. Events list total capped at 10,000.
 - **2026-10-24** — Registry: `feature_created`, `feature_updated`, `feature_archived`, `plan_entitlement_set`, `subscription_entitlement_set` (resource types `feature`, `plan_entitlement`, `subscription_entitlement`). Emitted by the entitlements module.
+- **2026-11-13** — `registerEventRefresher` / `refreshEvent(tx, event)`: a subscriber rebuilds what
+  it copied from an event when the facts change later in the event's own transaction. Nothing is
+  emitted again. Used by the renewal email (`emails/outbox.ts`).
+- **2026-11-15** — Registry: `subscription_pending_change_created`, `_applied`, `_expired`
+  (`failed_change_charge: apply_when_paid`). `data.pending_change` = `{ id, kind, invoice,
+  requested_at, expires_at, reason? }`; `reason` is `expired`, `replaced`, `cancelled`, `voided`
+  or `moved`.

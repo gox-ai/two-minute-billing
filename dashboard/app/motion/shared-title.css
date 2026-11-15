@@ -1,0 +1,22 @@
+/* Motion: shared-title. Owned by the matching component; tokens from globals.css only. */
+
+/* A row's name glides into the record page's title on a push, and back into its row on a
+   pop (lib/shared-title.ts names one element at a time). Above the page groups. */
+::view-transition-group(record-title) {
+  z-index: 3;
+  animation-duration: var(--nav-new-dur);
+  animation-timing-function: var(--ease-glide);
+}
+/* Scale the text with the box, anchored at its start: never stretch it. */
+::view-transition-old(record-title),
+::view-transition-new(record-title) {
+  inline-size: auto;
+  block-size: 100%;
+  object-fit: contain;
+  animation-duration: var(--nav-new-dur);
+  animation-timing-function: var(--ease-out);
+}
+/* No title to land on (the page arrived as a skeleton): the name leaves with its page. */
+::view-transition-old(record-title):only-child {
+  animation: m-fade-out var(--nav-old-dur) var(--ease-out) both;
+}

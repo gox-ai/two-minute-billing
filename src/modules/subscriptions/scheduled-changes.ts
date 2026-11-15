@@ -512,15 +512,31 @@ async function applyOne(row: Row, now: Date): Promise<ApplyOutcome> {
           "prorated"
         );
       });
-      await changeSubscription({
-        ...base,
-        now,
-        changes,
-        adds,
-        removes,
-        invoiceImmediately: true,
-        prorate,
-      });
+      try {
+        await changeSubscription({
+          ...base,
+          now,
+          changes,
+          adds,
+          removes,
+          invoiceImmediately: true,
+          prorate,
+          // Allowed when scheduled; `block_downgrade_when_past_due` refuses only a change now.
+          skipPastDueGuard: true,
+        });
+      } catch (e) {
+        // Reverted on a hard decline (`failed_change_charge: revert`): a retry charges the same
+        // card again, so the row ends here.
+        const { ChangeRevertedError, PendingChangeError } = await import("./proration");
+        if (e instanceof ChangeRevertedError) return { kind: "unapplicable", reason: e.message };
+        // Held until its invoice is paid (`apply_when_paid`): the pending change takes it over.
+        if (e instanceof PendingChangeError)
+          return {
+            kind: "moot",
+            reason: `Held as pending change ${e.held.pendingChange} until invoice ${e.held.invoice} is paid.`,
+          };
+        throw e;
+      }
       break;
     }
   }

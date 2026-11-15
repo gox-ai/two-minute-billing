@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 // Full-page "Change subscription" flow: line builder
 // pre-filled from the current items, add/remove lines, quantity + unit-price
 // override, mandatory-addon auto-include for the selected plan (non-removable,
@@ -14,6 +15,7 @@
 // is how a removal came to preview as "No immediate charge" while the apply credited
 // unused time — a false statement about money on a confirmation screen.
 
+import { plural } from "@/lib/labels";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -34,7 +36,8 @@ import { Alert } from "@/components/ui/alert";
 import { DateTimeField } from "@/components/form/datetime-field";
 import { Field } from "@/components/form/field";
 import { ErrorState } from "@/components/states";
-import { money, fmtDate, fmtDateTime, isQuantityBased, toMajor, toMinor } from "@/lib/format";
+import { money, isQuantityBased, toMajor, toMinor } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { MoreVertical, UserRound } from "lucide-react";
 import {
@@ -96,6 +99,9 @@ import {
 } from "@/components/subscriptions/line-items";
 import {
   CouponPickerModal,
+  DISCOUNT_DURATION_OPTIONS,
+  DISCOUNT_TYPE_OPTIONS,
+  InlineEditorPanel,
   couponDiscountLabel,
   couponDurationLabel,
 } from "@/components/subscriptions/coupon-picker-modal";
@@ -104,15 +110,19 @@ import { SelectField } from "@/components/ui/select-field";
 import { changeEditKey, policyReady, prorateToSend } from "@/lib/change-policy-view";
 import { useDefaultState } from "@/lib/use-default-state";
 import { CheckboxField } from "@/components/ui/checkbox";
-import { RadioField } from "@/components/ui/radio-group";
 import {
   ALLOWANCE_UPGRADE_LABELS,
+  CREDIT_DOWNGRADE_CONSEQUENCES,
   CREDIT_DOWNGRADE_LABELS,
+  CREDIT_UPGRADE_CONSEQUENCES,
   CREDIT_UPGRADE_LABELS,
   DOWNGRADE_CREDIT_LABELS,
   FAILED_CHANGE_LABELS,
+  NET_CREDIT_DOCUMENT_LABELS,
+  NET_CREDIT_DOCUMENT_OUTCOMES,
   PLAN_CHANGE_COUPON_LABELS,
   type ChangeRuleDefaults,
+  type NetCreditDocuments,
 } from "@/lib/billing-rules";
 import type { ChangeRuleOverrides } from "@/app/(dashboard)/businesses/[biz]/subscriptions/actions";
 import { MetadataField, type MetadataEditorData } from "@/components/form/metadata-field";
@@ -661,7 +671,13 @@ export function SubscriptionChangeForm({
   //
   // The form still posts the value explicitly either way, so nothing depends on the
   // engine's default at request time.
-  const [invoiceImmediately, setInvoiceImmediately] = React.useState(defaultInvoiceImmediately);
+  //
+  // Untouched, it follows the estimate's `change_policy.invoice_immediately`: the engine
+  // resolves `unbilled_charges_config.on_change` first, and the raw column only when that
+  // key is unset. The prop is the fallback until an estimate answers.
+  const [invoiceImmediatelyChoice, setInvoiceImmediately] = React.useState<boolean | null>(null);
+  const invoiceImmediately =
+    invoiceImmediatelyChoice ?? policy?.invoice_immediately ?? defaultInvoiceImmediately;
 
   // ── Coupon / manual discount ────────────────────────────────────────────
   // ONE coupon: `ChangePayload` carries a single `coupon_code`, so the Coupons group
@@ -725,6 +741,10 @@ export function SubscriptionChangeForm({
     (!Number.isFinite(Number(mdValue)) ||
       (mdType === "percent" ? Number(mdValue) < 1 || Number(mdValue) > 100 : Number(mdValue) <= 0)),
   );
+
+  /** Which "+ Add …" links the discount bar offers. */
+  const couponLinks = !keptDiscount && !couponCode && !showCouponCode;
+  const mdLink = !mdOpen && !keptDiscount;
 
   // ── Payload derivation ──────────────────────────────────────────────────────
   const changes: SubscriptionChangeLine[] = lines
@@ -815,8 +835,7 @@ export function SubscriptionChangeForm({
     : prorateApplies
       ? (prorateChoice ?? undefined)
       : true;
-  /** The chosen outcome, once it is a choice at all. */
-  const deferChargesToUnbilled = invoicingOptionApplies && !invoiceImmediately;
+  // `deferChargesToUnbilled` is declared next to `netMinor`: a net credit never defers.
   // NOTE: "add to unbilled charges" WITH an added line used to be refused here
   // (`deferConflict`), because `POST …/items` had no invoicing option and always
   // invoiced — so the edit would have deferred its changes and charged its adds, and no
@@ -864,7 +883,7 @@ export function SubscriptionChangeForm({
    * the redirect describe the same edit.
    */
   const scheduledEditParts = [
-    changes.length > 0 ? `${changes.length} line(s) changed` : null,
+    changes.length > 0 ? `${plural(changes.length, "line")} changed` : null,
     removes.length > 0 ? `${removes.length} removed` : null,
     adds.length > 0 ? `${adds.length} added` : null,
   ].filter(Boolean) as string[];
@@ -938,6 +957,15 @@ export function SubscriptionChangeForm({
   );
   const [couponsChoice, setCouponsChoice] = useDefaultState(changeRules.coupons);
   const [creditChoice, setCreditChoice] = useDefaultState(changeRules.downgrade_credit);
+  // Untouched: the saved rule, else what the unsaved rule gives this change (two documents
+  // when it is invoiced immediately). Always sent on a net credit, so the estimate and the
+  // apply price the same documents.
+  const [documentsPick, setDocumentsChoice] = React.useState<NetCreditDocuments | null>(null);
+  const unsavedDocumentsDefault: NetCreditDocuments = invoiceImmediately
+    ? "credit_note_and_invoice"
+    : "one_credit_note";
+  const documentsChoice: NetCreditDocuments =
+    documentsPick ?? changeRules.net_credit_documents ?? unsavedDocumentsDefault;
   const [planCreditsChoice, setPlanCreditsChoice] = useDefaultState<
     "full" | "prorated" | "next_window"
   >(planCreditsRule);
@@ -957,6 +985,12 @@ export function SubscriptionChangeForm({
     invoiceImmediately &&
     effectiveAutoCollectOn &&
     (estimate?.amount_due_minor ?? 0) > 0;
+  /** The proration lines net to a credit: the documents choice has an effect (see `netCredit`). */
+  const showDocuments =
+    invoicingOptionApplies &&
+    hasLineWork &&
+    estimate != null &&
+    estimate.lines.reduce((sum, l) => sum + l.amount_minor, 0) < 0;
   const showPlanCredits = changeNow && policy?.plan_credits != null;
   const showAllowances = changeNow && !downgrading && policy?.allowances != null;
   const changeOverrides: ChangeRuleOverrides = {
@@ -967,19 +1001,21 @@ export function SubscriptionChangeForm({
     ...(showCredit && creditChoice !== changeRules.downgrade_credit
       ? { downgrade_credit: creditChoice }
       : {}),
-    // A downgrade cannot prorate plan credits; the route refuses it.
-    ...(showPlanCredits &&
-    planCreditsChoice !== planCreditsRule &&
-    !(downgrading && planCreditsChoice === "prorated")
+    ...(showDocuments ? { net_credit_documents: documentsChoice } : {}),
+    ...(showPlanCredits && planCreditsChoice !== planCreditsRule
       ? { plan_credits: planCreditsChoice }
       : {}),
     ...(showAllowances && allowancesChoice !== changeRules.allowances
       ? { allowances: allowancesChoice }
       : {}),
   };
-  /** The two that move money, so the estimate prices them too. */
+  const planCreditsOutcome = downgrading
+    ? CREDIT_DOWNGRADE_CONSEQUENCES[planCreditsChoice]
+    : CREDIT_UPGRADE_CONSEQUENCES[planCreditsChoice];
+  /** The ones that move money or documents, so the estimate prices them too. */
   const sentCoupons = changeOverrides.coupons;
   const sentCredit = changeOverrides.downgrade_credit;
+  const sentDocuments = changeOverrides.net_credit_documents;
 
   /** The business's plan-change gate refuses this edit; the apply would 409. */
   const changeBlocked = !reactivating && hasLineWork ? (policy?.blocked ?? null) : null;
@@ -990,6 +1026,7 @@ export function SubscriptionChangeForm({
     resetTermSent ?? null,
     sentCoupons ?? null,
     sentCredit ?? null,
+    sentDocuments ?? null,
   ]);
   /** False while the policy on screen may belong to an earlier edit. */
   const ready = policyReady({ hasLineWork, reactivating, answeredKey, editKey });
@@ -1045,6 +1082,7 @@ export function SubscriptionChangeForm({
         resetTermSent ?? null,
         sentCoupons ?? null,
         sentCredit ?? null,
+        sentDocuments ?? null,
       ],
     );
     const shapeKey = changeEditKey(
@@ -1075,7 +1113,11 @@ export function SubscriptionChangeForm({
           manualDiscount ? { type: manualDiscount.type, value: manualDiscount.value } : undefined,
           removeApplied,
           estimateChangeOption,
-          { coupons: sentCoupons, downgrade_credit: sentCredit },
+          {
+            coupons: sentCoupons,
+            downgrade_credit: sentCredit,
+            net_credit_documents: sentDocuments,
+          },
         );
         if (askedKeyRef.current !== askedKey) return;
         if (res.ok) {
@@ -1112,6 +1154,7 @@ export function SubscriptionChangeForm({
     estimateChangeOption,
     sentCoupons,
     sentCredit,
+    sentDocuments,
     recheck,
   ]);
 
@@ -1228,6 +1271,44 @@ export function SubscriptionChangeForm({
     ? -estimate.lines.filter((l) => l.amount_minor < 0).reduce((s, l) => s + l.amount_minor, 0)
     : 0;
   const netMinor = estimate ? estimate.total_minor : 0;
+  /** The proration lines net, pre-tax: the `net` that `applyChange` tests for a credit. */
+  const netLinesMinor = chargesMinor - creditsMinor;
+  /**
+   * The change gives money back. The engine never queues a net credit as an unbilled
+   * charge (`applyChange`, net < 0), whatever `invoice_immediately` says: the Invoicing
+   * field then picks `net_credit_documents` instead. The estimate is priced for that
+   * choice, so every figure below describes the documents the apply raises.
+   * Tested on the lines, not `total_minor`: a credit that goes to an unpaid term invoice
+   * leaves `total_minor` positive (the new invoice) while the lines still net negative.
+   */
+  const netCredit = invoicingOptionApplies && estimate != null && netLinesMinor < 0;
+  /** One credit note for the net credit, and no invoice. */
+  const creditNetted = netCredit && documentsChoice === "one_credit_note";
+  /** The confirm dialog repeats each choice that decides the documents or the credits. */
+  const changeChoiceNotes: Array<{ label: string; value: string; outcome: string }> = [
+    ...(netCredit
+      ? [
+          {
+            label: "Documents for the credit",
+            value: NET_CREDIT_DOCUMENT_LABELS[documentsChoice],
+            outcome: NET_CREDIT_DOCUMENT_OUTCOMES[documentsChoice],
+          },
+        ]
+      : []),
+    ...(showPlanCredits
+      ? [
+          {
+            label: "Plan credits",
+            value: (downgrading ? CREDIT_DOWNGRADE_LABELS : CREDIT_UPGRADE_LABELS)[
+              planCreditsChoice
+            ],
+            outcome: planCreditsOutcome,
+          },
+        ]
+      : []),
+  ];
+  /** The chosen outcome, once it is a choice at all. */
+  const deferChargesToUnbilled = invoicingOptionApplies && !invoiceImmediately && !netCredit;
   // POST-tax buckets only. The promotional bucket is applied PRE-tax and arrives as its
   // own field — the estimate stopped folding it in here when the invoice document stopped
   // doing so (30fcbd6), because it is already netted out of `total_minor`.
@@ -1713,6 +1794,45 @@ export function SubscriptionChangeForm({
     !deferChargesToUnbilled &&
     estimate != null &&
     netMinor < 0;
+  /** The label for money due on apply. Auto-collection off sends the invoice: nothing is
+   *  taken from a card, so "Chargeable" would be false. */
+  const dueNowLabel = effectiveAutoCollectOn
+    ? "Chargeable immediately"
+    : "We send the invoice now. The customer pays it.";
+  /**
+   * An immediate change that collects nothing although it is not a net credit to the balance:
+   * the credit note went to the term's unpaid invoice, or credit pays the new invoice in full.
+   * "€0.00 · We send the invoice now" was false for "One credit note", which raises none.
+   */
+  const creditToOpenInvoicesMinor = estimate?.credit_applied_to_open_invoices_minor ?? 0;
+  const invoiceRaised = !creditNetted && invoiceTotalMinor > 0;
+  const nothingCollected =
+    !reactivating &&
+    !scheduled &&
+    !billedAtTrialEnd &&
+    !deferChargesToUnbilled &&
+    !endTrialNow &&
+    !netCreditNow &&
+    estimate != null &&
+    amountDueMinor === 0;
+  const nothingCollectedLabel = [
+    "Nothing due now.",
+    invoiceRaised ? null : "We raise no invoice.",
+    creditToOpenInvoicesMinor > 0
+      ? "The credit note reduces the unpaid invoice for this term."
+      : null,
+    invoiceRaised ? "Credit pays the new invoice in full." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  /** The renewal the credit pays in full: "€0.00 · Chargeable on renewal" said nothing. */
+  const renewalCovered =
+    nextRenewal != null &&
+    nextRenewal.amount_due_minor === 0 &&
+    nextRenewal.credits_applied_minor > 0;
+  const renewalLabel = renewalCovered
+    ? "Nothing due on the next renewal. The credit from this change pays it."
+    : "Chargeable on renewal";
   const headlineMinor =
     endTrialNow && endTrialDueMinor != null
       ? endTrialDueMinor
@@ -1732,45 +1852,45 @@ export function SubscriptionChangeForm({
               ? nextRenewal.amount_due_minor
               : amountDueMinor;
   const headlineLabel = trialDateOnlyChange
-    ? `Nothing due now. We raise the first invoice at the new trial end (${fmtDate(trialEndAt, tz)})`
+    ? `Nothing due now. We raise the first invoice at the new trial end (${fmtDate(trialEndAt, tz)}).`
     : endTrialBlocked
-      ? "Blocked. The customer has no payment method on file, and this subscription auto-collects"
+      ? "Blocked. The customer has no payment method on file, and this subscription auto-collects."
       : endTrialNow
         ? endTrialDueMinor == null
-          ? "First term invoiced today. We could not preview the amount"
+          ? "First term invoiced today. We could not preview the amount."
           : effectiveAutoCollectOn
             ? "Chargeable immediately: first term"
             : // Auto-collection off is the send-invoice model: the first term is INVOICED
               // today, nothing is taken from a card.
-              "Invoiced today: first term, sent instead of charged"
+              "We send the first-term invoice now. The customer pays it."
         : reactivating
           ? reactTrialEnd
             ? // NAME THE FIGURE AND THE DATE. "Charges on activation (trial)" over ₹0.00
               // is true and answers nothing — the operator's next question is what the
               // conversion will bill, and the engine has just answered it.
               reactEstimate
-              ? `Nothing due now. We bill ${money(reactSummary.minor, currency)} when the trial ends (${fmtDate(reactTrialEnd, tz)})`
-              : `Nothing due now. We raise the first invoice at the trial end (${fmtDate(reactTrialEnd, tz)})`
+              ? `Nothing due now. We bill ${money(reactSummary.minor, currency)} when the trial ends (${fmtDate(reactTrialEnd, tz)}).`
+              : `Nothing due now. We raise the first invoice at the trial end (${fmtDate(reactTrialEnd, tz)}).`
             : reactInTerm
               ? reactInTerm.collects_now
-                ? `We collect the open balance of invoice ${reactInTerm.invoice.number ?? reactInTerm.invoice.id} now. We raise no new invoice`
-                : "Nothing due now. The current term continues and we raise no new invoice"
+                ? `We collect the open balance of invoice ${reactInTerm.invoice.number ?? reactInTerm.invoice.id} now. We raise no new invoice.`
+                : "Nothing due now. The current term continues and we raise no new invoice."
               : chargesHandling === "add_to_unbilled_charges"
-                ? "Added to unbilled charges. We charge nothing today"
+                ? "Added to unbilled charges. We charge nothing today."
                 : reactMoney
                   ? // Credit can cover the whole bill. "Chargeable immediately ₹0.00" is
                     // true and says nothing; the operator needs to know the money came out
                     // of the customer's balance.
                     (reactMoney.amount_due_minor ?? 0) === 0 && reactMoney.total_minor > 0
-                    ? "Covered in full by the customer's account credit. We charge nothing"
+                    ? "Covered in full by the customer's account credit. We charge nothing."
                     : effectiveAutoCollectOn
                       ? "Chargeable immediately"
                       : // Auto-collection off is the send-invoice model.
-                        "Invoiced today: sent instead of charged"
+                        "We send the invoice now. The customer pays it."
                   : // NO ESTIMATE YET. The number on screen is the pre-tax subtotal, so the
                     // label says exactly that instead of promising it is the charge.
                     reactEstimateError
-                    ? `Subtotal of the lines above. We could not preview the taxed total (${reactEstimateError})`
+                    ? `Subtotal of the lines above. We could not preview the taxed total (${reactEstimateError}).`
                     : "Subtotal of the lines above. Previewing tax and account credit…"
           : scheduled
             ? `Scheduled for ${
@@ -1779,11 +1899,11 @@ export function SubscriptionChangeForm({
                   : applyWhen === "end_of_term"
                     ? termEndNoun
                     : "the selected date"
-              }. No immediate charge`
+              }. No immediate charge.`
             : billedAtTrialEnd
-              ? `Nothing due now. We bill ${money(netMinor, estimate!.currency)} at trial end (${fmtDate(trialEndAtIso, tz)})`
+              ? `Nothing due now. We bill ${money(netMinor, estimate!.currency)} at trial end (${fmtDate(trialEndAtIso, tz)}).`
               : deferChargesToUnbilled
-                ? "Added to unbilled charges. We charge nothing today"
+                ? "Added to unbilled charges. We charge nothing today."
                 : // Wording for a change that credits: it names the RENEWAL, because
                   // nothing is collectible today and that is the next real charge.
                   netCreditNow
@@ -1791,9 +1911,11 @@ export function SubscriptionChangeForm({
                     ? // The label for this case: the card reads "₹89,845.20 INR / Chargeable
                       // on renewal", with the credit stated as its own line underneath rather
                       // than appended to the label.
-                      "Chargeable on renewal"
-                    : "Nothing due today. This change credits the customer"
-                  : "Chargeable immediately";
+                      renewalLabel
+                    : "Nothing due now. This change credits the customer."
+                  : nothingCollected
+                    ? nothingCollectedLabel
+                    : dueNowLabel;
 
   /** Nothing leaves the customer's card on apply — a trial change, a deferred apply, a
    *  change whose proration is queued as unbilled charges, or one that nets to a CREDIT.
@@ -1802,6 +1924,7 @@ export function SubscriptionChangeForm({
   const nothingDueNow =
     trialDateOnlyChange ||
     netCreditNow ||
+    nothingCollected ||
     (!endTrialNow && (billedAtTrialEnd || scheduled || deferChargesToUnbilled));
 
   // Footer reconciliation. The headline states the amount that actually moves, so the
@@ -1998,7 +2121,7 @@ export function SubscriptionChangeForm({
       if (!product) return null;
       return {
         index: priceEdit.index,
-        label: "Change Frequency",
+        label: "Change frequency",
         products: [product],
         startAt,
         search: undefined,
@@ -2008,10 +2131,10 @@ export function SubscriptionChangeForm({
     if (slot === "plan") {
       return {
         index: priceEdit.index,
-        label: "Change Plan",
+        label: "Change plan",
         products: catalogProducts("plan"),
         startAt: undefined,
-        search: "Search Plans…",
+        search: "Search plans…",
         confirm: "Change plan",
       };
     }
@@ -2025,7 +2148,7 @@ export function SubscriptionChangeForm({
       products:
         product && !catalog.some((p) => p.id === product.id) ? [product, ...catalog] : catalog,
       startAt,
-      search: kind === "charge" ? "Search Charges…" : "Search Addons…",
+      search: kind === "charge" ? "Search charges…" : "Search addons…",
       confirm: "Save",
     };
   })();
@@ -2145,14 +2268,14 @@ export function SubscriptionChangeForm({
                 {isPlan ? (
                   <>
                     <DropdownMenuItem onSelect={() => setPriceEdit({ index: i, mode: "plan" })}>
-                      Change Plan
+                      Change plan
                     </DropdownMenuItem>
                     {/* Only offered when another cadence of this plan actually exists. */}
                     {otherCadences.length > 0 ? (
                       <DropdownMenuItem
                         onSelect={() => setPriceEdit({ index: i, mode: "frequency" })}
                       >
-                        Change Frequency
+                        Change frequency
                       </DropdownMenuItem>
                     ) : null}
                     {/* Opens the subscription-level panel in the bar below — the same
@@ -2164,7 +2287,7 @@ export function SubscriptionChangeForm({
                         one and would refuse this. */}
                     {!keptDiscount ? (
                       <DropdownMenuItem onSelect={openManualDiscountFromMenu}>
-                        Add Manual Discount
+                        Add manual discount
                       </DropdownMenuItem>
                     ) : null}
                   </>
@@ -2300,7 +2423,8 @@ export function SubscriptionChangeForm({
                 ? firstTerm?.tax_lines
                 : estimate?.tax_lines
         }
-        invoiceTotalMinor={showCreditNote ? invoiceTotalMinor : undefined}
+        // Only when the apply raises an invoice: "One credit note" raises none.
+        invoiceTotalMinor={showCreditNote && invoiceRaised ? invoiceTotalMinor : undefined}
         creditNoteTotalMinor={showCreditNote ? creditNoteMinor : undefined}
         creditAppliedToThisInvoiceMinor={showCreditNote ? creditAppliedHereMinor : undefined}
         creditDestinations={showCreditNote ? creditNarrative.destinations : undefined}
@@ -2348,7 +2472,7 @@ export function SubscriptionChangeForm({
                 ? // Never "no immediate charge" here: ending the trial activates the
                   // subscription and raises + collects the first term's invoice today.
                   endTrialDueMinor != null
-                  ? `Ending the trial activates the subscription and invoices the first term today: ${money(endTrialDueMinor, currency)} ${currency}.`
+                  ? `Ending the trial activates the subscription and invoices the first term today: ${money(endTrialDueMinor, currency)}.`
                   : "Ending the trial activates the subscription and invoices the first term today. We could not preview the amount."
                 : scheduled
                   ? "This change is scheduled. We raise no charge now."
@@ -2356,28 +2480,37 @@ export function SubscriptionChangeForm({
                     ? // Do not claim "no immediate charge" when the preview FAILED — we do not
                       // know what apply would book. Adds and removes are priced now, so a genuinely
                       // empty estimate does mean nothing moves; an errored one means nothing is known.
-                      "We could not preview this change, so the amount is unknown. Fix the error above before you apply the change."
+                      "We could not preview this change, so the amount is unknown. Correct the error above before you apply the change."
                     : "No immediate charge for this change."
         }
         note={
-          deferChargesToUnbilled ? (
-            <>
-              We add these lines to the subscription as unbilled charges. We bill them on the next
-              renewal invoice, where we apply tax and any account credits. We charge nothing to the
-              payment method today.
-              {removes.length > 0 ? (
-                <>
-                  {" "}
-                  We credit removed items immediately, as a credit note. The deferral applies to
-                  charges only.
-                </>
+          deferChargesToUnbilled || changeChoiceNotes.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              {deferChargesToUnbilled ? (
+                <p className="m-0">
+                  We add these lines to the subscription as unbilled charges. We bill them on the
+                  next renewal invoice, where we apply tax and any account credits. We charge
+                  nothing to the payment method today.
+                  {removes.length > 0 ? (
+                    <>
+                      {" "}
+                      We credit removed items immediately, as a credit note. The deferral applies to
+                      charges only.
+                    </>
+                  ) : null}
+                </p>
               ) : null}
-            </>
+              {changeChoiceNotes.map((n) => (
+                <p key={n.label} className="m-0">
+                  {n.label}: <b>{n.value}</b>. {n.outcome}
+                </p>
+              ))}
+            </div>
           ) : undefined
         }
         proceedDisabled={submitDisabled}
         pending={submitting}
-        proceedLabel={reactivating ? "Reactivate" : "Save changes"}
+        proceedLabel={reactivating ? "Reactivate" : "Change subscription"}
         onProceed={() => formRef.current?.requestSubmit()}
       />
       <SubFormFrame
@@ -2391,13 +2524,13 @@ export function SubscriptionChangeForm({
         // an existing subscription cannot be changed here (no route accepts it).
         lead={
           customerId ? (
-            <a
+            <Link
               href={`/businesses/${biz}/customers/${customerId}`}
               className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted/60 px-3 py-1 text-sm font-medium wrap-anywhere transition-colors hover:bg-accent"
             >
               <UserRound className="size-3.5 shrink-0 text-muted-foreground" />
               {customerName || customerId}
-            </a>
+            </Link>
           ) : null
         }
         title={reactivating ? "Reactivate subscription" : "Change subscription"}
@@ -2421,7 +2554,7 @@ export function SubscriptionChangeForm({
           ) : null
         }
         cancelHref={`/businesses/${biz}/subscriptions/${sub}`}
-        footerNote={`${reactivating ? "Reactivate" : "Save"} asks you to confirm before we charge anything`}
+        footerNote={`${reactivating ? "Reactivate" : "Save"} asks you to confirm before we change anything.`}
         footerFigure={footerFigure}
         primary={
           <Button type="button" disabled={submitDisabled} onClick={() => setConfirmOpen(true)}>
@@ -2489,7 +2622,7 @@ export function SubscriptionChangeForm({
                   <li>
                     Billing cycles:{" "}
                     {billingCyclesMode === "limited" && billingCyclesN
-                      ? `limited to ${billingCyclesN} cycle(s)`
+                      ? `limited to ${plural(Number(billingCyclesN), "cycle")}`
                       : "forever"}
                     .
                   </li>
@@ -2545,19 +2678,19 @@ export function SubscriptionChangeForm({
                     <>
                       {removes.length > 0 ? (
                         <li>
-                          {removes.length} item(s) removed
+                          {plural(removes.length, "item")} removed
                           {inTrial ? "." : ". We credit back the unused time."}
                         </li>
                       ) : null}
                       {adds.length > 0 ? (
                         <li>
-                          {adds.length} new item(s) added
+                          {plural(adds.length, "new item")} added
                           {inTrial ? "." : ", prorated for the remainder of the term."}
                         </li>
                       ) : null}
                       {changes.length > 0 ? (
                         <li>
-                          {changes.length} existing item(s) changed
+                          {plural(changes.length, "existing item")} changed
                           {inTrial
                             ? "."
                             : // Proration off: the bullet below states what happens instead. This
@@ -2567,7 +2700,11 @@ export function SubscriptionChangeForm({
                               ? "."
                               : deferChargesToUnbilled
                                 ? ". We add the prorated charge to unbilled charges and bill it on the next renewal, not now."
-                                : " with immediate proration (see the estimate)."}
+                                : netCredit
+                                  ? creditNetted
+                                    ? ". We raise one credit note now for the net credit (see the estimate)."
+                                    : ". We raise a credit note for the unused time and an invoice for the new lines now (see the estimate)."
+                                  : " with immediate proration (see the estimate)."}
                         </li>
                       ) : null}
                     </>
@@ -2580,8 +2717,8 @@ export function SubscriptionChangeForm({
                   for figures the rail already shows. */}
                   {prorateApplies && !prorate && changes.length > 0 ? (
                     <li>
-                      Proration is <b>off</b> for the {changes.length} changed line(s). We book no
-                      prorated credit or charge for them
+                      Proration is <b>off</b> for the {plural(changes.length, "changed line")}. We
+                      book no prorated credit or charge for them
                       {effectiveResetTerm
                         ? ", but the term still resets and we charge the full new term."
                         : ", so we raise no invoice and no credit note for them."}
@@ -2602,7 +2739,17 @@ export function SubscriptionChangeForm({
                   ) : null}
                   {changeOverrides.downgrade_credit ? (
                     <li>
-                      Credit: <b>{DOWNGRADE_CREDIT_LABELS[changeOverrides.downgrade_credit]}</b>.
+                      Credit from this change:{" "}
+                      <b>{DOWNGRADE_CREDIT_LABELS[changeOverrides.downgrade_credit]}</b>. This
+                      change only.
+                    </li>
+                  ) : null}
+                  {documentsPick !== null &&
+                  changeOverrides.net_credit_documents &&
+                  changeOverrides.net_credit_documents !== changeRules.net_credit_documents ? (
+                    <li>
+                      Documents for the credit:{" "}
+                      <b>{NET_CREDIT_DOCUMENT_LABELS[changeOverrides.net_credit_documents]}</b>.
                       This change only.
                     </li>
                   ) : null}
@@ -2627,7 +2774,7 @@ export function SubscriptionChangeForm({
                           ? "renew forever"
                           : cyclesValue === 0
                             ? "end at the current term"
-                            : `${cyclesValue} more renewal(s) after the current term`}
+                            : `${plural(cyclesValue, "more renewal")} after the current term`}
                       </b>
                       .
                     </li>
@@ -2704,7 +2851,7 @@ export function SubscriptionChangeForm({
                     ) : null}
                     .
                   </p>
-                  <div className="rounded-lg border p-3">
+                  <div className="rounded-xl border p-3">
                     {reactLadder.map((r, i) => (
                       <div
                         key={r.label}
@@ -2854,7 +3001,7 @@ export function SubscriptionChangeForm({
               under the rail says so. */}
                         <div
                           className={cn(
-                            "space-y-2 rounded-lg border p-4",
+                            "space-y-2 rounded-xl border p-4",
                             nothingDueNow
                               ? "border-info/25 bg-info-soft"
                               : "border-warning/25 bg-warning-soft",
@@ -2900,7 +3047,7 @@ export function SubscriptionChangeForm({
                               <div>
                                 <div className="text-xl font-bold wrap-anywhere text-foreground tabular-nums">
                                   {endTrialDueMinor != null
-                                    ? `${money(endTrialDueMinor, currency)} ${currency}`
+                                    ? money(endTrialDueMinor, currency)
                                     : "Amount unknown"}
                                 </div>
                                 <div className="mt-0.5 text-xs font-medium text-muted-foreground">
@@ -2916,7 +3063,7 @@ export function SubscriptionChangeForm({
                                 </div>
                                 <div className="mt-0.5 text-xs font-medium text-muted-foreground">
                                   <span className="tabular-nums">
-                                    {money(netMinor, estimate.currency)} {estimate.currency}
+                                    {money(netMinor, estimate.currency)}
                                   </span>{" "}
                                   billed at trial end ({fmtDate(trialEndAtIso, tz)})
                                 </div>
@@ -2927,11 +3074,10 @@ export function SubscriptionChangeForm({
                               // are computed by the renewal invoice that folds it in.
                               <div>
                                 <div className="text-xl font-bold wrap-anywhere text-foreground tabular-nums">
-                                  {money(deferredBookedMinor, estimate.currency)}{" "}
-                                  {estimate.currency}
+                                  {money(deferredBookedMinor, estimate.currency)}
                                 </div>
                                 <div className="mt-0.5 text-xs font-medium text-muted-foreground">
-                                  Added to unbilled charges. We bill them at the next renewal
+                                  Added to unbilled charges. We bill them at the next renewal.
                                 </div>
                               </div>
                             ) : netCreditNow && nextRenewal ? (
@@ -2945,22 +3091,23 @@ export function SubscriptionChangeForm({
                               // dialog now.
                               <div>
                                 <div className="text-xl font-bold wrap-anywhere text-foreground tabular-nums">
-                                  {money(nextRenewal.amount_due_minor, estimate.currency)}{" "}
-                                  {estimate.currency}
+                                  {money(nextRenewal.amount_due_minor, estimate.currency)}
                                 </div>
                                 <div className="mt-0.5 text-xs font-medium text-muted-foreground">
-                                  Chargeable on renewal
+                                  {renewalLabel}
                                 </div>
                               </div>
                             ) : (
                               <div>
                                 <div className="text-xl font-bold wrap-anywhere text-foreground tabular-nums">
-                                  {money(amountDueMinor, estimate.currency)} {estimate.currency}
+                                  {money(amountDueMinor, estimate.currency)}
                                 </div>
                                 <div className="mt-0.5 text-xs font-medium text-muted-foreground">
                                   {netCreditNow
-                                    ? "Nothing due today. This change credits the customer"
-                                    : "Chargeable immediately"}
+                                    ? "Nothing due now. This change credits the customer."
+                                    : nothingCollected
+                                      ? nothingCollectedLabel
+                                      : dueNowLabel}
                                 </div>
                               </div>
                             )}
@@ -3074,8 +3221,8 @@ export function SubscriptionChangeForm({
                                 ✓
                               </span>
                               <span className="tabular-nums">
-                                {money(creditAppliedHereMinor, estimate.currency)}{" "}
-                                {estimate.currency} credit for unused time applied to this invoice
+                                {money(creditAppliedHereMinor, estimate.currency)} credit for unused
+                                time applied to this invoice
                               </span>
                             </div>
                           ) : null}
@@ -3085,8 +3232,8 @@ export function SubscriptionChangeForm({
                                 ✓
                               </span>
                               <span className="tabular-nums">
-                                {money(balanceCreditsMinor, estimate.currency)} {estimate.currency}{" "}
-                                account credits applied
+                                {money(balanceCreditsMinor, estimate.currency)} account credits
+                                applied
                               </span>
                             </div>
                           ) : null}
@@ -3099,8 +3246,8 @@ export function SubscriptionChangeForm({
                                 ✓
                               </span>
                               <span className="tabular-nums">
-                                {money(refundableAddedMinor, estimate.currency)} {estimate.currency}{" "}
-                                refundable credits go back to the customer&apos;s account
+                                {money(refundableAddedMinor, estimate.currency)} refundable credits
+                                go back to the customer&apos;s account
                               </span>
                             </div>
                           ) : null}
@@ -3123,7 +3270,12 @@ export function SubscriptionChangeForm({
                           <p className="text-xs text-muted-foreground">
                             We raise the next invoice of{" "}
                             <b className="tabular-nums">
-                              {money(nextRenewal.amount_due_minor, estimate.currency)}
+                              {money(
+                                nextRenewal.credits_applied_minor > 0
+                                  ? nextRenewal.total_minor
+                                  : nextRenewal.amount_due_minor,
+                                estimate.currency,
+                              )}
                             </b>
                             {/* Deferring puts the proration ON that invoice, so quoting the
                   recurring figure alone would understate it. */}
@@ -3137,21 +3289,36 @@ export function SubscriptionChangeForm({
                                 queued above
                               </>
                             ) : null}{" "}
-                            on <b>{fmtDate(nextRenewal.date, tz)}</b>
+                            on <b>{fmtDate(nextRenewal.date, tz)}</b>.
+                            {/* The renewal spends only what it needs, so this names that slice
+                                and the rest of the credit separately from the credit's total. */}
                             {nextRenewal.credits_applied_minor > 0 ? (
                               <>
-                                {": "}
-                                <b className="tabular-nums">
-                                  {money(nextRenewal.total_minor, estimate.currency)}
-                                </b>{" "}
-                                less the{" "}
+                                {" "}
+                                The credit from this change pays{" "}
                                 <b className="tabular-nums">
                                   {money(nextRenewal.credits_applied_minor, estimate.currency)}
                                 </b>{" "}
-                                credit that this change gives back
+                                of it, so{" "}
+                                <b className="tabular-nums">
+                                  {money(nextRenewal.amount_due_minor, estimate.currency)}
+                                </b>{" "}
+                                is due.
+                                {refundableAddedMinor > nextRenewal.credits_applied_minor ? (
+                                  <>
+                                    {" "}
+                                    The other{" "}
+                                    <b className="tabular-nums">
+                                      {money(
+                                        refundableAddedMinor - nextRenewal.credits_applied_minor,
+                                        estimate.currency,
+                                      )}
+                                    </b>{" "}
+                                    of the credit stays on the account.
+                                  </>
+                                ) : null}
                               </>
                             ) : null}
-                            .
                           </p>
                         ) : null}
                         <Dialog open={breakdownOpen} onOpenChange={setBreakdownOpen}>
@@ -3171,7 +3338,7 @@ export function SubscriptionChangeForm({
                                       : "Breakdown of the trial-end invoice"
                                     : deferChargesToUnbilled
                                       ? "Breakdown of the unbilled charges"
-                                      : "Breakdown of Immediate Charges"}
+                                      : "Breakdown of immediate charges"}
                               </DialogTitle>
                               <DialogDescription>
                                 {scheduled
@@ -3190,7 +3357,7 @@ export function SubscriptionChangeForm({
                             <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6">
                               <div
                                 className={cn(
-                                  "space-y-1 rounded-lg border p-3 text-sm",
+                                  "space-y-1 rounded-xl border p-3 text-sm",
                                   nothingDueNow
                                     ? "border-info/25 bg-info-soft"
                                     : "border-warning/25 bg-warning-soft",
@@ -3209,12 +3376,14 @@ export function SubscriptionChangeForm({
                                 </div>
                                 <div className="text-xs text-muted-foreground">
                                   {scheduled
-                                    ? "Value as of today. Nothing due now"
+                                    ? "Value as of today. Nothing due now."
                                     : billedAtTrialEnd
-                                      ? `Billed at trial end (${fmtDate(trialEndAtIso, tz)}). Nothing due now`
+                                      ? `Billed at trial end (${fmtDate(trialEndAtIso, tz)}). Nothing due now.`
                                       : deferChargesToUnbilled
-                                        ? "Added to unbilled charges. Nothing due now"
-                                        : "Chargeable immediately"}
+                                        ? "Added to unbilled charges. Nothing due now."
+                                        : netCreditNow
+                                          ? "Nothing due now. This change credits the customer."
+                                          : dueNowLabel}
                                 </div>
                               </div>
                               <div className="overflow-x-auto">
@@ -3483,7 +3652,7 @@ export function SubscriptionChangeForm({
                     This subscription&rsquo;s plan is still{" "}
                     <b>{productOfPrice(offGroupPlan.l.price)?.name ?? offGroupPlan.l.price}</b> from{" "}
                     <b>{groupName(productOfPrice(offGroupPlan.l.price)?.product_group)}</b>. Use the
-                    plan row&rsquo;s <b>Change Plan</b> to select one from {groupName(group)}.
+                    plan row&rsquo;s <b>Change plan</b> to select one from {groupName(group)}.
                     Nothing changes until you do.
                   </>
                 ) : null}
@@ -3554,41 +3723,57 @@ export function SubscriptionChangeForm({
                 </LineActionsBar>
                 {/* Coupons + manual discount, the second bar. Both coupon entry
                     points fill the same `coupon_code`; hidden once one is applied,
-                    since a second would silently replace the first. */}
-                <LineActionsBar>
-                  {/* Nothing to add when one is already applied — the engine allows a
-                      single discount per subscription and refuses the second outright,
-                      so these would be controls that cannot do what they say. The row
-                      in the Coupons group below states what is applied instead. */}
-                  {!keptDiscount && !couponCode && !showCouponCode ? (
-                    <>
-                      <CouponPickerModal
-                        coupons={coupons}
-                        currency={currency}
-                        label="Add coupon"
-                        onSelect={setCouponCode}
-                      />
-                      <LineActionSeparator label="OR" />
-                      <LineActionLink onClick={() => setShowCouponCode(true)}>
-                        Add coupon code
+                    since a second would silently replace the first. Nothing to add when
+                    a discount is already kept: the engine allows one per subscription. */}
+                {couponLinks || mdLink ? (
+                  <LineActionsBar>
+                    {couponLinks ? (
+                      <>
+                        <CouponPickerModal
+                          coupons={coupons}
+                          currency={currency}
+                          label="Add coupon"
+                          onSelect={setCouponCode}
+                        />
+                        <LineActionSeparator label="OR" />
+                        <LineActionLink onClick={() => setShowCouponCode(true)}>
+                          Add coupon code
+                        </LineActionLink>
+                      </>
+                    ) : null}
+                    {couponLinks && mdLink ? <LineActionSeparator /> : null}
+                    {mdLink ? (
+                      <LineActionLink onClick={openManualDiscount}>
+                        Add manual discount
                       </LineActionLink>
-                      <LineActionSeparator />
-                    </>
-                  ) : null}
-                  {showCouponCode ? (
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Input
-                        autoFocus
-                        value={couponDraft}
-                        onChange={(e) => setCouponDraft(e.target.value)}
-                        placeholder="Coupon code"
-                        maxLength={100}
-                        className="w-56 max-w-full"
-                        aria-label="Coupon code"
-                      />
+                    ) : null}
+                  </LineActionsBar>
+                ) : null}
+                {showCouponCode ? (
+                  <InlineEditorPanel
+                    title="Add coupon code"
+                    closeLabel="Close coupon code"
+                    onClose={() => {
+                      setShowCouponCode(false);
+                      setCouponDraft("");
+                    }}
+                  >
+                    <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+                      <Field
+                        name="coupon_code_draft"
+                        label="Coupon code"
+                        className="w-72 max-w-full"
+                      >
+                        <Input
+                          id="coupon_code_draft"
+                          autoFocus
+                          value={couponDraft}
+                          onChange={(e) => setCouponDraft(e.target.value)}
+                          maxLength={100}
+                        />
+                      </Field>
                       <Button
                         type="button"
-                        size="sm"
                         variant="outline"
                         disabled={!couponDraft.trim()}
                         onClick={() => {
@@ -3597,82 +3782,67 @@ export function SubscriptionChangeForm({
                           setShowCouponCode(false);
                         }}
                       >
-                        Apply
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setShowCouponCode(false);
-                          setCouponDraft("");
-                        }}
-                      >
-                        Cancel
+                        Apply coupon
                       </Button>
                     </div>
-                  ) : null}
-                  {/* Same single-discount rule as the coupon links above. */}
-                  {!mdOpen && !keptDiscount ? (
-                    <LineActionLink onClick={openManualDiscount}>
-                      Add manual discount
-                    </LineActionLink>
-                  ) : mdOpen ? (
-                    <div className="flex min-w-0 flex-wrap items-center gap-2 text-foreground">
-                      <SelectField
-                        value={mdType}
-                        onValueChange={(v) => setMdType(v as "percent" | "amount")}
-                        ariaLabel="Manual discount type"
-                        className="w-44"
-                        options={[
-                          { value: "percent", label: "Percentage (%)" },
-                          { value: "amount", label: "Fixed amount" },
-                        ]}
-                      />
-                      <Input
-                        type="number"
-                        min={mdType === "percent" ? 1 : 0}
-                        max={mdType === "percent" ? 100 : undefined}
-                        step={mdType === "percent" ? 1 : 0.01}
-                        ref={mdValueRef}
-                        value={mdValue}
-                        onChange={(e) => setMdValue(e.target.value)}
-                        placeholder="Value"
-                        className="w-28 tabular-nums"
-                        aria-label="Manual discount value"
-                        aria-invalid={mdValueInvalid ? true : undefined}
-                      />
-                      <SelectField
-                        value={mdDuration}
-                        onValueChange={(v) => setMdDuration(v as "one_time" | "forever")}
-                        ariaLabel="Manual discount duration"
-                        className="w-36"
-                        options={[
-                          { value: "one_time", label: "One time" },
-                          { value: "forever", label: "Forever" },
-                        ]}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setMdOpen(false);
-                          setMdValue("");
-                        }}
+                  </InlineEditorPanel>
+                ) : null}
+                {mdOpen ? (
+                  <InlineEditorPanel
+                    title="Manual discount"
+                    closeLabel="Remove manual discount"
+                    onClose={() => {
+                      setMdOpen(false);
+                      setMdValue("");
+                    }}
+                  >
+                    <div className="grid items-start gap-x-4 gap-y-3 sm:grid-cols-3">
+                      <Field name="md_type" label="Discount type">
+                        <SelectField
+                          id="md_type"
+                          value={mdType}
+                          onValueChange={(v) => setMdType(v as "percent" | "amount")}
+                          ariaLabel="Discount type"
+                          options={DISCOUNT_TYPE_OPTIONS}
+                        />
+                      </Field>
+                      <Field
+                        name="md_value"
+                        label={mdType === "percent" ? "Percent off" : "Amount off"}
+                        help={mdType === "percent" ? "From 1 to 100." : `In ${currency}.`}
+                        error={
+                          mdValueInvalid
+                            ? mdType === "percent"
+                              ? "Percent must be between 1 and 100."
+                              : "Enter an amount greater than zero."
+                            : undefined
+                        }
                       >
-                        Remove
-                      </Button>
-                      {mdValueInvalid ? (
-                        <p className="w-full text-xs font-medium text-destructive">
-                          {mdType === "percent"
-                            ? "Percent must be between 1 and 100."
-                            : "Enter an amount greater than zero."}
-                        </p>
-                      ) : null}
+                        <Input
+                          id="md_value"
+                          type="number"
+                          min={mdType === "percent" ? 1 : 0}
+                          max={mdType === "percent" ? 100 : undefined}
+                          step={mdType === "percent" ? 1 : 0.01}
+                          ref={mdValueRef}
+                          value={mdValue}
+                          onChange={(e) => setMdValue(e.target.value)}
+                          className="tabular-nums"
+                          aria-invalid={mdValueInvalid ? true : undefined}
+                        />
+                      </Field>
+                      <Field name="md_duration" label="Duration">
+                        <SelectField
+                          id="md_duration"
+                          value={mdDuration}
+                          onValueChange={(v) => setMdDuration(v as "one_time" | "forever")}
+                          ariaLabel="Duration"
+                          options={DISCOUNT_DURATION_OPTIONS}
+                        />
+                      </Field>
                     </div>
-                  ) : null}
-                </LineActionsBar>
+                  </InlineEditorPanel>
+                ) : null}
               </>
             }
           >
@@ -3856,9 +4026,15 @@ export function SubscriptionChangeForm({
 
               {/* Term: offered only when the engine says this reactivation can continue it. */}
               {reactivating && !reactTrialEnd && reactEstimate?.in_term_available ? (
-                <div className="space-y-2">
-                  <span className="text-sm font-medium">Term</span>
-                  <RadioField
+                <FieldBlock
+                  label="Term"
+                  help={
+                    reactTerm === "continue"
+                      ? "Dunning cancelled this subscription inside its term. The term continues and we raise no new invoice."
+                      : "A new term starts today, and we bill it. The open invoice of the cancelled term stays open."
+                  }
+                >
+                  <ChoiceCardsField
                     name="reactivation_term"
                     ariaLabel="Term"
                     value={reactTerm}
@@ -3868,60 +4044,54 @@ export function SubscriptionChangeForm({
                       { value: "new", label: "Start a new term today" },
                     ]}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {reactTerm === "continue"
-                      ? "Dunning cancelled this subscription inside its term. The term continues and we raise no new invoice."
-                      : "A new term starts today, and we bill it. The open invoice of the cancelled term stays open."}
-                  </p>
-                </div>
+                </FieldBlock>
               ) : null}
 
-              {/* Billing cycles cap */}
-              <div className="space-y-2">
-                <span className="text-sm font-medium">Billing Cycles</span>
-                <div className="flex flex-wrap items-center gap-4">
-                  <RadioField
-                    name="billing_cycles_mode"
-                    ariaLabel="Billing cycles"
-                    value={billingCyclesMode}
-                    onValueChange={(v) => setBillingCyclesMode(v as "forever" | "limited")}
-                    className="flex flex-row items-center gap-6"
-                    options={[
-                      { value: "forever", label: "Forever" },
-                      { value: "limited", label: "Limited to" },
-                    ]}
-                  />
-                  {/* The count sits beside the "Limited to" option rather than
-                      inside its label — typing in it selects that option. */}
-                  <span className="flex items-center gap-2 text-sm">
+              {/* Billing cycles cap. Same cards as the edit form's billing cycles. */}
+              <FieldBlock
+                label="Billing cycles"
+                help="The number of terms to bill before the subscription cancels automatically."
+              >
+                <ChoiceCardsField
+                  name="billing_cycles_mode"
+                  ariaLabel="Billing cycles"
+                  value={billingCyclesMode}
+                  onValueChange={(v) => setBillingCyclesMode(v as "forever" | "limited")}
+                  options={[
+                    { value: "forever", label: "Forever", hint: "Renews until cancelled" },
+                    {
+                      value: "limited",
+                      label: "A set number of cycles",
+                      hint: "Cancels after the last cycle",
+                    },
+                  ]}
+                />
+                {billingCyclesMode === "limited" ? (
+                  <Field
+                    name="reactivation_cycles"
+                    label="Number of billing cycles"
+                    className="pt-1"
+                  >
                     <Input
+                      id="reactivation_cycles"
                       type="number"
                       min={1}
                       step={1}
                       value={billingCyclesN}
-                      onChange={(e) => {
-                        setBillingCyclesN(e.target.value);
-                        setBillingCyclesMode("limited");
-                      }}
-                      placeholder="N"
-                      className="w-24"
-                      aria-label="Number of billing cycles"
+                      onChange={(e) => setBillingCyclesN(e.target.value)}
+                      className="w-30 tabular-nums"
                     />
-                    cycles
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  The number of terms to bill before the subscription cancels automatically.
-                </p>
-              </div>
+                  </Field>
+                ) : null}
+              </FieldBlock>
 
               {/* Trial end (optional) */}
               <Field
                 name="reactivation_trial_end"
-                label="Trial End At (optional)"
+                label="Trial end"
                 help={
                   <>
-                    Reactivate into a trial that ends at this time. No charge until then.
+                    Optional. We charge nothing until the trial ends.
                     {reactEstimate?.in_term_available ? " A trial always starts a new term." : null}
                     {reactTrialEnd && new Date(reactTrialEnd).getTime() < Date.now() ? (
                       <span className="ml-1 text-warning">You have selected a past date.</span>
@@ -3930,17 +4100,24 @@ export function SubscriptionChangeForm({
                 }
               >
                 <DateTimeField
+                  id="reactivation_trial_end"
                   defaultValue={reactTrialEnd}
                   onUtcChange={setReactTrialEnd}
-                  className="w-64"
+                  className="w-72 max-w-full"
                 />
               </Field>
 
               {/* Invoicing options. Omitted in term: there is no new charge to place. */}
               {reactInTerm ? null : (
-                <div className="space-y-2">
-                  <span className="text-sm font-medium">When should the invoice be generated?</span>
-                  <RadioField
+                <FieldBlock
+                  label="When should the invoice be generated?"
+                  help={
+                    reactTrialEnd
+                      ? "We generate no invoice during the trial. The first charge occurs when the trial ends."
+                      : "Unbilled charges go on the next renewal invoice. We do not bill them now."
+                  }
+                >
+                  <ChoiceCardsField
                     name="charges_handling"
                     ariaLabel="When should the invoice be generated?"
                     value={chargesHandling}
@@ -3958,19 +4135,24 @@ export function SubscriptionChangeForm({
                       },
                     ]}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {reactTrialEnd
-                      ? "We generate no invoice during the trial. The first charge occurs when the trial ends."
-                      : "Unbilled charges go on the next renewal invoice. We do not bill them now."}
-                  </p>
-                </div>
+                </FieldBlock>
               )}
 
               {/* Only when a charge is taken on apply: otherwise there is no payment to fail. */}
               {reactChargesNow ? (
-                <div className="space-y-2">
-                  <span className="text-sm font-medium">If the payment fails</span>
-                  <RadioField
+                <FieldBlock
+                  label="If the payment fails"
+                  help={
+                    <>
+                      Applies to this reactivation only. The business setting is &ldquo;
+                      {reactivationChargeFailure === "refuse"
+                        ? "Do not reactivate"
+                        : "Reactivate, and dunning collects the invoice"}
+                      &rdquo;.
+                    </>
+                  }
+                >
+                  <ChoiceCardsField
                     name="on_charge_failure"
                     ariaLabel="If the payment fails"
                     value={chargeFailure}
@@ -3990,14 +4172,7 @@ export function SubscriptionChangeForm({
                       },
                     ]}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Applies to this reactivation only. The business setting is &ldquo;
-                    {reactivationChargeFailure === "refuse"
-                      ? "Do not reactivate"
-                      : "Reactivate, and dunning collects the invoice"}
-                    &rdquo;.
-                  </p>
-                </div>
+                </FieldBlock>
               ) : null}
             </div>
           ) : (
@@ -4019,7 +4194,7 @@ export function SubscriptionChangeForm({
                     ...(allowNow
                       ? [{ value: "immediately", label: "Immediately", hint: applyHint }]
                       : []),
-                    // "On next renewal (end of term)", and "On activation" while the
+                    // "On next renewal", and "On activation" while the
                     // subscription is in a trial — one option, because both are the same
                     // schedule at the same boundary (see `termEndAnchor`). Omitted only
                     // when there is no such boundary to resolve at all.
@@ -4027,9 +4202,7 @@ export function SubscriptionChangeForm({
                       ? [
                           {
                             value: "end_of_term",
-                            label: inTrial
-                              ? "On activation (end of trial)"
-                              : "On next renewal (end of term)",
+                            label: inTrial ? "On activation" : "On next renewal",
                             hint: fmtDateTime(termEndAnchor!, tz),
                           },
                         ]
@@ -4067,7 +4240,7 @@ export function SubscriptionChangeForm({
                     checked={resetTerm || frequencyChanged}
                     disabled={frequencyChanged}
                     onCheckedChange={setResetTerm}
-                    label="Reset billing term: start a new term today"
+                    label="Start a new term today"
                     hint={
                       inTrial
                         ? "During a trial, the term is the trial period, and we never move its start. A frequency change only changes the cadence of the first paid term."
@@ -4095,12 +4268,14 @@ export function SubscriptionChangeForm({
                 </p>
               ) : null}
               {applyWhen === "specific_date" ? (
-                <DateTimeField
-                  defaultValue={applyAt}
-                  onUtcChange={setApplyAt}
-                  className="w-64 max-w-full"
-                  aria-label="Apply at"
-                />
+                <Field name="apply_at" label="Apply on">
+                  <DateTimeField
+                    id="apply_at"
+                    defaultValue={applyAt}
+                    onUtcChange={setApplyAt}
+                    className="w-72 max-w-full"
+                  />
+                </Field>
               ) : null}
               {/* Both deferred modes take the same POST …/schedule path, which carries the
                   whole composition edit and applies it in one transaction when it lands.
@@ -4125,25 +4300,52 @@ export function SubscriptionChangeForm({
           <RecordCard title="Invoicing">
             {invoicingOptionApplies ? (
               <div className="flex flex-col gap-2">
-                <FieldBlock label="How should this change be invoiced?">
-                  <ChoiceCardsField
-                    ariaLabel="How should this change be invoiced?"
-                    value={invoiceImmediately ? "true" : "false"}
-                    onValueChange={(v) => setInvoiceImmediately(v === "true")}
-                    options={[
-                      {
-                        value: "true",
-                        label: "Invoice immediately",
-                        hint: "Raises the proration invoice now and tries to collect from the payment method.",
-                      },
-                      {
-                        value: "false",
-                        label: "Add to unbilled charges",
-                        hint: "We add the charges to this subscription and bill them on the next renewal invoice, with tax and account credits. No money moves now.",
-                      },
-                    ]}
-                  />
-                </FieldBlock>
+                {/* A net credit is never queued (see `netCredit`): the same field then picks
+                    `net_credit_documents`, and the options say so. */}
+                {netCredit ? (
+                  // Named after the setting "Documents for a credit from a change".
+                  <FieldBlock
+                    label="Documents for the credit"
+                    help={
+                      changeRules.net_credit_documents
+                        ? ruleHelp(NET_CREDIT_DOCUMENT_LABELS[changeRules.net_credit_documents])
+                        : `Applies to this change only. The business has not saved this setting, so this change gets “${NET_CREDIT_DOCUMENT_LABELS[unsavedDocumentsDefault]}”.`
+                    }
+                  >
+                    <ChoiceCardsField
+                      ariaLabel="Documents for the credit"
+                      value={documentsChoice}
+                      onValueChange={(v) => setDocumentsChoice(v as NetCreditDocuments)}
+                      options={(["credit_note_and_invoice", "one_credit_note"] as const).map(
+                        (v) => ({
+                          value: v,
+                          label: NET_CREDIT_DOCUMENT_LABELS[v],
+                          hint: NET_CREDIT_DOCUMENT_OUTCOMES[v],
+                        }),
+                      )}
+                    />
+                  </FieldBlock>
+                ) : (
+                  <FieldBlock label="How should this change be invoiced?">
+                    <ChoiceCardsField
+                      ariaLabel="How should this change be invoiced?"
+                      value={invoiceImmediately ? "true" : "false"}
+                      onValueChange={(v) => setInvoiceImmediately(v === "true")}
+                      options={[
+                        {
+                          value: "true",
+                          label: "Invoice immediately",
+                          hint: "We raise the proration invoice now. With auto-collection on, we charge the payment method. With auto-collection off, we send the invoice.",
+                        },
+                        {
+                          value: "false",
+                          label: "Add to unbilled charges",
+                          hint: "We add the charges to this subscription and bill them on the next renewal invoice, with tax and account credits. No money moves now.",
+                        },
+                      ]}
+                    />
+                  </FieldBlock>
+                )}
                 {removes.length > 0 ? (
                   <p className="text-xs text-muted-foreground">
                     Removals always credit unused time as a credit note. This choice applies to
@@ -4215,11 +4417,11 @@ export function SubscriptionChangeForm({
               {showPlanCredits ? (
                 <FieldBlock
                   label="Plan credits"
-                  help={ruleHelp(
+                  help={`${planCreditsOutcome} ${ruleHelp(
                     downgrading
                       ? CREDIT_DOWNGRADE_LABELS[changeRules.plan_credits.downgrade]
                       : CREDIT_UPGRADE_LABELS[changeRules.plan_credits.upgrade],
-                  )}
+                  )}`}
                 >
                   <SelectField
                     ariaLabel="Plan credits"
@@ -4258,59 +4460,70 @@ export function SubscriptionChangeForm({
             mono
             reason="Fixed once the subscription is created."
           />
-          {/*
-            Same control, same wording, same resolved-inherit hint as create's. The inherit
-            option states the RESOLVED value: the customer's stored `auto_collection`, which
-            is what the engine falls back to when the subscription's own column is null.
-          */}
-          <Field
-            name="auto_collection"
-            label="Auto-collection"
-            help={
-              <>
-                Auto-collection tries to charge the customer&apos;s payment method automatically
-                each time we create an invoice.
-                {autoCollectionState === "" && customerAutoCollection ? (
-                  <>
-                    {" "}
-                    {customerAutoCollection === "on"
-                      ? `${customerName} uses auto-collection, so we charge invoices on this subscription to their payment method automatically.`
-                      : `${customerName} uses manual collection, so we send invoices on this subscription instead of charging them.`}
-                  </>
-                ) : null}
-              </>
-            }
-          >
-            <SelectField
-              ariaLabel="Auto-collection"
-              value={autoCollectionState}
-              onValueChange={setAutoCollectionState}
-              options={[
-                {
-                  value: "",
-                  label: customerAutoCollection
-                    ? `Use customer's setting (currently ${customerAutoCollection === "on" ? "On" : "Off"})`
-                    : "Use customer's setting",
-                },
-                { value: "on", label: "On: charge the card automatically" },
-                { value: "off", label: "Off: send the invoice" },
-              ]}
-            />
-          </Field>
-          <Field name="po_number" label="PO number" help="Enter the Purchase Order Number.">
+          <Field name="po_number" label="PO number" help="Your customer's purchase order number.">
             <Input
+              id="po_number"
               value={poNumberState}
               onChange={(e) => setPoNumberState(e.target.value)}
               maxLength={100}
             />
           </Field>
-          <Field name="invoice_notes" label="Invoice notes">
-            <Input
-              value={invoiceNotesState}
-              onChange={(e) => setInvoiceNotesState(e.target.value)}
-              maxLength={2000}
-            />
-          </Field>
+          {/*
+            Same control, same wording, same resolved-inherit hint as create's. The inherit
+            option states the RESOLVED value: the customer's stored `auto_collection`, which
+            is what the engine falls back to when the subscription's own column is null.
+          */}
+          <Wide>
+            <Field
+              name="auto_collection"
+              label="Auto-collection"
+              help={
+                <>
+                  Auto-collection tries to charge the customer&apos;s payment method automatically
+                  each time we create an invoice.
+                  {autoCollectionState === "" && customerAutoCollection ? (
+                    <>
+                      {" "}
+                      {customerAutoCollection === "on"
+                        ? `${customerName} uses auto-collection, so we charge invoices on this subscription to their payment method automatically.`
+                        : `${customerName} uses manual collection, so we send invoices on this subscription instead of charging them.`}
+                    </>
+                  ) : null}
+                </>
+              }
+            >
+              <SelectField
+                ariaLabel="Auto-collection"
+                value={autoCollectionState}
+                onValueChange={setAutoCollectionState}
+                options={[
+                  {
+                    value: "",
+                    label: customerAutoCollection
+                      ? `Customer's setting (${customerAutoCollection === "on" ? "On" : "Off"})`
+                      : "Customer's setting",
+                  },
+                  { value: "on", label: "On: charge the card automatically" },
+                  { value: "off", label: "Off: send the invoice" },
+                ]}
+                className="sm:max-w-sm"
+              />
+            </Field>
+          </Wide>
+          <Wide>
+            <Field
+              name="invoice_notes"
+              label="Invoice notes"
+              help="We print this note on each invoice of this subscription."
+            >
+              <Input
+                id="invoice_notes"
+                value={invoiceNotesState}
+                onChange={(e) => setInvoiceNotesState(e.target.value)}
+                maxLength={2000}
+              />
+            </Field>
+          </Wide>
           {/* Billing cycles. Semantics and copy are BillingCyclesInline's, deliberately:
               "2" alone is ambiguous about whether the current term counts, and getting that
               wrong ends a paying subscription a term early. Omitted while reactivating —
@@ -4346,18 +4559,21 @@ export function SubscriptionChangeForm({
                   ]}
                 />
                 {cyclesMode === "count" ? (
-                  <span className="flex items-center gap-2 text-sm">
+                  <Field
+                    name="remaining_billing_cycles"
+                    label="Renewals after the current term"
+                    className="pt-1"
+                  >
                     <Input
+                      id="remaining_billing_cycles"
                       type="number"
                       min={0}
                       step={1}
                       value={cyclesN}
                       onChange={(e) => setCyclesN(e.target.value)}
-                      className="w-24 tabular-nums"
-                      aria-label="Renewals remaining after the current term"
+                      className="w-30 tabular-nums"
                     />
-                    after the current term
-                  </span>
+                  </Field>
                 ) : null}
               </FieldBlock>
             </Wide>
@@ -4367,10 +4583,12 @@ export function SubscriptionChangeForm({
               <div className="flex flex-col gap-4">
                 <Field
                   name="trial_end_at"
-                  label="Trial End At"
+                  label="Trial end"
                   help="Moves the trial end. The first charge occurs then."
                 >
                   <DateTimeField
+                    id="trial_end_at"
+                    className="w-72 max-w-full"
                     defaultValue={trialEndAt}
                     onUtcChange={setTrialEndAt}
                     disabled={endTrialNow}

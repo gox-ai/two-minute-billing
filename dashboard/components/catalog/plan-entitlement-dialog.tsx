@@ -58,8 +58,8 @@ export function PlanEntitlementDialog({
   const linked = same && linkable;
   const [reset, setReset] = React.useState<ResetDraft>(() => draftOf(edit?.reset));
   const [open, setOpen] = React.useState(false);
-  const [featureKey, setFeatureKey] = React.useState(edit?.feature ?? "");
-  const [unlimited, setUnlimited] = React.useState(edit?.value === "unlimited");
+  const [featureKey, setFeatureKey] = useDefaultState(edit?.feature ?? "");
+  const [unlimited, setUnlimited] = useDefaultState(edit?.value === "unlimited");
   const [seq, setSeq] = React.useState(0);
 
   const onOpenChange = (next: boolean) => {

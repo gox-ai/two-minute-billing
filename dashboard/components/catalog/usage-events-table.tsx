@@ -8,8 +8,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Chip, StatusChip } from "@/components/patterns/chip";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import type { UsageEvent } from "@/lib/api/meters";
+import { eventCreditLines, refusedForCredit, type UnitNames } from "@/lib/meter-credit-cost";
 
 const FLAG_LABEL: Record<string, string> = {
   no_meter: "No meter",
@@ -22,22 +23,29 @@ export function UsageEventsTable({
   events,
   tz,
   valueProperty,
+  units = {},
 }: {
   biz: string;
   events: UsageEvent[];
   tz?: string | null;
   /** The meter's value property, shown in its own column. */
   valueProperty?: string | null;
+  /** Credit unit names by key, for the Credits column. */
+  units?: Record<string, UnitNames>;
 }) {
+  // Only a page with an event of a meter that has a credit cost gets the column.
+  const showCredit = events.some((e) => e.credit?.length);
+  const names = (key: string): UnitNames => units[key] ?? { name: key, plural: key };
   return (
-    <Table>
+    <Table phone="stack">
       <TableHeader>
         <TableRow>
           <TableHead className="pl-5">Event time</TableHead>
           <TableHead>Customer</TableHead>
           {valueProperty ? <TableHead className="text-right">{valueProperty}</TableHead> : null}
           <TableHead>Properties</TableHead>
-          <TableHead>Status</TableHead>
+          <TableHead phone="aside">Status</TableHead>
+          {showCredit ? <TableHead>Credits</TableHead> : null}
           <TableHead className="pr-5">Key</TableHead>
         </TableRow>
       </TableHeader>
@@ -82,7 +90,12 @@ export function UsageEventsTable({
               </TableCell>
               <TableCell>
                 <span className="flex flex-wrap gap-1">
-                  <StatusChip status={e.status} />
+                  {/* Refused for credit: stored, but no usage or invoice counts it. */}
+                  {refusedForCredit(e) && e.status !== "voided" ? (
+                    <Chip>Refused</Chip>
+                  ) : (
+                    <StatusChip status={e.status} />
+                  )}
                   {e.flags.map((f) => (
                     <Chip key={f} tone="tan">
                       {FLAG_LABEL[f] ?? f.replace(/_/g, " ")}
@@ -90,6 +103,22 @@ export function UsageEventsTable({
                   ))}
                 </span>
               </TableCell>
+              {showCredit ? (
+                <TableCell className="max-w-72 text-xs whitespace-normal">
+                  {e.credit?.length
+                    ? e.credit.map((c) => (
+                        <div key={c.meter} className="flex flex-col">
+                          {e.credit!.length > 1 ? (
+                            <span className="font-mono text-muted-foreground">{c.meter}</span>
+                          ) : null}
+                          {eventCreditLines(c, names(c.unit)).map((l) => (
+                            <span key={l}>{l}</span>
+                          ))}
+                        </div>
+                      ))
+                    : "—"}
+                </TableCell>
+              ) : null}
               <TableCell className="max-w-56 pr-5 font-mono text-xs wrap-anywhere whitespace-normal">
                 {e.key}
               </TableCell>

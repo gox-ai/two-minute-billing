@@ -4,9 +4,13 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { money } from "@/lib/format";
+import type { PortalInvoice, PortalMe } from "@/lib/portal-api";
 import { NoticeCard } from "../../chrome";
 import { portalInvoiceStateAction, portalPayInvoiceAction } from "./actions";
+import { PayInvoiceButton } from "./pay-invoice";
+import { payableNow } from "./portal-state";
 import {
   clearPendingPayment,
   consumePaymentReturn,
@@ -29,6 +33,10 @@ type Watch = {
   currency: string | null;
   state: "finishing" | "processing" | "paid" | "failed";
   slow: boolean;
+  /** The engine's or the gateway's own refusal, when it gave one. */
+  reason?: string;
+  /** The invoice as last read, for a failed payment: its number and the Pay button. */
+  read?: PortalInvoice;
 };
 
 /**
@@ -58,7 +66,16 @@ type Watch = {
  * is paid or the payment fails, and holds the invoice's "Pay now" off for as long as it
  * is in flight — not on a timer, and not on a list refresh landing.
  */
-export function PaymentReturn({ scope }: { scope: string }) {
+export function PaymentReturn({
+  scope,
+  me,
+  invoices,
+}: {
+  scope: string;
+  me: PortalMe;
+  /** The page's invoice list: refreshed with the page, so it shows a later payment too. */
+  invoices: PortalInvoice[];
+}) {
   const router = useRouter();
   const [watch, setWatch] = React.useState<Watch | null>(null);
   // Exactly once per return, even under StrictMode's double-invoked effects in dev.
@@ -75,6 +92,16 @@ export function PaymentReturn({ scope }: { scope: string }) {
     ran.current = true;
 
     const pending = readPendingPayment(scope);
+    /** A failed payment names the invoice by its number and offers Pay on the card. */
+    const readInvoice = async (invoice: string) => {
+      const read = await portalInvoiceStateAction(invoice);
+      if (!read.ok) return;
+      setWatch((w) =>
+        w && w.invoice === invoice
+          ? { ...w, number: w.number ?? read.invoice.number, read: read.invoice }
+          : w,
+      );
+    };
     if (ret === "cancel") {
       clearPendingPayment(scope);
       toast("Payment not completed");
@@ -91,6 +118,7 @@ export function PaymentReturn({ scope }: { scope: string }) {
         state: "failed",
         slow: false,
       });
+      void readInvoice(pending.invoice);
       return;
     }
     /**
@@ -120,6 +148,7 @@ export function PaymentReturn({ scope }: { scope: string }) {
     const settle = (state: "paid" | "failed") => {
       markPaymentProcessing(scope, invoice, false);
       setWatch((w) => (w ? { ...w, state } : w));
+      if (state === "failed") void readInvoice(invoice);
       router.refresh();
     };
 
@@ -192,9 +221,15 @@ export function PaymentReturn({ scope }: { scope: string }) {
       router.refresh();
       const refused = (message: string, quiet = false) => {
         markPaymentProcessing(scope, invoice, false);
-        setWatch(null);
-        if (quiet) toast(message);
-        else toast.error(message);
+        if (quiet) {
+          setWatch(null);
+          return void toast(message);
+        }
+        // Kept on the page, not a toast: the buyer has just come back from the gateway and
+        // a toast that closes by itself leaves an unchanged invoice with no reason.
+        const reason = /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`;
+        setWatch((w) => (w ? { ...w, state: "failed", reason } : w));
+        void readInvoice(invoice);
       };
       // "You do not need to do anything": the webhook still settles it, so keep watching.
       if (!res.ok && NOT_YET_CONFIRMED.test(res.error)) return void follow(false);
@@ -202,7 +237,10 @@ export function PaymentReturn({ scope }: { scope: string }) {
       // A second `action_required` would mean the gateway wants another challenge; the
       // invoice row is the honest place to start that again rather than looping here.
       if (res.result.object === "invoice_collection")
-        return refused("Your bank needs one more step. Open Pay now again to finish.", true);
+        return refused(
+          "Your bank needs one more step. Select Pay on the invoice again to finish.",
+          true,
+        );
       if (res.result.payment_error) return refused(res.result.payment_error.message);
       const inv = res.result;
       setWatch((w) =>
@@ -224,33 +262,84 @@ export function PaymentReturn({ scope }: { scope: string }) {
   if (!watch) return null;
   const amount =
     watch.amountMinor != null && watch.currency ? money(watch.amountMinor, watch.currency) : null;
-  const label = watch.number ?? watch.invoice;
+  // The list is refreshed with the page, so it is the fresher of the two.
+  const inv = invoices.find((i) => i.id === watch.invoice) ?? watch.read ?? null;
+  const number = watch.number ?? inv?.number ?? null;
+  // Paid after all (the webhook, or a new try below): never "not received" over a paid invoice.
+  const state = watch.state === "failed" && inv?.status === "paid" ? "paid" : watch.state;
   return (
     <div className="mb-6">
-      {watch.state === "finishing" ? (
+      {state === "finishing" ? (
         <NoticeCard icon={<Loader2 className="animate-spin" />} title="Finishing your payment">
           We are confirming the payment that you approved. This takes a few seconds.
         </NoticeCard>
-      ) : watch.state === "processing" ? (
+      ) : state === "processing" ? (
         <NoticeCard icon={<Loader2 className="animate-spin" />} title="Payment in progress">
           <p>
             Your bank is still confirming the{" "}
-            {amount ? <span className="font-medium tabular-nums">{amount}</span> : null} payment for
-            invoice <span className="font-mono">{label}</span>.{" "}
+            {amount ? <span className="font-medium tabular-nums">{amount}</span> : null} payment
+            {number ? (
+              <>
+                {" "}
+                for invoice <span className="font-medium">{number}</span>
+              </>
+            ) : null}
+            .{" "}
             {watch.slow
               ? "This takes longer than usual. You do not have to do anything. We will email your receipt when the payment completes."
               : "You do not have to do anything. This usually takes a few seconds."}
           </p>
         </NoticeCard>
-      ) : watch.state === "paid" ? (
+      ) : state === "paid" ? (
         <NoticeCard icon={<CheckCircle2 />} tone="success" title="Payment received">
-          Thank you. Invoice <span className="font-mono">{label}</span> is paid.
+          {number ? (
+            <>
+              Thank you. Invoice <span className="font-medium">{number}</span> is paid.
+            </>
+          ) : (
+            "Thank you. We received your payment."
+          )}
         </NoticeCard>
       ) : (
         <NoticeCard icon={<AlertCircle />} title="Payment not received">
-          Your bank did not accept the payment for invoice{" "}
-          <span className="font-mono">{label}</span>. Select Pay now to try again, or use a
-          different payment method.
+          <div className="flex flex-col gap-3 text-left">
+            <p className="text-center">
+              {number ? (
+                <>
+                  We did not receive the payment for invoice{" "}
+                  <span className="font-medium">{number}</span>.
+                </>
+              ) : (
+                "We did not receive your payment."
+              )}
+            </p>
+            <Alert tone="error">{watch.reason ?? "The payment did not finish."}</Alert>
+            {inv && payableNow(inv) ? (
+              <>
+                <p className="text-center">
+                  Select Pay {money(inv.amount_due_minor, inv.currency)} to try again, or use a
+                  different payment method.
+                </p>
+                {/* Outline: the page below already has a filled Pay for this invoice. */}
+                <div className="flex flex-wrap justify-center gap-2">
+                  <PayInvoiceButton
+                    invoice={inv.id}
+                    currency={inv.currency}
+                    amountMinor={inv.amount_due_minor}
+                    me={me}
+                    scope={scope}
+                    variant="outline"
+                    size="default"
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-center">
+                To try again, select the Pay button of the invoice in Invoices. You can also use a
+                different payment method.
+              </p>
+            )}
+          </div>
         </NoticeCard>
       )}
     </div>

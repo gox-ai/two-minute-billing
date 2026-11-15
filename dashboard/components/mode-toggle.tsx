@@ -4,6 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { openTestModeAction } from "@/app/actions";
 import { useDashboardMode } from "@/components/mode-provider";
+import { FlaskConical, Radio } from "lucide-react";
+import { useNavCollapse } from "@/components/nav-collapse";
+import { NAV_FOCUS, RailTip } from "@/components/rail-tip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,6 +19,7 @@ import { cn } from "@/lib/utils";
  * test business, there is no other mode and this renders nothing.
  */
 export function ModeToggle() {
+  const { collapsed } = useNavCollapse();
   const path = usePathname();
   const state = useDashboardMode();
   const b = state?.business;
@@ -30,7 +34,7 @@ export function ModeToggle() {
   // One row at nav height: the label says what it is, and the lit segment carries the
   // state as a dot — the same quiet register as a status chip.
   const pill = (
-    <span className="flex items-center rounded-lg bg-muted p-0.5 text-xs font-medium">
+    <span className="flex items-center rounded-md bg-muted p-0.5 text-xs font-medium">
       {(["live", "test"] as const).map((m) => (
         <span
           key={m}
@@ -50,8 +54,47 @@ export function ModeToggle() {
       ))}
     </span>
   );
-  const row = "flex w-full items-center justify-between px-2.5 py-1";
+  const row = cn("flex w-full items-center justify-between px-2.5 py-1", NAV_FOCUS);
   const caption = <span className="text-sm text-muted-foreground">Mode</span>;
+
+  // Collapsed rail: one icon row for the current mode; the tooltip names the switch.
+  if (collapsed) {
+    const Icon = mode === "test" ? FlaskConical : Radio;
+    const icon = (
+      <>
+        <Icon
+          className={cn("size-4 shrink-0", mode === "test" ? "text-warning" : "text-success")}
+        />
+        <span className="nav-label">{label}</span>
+      </>
+    );
+    const cls = cn(
+      "nav-row flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/60",
+      NAV_FOCUS,
+    );
+    return otherId ? (
+      <RailTip label={label}>
+        <Link
+          href={`/businesses/${encodeURIComponent(otherId)}${section ? `/${section}` : ""}`}
+          aria-label={label}
+          data-nav-label="Mode"
+          className={cls}
+        >
+          {icon}
+        </Link>
+      </RailTip>
+    ) : (
+      <form action={openTestModeAction}>
+        <input type="hidden" name="biz" value={b.id} />
+        <input type="hidden" name="section" value={section ?? ""} />
+        <RailTip label={label}>
+          <button type="submit" aria-label={label} data-nav-label="Mode" className={cls}>
+            {icon}
+          </button>
+        </RailTip>
+      </form>
+    );
+  }
 
   if (otherId) {
     return (

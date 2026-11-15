@@ -16,7 +16,7 @@ operator row's key is its own public id.
 - `handleDisputeEvent(ev, ctx)` — process a normalized `dispute.*` event: upsert the row, drive its
   lifecycle status, and post the balanced ledger entries for the cash movement.
 - `recordOperatorDispute` / `recordDisputeOutcome` — the hand-recorded path (see below).
-- Read: `listDisputes`, `getDispute`, `serializeDispute`.
+- Read: `listDisputes`, `getDispute`, `serializeDispute`, `loadDisputeRefs` (the linked records).
 
 ## Data model
 `db/schema/disputes.ts` — `disputes` (publicId `dsp_…`, org/business/customer/payment/invoice ids,
@@ -88,6 +88,14 @@ row update + event emit.
   happen on a no-feed gateway; tmtest can do both and is the only place it would double-book.
 
 ## Changelog
+- **2026-11-12** — The list takes `customer` (`cus_…`): only that customer's disputes; an unknown
+  id answers empty. The assistant's customer read uses it for open disputes.
+- **2026-11-11** — **A dispute names its records.** The API adds `customer`, `customer_name`,
+  `invoice`, `invoice_number`, `subscription` (through the invoice) and `transaction`, read in four
+  batched queries (`loadDisputeRefs`). Correlation retries with `providerIntentId` when the charge
+  id misses: a PayPal charge that did not complete at once is stored under its order id, and the
+  dispute names the capture, so the adapter now reads the capture's order on a dispute. Engine
+  `D7`; conformance `S5.*.linked` on every gateway.
 - **2026-11-03** — Chargeback policy fixes (every business with a policy): the actions run (they
   passed the subscription's PUBLIC id and always failed); a policy cancel takes none of the cancel
   money defaults (no credit, refund, collection or write-off); the cascade skips the customer's

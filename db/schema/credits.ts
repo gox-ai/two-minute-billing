@@ -7,7 +7,9 @@ import {
   bigint,
   smallint,
   boolean,
+  integer,
   jsonb,
+  numeric,
   timestamp,
   uniqueIndex,
   index,
@@ -15,7 +17,8 @@ import {
 import { organizations, businesses } from "./tenancy";
 import { customers } from "./customers";
 import { invoices } from "./invoices";
-import { subscriptionItems } from "./subscriptions";
+import { subscriptionItems, subscriptions } from "./subscriptions";
+import { products } from "./catalog";
 import { meters } from "./meters";
 import { users } from "./users";
 
@@ -47,19 +50,79 @@ export type CreditApplicability =
   | { kind: "prices"; prices: string[] }
   | { kind: "meters"; meters: string[] };
 
+export const IN_FLIGHT_APPLIES = ["always", "other_holds_open"] as const;
+export type InFlightApplies = (typeof IN_FLIGHT_APPLIES)[number];
+
+/** Usage past the credits in a free trial. `refuse` (absent) is the rule before the key. */
+export const TRIAL_USAGE = ["refuse", "overdraft_only", "as_paid"] as const;
+export type TrialUsage = (typeof TRIAL_USAGE)[number];
+/** Usage past the credits of a customer with no live subscription. */
+export const NO_SUBSCRIPTION_USAGE = ["block", "as_subscriber"] as const;
+export type NoSubscriptionUsage = (typeof NO_SUBSCRIPTION_USAGE)[number];
+/** When such a customer may go below zero, inside the overdraft limit. */
+export const NO_SUBSCRIPTION_OVERDRAFT = ["needs_payment_method", "always", "never"] as const;
+export type NoSubscriptionOverdraft = (typeof NO_SUBSCRIPTION_OVERDRAFT)[number];
+/** What a hard decline does to an automatic top-up. */
+export const AUTO_TOPUP_ON_HARD_DECLINE = ["disable", "keep_enabled"] as const;
+export type AutoTopupOnHardDecline = (typeof AUTO_TOPUP_ON_HARD_DECLINE)[number];
+/** A capture of a hold in units that uses more than the hold. */
+export const CAPTURE_OVER_HOLD = ["debt", "cap_at_hold"] as const;
+export type CaptureOverHold = (typeof CAPTURE_OVER_HOLD)[number];
+
 /** `businesses.credit_config` (0464). Absent keys take the API's defaults. */
 export type BusinessCreditConfig = {
   hold_default_seconds?: number;
   in_flight_share_bps?: number;
+  /** When the share caps a hold: every hold (absent), or only while other holds are open. */
+  in_flight_applies?: InFlightApplies;
   blocking_enabled?: boolean;
+  /**
+   * The buyer may turn an automatic top-up of a unit with no rate on and off in the portal.
+   * Absent = no: only an operator can.
+   */
+  portal_auto_topup?: boolean;
   on_exhausted_default?: CreditOnExhausted;
   overdraft_limit_minor?: Record<string, number>;
   top_up_limits?: Record<string, { min_minor?: number; max_minor?: number }>;
   /** Free credit an operator gives, per grant: refuse above `max_minor`, alert above the other. */
   grant_limits?: Record<string, { max_minor?: number; alert_above_minor?: number }>;
+  /**
+   * The same two limits for free credit in a unit with no rate, per unit key, in the unit's
+   * smallest step (as a grant's `amount`). Such a unit has no money value, so `grant_limits`
+   * does not apply to it.
+   */
+  unit_grant_limits?: Record<string, { max_units?: number; alert_above_units?: number }>;
   default_tax_treatment?: CreditTaxTreatment | null;
   /** Credit scope (2.55): narrows every grant scoped to all usage. Absent = no narrowing. */
   credit_scope?: Exclude<CreditApplicability, { kind: "metered" }> | null;
+  /**
+   * Usage paid in credits: how late an event may arrive and still be paid by the grant that
+   * was live at its timestamp. Absent = 12 hours. 0 = the balance at receipt always pays.
+   */
+  late_event_grace_hours?: number;
+  /**
+   * Automatic top-up (0530): try a soft decline again. Absent = on; false = the first decline
+   * turns the top-up off.
+   */
+  auto_topup_retries?: boolean;
+  /** Retry delays in hours, each from the try before: at most 4, at most 72 in total. Absent = [4, 12]. */
+  auto_topup_retry_hours?: number[];
+  /** The same list per payment method kind; a kind with none uses `auto_topup_retry_hours`. */
+  auto_topup_retry_hours_by_method?: Partial<Record<"card" | "bank_debit", number[]>>;
+  /** Absent = `refuse`: a free trial never goes below zero and never bills usage in money. */
+  trial_usage?: TrialUsage;
+  /** Absent = `block`: no live subscription, so the usage past the credits is refused. */
+  no_subscription_usage?: NoSubscriptionUsage;
+  /** Absent = `needs_payment_method`: a chargeable method and no unpaid overage invoice. */
+  no_subscription_overdraft?: NoSubscriptionOverdraft;
+  /** Days before the overshoot of a customer with no subscription is invoiced. Absent = 30. */
+  no_subscription_invoice_after_days?: number;
+  /** Expiry of credit given back after a correction or an invoice give-back. Absent = 12. */
+  restore_expiry_months?: number | "never";
+  /** Absent = `disable`. */
+  auto_topup_on_hard_decline?: AutoTopupOnHardDecline;
+  /** Absent = `debt`: the units past the hold are billed or taken below zero. */
+  capture_over_hold?: CaptureOverHold;
 };
 
 /** `customers.credit_settings` (0464): operator override, ignored after `override_expires_at`. */
@@ -99,6 +162,11 @@ export type PriceGrantsCredit =
       priority?: number;
       applicability?: CreditApplicability;
       on_exhausted?: CreditOnExhausted | null;
+      /**
+       * 0530: money per whole credit (a decimal, major units) for a unit with no rate. The
+       * grant is then paid credit: that share of the plan fee is deferred and recognised on use.
+       */
+      unit_cost_basis?: string;
       rollover?: {
         mode: "none" | "carry";
         percent?: number;
@@ -113,7 +181,8 @@ export type PriceGrantsCredit =
 
 /**
  * A business's own unit of credit (0460). Money is the implicit unit (`unit_id` NULL on a
- * grant). `key` is the catalog-family slug id. `locked_at` freezes currency, rate and decimals.
+ * grant). `key` is the catalog-family slug id. `locked_at` freezes currency, rate (and
+ * whether there is one) and decimals.
  */
 export const creditUnits = pgTable(
   "credit_units",
@@ -131,8 +200,8 @@ export const creditUnits = pgTable(
     name: text("name").notNull(),
     pluralName: text("plural_name").notNull(),
     currency: char("currency", { length: 3 }).notNull(),
-    /** Minor units per unit × 10^12. */
-    minorPerUnitE12: bigint("minor_per_unit_e12", { mode: "bigint" }).notNull(),
+    /** Minor units per unit × 10^12. NULL = no money rate: the credits are counted in units only. */
+    minorPerUnitE12: bigint("minor_per_unit_e12", { mode: "bigint" }),
     /** 0–4: grant amounts are integers in 10^-decimals steps. */
     decimals: smallint("decimals").notNull().default(0),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
@@ -175,7 +244,15 @@ export const creditGrants = pgTable(
     unitId: uuid("unit_id").references(() => creditUnits.id),
     /** Units in the unit's smallest step (money: minor units). */
     amount: bigint("amount", { mode: "bigint" }).notNull(),
+    /** 0 exactly when the unit has no rate (CHECK). */
     faceMinor: bigint("face_minor", { mode: "bigint" }).notNull(),
+    /** The unit has a money rate (money: always). Copied from the unit at insert (0525). */
+    unitRated: boolean("unit_rated").notNull().default(true),
+    /**
+     * No rate only: the grant's units are not in `credit_unit_balances` (0526). It has not
+     * started, or it ended and its renewal has not closed it yet.
+     */
+    outOfBalance: boolean("out_of_balance").notNull().default(false),
     costBasisMinor: bigint("cost_basis_minor", { mode: "bigint" })
       .notNull()
       .default(sql`0`),
@@ -232,6 +309,12 @@ export const creditGrants = pgTable(
     index("credit_grants_expiry_idx")
       .on(t.expiresAt)
       .where(sql`status = 'active' AND expires_at IS NOT NULL`),
+    index("credit_grants_out_of_balance_idx")
+      .on(t.customerId, t.unitId)
+      .where(sql`out_of_balance AND status = 'active'`),
+    index("credit_grants_unit_expiry_idx")
+      .on(t.customerId, t.unitId, t.expiresAt)
+      .where(sql`status = 'active' AND NOT unit_rated AND expires_at IS NOT NULL`),
   ],
 );
 
@@ -264,6 +347,8 @@ export const creditGrantMovements = pgTable(
       .notNull()
       .default(sql`0`),
     invoiceId: uuid("invoice_id"),
+    /** A draw made by a usage settlement (0526). CHECK: a draw names an invoice or a settlement. */
+    settlementId: uuid("settlement_id"),
     ledgerTransactionId: uuid("ledger_transaction_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`app_now()`)
@@ -300,7 +385,15 @@ export const creditHolds = pgTable(
       .notNull()
       .references(() => customers.id, { onDelete: "cascade" }),
     currency: char("currency", { length: 3 }).notNull(),
+    /** 0 for a hold in units. */
     amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),
+    /** A hold in a unit with no rate (0527): the unit and the steps it reserves. */
+    unitId: uuid("unit_id").references(() => creditUnits.id),
+    amountUnits: bigint("amount_units", { mode: "bigint" }),
+    /** What the captured events took, in steps. */
+    capturedUnits: bigint("captured_units", { mode: "bigint" }),
+    /** What the hold still reserves (a lease is captured in steps). 0 once it is closed. */
+    remainingUnits: bigint("remaining_units", { mode: "bigint" }),
     meterId: uuid("meter_id").references(() => meters.id, { onDelete: "set null" }),
     /** {property: value}, as the access check's scope. */
     scope: jsonb("scope").$type<Record<string, string>>(),
@@ -328,5 +421,346 @@ export const creditHolds = pgTable(
     index("credit_holds_expiry_idx")
       .on(t.expiresAt)
       .where(sql`status = 'held'`),
+    index("credit_holds_unit_held_idx")
+      .on(t.customerId, t.unitId, t.expiresAt)
+      .where(sql`status = 'held' AND unit_id IS NOT NULL`),
+  ],
+);
+
+/**
+ * The real-time balance of a unit with no rate (0525): one row per customer and unit, the sum
+ * of what is left on the customer's grants in it. Moved by every grant movement, in its
+ * transaction. The grants and their movements stay the book of record.
+ */
+export const creditUnitBalances = pgTable(
+  "credit_unit_balances",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => creditUnits.id),
+    /** In the unit's smallest step. */
+    availableSteps: bigint("available_steps", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** Σ open holds in the unit (0527). The gate offers available − held. */
+    heldSteps: bigint("held_steps", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** The part of `heldSteps` that closed grants back from their grace rows. */
+    pinnedSteps: bigint("pinned_steps", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** The active automatic top-up's threshold, and the gate's mark at or below it. */
+    topupThresholdSteps: bigint("topup_threshold_steps", { mode: "bigint" }),
+    topupDueAt: timestamp("topup_due_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("credit_unit_balances_customer_unit_uq").on(t.customerId, t.unitId),
+    index("credit_unit_balances_business_idx").on(t.businessId),
+  ],
+);
+
+/**
+ * What one unit of a meter costs in credits of a unit with no rate (0526). Three layers, the
+ * most specific wins: a subscription's row, then a plan's (`product_id`), then the meter's own
+ * (both NULL). Every row of a meter names the same unit.
+ */
+export const meterCreditCosts = pgTable(
+  "meter_credit_costs",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    meterId: uuid("meter_id")
+      .notNull()
+      .references(() => meters.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => creditUnits.id),
+    creditsPerUnit: numeric("credits_per_unit", { precision: 20, scale: 6 }).notNull(),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }),
+    subscriptionId: uuid("subscription_id").references(() => subscriptions.id, {
+      onDelete: "cascade",
+    }),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("meter_credit_costs_meter_uq")
+      .on(t.meterId)
+      .where(sql`product_id IS NULL AND subscription_id IS NULL`),
+    uniqueIndex("meter_credit_costs_product_uq")
+      .on(t.meterId, t.productId)
+      .where(sql`product_id IS NOT NULL`),
+    uniqueIndex("meter_credit_costs_subscription_uq")
+      .on(t.meterId, t.subscriptionId)
+      .where(sql`subscription_id IS NOT NULL`),
+    index("meter_credit_costs_business_idx").on(t.businessId),
+  ],
+);
+
+/**
+ * One settled window of a customer and meter (0526): the draws it made carry its id.
+ * Append-only: the app role has SELECT and INSERT only. `seq` counts per customer and meter.
+ */
+export const creditUsageSettlements = pgTable(
+  "credit_usage_settlements",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    publicId: text("public_id").notNull(), // cus_… is the customer: settlements are cst_…
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    meterId: uuid("meter_id")
+      .notNull()
+      .references(() => meters.id),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => creditUnits.id),
+    subscriptionId: uuid("subscription_id").references(() => subscriptions.id, {
+      onDelete: "set null",
+    }),
+    seq: integer("seq").notNull(),
+    /**
+     * usage | late (late events paid by one closed grant in its grace window) | correction
+     * (what a voided event's settlement drew, given back: `unitsDrawn` and `revenueMinor` are
+     * the amounts returned) | redraw (usage a fully refunded pack paid, drawn again from other
+     * grants; `correctsSettlementId` names the settlement that drew the pack).
+     */
+    kind: text("kind").notNull().default("usage"),
+    /** A correction: the voided usage event (0530). */
+    correctsEventId: uuid("corrects_event_id"),
+    correctsSettlementId: uuid("corrects_settlement_id"),
+    graceGrantId: uuid("grace_grant_id").references(() => creditGrants.id, {
+      onDelete: "set null",
+    }),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+    events: integer("events").notNull().default(0),
+    quantity: numeric("quantity").notNull().default("0"),
+    /** In the unit's smallest step. */
+    unitsDue: bigint("units_due", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    unitsDrawn: bigint("units_drawn", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    quantityUncovered: numeric("quantity_uncovered").notNull().default("0"),
+    currency: char("currency", { length: 3 }).notNull(),
+    /** Cost of the paid credit drawn: the revenue this settlement posted. */
+    revenueMinor: bigint("revenue_minor", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    status: text("status").notNull().default("settled"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("credit_usage_settlements_public_id_uq").on(t.publicId),
+    uniqueIndex("credit_usage_settlements_seq_uq").on(t.customerId, t.meterId, t.seq),
+    index("credit_usage_settlements_customer_idx").on(t.customerId, t.windowEnd.desc()),
+    index("credit_usage_settlements_business_idx").on(t.businessId),
+  ],
+);
+
+/**
+ * `billed` and `forgiven` (0530) are for an overshoot part only (`source` overdraft): moved
+ * to a one-off invoice, or written off with `zeroReason`.
+ */
+export type CreditUsageStatus =
+  | "taken"
+  | "pending"
+  | "settled"
+  | "refused"
+  | "skipped"
+  | "billed"
+  | "forgiven";
+export type CreditUsageReason =
+  | "insufficient_credit"
+  | "backfill"
+  | "unmatched_customer"
+  | "voided";
+/** `balance` and `grace` are paid by credits; `overdraft` is an overshoot below zero (0530). */
+export type CreditUsageSource = "balance" | "grace" | "overdraft";
+/** Why units were written off or zeroed out (0530). */
+export type CreditZeroReason =
+  | "plan_reset"
+  | "invoice_voided"
+  | "event_voided"
+  | "full_refund"
+  | "manual"
+  /** A capture took no more than its hold (`capture_over_hold: cap_at_hold`). */
+  | "hold_cap";
+
+/**
+ * What the gate decided for one usage event on a meter with a credit cost (0526). `taken`
+ * rows are out of `credit_unit_balances` and wait for settlement; `pending` rows are out of a
+ * closed grant's grace row and wait for its window to end. `refused` and `skipped` rows spend
+ * nothing and are never settled.
+ */
+export const creditUsageEvents = pgTable(
+  "credit_usage_events",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id").references(() => customers.id, { onDelete: "cascade" }),
+    meterId: uuid("meter_id")
+      .notNull()
+      .references(() => meters.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => creditUnits.id),
+    /** usage_events is partitioned: no foreign key. */
+    eventId: uuid("event_id").notNull(),
+    eventKey: text("event_key").notNull(),
+    eventTimestamp: timestamp("event_timestamp", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    part: smallint("part").notNull().default(0),
+    /** The event's quantity on the meter; on part 0 only, as `units_due` and `units_uncovered`. */
+    quantity: numeric("quantity").notNull().default("0"),
+    creditsPerUnit: numeric("credits_per_unit", { precision: 20, scale: 6 }).notNull(),
+    /** meter | plan | subscription */
+    costSource: text("cost_source").notNull().default("meter"),
+    unitsDue: bigint("units_due", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    unitsUncovered: bigint("units_uncovered", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** Taken by this part, in the unit's smallest step. */
+    units: bigint("units", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** balance | grace | overdraft */
+    source: text("source").$type<CreditUsageSource>().notNull().default("balance"),
+    graceGrantId: uuid("grace_grant_id").references(() => creditGrants.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").$type<CreditUsageStatus>().notNull(),
+    reason: text("reason").$type<CreditUsageReason>(),
+    coveredByHold: boolean("covered_by_hold").notNull().default(false),
+    settlementId: uuid("settlement_id").references(() => creditUsageSettlements.id),
+    /** How `unitsUncovered` is billed in money: the meter's usage price, or the unit's price. */
+    overageBasis: text("overage_basis").$type<"meter" | "unit">(),
+    /** `unit` basis: money per credit at the gate, fixed-12 minor units. */
+    overageRateE12: bigint("overage_rate_e12", { mode: "bigint" }),
+    /** `meter` basis: the meter price that bills the uncovered units, fixed at the gate. */
+    overagePriceId: uuid("overage_price_id"),
+    overageChargeId: uuid("overage_charge_id"),
+    /** A `billed` overshoot part: its one-off invoice. */
+    overageInvoiceId: uuid("overage_invoice_id"),
+    zeroReason: text("zero_reason").$type<CreditZeroReason>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("credit_usage_events_event_uq").on(t.eventId, t.meterId, t.part),
+    index("credit_usage_events_open_idx")
+      .on(t.customerId, t.unitId)
+      .where(sql`status = 'taken'`),
+    index("credit_usage_events_pending_idx")
+      .on(t.graceGrantId)
+      .where(sql`status = 'pending'`),
+    index("credit_usage_events_due_idx")
+      .on(t.receivedAt)
+      .where(sql`status = 'taken'`),
+    index("credit_usage_events_customer_received_idx").on(t.customerId, t.meterId, t.receivedAt),
+    index("credit_usage_events_key_idx").on(t.businessId, t.eventKey),
+  ],
+);
+
+/**
+ * What a closed grant in a unit with no rate still has for late events dated inside its life
+ * (0526). The units leave `credit_unit_balances` at the close and are booked out of the grant
+ * when the grace window ends (`locked_at`).
+ */
+export const creditGrantGrace = pgTable(
+  "credit_grant_grace",
+  {
+    grantId: uuid("grant_id")
+      .primaryKey()
+      .references(() => creditGrants.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => creditUnits.id),
+    availableSteps: bigint("available_steps", { mode: "bigint" }).notNull(),
+    /** Kept for open holds: no late event takes it. */
+    heldSteps: bigint("held_steps", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+    validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
+    locksAt: timestamp("locks_at", { withTimezone: true }).notNull(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    index("credit_grant_grace_open_idx")
+      .on(t.customerId, t.unitId)
+      .where(sql`locked_at IS NULL`),
+    index("credit_grant_grace_due_idx")
+      .on(t.locksAt)
+      .where(sql`locked_at IS NULL`),
+    index("credit_grant_grace_business_idx").on(t.businessId),
   ],
 );

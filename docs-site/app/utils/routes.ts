@@ -10,6 +10,10 @@ export const MARKETING_ROUTES: string[] = [
   "/",
   "/product",
   "/compare",
+  // Linked from /security and the footer's bottom row, not the menus.
+  "/sub-processors",
+  "/privacy",
+  "/terms",
   ...[...PRODUCT, ...SOLUTIONS, ...DEVELOPERS, ...COMPANY, ...COMPARE]
     .map((l) => l.to)
     .filter((to) => !to.startsWith("/help")),

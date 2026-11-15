@@ -7,7 +7,12 @@ import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective
 import { closingCommitment } from "./commitment";
 import { randomUUID } from "node:crypto";
 import { couponsLeftBehind } from "./plan-change-coupons";
-import { resolveLifecycleConfig, type PlanChangeCoupons } from "./lifecycle-config";
+import { midTermCouponsFor } from "./mid-term-coupons";
+import {
+  resolveLifecycleConfig,
+  type NetCreditDocuments,
+  type PlanChangeCoupons,
+} from "./lifecycle-config";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
 /**
@@ -49,6 +54,7 @@ import {
   resolveMandatoryAttachedItems,
 } from "@/modules/catalog/service";
 import {
+  creditPaidBasis,
   peekDiscounts,
   peekCouponCodes,
   refusePendingCouponCodes,
@@ -326,6 +332,16 @@ export interface CreditDestination {
   invoice?: string;
 }
 
+/** One document a change books (`documents`). */
+export interface EstimateDocument {
+  type: "credit_note" | "invoice";
+  /** Credit notes only. */
+  kind?: "adjustment" | "refundable";
+  /** Credit notes only: the printed number of the invoice it credits. */
+  invoice?: string;
+  total_minor: number;
+}
+
 export interface Estimate {
   object: "estimate";
   currency: string;
@@ -502,6 +518,8 @@ export interface Estimate {
    * cannot leave an unnamed remainder.
    */
   credit_destinations?: CreditDestination[];
+  /** Change estimates: every document the change books, in booking order. */
+  documents?: EstimateDocument[];
   /**
    * The unused period this credit covers — stated twice in one sentence ("will be
    * created for the unused period of 31-Aug-2025 00:00 - 29-Sep-2025 23:59"), and it is what
@@ -1427,6 +1445,13 @@ export async function estimateChange(input: {
   downgradeCredit?: "credit_balance" | "refund";
   /** Mirrors `changeSubscription`'s `planChangeCoupons`. */
   planChangeCoupons?: PlanChangeCoupons;
+  /** Mirrors `changeSubscription`'s `netCreditDocuments`. Omitted = the business rule. */
+  netCreditDocuments?: NetCreditDocuments;
+  /**
+   * The `invoice_immediately` the apply will use. Read only while `net_credit_documents` is
+   * not saved, where it picks the documents. Omitted: two documents, as previewed before.
+   */
+  legacyInvoiceImmediately?: boolean;
   /**
    * Mirrors `changeSubscription`'s `prorate`. Default true.
    * MUST stay in lockstep with the booking or the preview quotes a total the confirm
@@ -1511,13 +1536,18 @@ export async function estimateChange(input: {
     } | null> = [];
     /** Per line: does it take tax. A line with no price is taxed, as on the invoice. */
     const lineTaxable: boolean[] = [];
+    /** Lines `addSubscriptionItem` bills on its own invoice, under `mid_term_coupons`. */
+    const addLineIndexes = new Set<number>();
+    /** Per line: the internal price id, as `invoice_line_items.price_id` holds it. */
+    const linePriceIds: Array<string | null> = [];
     /** `lines.push` + the price (and so product) that line belongs to. Keep them in lockstep. */
     const pushLine = (
       line: EstimateLine,
-      price?: { productId: string; publicId: string; isTaxable?: boolean } | null,
+      price?: { id?: string; productId: string; publicId: string; isTaxable?: boolean } | null,
     ) => {
       lines.push(line);
       lineTaxable.push(price?.isTaxable !== false);
+      linePriceIds.push(price?.id ?? null);
       const prod = price ? prodById.get(price.productId) : undefined;
       lineProducts.push(
         prod && price
@@ -2253,6 +2283,7 @@ export async function estimateChange(input: {
             },
             a.price,
           );
+          addLineIndexes.add(lines.length - 1);
         }
       }
       for (const r of removedRows) {
@@ -2501,7 +2532,7 @@ export async function estimateChange(input: {
           ratableFromSnapshot(a.snapshot, null),
           a.qty,
         );
-        if (fullNewTerm > 0n)
+        if (fullNewTerm > 0n) {
           pushLine(
             {
               description: `${priceLabel(a.price)} ×${a.qty} (new term)`,
@@ -2509,9 +2540,38 @@ export async function estimateChange(input: {
             },
             a.price,
           );
+          addLineIndexes.add(lines.length - 1);
+        }
       }
     }
 
+    // `net_credit_documents: one_credit_note`: a change that nets to a credit is booked as
+    // ONE credit note for the net (`applyChange`), with no invoice. Priced the same way: one
+    // credit line, credited against the invoices that charged the credited prices.
+    const linesNet = lines.reduce((s, l) => s + BigInt(l.amount_minor), 0n);
+    const [docsRow] = await tx
+      .select({ billingRulesConfig: businesses.billingRulesConfig })
+      .from(businesses)
+      .where(eq(businesses.id, businessId))
+      .limit(1);
+    const netCreditDocuments =
+      input.netCreditDocuments ?? resolveLifecycleConfig(docsRow).netCreditDocuments;
+    if (linesNet < 0n && lines.some((l) => l.amount_minor > 0)) {
+      // Unset: the rule before 2026-11-13 — one note unless the change is invoiced now.
+      if (
+        netCreditDocuments === "one_credit_note" ||
+        (netCreditDocuments === null && input.legacyInvoiceImmediately === false)
+      ) {
+        lines.splice(0, lines.length, {
+          description: "Prorated credit for subscription change",
+          amount_minor: Number(linesNet),
+        });
+        lineTaxable.splice(0, lineTaxable.length, true);
+        linePriceIds.splice(0, linePriceIds.length, null);
+        lineProducts.splice(0, lineProducts.length, null);
+        addLineIndexes.clear();
+      }
+    }
     const net = lines.reduce((s, l) => s + BigInt(l.amount_minor), 0n);
     // TAX THE CHARGES, NOT THE NET. The negative lines here are unused-time credits,
     // and on apply they do NOT land on the invoice — `issueCurrentTermCredit` turns them
@@ -2565,13 +2625,17 @@ export async function estimateChange(input: {
     // Both sides are discounted because both documents are. The CREDIT side takes the
     // STORED stack only — it reverses time billed under the discounts that were live
     // then, which a coupon being added today was not.
-    const toDiscountLines = (want: (amount: number) => boolean): DiscountLine[] => {
+    const toDiscountLines = (
+      want: (amount: number) => boolean,
+      /** Kept in place at 0, so the per-line discounts stay aligned with `charges`. */
+      undiscounted?: ReadonlySet<number>,
+    ): DiscountLine[] => {
       const out: DiscountLine[] = [];
       lines.forEach((l, i) => {
         if (!want(l.amount_minor)) return;
         out.push({
           index: out.length,
-          amountMinor: BigInt(Math.abs(l.amount_minor)),
+          amountMinor: undiscounted?.has(i) ? 0n : BigInt(Math.abs(l.amount_minor)),
           productKind: lineProducts[i]?.kind ?? null,
           productPublicId: lineProducts[i]?.publicId ?? null,
           pricePublicId: lineProducts[i]?.pricePublicId ?? null,
@@ -2614,21 +2678,26 @@ export async function estimateChange(input: {
         customerId: sub.customerId,
       });
     }
-    const chargeDiscount =
+    // An added item is billed on its own invoice, which takes the coupons only when
+    // `mid_term_coupons` gives them to a charge invoiced at once.
+    const addsTakeCoupons =
+      addLineIndexes.size === 0 ||
+      (await midTermCouponsFor(organizationId, businessId, "charge", tx));
+    let chargeDiscount =
       chargeBase > 0n
         ? await peekDiscounts(
             tx,
             sub.id,
-            toDiscountLines((a) => a > 0),
+            toDiscountLines((a) => a > 0, addsTakeCoupons ? undefined : addLineIndexes),
             sub.currency,
             pendingDiscount,
           )
         : null;
-    const discountMinor = chargeDiscount?.totalMinor ?? 0n;
+    let discountMinor = chargeDiscount?.totalMinor ?? 0n;
     const charges = lines.flatMap((l, i) =>
       l.amount_minor > 0 ? [{ amount: BigInt(l.amount_minor), taxable: lineTaxable[i]! }] : [],
     );
-    const discountedChargeBase = chargeBase - discountMinor > 0n ? chargeBase - discountMinor : 0n;
+    let discountedChargeBase = chargeBase - discountMinor > 0n ? chargeBase - discountMinor : 0n;
     // …AND THE PROMOTIONAL SLICE COMES OFF THAT BASE BEFORE IT IS TAXED — but it can only
     // be priced once the CREDIT this change issues has been routed, because part of the
     // promotional credit it draws is released BY that credit. So `promoCap`, `promotional`,
@@ -2648,7 +2717,7 @@ export async function estimateChange(input: {
 
     // ── WHAT THE CREDIT NOTE IS ACTUALLY WORTH ──────────────────────────────────
     // The credit LINES are in list-price units. `creditOneInvoice` converts them to a
-    // real credit note with the exact expression documented on `termInvoiceCanAbsorb`:
+    // real credit note with the exact expression documented on `grossCreditOnInvoice`:
     //
     //     gross = preTax × inv.total / listBase        listBase = (inv.total − tax) + discount
     //
@@ -2863,13 +2932,78 @@ export async function estimateChange(input: {
               : null;
           })()
         : null;
+    // ── NO SOURCE INVOICE: THE CREDIT IS NETTED ON THE CHANGE INVOICE ──────────────
+    // The booking puts these credit lines on the invoice (`fallbackCreditLines`, or an
+    // upgrade whose credit note could not attach). `createInvoiceFromLines` restates each
+    // at what was paid for that time (`creditPaidBasis`) and prices the coupons on the
+    // net in one stack. Mirrored here with the same two calls on the same lines, charges
+    // first so `charges[k]` keeps index k, and then taxed on the net as that invoice is:
+    // `tax_minor` is the tax the invoice prints, and the credit leg is pre-tax.
+    const netted =
+      !creditRatio && rawCreditBase > 0n && chargeBase > 0n && net > 0n
+        ? await (async () => {
+            const order = [
+              ...lines.flatMap((l, i) => (l.amount_minor > 0 ? [i] : [])),
+              ...lines.flatMap((l, i) => (l.amount_minor < 0 ? [i] : [])),
+            ];
+            const basis = await creditPaidBasis(tx, {
+              subscriptionId: sub.id,
+              periodStart: sub.currentPeriodStart,
+              periodEnd: sub.currentPeriodEnd,
+              credits: order.map((i, k) => ({
+                index: k,
+                priceId: linePriceIds[i],
+                amountMinor: BigInt(lines[i]!.amount_minor),
+              })),
+            });
+            const amounts = order.map((i, k) => {
+              const paid = basis.paidByIndex.get(k);
+              return paid != null ? -paid : BigInt(lines[i]!.amount_minor);
+            });
+            const stack = await peekDiscounts(
+              tx,
+              sub.id,
+              order.map((i, k) => ({
+                index: k,
+                amountMinor: !addsTakeCoupons && addLineIndexes.has(i) ? 0n : amounts[k]!,
+                settled: basis.paidByIndex.has(k),
+                productKind: lineProducts[i]?.kind ?? null,
+                productPublicId: lineProducts[i]?.publicId ?? null,
+                pricePublicId: lineProducts[i]?.pricePublicId ?? null,
+              })),
+              sub.currency,
+              pendingDiscount || basis.releasedByCoupon.size > 0
+                ? {
+                    organizationId,
+                    businessId,
+                    ...pendingDiscount,
+                    released: basis.releasedByCoupon,
+                  }
+                : undefined,
+              sub.currentPeriodStart,
+            );
+            const creditPaid = amounts.reduce((s2, a) => (a < 0n ? s2 - a : s2), 0n);
+            return {
+              stack,
+              creditPaid,
+              amounts,
+              taxable: order.map((i) => lineTaxable[i]!),
+            };
+          })()
+        : null;
+    if (netted) {
+      chargeDiscount = netted.stack;
+      discountMinor = netted.stack.totalMinor;
+      discountedChargeBase = chargeBase - discountMinor;
+    }
+
     // ── GROSS UP PER INVOICE, NOT ON ONE BLENDED RATIO (2026-09-01) ─────────────
     // This used to be `rawCreditBase × Σ inv.total / Σ listBase` — ONE ratio blended
     // over every eligible invoice — and then it distributed that GROSS figure. The
     // booking does the opposite order: `creditAcrossInvoices` distributes the PRE-TAX
     // list total and only then hands each share to `creditOneInvoice`, which grosses it
     // on the ledger of the invoice it belongs to (`gross = preTax × inv.total / listBase`,
-    // the expression documented on `termInvoiceCanAbsorb`).
+    // the expression documented on `grossCreditOnInvoice`).
     //
     // The two are not the same number, because an invoice's booked tax is a COMPONENT
     // VECTOR, not a rate. Under India GST ₹8,814.07 of base is CGST 9% + SGST 9%, each
@@ -2914,42 +3048,45 @@ export async function estimateChange(input: {
       : [];
     const creditNoteTotal = creditRatio
       ? grossShares.reduce((s2, g) => s2 + g.shareMinor, 0n)
-      : rawCreditBase > 0n
-        ? await (async () => {
-            // NO ELIGIBLE SOURCE INVOICE — an unbilled term. `issueCurrentTermCredit`
-            // credits nothing and the apply falls to `fallbackCreditLines`, which books
-            // the credit as NEGATIVE INVOICE LINES. So the credit still reduces what is
-            // owed; it is simply not a separate document.
-            //
-            // ⚠ This branch returned 0n for one commit and `verify:estimates` caught it
-            // immediately: the plan-swap case quoted 3000 against a booking of 2000,
-            // because the whole 1000 credit vanished from the total. On that path the
-            // invoice's tax is charged on the NET, so the figure that has to come off is
-            // the credit plus the tax it removes from the base — which is what this is.
-            const [cus] = await tx
-              .select()
-              .from(customers)
-              .where(eq(customers.id, sub.customerId))
-              .limit(1);
-            const credits = lines.flatMap((l, i) =>
-              l.amount_minor < 0
-                ? [{ amount: BigInt(-l.amount_minor), taxable: lineTaxable[i]! }]
-                : [],
-            );
-            const t = await estimateTax(
-              organizationId,
-              businessId,
-              cus,
-              rawCreditBase,
-              taxedLineAmounts(
-                credits.map((c) => c.amount),
-                undefined,
-                credits.map((c) => c.taxable),
-              ),
-            );
-            return rawCreditBase + t.taxMinor;
-          })()
-        : 0n;
+      : netted
+        ? // Pre-tax: the invoice's own tax is taken on the net below.
+          netted.creditPaid
+        : rawCreditBase > 0n
+          ? await (async () => {
+              // NO ELIGIBLE SOURCE INVOICE — an unbilled term. `issueCurrentTermCredit`
+              // credits nothing and the apply falls to `fallbackCreditLines`, which books
+              // the credit as NEGATIVE INVOICE LINES. So the credit still reduces what is
+              // owed; it is simply not a separate document.
+              //
+              // ⚠ This branch returned 0n for one commit and `verify:estimates` caught it
+              // immediately: the plan-swap case quoted 3000 against a booking of 2000,
+              // because the whole 1000 credit vanished from the total. On that path the
+              // invoice's tax is charged on the NET, so the figure that has to come off is
+              // the credit plus the tax it removes from the base — which is what this is.
+              const [cus] = await tx
+                .select()
+                .from(customers)
+                .where(eq(customers.id, sub.customerId))
+                .limit(1);
+              const credits = lines.flatMap((l, i) =>
+                l.amount_minor < 0
+                  ? [{ amount: BigInt(-l.amount_minor), taxable: lineTaxable[i]! }]
+                  : [],
+              );
+              const t = await estimateTax(
+                organizationId,
+                businessId,
+                cus,
+                rawCreditBase,
+                taxedLineAmounts(
+                  credits.map((c) => c.amount),
+                  undefined,
+                  credits.map((c) => c.taxable),
+                ),
+              );
+              return rawCreditBase + t.taxMinor;
+            })()
+          : 0n;
 
     // ── THE CREDIT PAYS OFF DEBT BEFORE IT REACHES THE BALANCE (2026-08-31) ──────
     // This used to be `invoiceTotal - creditNoteTotal`, which modelled the whole note as
@@ -3120,7 +3257,8 @@ export async function estimateChange(input: {
      * result, and this call site discards it (`{ refundable, excess }`). The post-tax legs
      * are bounded by `postTaxRemaining`, which is unchanged.
      */
-    const promoCap = discountedChargeBase;
+    // Netted: the credit lines sit on this invoice, so its cap is the net, as booked.
+    const promoCap = netted ? discountedChargeBase - netted.creditPaid : discountedChargeBase;
     const { promotional, balances }: { promotional: bigint; balances: CustomerBalances | null } =
       promoCap > 0n
         ? await simulatePromotionalDiscount(
@@ -3132,7 +3270,7 @@ export async function estimateChange(input: {
             routed.freedPromoMinor,
           )
         : { promotional: 0n, balances: null };
-    const taxBase = discountedChargeBase - promotional;
+    const taxBase = discountedChargeBase - promotional - (netted ? netted.creditPaid : 0n);
     const tax =
       taxBase > 0n
         ? await (async () => {
@@ -3147,11 +3285,13 @@ export async function estimateChange(input: {
               cus,
               taxBase,
               // Charge lines, in the order `toDiscountLines` priced them.
-              taxedLineAmounts(
-                charges.map((c) => c.amount),
-                chargeDiscount?.lineDiscountByIndex,
-                charges.map((c) => c.taxable),
-              ),
+              netted
+                ? taxedLineAmounts(netted.amounts, netted.stack.lineDiscountByIndex, netted.taxable)
+                : taxedLineAmounts(
+                    charges.map((c) => c.amount),
+                    chargeDiscount?.lineDiscountByIndex,
+                    charges.map((c) => c.taxable),
+                  ),
             );
           })()
         : { taxMinor: 0n, taxLines: [] as EstimateTaxLine[], inclusiveTaxMinor: 0n };
@@ -3501,6 +3641,37 @@ export async function estimateChange(input: {
       invoice_total_minor: Number(invoiceTotal),
       invoice_subtotal_minor: Number(invoiceTotal - tax.taxMinor),
       ...(creditDestinations.length > 0 ? { credit_destinations: creditDestinations } : {}),
+      // Every document the change books, from the same per-invoice routing as the legs.
+      documents: [
+        ...perShare.flatMap((p) => {
+          const invoice = creditRatio?.invoiceLabels.get(p.id) ?? p.id;
+          return [
+            ...(p.routing.adjustmentMinor > 0n
+              ? [
+                  {
+                    type: "credit_note" as const,
+                    kind: "adjustment" as const,
+                    invoice,
+                    total_minor: Number(p.routing.adjustmentMinor),
+                  },
+                ]
+              : []),
+            ...(p.routing.cashableMinor > 0n
+              ? [
+                  {
+                    type: "credit_note" as const,
+                    kind: "refundable" as const,
+                    invoice,
+                    total_minor: Number(p.routing.cashableMinor),
+                  },
+                ]
+              : []),
+          ];
+        }),
+        ...(invoiceTotal > 0n
+          ? [{ type: "invoice" as const, total_minor: Number(invoiceTotal) }]
+          : []),
+      ],
       // The unused window the credit is FOR: from the change instant to the end of the term
       // that was billed — the same window the credit lines are prorated over, taken from the
       // same variables rather than recomputed.
@@ -3761,6 +3932,8 @@ export async function estimateRenewal(input: {
       ? { usagePeriod: { start: usageWindow.start, end: usageWindow.end } }
       : {}),
     ...(Object.keys(preview).length > 0 ? { preview } : {}),
+    // Read-only: usage beyond the credits is rated as the invoice will, never queued.
+    creditOverage: input.includeUsageSoFar ? "preview" : "omit",
     // The closing term's minimum commitment, as the renewal raises it.
     commitment: closingCommitment(sub),
     ...(items ? { items } : {}),
@@ -4241,10 +4414,11 @@ export async function estimateNewSubscription(input: {
  *    that subscription's own `max_refundable_credits_usage_minor`, which
  *    `planSubscriptionPeriodInvoice` does apply. On a capped subscription it would over-
  *    spend the credit and quote an amount due that is too low. It also auto-includes
- *    mandatory add-ons (CAT-3) and applies CAT-7 differentials, and
- *    `reactivateSubscriptionWithOptions` does NEITHER: it books exactly the item set it
- *    was handed. A preview that added a line the booking will not is the same class of
- *    defect as one that drops the tax.
+ *    mandatory add-ons (CAT-3), and `reactivateSubscriptionWithOptions` does not: it books
+ *    exactly the item set it was handed. Both apply CAT-7 differentials to an add-on line
+ *    with no custom price (2026-11-10: reactivation froze those at catalog 0). A preview
+ *    that added a line the booking will not is the same class of defect as one that drops
+ *    the tax.
  *
  * So the money ladder is SHARED — `estimateFreshTermMoney`, one copy of rate → discount →
  * promotional draw → tax → refundable/excess draw → amount due — and only the item
@@ -4364,10 +4538,11 @@ export async function estimateReactivate(input: {
     }
 
     // ── ITEM RESOLUTION: `reactivateSubscriptionWithOptions`, guard for guard ──────
-    const resolved: Array<{
+    let resolved: Array<{
       price: typeof prices.$inferSelect;
       quantity: number;
       customAmountMinor?: number;
+      customTiers?: unknown;
       freeQuantity: number | null;
     }> = [];
     for (const it of input.items) {
@@ -4395,6 +4570,18 @@ export async function estimateReactivate(input: {
         freeQuantity: it.freeQuantity ?? null,
       });
     }
+    // CAT-7, exactly as the booking applies it.
+    const productIds = [...new Set(resolved.map((i) => i.price.productId))];
+    const kinds = await tx
+      .select({ id: products.id, kind: products.kind })
+      .from(products)
+      .where(and(eq(products.businessId, businessId), inArray(products.id, productIds)));
+    resolved = await applyExplicitDifferentials(tx, {
+      currency: sub.currency,
+      planProductIds: kinds.filter((k) => k.kind === "plan").map((k) => k.id),
+      addonProductIds: new Set(kinds.filter((k) => k.kind === "addon").map((k) => k.id)),
+      items: resolved,
+    });
     const recurring = resolved.find((i) => i.price.type === "recurring");
     if (!recurring) {
       throw new ProrationError("A subscription needs at least one recurring price");
@@ -4429,7 +4616,10 @@ export async function estimateReactivate(input: {
         quantity: i.quantity,
         // The snapshot the reactivated `subscription_items` row will freeze, byte for
         // byte — `alignSnapshotToCycle(snapshotPrice(price, override), newCycle)`.
-        snapshot: alignSnapshotToCycle(snapshotPrice(i.price, i.customAmountMinor), cycle),
+        snapshot: alignSnapshotToCycle(
+          snapshotPrice(i.price, i.customAmountMinor, i.customTiers),
+          cycle,
+        ),
         freeQuantity: i.freeQuantity ?? null,
       })),
       // The subscription's OWN applied discounts. Cancelling does not remove
@@ -4922,10 +5112,35 @@ export async function estimateCancel(input: {
     })),
     subtotal_minor: Number(pendingTotal),
   };
-  if (unbilledOption === "invoice" && pending.length > 0) {
+  const unbilledTakesCoupons =
+    unbilledOption === "invoice" &&
+    pending.length > 0 &&
+    (await midTermCouponsFor(organizationId, businessId, "unbilled"));
+  if (unbilledTakesCoupons) {
+    // `mid_term_coupons` discounts this invoice, so price it with the invoice's own preview.
+    const { previewInvoiceFromLines } = await import("@/modules/invoicing/service");
+    const { unbilledChargeLine } = await import("./items");
+    const p = await previewInvoiceFromLines({
+      organizationId,
+      businessId,
+      customerId: sub.customerId,
+      subscriptionId: sub.id,
+      currency,
+      lines: pending.map(unbilledChargeLine),
+      applyCoupons: true,
+    });
+    unbilled = {
+      ...unbilled,
+      tax_minor: Number(p.taxMinor),
+      total_minor: Number(p.totalMinor - p.promotionalCreditsAppliedMinor),
+      credits_applied_minor: Number(p.creditsAppliedMinor),
+      promotional_discount_minor: Number(p.promotionalCreditsAppliedMinor),
+      amount_due_minor: Number(p.amountDueMinor > 0n ? p.amountDueMinor : 0n),
+    };
+  } else if (unbilledOption === "invoice" && pending.length > 0) {
     // Mirror `invoiceUnbilledCharges` → `createInvoiceFromLines`: taxed, customer
-    // credit applied, `collect: false` so it is raised OPEN. Note it passes no
-    // `applyCoupons`, so these lines are list-priced — do NOT discount them here.
+    // credit applied, `collect: false` so it is raised OPEN. Under `mid_term_coupons:
+    // skip` it passes no `applyCoupons`, so these lines are list-priced.
     // Promotional credit first and PRE-tax, as `createInvoiceFromLines` applies it —
     // it shrinks the taxable base, so quoting tax on the full pending total would
     // over-state the invoice this cancel would raise.
@@ -4983,7 +5198,7 @@ export async function estimateCancel(input: {
     unbilled = { ...unbilled, discarded_minor: Number(pendingTotal) };
   } else if (unbilledOption == null && pending.length > 0) {
     warnings.push(
-      `${pending.length} pending unbilled charge(s) totaling ${formatMoney(pendingTotal, currency)} would stay on the cancelled subscription. Set unbilled_charges_option to invoice or delete them.`,
+      `${pending.length} pending unbilled ${pending.length === 1 ? "charge" : "charges"} totaling ${formatMoney(pendingTotal, currency)} would stay on the cancelled subscription. To bill or discard ${pending.length === 1 ? "it" : "them"}, invoice or delete the unbilled charges.`,
     );
   }
 

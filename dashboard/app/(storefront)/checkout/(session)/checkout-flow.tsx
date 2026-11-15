@@ -27,6 +27,8 @@ import { CheckboxField } from "@/components/ui/checkbox";
 import { Turnstile } from "@/components/turnstile";
 import { useRouter } from "next/navigation";
 import { MethodTypeChoice, type MethodType } from "../../method-choice";
+import { privacyText, railsForCurrency } from "../../storefront-text";
+import { useDefaultState } from "@/lib/use-default-state";
 import { useReportInstrument } from "../../storefront-footer";
 import { AchAuthorization } from "../../ach-authorization";
 import { PaymentMark, paymentMarkKey } from "@/components/brand/payment-mark";
@@ -49,24 +51,29 @@ import {
   type FormPostDescriptor,
   type GatewaySdkDescriptor,
 } from "@/lib/gateway-sdk";
-import { fmtDate, money } from "@/lib/format";
-import { creditLegSentences, creditNarrativeFromPreview } from "@/lib/credit-legs";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
+import { creditNarrativeFromPreview } from "@/lib/credit-legs";
 import { Chip } from "@/components/patterns/chip";
 import {
   BrandTheme,
-  CommitBar,
   Glyph,
   NoticeCard,
   ProductGlyph,
-  Row,
-  RowList,
   Steps,
   StorefrontFooter,
   StorefrontHeader,
   StorefrontSection,
   instrumentLabel,
 } from "../../chrome";
-import { PaymentDialog, StripeIntentForm, refusalMessage } from "../../payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  RefusalAlert,
+  StripeIntentForm,
+  refusalMessage,
+} from "../../payment-dialog";
+import { contactBusiness } from "@/lib/gateway-errors";
 import type {
   CheckoutView,
   CheckoutChangePreview,
@@ -109,6 +116,15 @@ interface BuyerPrefill {
   name?: string | null;
   email?: string | null;
   contact?: string | null;
+  /** The billing address the page already took, so a gateway form need not ask again. */
+  address?: {
+    line1: string | null;
+    city: string | null;
+    state: string | null;
+    state_code: string | null;
+    postal_code: string | null;
+    country: string | null;
+  };
 }
 
 /**
@@ -173,6 +189,175 @@ function reactivateLabel(preview: CheckoutChangePreview | undefined): string {
   return preview?.immediateCharge && preview.amountDueMinor > 0
     ? "Reactivate and pay"
     : "Reactivate";
+}
+
+/** The billing interval of the plan line ("month", "3 months"), or null. */
+function planInterval(view: CheckoutView): string | null {
+  const item =
+    view.items.find((i) => i.kind === "plan" && i.interval) ?? view.items.find((i) => i.interval);
+  if (item?.interval) return item.interval;
+  return view.offer?.lines.find((l) => l.quantity > 0 && l.interval)?.interval ?? null;
+}
+
+/** The product the buyer subscribes to: the plan line's name. */
+function planName(view: CheckoutView): string | null {
+  const offerPlan = view.offer?.lines.find((l) => l.quantity > 0);
+  return (
+    view.items.find((i) => i.kind === "plan")?.name ??
+    view.items[0]?.name ??
+    offerPlan?.name ??
+    null
+  );
+}
+
+/** "14 days", "1 month". */
+function trialLength(t: { count: number; unit: string }): string {
+  return `${t.count} ${t.unit}${t.count === 1 ? "" : "s"}`;
+}
+
+/** What the one commit button says, and the line under it that dates the money. */
+interface CommitCopy {
+  label: string;
+  busy: string;
+  summary: string | null;
+}
+
+function commitCopy(view: CheckoutView): CommitCopy {
+  const tz = view.business.timezone;
+  if (view.mode === "purchase" && view.purchase) {
+    const due = view.purchase.amount_due_minor;
+    return {
+      label: due > 0 ? `Pay ${money(due, view.purchase.currency)}` : "Complete purchase",
+      busy: due > 0 ? "Paying…" : "Completing…",
+      summary: null,
+    };
+  }
+  if (view.mode === "change") {
+    const p = view.change?.preview;
+    const reactivate = view.change?.reactivation != null;
+    const payNow = p && p.immediateCharge && p.amountDueMinor > 0 ? p.amountDueMinor : 0;
+    const label = reactivate
+      ? payNow > 0
+        ? `Reactivate and pay ${money(payNow, p!.currency)}`
+        : "Reactivate"
+      : view.change?.itemsUnchanged && view.coupons.length === 0
+        ? "Confirm"
+        : payNow > 0
+          ? `Confirm change and pay ${money(payNow, p!.currency)}`
+          : "Confirm change";
+    const next =
+      p?.nextRenewalAt && p.nextRenewalAmountDueMinor != null
+        ? ` Your next payment is ${money(p.nextRenewalAmountDueMinor, p.currency)} on ${fmtDate(p.nextRenewalAt, tz)}.`
+        : "";
+    const today = p
+      ? payNow > 0
+        ? `You pay ${money(payNow, p.currency)} today.`
+        : "You pay nothing today."
+      : "";
+    return {
+      label,
+      busy: reactivate ? "Reactivating…" : "Confirming…",
+      summary: `${today}${next}`.trim() || null,
+    };
+  }
+  const due = view.dueToday;
+  if (due?.trial) {
+    const when = due.firstChargeAt ? fmtDate(due.firstChargeAt, tz) : null;
+    return {
+      label: "Start free trial",
+      busy: "Starting…",
+      summary: when
+        ? due.firstChargeMinor != null
+          ? `You pay nothing today. Your first payment of ${money(due.firstChargeMinor, due.currency)} is on ${when}.`
+          : `You pay nothing today. Your first payment is on ${when}.`
+        : "You pay nothing today.",
+    };
+  }
+  if (due) {
+    const amt = due.amountDueMinor;
+    return {
+      label: amt > 0 ? `Subscribe and pay ${money(amt, due.currency)}` : "Subscribe",
+      busy: "Subscribing…",
+      summary: `You pay ${money(amt, due.currency)} today.${
+        due.nextChargeAt ? ` Your next payment is on ${fmtDate(due.nextChargeAt, tz)}.` : ""
+      }`,
+    };
+  }
+  return { label: "Subscribe", busy: "Subscribing…", summary: null };
+}
+
+/**
+ * A proration line in the buyer's words. The engine writes "Remaining time on X ×1" for the
+ * operator's ledger; the buyer reads the product and the dates it covers.
+ */
+function buyerLineLabel(description: string, until: string | null): string {
+  const q = (n: string | undefined) => (n && n !== "1" ? ` × ${n}` : "");
+  const rest = until ? `today to ${until}` : "rest of this billing period";
+  let m = /^Remaining time on (.+?) ×(\d+)$/.exec(description);
+  if (m) return `${m[1]}${q(m[2])}, ${rest}`;
+  m = /^(.+?) - Prorated Charges(?: ×(\d+))?$/.exec(description);
+  if (m) return `${m[1]}${q(m[2])}, ${rest}`;
+  m = /^Unused time on (.+?) ×(\d+)$/.exec(description);
+  if (m) return `Credit for unused time on ${m[1]}${q(m[2])}`;
+  m = /^(.+?) ×(\d+) \(new term\)$/.exec(description);
+  if (m) return `${m[1]}${q(m[2])}, new billing period`;
+  m = /^(.+?) ×(\d+)$/.exec(description);
+  if (m) return `${m[1]}${q(m[2])}`;
+  return description;
+}
+
+/**
+ * The credit a change gives back, in the buyer's words. Same legs as `creditLegSentences`
+ * (they account for all of the credit), without the operator's vocabulary.
+ */
+function buyerCreditSentences(
+  n: ReturnType<typeof creditNarrativeFromPreview>,
+  fmt: (minor: number) => string,
+  when: (iso: string) => string,
+  oldPlan: string | null,
+): string[] {
+  if (n.grossMinor <= 0) return [];
+  const out = [
+    `You get ${fmt(n.grossMinor)} back for the time that you do not use on ${
+      oldPlan ?? "your current plan"
+    }${n.periodEnd ? `, from today to ${when(n.periodEnd)}` : ""}.`,
+  ];
+  const order = {
+    open_invoice: 0,
+    this_invoice: 1,
+    balance: 2,
+    payment_method: 3,
+    buckets: 4,
+    none: 5,
+  };
+  const legs = [...n.destinations]
+    .filter((d) => d.amount_minor > 0)
+    .sort((a, b) => order[a.destination] - order[b.destination]);
+  const all = legs.length === 1 && legs[0]!.amount_minor === n.grossMinor;
+  for (const d of legs) {
+    const amt = all ? "All of it" : `${fmt(d.amount_minor)} of it`;
+    switch (d.destination) {
+      case "open_invoice":
+        out.push(`${amt} pays your unpaid invoice${d.invoice ? ` ${d.invoice}` : ""}.`);
+        break;
+      case "this_invoice":
+        out.push(`${amt} lowers what you pay today.`);
+        break;
+      case "balance":
+        out.push(`${amt} stays on your account and lowers your next payment.`);
+        break;
+      case "payment_method":
+        out.push(`${amt} goes back to your payment method.`);
+        break;
+      case "buckets":
+        out.push(`${amt} goes back to the promotional credit that it came from.`);
+        break;
+      case "none":
+        out.push(`${amt} cannot be used on your account.`);
+        break;
+    }
+  }
+  return out;
 }
 
 /**
@@ -283,6 +468,10 @@ interface PoNumberState {
   setValue: (v: string) => void;
   /** What to send: the field, or — on a fresh page after a gateway redirect — the stored copy. */
   current: () => string;
+  /** A payment was refused for an empty required field: the field shows the error. */
+  missing: boolean;
+  /** Show the error at the field and bring it into view. False when the field is not on the page. */
+  flag: () => boolean;
 }
 const NO_PO: PoNumberState = {
   collect: false,
@@ -290,7 +479,10 @@ const NO_PO: PoNumberState = {
   value: "",
   setValue: () => {},
   current: () => "",
+  missing: false,
+  flag: () => false,
 };
+const PO_MISSING = "Enter your PO number.";
 const PoNumberContext = React.createContext<PoNumberState>(NO_PO);
 const poStorageKey = (scope: string) => `tmb.checkout.po.${scope}`;
 
@@ -298,9 +490,20 @@ function usePoNumberState(scope: string, view: CheckoutView): PoNumberState {
   const collect = view.collect_po_number === true;
   const required = collect && view.field_config?.["invoice.po_number"] === "mandatory";
   const [value, setRaw] = React.useState<string | null>(null);
+  const [missing, setMissing] = React.useState(false);
+  const flag = React.useCallback(() => {
+    // `Field` gives the input its name as its id.
+    const input = document.getElementById("po_number");
+    if (!input || input.getClientRects().length === 0) return false;
+    setMissing(true);
+    input.scrollIntoView({ block: "center" });
+    input.focus({ preventScroll: true });
+    return true;
+  }, []);
   const setValue = React.useCallback(
     (v: string) => {
       setRaw(v);
+      setMissing(false);
       try {
         window.sessionStorage.setItem(poStorageKey(scope), v);
       } catch {
@@ -318,8 +521,8 @@ function usePoNumberState(scope: string, view: CheckoutView): PoNumberState {
     }
   }, [value, scope]);
   return React.useMemo(
-    () => ({ collect, required, value: value ?? "", setValue, current }),
-    [collect, required, value, setValue, current],
+    () => ({ collect, required, value: value ?? "", setValue, current, missing, flag }),
+    [collect, required, value, setValue, current, missing, flag],
   );
 }
 
@@ -342,6 +545,10 @@ interface ConsentState {
   /** The engine asked for a Turnstile check; the widget shows until the payment goes through. */
   botCheck: boolean;
   setBotCheck: (v: boolean) => void;
+  /** A payment was refused for a missing box: each missing box shows its own error. */
+  showErrors: boolean;
+  /** Show the errors on the boxes and bring them into view. */
+  flag: () => void;
 }
 const NO_ANSWERS: ConsentAnswers = { recurring: false, terms: false, marketing: false };
 const NO_CONSENT: ConsentState = {
@@ -355,6 +562,8 @@ const NO_CONSENT: ConsentState = {
   current: () => NO_ANSWERS,
   botCheck: false,
   setBotCheck: () => {},
+  showErrors: false,
+  flag: () => {},
 };
 const ConsentContext = React.createContext<ConsentState>(NO_CONSENT);
 const consentStorageKey = (scope: string) => `tmb.checkout.consent.${scope}`;
@@ -372,6 +581,15 @@ function useConsentState(scope: string, view: CheckoutView): ConsentState {
   const c = view.consent;
   const [answers, setAnswers] = React.useState<ConsentAnswers | null>(null);
   const [botCheck, setBotCheck] = React.useState(false);
+  const [showErrors, setShowErrors] = React.useState(false);
+  const flag = React.useCallback(() => {
+    setShowErrors(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("checkout-consent")
+        ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+    );
+  }, []);
   const set = React.useCallback(
     (key: keyof ConsentAnswers, v: boolean) => {
       setAnswers((prev) => {
@@ -402,8 +620,10 @@ function useConsentState(scope: string, view: CheckoutView): ConsentState {
       current,
       botCheck,
       setBotCheck,
+      showErrors,
+      flag,
     }),
-    [c, answers, set, current, botCheck],
+    [c, answers, set, current, botCheck, showErrors, flag],
   );
 }
 
@@ -426,54 +646,67 @@ function ConsentBoxes() {
   const consent = React.useContext(ConsentContext);
   if (!consent.recurringText && !consent.termsRequired && !consent.marketingOffered) return null;
   const a = consent.answers;
+  const err = (missing: boolean, text: string) =>
+    consent.showErrors && missing ? (
+      <p className="mt-1 pl-6 text-xs font-medium text-destructive" role="alert">
+        {text}
+      </p>
+    ) : null;
   return (
-    <div className="flex flex-col gap-3">
+    <div id="checkout-consent" className="flex flex-col gap-3">
       {consent.recurringText ? (
-        <CheckboxField
-          checked={a.recurring}
-          onCheckedChange={(v) => consent.set("recurring", v === true)}
-          label={consent.recurringText}
-        />
+        <div>
+          <CheckboxField
+            checked={a.recurring}
+            onCheckedChange={(v) => consent.set("recurring", v === true)}
+            label={consent.recurringText}
+          />
+          {err(!a.recurring, "Select this box to agree to the recurring charge.")}
+        </div>
       ) : null}
       {consent.termsRequired && consent.termsUrl ? (
-        <CheckboxField
-          checked={a.terms}
-          onCheckedChange={(v) => consent.set("terms", v === true)}
-          label={
-            <span>
-              I accept the{" "}
-              <a
-                href={consent.termsUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary hover:underline"
-              >
-                Terms of service
-              </a>
-              {consent.privacyUrl ? (
-                <>
-                  {" "}
-                  and the{" "}
-                  <a
-                    href={consent.privacyUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Privacy policy
-                  </a>
-                </>
-              ) : null}
-              .
-            </span>
-          }
-        />
+        <div>
+          <CheckboxField
+            checked={a.terms}
+            onCheckedChange={(v) => consent.set("terms", v === true)}
+            label={
+              <span>
+                I accept the{" "}
+                <a
+                  href={consent.termsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  Terms of service
+                </a>
+                {consent.privacyUrl ? (
+                  <>
+                    {" "}
+                    and the{" "}
+                    <a
+                      href={consent.privacyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Privacy policy
+                    </a>
+                  </>
+                ) : null}
+                .
+              </span>
+            }
+          />
+          {err(!a.terms, "Select this box to accept the terms.")}
+        </div>
       ) : null}
       {consent.marketingOffered ? (
         <CheckboxField
           checked={a.marketing}
           onCheckedChange={(v) => consent.set("marketing", v === true)}
           label="Send me news and offers by email."
+          hint="Optional."
         />
       ) : null}
     </div>
@@ -513,6 +746,7 @@ function PoNumberInput() {
       label="PO number"
       required={po.required}
       help="Your purchase order number, shown on your invoices."
+      error={po.missing ? PO_MISSING : undefined}
     >
       <Input
         name="po_number"
@@ -593,6 +827,7 @@ function usePaymentChallenge({
   onCompleted,
   onFailed,
   quiet,
+  showsRefusal = false,
   po: poOverride,
   consent: consentOverride,
 }: {
@@ -615,6 +850,8 @@ function usePaymentChallenge({
   onFailed?: (error: string) => void;
   /** A failure the caller handles itself (an automatic retry): no error toast. */
   quiet?: (error: string) => boolean;
+  /** The caller renders `refusal` beside its Pay button, so a refusal is not also a toast. */
+  showsRefusal?: boolean;
   /** For a caller outside `PoNumberContext` (the flow's own return leg). */
   po?: PoNumberState;
   /** For a caller outside `ConsentContext` (the flow's own return leg). */
@@ -637,10 +874,20 @@ function usePaymentChallenge({
     intentId: string;
   } | null>(null);
   const [busy, setBusy] = React.useState(false);
+  /** The last refusal, kept on the page beside Pay: a toast closes itself, and a buyer reading
+   *  the card after it would see an unchanged page with no reason the payment did not happen. */
+  const [refusal, setRefusal] = React.useState<string | null>(null);
   /** Leg 1's completion, held for leg 2 to repeat verbatim. */
   const repeat = React.useRef<{ completion: CheckoutCompletion; gatewayAccount?: string } | null>(
     null,
   );
+  /** Tell the buyer once: inline when the caller shows `refusal`, else a toast. */
+  const refuse = (error: string) => {
+    if (showsRefusal) setRefusal(error);
+    else toast.error(error);
+    onFailed?.(error);
+    return error;
+  };
 
   /**
    * Returns the refusal when there was one, else null. `inline`: the caller is the Stripe
@@ -657,10 +904,10 @@ function usePaymentChallenge({
     if (po.collect && given.poNumber === undefined) {
       const poNumber = po.current().trim();
       if (po.required && !poNumber) {
-        const error = "Enter your PO number";
-        toast.error(error);
-        onFailed?.(error);
-        return error;
+        // At the field when it is on this page; beside Pay when it is not. Never silent.
+        if (!po.flag()) return refuse(PO_MISSING);
+        onFailed?.(PO_MISSING);
+        return PO_MISSING;
       }
       if (poNumber) completion = { ...given, poNumber };
     }
@@ -671,7 +918,8 @@ function usePaymentChallenge({
       const answers = consent.current();
       const refusal = consentRefusal(consent, answers);
       if (refusal) {
-        toast.error(refusal);
+        // On the boxes themselves, not a toast at the top of the page.
+        consent.flag();
         onFailed?.(refusal);
         return refusal;
       }
@@ -705,6 +953,7 @@ function usePaymentChallenge({
     }
     if (res.ok) {
       consent.setBotCheck(false);
+      setRefusal(null);
       setStripeChallenge(null);
       setRedirectChallenge(null);
       const outcome: CompletionOutcome = {
@@ -729,30 +978,48 @@ function usePaymentChallenge({
     if (!res.actionRequired || leg > 1) {
       const error = res.error ?? "We could not complete the checkout.";
       if (inline) return error;
-      if (!quiet?.(error)) toast.error(error);
-      onFailed?.(error);
-      return error;
+      if (quiet?.(error)) {
+        onFailed?.(error);
+        return error;
+      }
+      return refuse(error);
     }
     const { paymentIntentId, nextAction, message } = res.actionRequired;
     // A client result answers the intent it came with, so no later leg repeats it.
     completion = { ...completion };
     delete completion.clientResult;
     repeat.current = { completion, ...(gatewayAccount ? { gatewayAccount } : {}) };
-    const second = (clientResult?: Record<string, string>) =>
-      post(
-        {
-          ...completion,
-          paymentIntent: paymentIntentId,
-          ...(clientResult ? { clientResult } : {}),
-        },
-        gatewayAccount,
-        2,
-      );
+    // The gateway's answer can reach us seconds after its sheet closes: ask again with the
+    // SAME intent before saying anything, so the buyer is never sent to start a second payment.
+    const second = async (clientResult?: Record<string, string>) => {
+      for (let retries = 0; ; retries++) {
+        const error = await post(
+          {
+            ...completion,
+            paymentIntent: paymentIntentId,
+            ...(clientResult ? { clientResult } : {}),
+          },
+          gatewayAccount,
+          2,
+          true,
+        );
+        if (error == null) return null;
+        if (!NOT_YET_APPROVED.test(error)) return refuse(error);
+        if (retries < RETURN_AUTO_RETRIES) {
+          await new Promise((wake) => setTimeout(wake, 2500 * (retries + 1)));
+          continue;
+        }
+        return refuse(
+          `${failed} yet. The payment provider has not confirmed the payment. Do not pay again. We will email you when it is confirmed. ${contactBusiness(businessName)}`,
+        );
+      }
+    };
 
     // RazorPay: the challenge is their embedded sheet, opened over this page — the same
     // component the portal's "Pay now" opens for exactly this.
     if (nextAction.mode === "checkout" && nextAction.checkout) {
       const result = await openRazorpayCheckout(nextAction.checkout, {
+        purpose: "payment",
         businessName,
         // A CHARGE, not a vault setup: this sheet is where the money moves, so it must
         // not borrow the add-card caption (see `vaultSetupDescription`).
@@ -766,11 +1033,14 @@ function usePaymentChallenge({
       // Closed without authenticating. Nothing was created and the session is still open,
       // so the buyer is exactly where they were — no toast, because nothing failed.
       if (result.status === "dismissed") return null;
-      if (result.status === "failed") {
-        toast.error(result.message);
-        onFailed?.(result.message);
-        return result.message;
-      }
+      if (result.status === "failed")
+        return refuse(
+          refusalMessage(
+            "We could not take your payment.",
+            result.message,
+            "Try again, or use a different payment method.",
+          ),
+        );
       setBusy(true);
       try {
         return await second();
@@ -794,11 +1064,14 @@ function usePaymentChallenge({
         ...(prefill ? { prefill } : {}),
       });
       if (result.status === "dismissed") return null;
-      if (result.status === "failed") {
-        toast.error(result.message);
-        onFailed?.(result.message);
-        return result.message;
-      }
+      if (result.status === "failed")
+        return refuse(
+          refusalMessage(
+            "We could not take your payment.",
+            result.message,
+            "Try again, or use a different payment method.",
+          ),
+        );
       setBusy(true);
       try {
         return await second(result.clientResult);
@@ -810,12 +1083,10 @@ function usePaymentChallenge({
     // Stripe 3DS. Elements in our own dialog rather than a redirect, so the order summary
     // the buyer is approving stays on screen behind it.
     if (nextAction.mode === "client_secret" && nextAction.clientSecret) {
-      if (!nextAction.publishableKey) {
-        const error = "This payment provider is not fully configured. Contact support.";
-        toast.error(error);
-        onFailed?.(error);
-        return error;
-      }
+      if (!nextAction.publishableKey)
+        return refuse(
+          `We could not take your payment. The payment setup of ${businessName} is not complete. Contact ${businessName}.`,
+        );
       setStripeChallenge({
         clientSecret: nextAction.clientSecret,
         publishableKey: nextAction.publishableKey,
@@ -871,9 +1142,7 @@ function usePaymentChallenge({
       return null;
     }
 
-    toast.error(message);
-    onFailed?.(message);
-    return message;
+    return refuse(message);
   }
 
   /**
@@ -889,11 +1158,10 @@ function usePaymentChallenge({
   React.useEffect(() => {
     impl.current = post;
   });
-  const run = React.useCallback(
-    (completion: CheckoutCompletion, gatewayAccount?: string) =>
-      impl.current(completion, gatewayAccount, 1),
-    [],
-  );
+  const run = React.useCallback((completion: CheckoutCompletion, gatewayAccount?: string) => {
+    setRefusal(null);
+    return impl.current(completion, gatewayAccount, 1);
+  }, []);
 
   /**
    * Leg 2 for a challenge that OUTLIVED the page.
@@ -1049,7 +1317,9 @@ function usePaymentChallenge({
     </div>
   ) : null;
 
-  return { run, resume, dialog, panel, busy };
+  /** For a gateway step outside `run` (its own sheet refused): beside Pay, like a refusal. */
+  const showRefusal = setRefusal;
+  return { run, resume, dialog, panel, busy, refusal, showRefusal };
 }
 
 /**
@@ -1144,8 +1414,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     setDetailsReturnTo(from);
     setStep("details");
   }, []);
-  const [subscriptionId, setSubscriptionId] = React.useState<string | null>(null);
-  const [invoiceId, setInvoiceId] = React.useState<string | null>(null);
+  // The id is not shown to the buyer; only whether a subscription came back matters.
+  const [, setSubscriptionId] = React.useState<string | null>(null);
   /**
    * The change applied and its invoice did NOT collect.
    *
@@ -1162,11 +1432,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   const [paymentError, setPaymentError] = React.useState<PaymentError | null>(null);
   /** The completion itself came back paid — the only outcome that auto-redirects. */
   const [cleanCompletion, setCleanCompletion] = React.useState(false);
-  /** Phones only: the order's lines are folded until the buyer opens them. */
-  const [orderOpen, setOrderOpen] = React.useState(false);
   const done = (outcome: CompletionOutcome) => {
     setSubscriptionId(outcome.subscriptionId || null);
-    setInvoiceId(outcome.invoiceId ?? null);
     setUnpaid(outcome.unpaidInvoice ?? null);
     setPaymentError(outcome.paymentError ?? null);
     setCleanCompletion(!outcome.unpaidInvoice && !outcome.paymentError);
@@ -1332,7 +1599,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
       clearPendingPaymentChallenge(scope);
       done(outcome);
     },
-    quiet: (error) => retryNotYetApproved(error),
+    // A charge return that is not approved yet gets its card below: never a toast as well.
+    quiet: (error) => returnKindRef.current === "payment" && NOT_YET_APPROVED.test(error),
     onFailed: (error) => {
       /**
        * A failed CHARGE return is not a card problem, so it must not be answered with the
@@ -1350,8 +1618,16 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           setTimeout(() => retryReturn.current?.(), 2500 * returnRetries.current);
           return;
         }
+        // Only the approval race reads as "not yet". Any other refusal is the gateway's own
+        // reason, and the buyer must read it.
         setReturnError(
-          "We could not confirm your payment yet. Your bank may still be sending us the approval. We did not charge you twice. You can safely try again.",
+          NOT_YET_APPROVED.test(error)
+            ? "We could not confirm your payment yet. Your bank may still be sending us the approval. If you try again, we will not charge you twice."
+            : refusalMessage(
+                "We could not confirm your payment.",
+                error,
+                "Try again, or use a different payment method.",
+              ),
         );
         return;
       }
@@ -1420,7 +1696,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           // failure propagates all the way here. Before this, that left `setReturning(false)`
           // unreachable and the buyer on a permanent spinner — right after approving payment.
           setReturnError(
-            "We could not confirm your payment method. We did not charge your card twice. You can safely try again.",
+            "We could not save your payment method. The request did not finish. If you try again, we will not charge you twice.",
           );
         } finally {
           setReturning(false);
@@ -1494,7 +1770,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           // `checkoutComplete`, and without this the buyer sat on a spinner forever
           // moments after approving a payment (the vault leg's own lesson).
           setReturnError(
-            "We could not confirm your payment. We did not charge you twice. You can safely try again.",
+            "We could not confirm your payment. The request did not finish. If you try again, we will not charge you twice.",
           );
         } finally {
           setReturning(false);
@@ -1516,16 +1792,16 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
    * payment step is part of the rail rather than an optional detour.
    */
   const mustReauthorize = Boolean(mandate?.reauthorizationRequired);
-  // The rail is built from what will ACTUALLY happen: a change with a usable card
-  // already on file never shows a payment step, and only grows one if the buyer
-  // asks to use a different card. A step you will never reach must not be drawn.
-  const showCardStep =
-    !isChange || !(view.change?.hasPaymentMethod ?? false) || mustReauthorize || step === "card";
-  /** A purchase pays on its own step unless the business always keeps the method. */
-  const purchasePayStep = purchase?.save_payment_method === "always" ? "card" : "pay";
-  const orderLineCount = view.offer
-    ? view.offer.lines.filter((l) => l.quantity > 0).length
-    : view.items.length;
+  /** A purchase pays on its own step unless the business always keeps the method. Nothing
+   *  due means no method to keep, so the pay step only completes it. */
+  const purchasePayStep =
+    purchase?.save_payment_method === "always" && purchase.amount_due_minor > 0 ? "card" : "pay";
+  const commit = commitCopy(view);
+  const trialInfo = view.mode === "create" && view.dueToday?.trial ? view.dueToday : null;
+  const name = planName(view);
+  /** One page: the details form is valid (or not shown). The commit waits while it is not. */
+  const [detailsValid, setDetailsValid] = React.useState(true);
+  const blockedByDetails = onePage && !detailsValid;
   /**
    * The payment step keeps the buyer's details on screen as a summary, so details and
    * payment read as one page rather than two — the form folds up, it does not go away.
@@ -1534,9 +1810,13 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     !isChange && details ? (
       <DetailsSummary
         details={details}
+        countries={countries}
         onEdit={() => editDetails(step === "pay" ? "pay" : "card")}
       />
     ) : null;
+  /** A change confirmed on the card on file has no payment step to show; adding one later
+   *  ("Manage cards") does not grow the stepper. */
+  const changeHasCardStep = !(view.change?.hasPaymentMethod ?? false) || mustReauthorize;
   const steps = isPurchase
     ? [
         { key: "details", label: "Your details" },
@@ -1546,7 +1826,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     : isChange
       ? [
           { key: "confirm", label: "Review" },
-          ...(showCardStep ? [{ key: "card", label: "Payment" }] : []),
+          ...(changeHasCardStep ? [{ key: "card", label: "Payment" }] : []),
           { key: "done", label: "Confirmation" },
         ]
       : [
@@ -1554,12 +1834,49 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           { key: "card", label: "Payment" },
           { key: "done", label: "Confirmation" },
         ];
+  const stepperAt = isChange && !changeHasCardStep && step === "card" ? "confirm" : step;
+  /** What is due today, for the phone's pay bar. */
+  const dueNow: { minor: number; currency: string } | null = isPurchase
+    ? purchase
+      ? { minor: purchase.amount_due_minor, currency: purchase.currency }
+      : null
+    : isChange
+      ? view.change?.preview
+        ? {
+            minor: view.change.preview.immediateCharge ? view.change.preview.amountDueMinor : 0,
+            currency: view.change.preview.currency,
+          }
+        : null
+      : view.dueToday
+        ? { minor: view.dueToday.amountDueMinor, currency: view.dueToday.currency }
+        : null;
+  const live = step !== "done" && !sessionEnded && !returning && !returnError;
+  /** A change's money, priced, ABOVE its confirm button: the buyer reads the total first. */
+  // Confirm would refuse this change: show why instead of figures for a change that cannot happen.
+  const changeBlocked = isChange ? (view.change?.blocked ?? null) : null;
+  const changePreview = changeBlocked ? (
+    <Alert tone="warning" title="You cannot make this change here">
+      <p>{changeBlocked.message}</p>
+    </Alert>
+  ) : isChange && view.change?.preview ? (
+    <>
+      {view.change.preview.heldInvoice && view.change.preview.heldExpiresAt ? (
+        <HeldChangeNotice preview={view.change.preview} tz={view.business.timezone} />
+      ) : null}
+      <PreviewCard
+        preview={view.change.preview}
+        tz={view.business.timezone}
+        oldPlan={view.change.currentPlan?.name ?? null}
+        {...(reactivation ? { reactivation } : {})}
+      />
+    </>
+  ) : null;
 
   return (
     <BrandTheme brand={view.business}>
       <PoNumberContext.Provider value={po}>
         <ConsentContext.Provider value={consent}>
-          <div className="flex w-full flex-col gap-4 sm:gap-5">
+          <div className="flex w-full flex-col gap-4 pb-20 sm:gap-5 sm:pb-0">
             <StorefrontHeader
               brand={view.business}
               subtitle={
@@ -1568,43 +1885,41 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                   : reactivate
                     ? "Reactivate your subscription."
                     : isChange
-                      ? "Review and confirm your plan change."
-                      : "Subscribe to continue."
+                      ? changeBlocked
+                        ? "Review your plan change."
+                        : "Review and confirm your plan change."
+                      : trialInfo?.trialPeriod
+                        ? `Start your ${trialInfo.trialPeriod.count}-${trialInfo.trialPeriod.unit} free trial${name ? ` of ${name}` : ""}.`
+                        : name
+                          ? `Subscribe to ${name}.`
+                          : "Subscribe."
               }
               aside={
                 cancelUrl && step !== "done" && !sessionEnded ? (
-                  <a href={cancelUrl} className="text-sm text-muted-foreground hover:underline">
+                  <a
+                    data-document-link
+                    href={cancelUrl}
+                    className="text-sm text-muted-foreground hover:underline"
+                  >
                     Cancel
                   </a>
                 ) : undefined
               }
             />
 
-            {onePage ? null : <Steps steps={steps} current={step} />}
+            {onePage ? null : <Steps steps={steps} current={stepperAt} />}
 
             {/*
           Two columns above 1000px: what the buyer ACTS on down the left, what they are
-          buying down the right, where it stays put while they fill in a card. Below that
-          it is the source order — order first, then the step — which is what this page
-          already did, so a phone sees no change.
-
-          The rail is `position: sticky` on a desktop for the reason it exists: the card
-          step is long enough to push the order summary off screen, and "what am I paying
-          for" is the question a buyer asks WHILE typing a card number, not before.
-
-          `Steps` stays full width above both, because it describes the whole flow rather
-          than either column. Layout lives in `globals.css` under `.checkout-panes`.
+          buying down the right, sticky while they fill in a card. Below that the order
+          comes first, then the step. Layout lives in `globals.css` under `.checkout-panes`.
         */}
             <div className="checkout-panes">
               <div className="checkout-rail">
-                {/* Item summary — always visible. In change mode, current → new.
-            The per-item amounts arrive PRE-FORMATTED ("INR 2499.00 / month"), which is
-            why this list still cannot add itself up — but the engine now sends the sum
-            it computed anyway (`view.nextPayment`, tax included), so the card closes on
-            the same "Next payment · includes CGST…" strip the portal's plan card ends
-            with. The old note here said a total we cannot compute is not a total; the
-            answer was to compute it, not to leave the buyer without one. */}
-                <StorefrontSection
+                <OrderCard
+                  view={view}
+                  locked={step === "done" || sessionEnded}
+                  sessionEnded={sessionEnded}
                   title={
                     isPurchase
                       ? "Your order"
@@ -1612,223 +1927,9 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         ? "Your subscription"
                         : isChange
                           ? "Your plan change"
-                          : view.items.length > 1
-                            ? "Your order"
-                            : "Your plan"
+                          : "Your order"
                   }
-                  bodyClassName="p-0"
-                >
-                  {/* Phones: the lines fold away behind a toggle and the totals stay, so the
-                    form is not pushed a screen down. Wider screens always show the lines. */}
-                  <div className="flex items-center justify-between gap-3 border-b px-5 py-3 sm:hidden">
-                    <span className="text-sm text-muted-foreground">
-                      {orderLineCount} {orderLineCount === 1 ? "item" : "items"}
-                    </span>
-                    <button
-                      type="button"
-                      className="text-sm text-primary hover:underline"
-                      aria-expanded={orderOpen}
-                      onClick={() => setOrderOpen((o) => !o)}
-                    >
-                      {orderOpen ? "Hide items" : "Show items"}
-                    </button>
-                  </div>
-                  <div className={orderOpen ? undefined : "hidden sm:block"}>
-                    <RowList>
-                      {reactivate && view.change?.currentPlan && view.items.length === 0 ? (
-                        /* Reactivating on the plan it was cancelled on — what it will be on, not a swap. */
-                        <Row>
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            <Glyph>
-                              <Package />
-                            </Glyph>
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium">
-                                {view.change.currentPlan.name}
-                              </div>
-                              <div className="mt-0.5 text-xs text-muted-foreground">Plan</div>
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-sm font-semibold tabular-nums">
-                            {view.change.currentPlan.amount}
-                          </div>
-                        </Row>
-                      ) : null}
-                      {isChange && !reactivate && view.change?.currentPlan
-                        ? (() => {
-                            /* Struck through ONLY when a new plan is actually in the list. An add-on
-                 change carries no plan item, and striking the plan there told the buyer
-                 they were losing the plan they are keeping — the row is context then,
-                 not a casualty. */
-                            const swapsPlan = view.items.some((i) => i.kind === "plan");
-                            return (
-                              <Row className="text-muted-foreground">
-                                <div className="flex min-w-0 flex-1 items-center gap-3">
-                                  <Glyph>
-                                    <Package />
-                                  </Glyph>
-                                  <div className="min-w-0">
-                                    <div
-                                      className={cn(
-                                        "truncate text-sm",
-                                        swapsPlan && "line-through",
-                                      )}
-                                    >
-                                      {view.change.currentPlan.name}
-                                    </div>
-                                    <div className="mt-0.5 text-xs">
-                                      {swapsPlan ? "Current plan" : "Current plan · unchanged"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <div
-                                  className={cn(
-                                    "shrink-0 text-sm tabular-nums",
-                                    swapsPlan && "line-through",
-                                  )}
-                                >
-                                  {view.change.currentPlan.amount}
-                                </div>
-                              </Row>
-                            );
-                          })()
-                        : null}
-                      {/* A REMOVAL IS AN ABSENCE, and an absence renders as nothing. The list below
-                draws the DESIRED items, so an unchecked add-on simply vanished — no row, no
-                mention that money was coming back. Reported by a buyer (PROGRESS :306).
-                Struck-through and muted, the same treatment the swapped plan row gets: a
-                removal is the ordinary end of a line, not an error, so it takes no semantic
-                colour. The refund itself is quoted in the totals block below. */}
-                      {(view.change?.removedItems ?? []).map((item, i) => (
-                        <Row key={`removed-${i}`} className="text-muted-foreground">
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            <Glyph>
-                              <Package />
-                            </Glyph>
-                            <div className="min-w-0">
-                              <div className="truncate text-sm line-through">
-                                {item.name}
-                                {item.quantity > 1 ? <span> × {item.quantity}</span> : null}
-                              </div>
-                              <div className="mt-0.5 text-xs">Removed</div>
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-sm tabular-nums line-through">
-                            {item.amount}
-                          </div>
-                        </Row>
-                      ))}
-                      {view.offer ? (
-                        <OfferLines
-                          lines={view.offer.lines}
-                          currency={purchase?.currency ?? view.items[0]?.currency ?? ""}
-                          locked={step === "done" || sessionEnded}
-                        />
-                      ) : null}
-                      {(view.offer ? [] : view.items).map((item, i) => (
-                        <Row key={i}>
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            <ProductGlyph src={item.image_url} fallback={<Package />} />
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium">
-                                {item.name}
-                                {item.quantity > 1 ? (
-                                  <span className="text-muted-foreground"> × {item.quantity}</span>
-                                ) : null}
-                              </div>
-                              <div className="mt-0.5 text-xs text-muted-foreground">
-                                {isPurchase || item.kind === "charge"
-                                  ? "One-time"
-                                  : item.kind === "plan"
-                                    ? isChange && !reactivate
-                                      ? "New plan"
-                                      : "Plan"
-                                    : "Add-on"}{" "}
-                                · {item.currency}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-sm font-semibold tabular-nums">
-                            {item.amount}
-                          </div>
-                        </Row>
-                      ))}
-                      {!view.offer &&
-                      view.items.length === 0 &&
-                      (view.change?.removedItems ?? []).length === 0 &&
-                      !(reactivate && view.change?.currentPlan) ? (
-                        <li className="px-5 py-4 text-sm text-muted-foreground">
-                          {reactivate
-                            ? "Your subscription is reactivated on its current plan."
-                            : isChange
-                              ? // A genuine coupon-only change link — the plan itself is unchanged.
-                                "This link applies a discount to your subscription. Your plan does not change."
-                              : // 0243 hide_zero_value_lines can empty this list on a create checkout
-                                // too (every line priced at zero) — that is not "nothing to buy", so
-                                // say so rather than reusing the change-only copy above.
-                                "Every line on this order is free of charge."}
-                        </li>
-                      ) : null}
-                    </RowList>
-                    {/* Two shapes, one place. `allow_coupons` (0238) means the buyer may type a
-                  code, so the strip becomes an editable box; otherwise it stays the
-                  read-only list of what the merchant attached at mint. A spent or expired
-                  link gets the read-only form either way — the routes refuse it, and an
-                  input that cannot be submitted is worse than none. */}
-                    {view.allow_coupons && !sessionEnded ? (
-                      <CouponBox applied={view.coupons} refusals={view.coupon_refusals ?? {}} />
-                    ) : view.coupons.length > 0 ? (
-                      <div className="space-y-2 border-t bg-muted/40 px-5 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-muted-foreground">
-                            {view.coupons.length > 1 ? "Discounts applied" : "Discount applied"}
-                          </span>
-                          {view.coupons.map((c) => (
-                            <Chip key={c} className="font-mono">
-                              {c}
-                            </Chip>
-                          ))}
-                        </div>
-                        <CouponRefusals refusals={view.coupon_refusals ?? {}} />
-                      </div>
-                    ) : null}
-                  </div>
-                  {isPurchase && purchase ? <PurchaseTotal purchase={purchase} /> : null}
-                  {view.mode === "create" && view.dueToday ? (
-                    <div className="border-t px-5 py-4">
-                      <div className="flex items-baseline justify-between gap-3">
-                        <span className="text-sm font-medium">Due today</span>
-                        <span className="text-lg font-semibold tabular-nums">
-                          {view.dueToday.trial
-                            ? money(0, view.dueToday.currency)
-                            : money(view.dueToday.amountDueMinor, view.dueToday.currency)}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {view.dueToday.trial
-                          ? "Your trial starts today. We charge you when it ends."
-                          : view.dueToday.taxMinor > 0
-                            ? `Includes ${money(view.dueToday.taxMinor, view.dueToday.currency)} tax, and any one-time items.`
-                            : "Includes any one-time items."}
-                      </div>
-                    </div>
-                  ) : null}
-                  {view.nextPayment ? (
-                    <NextPaymentStrip
-                      next={view.nextPayment}
-                      isChange={isChange && !reactivate}
-                      pendingCreditMinor={view.change?.preview?.refundableCreditAddedMinor ?? 0}
-                    />
-                  ) : null}
-                </StorefrontSection>
-
-                {isChange && view.change?.preview ? (
-                  <PreviewCard
-                    preview={view.change.preview}
-                    tz={view.business.timezone}
-                    {...(reactivation ? { reactivation } : {})}
-                  />
-                ) : null}
+                />
               </div>
 
               <div className="checkout-main">
@@ -1905,11 +2006,6 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                           ? "This takes longer than usual. You do not have to do anything. We will email your receipt when the payment completes."
                           : "You do not have to do anything. This usually takes a few seconds."}
                       </p>
-                      {invoiceId ? (
-                        <p className="mt-2 text-xs">
-                          Invoice <span className="font-mono">{invoiceId}</span>
-                        </p>
-                      ) : null}
                     </NoticeCard>
                   ) : unpaid ? (
                     // The order went through but its invoice is still open: never "received".
@@ -1921,23 +2017,19 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         </span>
                         {unpaid.failure ? `. Reason: ${unpaid.failure.message}` : "."}
                       </p>
+                      {/* The completion carries the invoice id only, never its number: no raw id here. */}
                       <p className="mt-2">
-                        Invoice <span className="font-mono">{unpaid.id}</span> stays open on your
-                        account. The billing email for this invoice has a secure link. Use it to pay
-                        the invoice. Keep this number if you must contact {view.business.name}.
+                        The invoice stays open on your account. The billing email for this invoice
+                        has its number and a secure link. Use the link to pay the invoice.
                       </p>
                     </NoticeCard>
                   ) : (
                     <NoticeCard icon={<CheckCircle2 />} tone="success" title="Payment received">
                       <p>Thank you for your purchase. We will email your receipt.</p>
-                      {invoiceId ? (
-                        <p className="mt-2 text-xs">
-                          Invoice <span className="font-mono">{invoiceId}</span>
-                        </p>
-                      ) : null}
                       {successUrl ? (
                         <p className="mt-3">
                           <a
+                            data-document-link
                             href={successUrl}
                             className="text-sm font-medium text-primary hover:underline"
                           >
@@ -1957,7 +2049,9 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     title={
                       reactivate
                         ? "Your subscription is reactivated. Payment in progress"
-                        : "Your plan changed. Payment in progress"
+                        : isChange
+                          ? "Your plan changed. Payment in progress"
+                          : "You are subscribed. Payment in progress"
                     }
                   >
                     <p>
@@ -1966,24 +2060,16 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         : isChange
                           ? "Your plan is changed."
                           : "Your subscription is active."}{" "}
-                      Your bank is still confirming the{" "}
+                      We are confirming the{" "}
                       <span className="font-medium tabular-nums">
                         {money(unpaid.amount_due_minor, unpaid.currency)}
                       </span>{" "}
-                      payment for it.
+                      payment with the payment provider.
                     </p>
                     <p className="mt-2">
                       {settleTimedOut
-                        ? "This payment takes longer than usual. Some mandate debits complete overnight. You do not have to do anything. We will email your receipt when the payment completes."
-                        : "You do not have to do anything. This usually takes a few seconds."}
-                    </p>
-                    <p className="mt-2 text-xs">
-                      Invoice <span className="font-mono">{unpaid.id}</span>
-                      {subscriptionId ? (
-                        <>
-                          {" · "}subscription <span className="font-mono">{subscriptionId}</span>
-                        </>
-                      ) : null}
+                        ? "This takes longer than usual. Do not pay again. We will email you when we know the result. If the payment did not go through, the email tells you how to pay."
+                        : "Do not pay again. This usually takes a few seconds."}
                     </p>
                   </NoticeCard>
                 ) : step === "done" && unpaid ? (
@@ -2022,16 +2108,10 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                 what this names. Give them a real link here only when the engine can mint
                 one on the completion. */}
                     <p className="mt-2">
-                      Invoice <span className="font-mono">{unpaid.id}</span> stays open on your
-                      account. The billing email for this invoice has a secure link. Use it to pay
-                      the invoice or to change your payment method. Keep this number if you must
-                      contact {view.business.name}.
+                      The invoice stays open on your account. The billing email for this invoice has
+                      its number and a secure link. Use the link to pay the invoice or to change
+                      your payment method.
                     </p>
-                    {subscriptionId ? (
-                      <p className="mt-2 text-xs">
-                        Subscription <span className="font-mono">{subscriptionId}</span>
-                      </p>
-                    ) : null}
                   </NoticeCard>
                 ) : step === "done" && paymentError ? (
                   /* The subscription EXISTS and its first charge was refused — the engine's
@@ -2062,11 +2142,6 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                       The invoice stays open on your account. The billing email for this invoice has
                       a secure link. Use it to pay the invoice or to change your payment method.
                     </p>
-                    {subscriptionId ? (
-                      <p className="mt-2 text-xs">
-                        Subscription <span className="font-mono">{subscriptionId}</span>
-                      </p>
-                    ) : null}
                   </NoticeCard>
                 ) : step === "done" ? (
                   /* `success`, not `--primary`: this is an outcome the buyer wanted, and the
@@ -2079,15 +2154,11 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                           ? "Your plan is changed. Thank you!"
                           : "Your subscription is now active. Thank you!"}
                     </p>
-                    {subscriptionId ? (
-                      <p className="mt-2 text-xs">
-                        Subscription <span className="font-mono">{subscriptionId}</span>
-                      </p>
-                    ) : null}
                     {/* A plain link: the fallback if the automatic redirect is blocked or slow. */}
                     {successUrl ? (
                       <p className="mt-3">
                         <a
+                          data-document-link
                           href={successUrl}
                           className="text-sm font-medium text-primary hover:underline"
                         >
@@ -2101,6 +2172,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     <DetailsStep
                       autoSave
                       customer={details}
+                      onValidity={setDetailsValid}
                       onDone={(prefill, saved) => {
                         setBuyer(prefill);
                         setDetails(saved);
@@ -2108,7 +2180,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         router.refresh();
                         setDetailsSaved(true);
                       }}
-                      lockEmail={purchase?.customer_pinned ?? false}
+                      lockEmail={view.customer_pinned ?? purchase?.customer_pinned ?? false}
                       onSessionEnded={() => setSessionEnded(true)}
                       countries={countries}
                       fieldConfig={view.field_config ?? {}}
@@ -2123,6 +2195,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                       <PurchasePayStep
                         scope={scope}
                         purchase={purchase}
+                        commit={commit}
+                        blocked={blockedByDetails}
                         businessName={view.business.name}
                         brandColor={view.business.brand_color}
                         {...(buyer ? { prefill: buyer } : {})}
@@ -2137,17 +2211,18 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         brandColor={view.business.brand_color}
                         isChange={isChange}
                         purchase={isPurchase}
+                        commit={commit}
+                        blocked={blockedByDetails}
+                        moneyDueToday={(dueNow?.minor ?? 0) > 0}
+                        currency={
+                          dueNow?.currency ?? view.items[0]?.currency ?? purchase?.currency ?? null
+                        }
                         {...(reactivate
                           ? { reactivateLabel: reactivateLabel(view.change?.preview) }
                           : {})}
                         preferNew={mustReauthorize}
                         {...(buyer ? { prefill: buyer } : {})}
                         onDone={done}
-                        onEditDetails={() =>
-                          document
-                            .getElementById("checkout-details")
-                            ?.scrollIntoView({ block: "start" })
-                        }
                         onSessionEnded={() => setSessionEnded(true)}
                         {...(cardReturnTo
                           ? {
@@ -2185,7 +2260,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         : undefined
                     }
                     isChange={isChange}
-                    lockEmail={purchase?.customer_pinned ?? false}
+                    lockEmail={view.customer_pinned ?? purchase?.customer_pinned ?? false}
                     onSessionEnded={() => setSessionEnded(true)}
                     countries={countries}
                     fieldConfig={view.field_config ?? {}}
@@ -2196,6 +2271,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     <PurchasePayStep
                       scope={scope}
                       purchase={purchase}
+                      commit={commit}
                       businessName={view.business.name}
                       brandColor={view.business.brand_color}
                       {...(buyer ? { prefill: buyer } : {})}
@@ -2205,40 +2281,51 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     />
                   </div>
                 ) : step === "confirm" ? (
-                  <ConfirmChangeStep
-                    scope={scope}
-                    {...(reactivation ? { reactivation } : {})}
-                    preview={view.change?.preview}
-                    tz={view.business.timezone}
-                    businessName={view.business.name}
-                    brandColor={view.business.brand_color}
-                    hasPaymentMethod={view.change?.hasPaymentMethod ?? false}
-                    paymentMethod={view.change?.paymentMethod}
-                    mandate={mandate}
-                    onDone={done}
-                    onNeedCard={() => {
-                      setCardReturnTo("confirm");
-                      setStep("card");
-                    }}
-                    onEditDetails={() => editDetails("confirm")}
-                    onSessionEnded={() => setSessionEnded(true)}
-                  />
+                  <div className="flex flex-col gap-4">
+                    {changePreview}
+                    <ConfirmChangeStep
+                      scope={scope}
+                      commit={commit}
+                      itemsUnchanged={view.change?.itemsUnchanged === true}
+                      {...(reactivation ? { reactivation } : {})}
+                      preview={view.change?.preview}
+                      tz={view.business.timezone}
+                      businessName={view.business.name}
+                      brandColor={view.business.brand_color}
+                      hasPaymentMethod={view.change?.hasPaymentMethod ?? false}
+                      paymentMethod={view.change?.paymentMethod}
+                      mandate={mandate}
+                      blocked={changeBlocked != null}
+                      onDone={done}
+                      onNeedCard={() => {
+                        setCardReturnTo("confirm");
+                        setStep("card");
+                      }}
+                      onEditDetails={() => editDetails("confirm")}
+                      onSessionEnded={() => setSessionEnded(true)}
+                    />
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-4">
-                    {detailsSummary}
+                    {isChange ? changePreview : detailsSummary}
                     <CardStep
                       scope={scope}
                       businessName={view.business.name}
                       brandColor={view.business.brand_color}
                       isChange={isChange}
                       purchase={isPurchase}
+                      commit={commit}
+                      moneyDueToday={(dueNow?.minor ?? 0) > 0}
+                      currency={
+                        dueNow?.currency ?? view.items[0]?.currency ?? purchase?.currency ?? null
+                      }
+                      {...(isChange ? { onEditDetails: () => editDetails("card") } : {})}
                       {...(reactivate
                         ? { reactivateLabel: reactivateLabel(view.change?.preview) }
                         : {})}
                       preferNew={mustReauthorize}
                       {...(buyer ? { prefill: buyer } : {})}
                       onDone={done}
-                      onEditDetails={() => editDetails("card")}
                       onSessionEnded={() => setSessionEnded(true)}
                       {...(cardReturnTo
                         ? {
@@ -2259,11 +2346,654 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
             {/* Always mounted, opened only while the return leg is being challenged. */}
             {returnChallenge.dialog}
 
-            <StorefrontFooter business={view.business.name} />
+            {live && dueNow ? (
+              <PhonePayBar
+                name={name}
+                isChange={isChange}
+                amount={money(dueNow.minor, dueNow.currency)}
+              />
+            ) : null}
+
+            <StorefrontFooter
+              business={view.business.name}
+              supportEmail={view.business.support_email ?? null}
+              website={view.business.website ?? null}
+            />
           </div>
         </ConsentContext.Provider>
       </PoNumberContext.Provider>
     </BrandTheme>
+  );
+}
+
+/** One figure row of the order card: label left, amount right, both on one line. */
+function Figure({
+  label,
+  value,
+  strong = false,
+  credit = false,
+  hint,
+}: {
+  label: React.ReactNode;
+  value: React.ReactNode;
+  strong?: boolean;
+  credit?: boolean;
+  hint?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex items-baseline justify-between gap-3",
+          strong ? "text-sm font-medium" : "text-sm text-muted-foreground",
+        )}
+      >
+        <span className="min-w-0">{label}</span>
+        <span
+          className={cn(
+            "shrink-0 tabular-nums",
+            strong && "text-lg font-semibold text-foreground",
+            credit && "text-success",
+          )}
+        >
+          {value}
+        </span>
+      </div>
+      {hint ? <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+/** "3 × $12.00 / month", "Billed every month", "One-time payment". */
+function lineSubline(
+  l: {
+    quantity: number;
+    unit_amount_minor?: number | null;
+    interval?: string | null;
+    amount: string;
+  },
+  currency: string,
+): string {
+  if (l.unit_amount_minor === undefined) return l.amount; // an older engine: the summary only
+  const every = l.interval ? ` / ${l.interval}` : "";
+  if (l.unit_amount_minor != null && l.quantity > 1)
+    return `${l.quantity} × ${money(l.unit_amount_minor, currency)}${every}`;
+  if (l.unit_amount_minor == null) return l.amount;
+  return l.interval ? `Billed every ${l.interval}` : "One-time payment";
+}
+
+/** One order line: the product, how it is priced, and what it adds up to. */
+function OrderLine({
+  name,
+  subline,
+  total,
+  image,
+  muted = false,
+  struck = false,
+  children,
+}: {
+  name: React.ReactNode;
+  subline: React.ReactNode;
+  total: React.ReactNode;
+  image?: string | null;
+  muted?: boolean;
+  struck?: boolean;
+  /** Controls under the line (a payment link's stepper). */
+  children?: React.ReactNode;
+}) {
+  return (
+    <li className={cn("px-5 py-3.5", muted && "text-muted-foreground")}>
+      <div className="flex items-start gap-3">
+        <ProductGlyph src={image ?? null} fallback={<Package />} />
+        <div className="min-w-0 flex-1">
+          <div className={cn("text-sm font-medium wrap-break-word", struck && "line-through")}>
+            {name}
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{subline}</div>
+        </div>
+        <div
+          className={cn(
+            "shrink-0 text-sm font-semibold tabular-nums",
+            struck && "font-normal line-through",
+          )}
+        >
+          {total}
+        </div>
+      </div>
+      {children ? <div className="mt-2 flex justify-end">{children}</div> : null}
+    </li>
+  );
+}
+
+/**
+ * The order: every line with its quantity and total, then the figures that add up to what
+ * is due today and what is charged after. On a phone a multi-line order folds behind a
+ * toggle; a single line always shows, so the buyer sees what they buy before they pay.
+ */
+function OrderCard({
+  view,
+  title,
+  locked,
+  sessionEnded,
+}: {
+  view: CheckoutView;
+  title: string;
+  locked: boolean;
+  sessionEnded: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const isChange = view.mode === "change";
+  const isPurchase = view.mode === "purchase";
+  const reactivate = view.change?.reactivation != null;
+  const unchanged = view.change?.itemsUnchanged === true;
+  const currency =
+    view.purchase?.currency ??
+    view.dueToday?.currency ??
+    view.items[0]?.currency ??
+    view.nextPayment?.currency ??
+    "";
+  const rows: Array<{ key: string; name: string; node: React.ReactNode }> = [];
+  const current = view.change?.currentPlan;
+  if (isChange && current) {
+    const swaps = !unchanged && !reactivate && view.items.some((i) => i.kind === "plan");
+    rows.push({
+      key: "current",
+      name: current.name,
+      node: (
+        <OrderLine
+          key="current"
+          name={current.name}
+          subline={reactivate ? "Plan" : swaps ? "Current plan" : "Current plan · does not change"}
+          total={current.amount}
+          muted={swaps}
+          struck={swaps}
+        />
+      ),
+    });
+  }
+  for (const [i, item] of (view.change?.removedItems ?? []).entries()) {
+    rows.push({
+      key: `removed-${i}`,
+      name: item.name,
+      node: (
+        <OrderLine
+          key={`removed-${i}`}
+          name={`${item.name}${item.quantity > 1 ? ` × ${item.quantity}` : ""}`}
+          subline="Removed"
+          total={item.amount}
+          muted
+          struck
+        />
+      ),
+    });
+  }
+  if (view.offer) {
+    for (const l of view.offer.lines) {
+      rows.push({
+        key: l.price,
+        name: l.name,
+        node: <OfferLine key={l.price} line={l} currency={currency} locked={locked} />,
+      });
+    }
+  } else if (!unchanged) {
+    for (const [i, item] of view.items.entries()) {
+      const sub = lineSubline(item, item.currency);
+      rows.push({
+        key: `item-${i}`,
+        name: item.name,
+        node: (
+          <OrderLine
+            key={`item-${i}`}
+            name={item.name}
+            subline={isChange && item.kind === "plan" && !reactivate ? `New plan · ${sub}` : sub}
+            total={
+              item.line_total_minor != null
+                ? money(item.line_total_minor, item.currency)
+                : item.amount
+            }
+            image={item.image_url ?? null}
+          />
+        ),
+      });
+    }
+  }
+  const chosen = view.offer ? view.offer.lines.filter((l) => l.quantity > 0).length : rows.length;
+  const folds = rows.length > 1;
+  const first = rows.find((r) => r.key !== "current")?.name ?? rows[0]?.name ?? "";
+  return (
+    <StorefrontSection title={title} bodyClassName="p-0">
+      {folds ? (
+        <div className="flex items-center justify-between gap-3 border-b px-5 py-3 sm:hidden">
+          <span className="min-w-0 text-sm">
+            {isChange && current && !reactivate && first !== current.name ? (
+              <span className="text-muted-foreground">{current.name} to </span>
+            ) : null}
+            <span className="font-medium">{first}</span>
+            {(isChange && current ? chosen - 1 : chosen) > 1 ? (
+              <span className="text-muted-foreground">
+                {" "}
+                and {(isChange && current ? chosen - 1 : chosen) - 1} more{" "}
+                {(isChange && current ? chosen - 1 : chosen) - 1 === 1 ? "item" : "items"}
+              </span>
+            ) : null}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 text-sm text-primary hover:underline"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+          >
+            {open ? "Hide items" : "Show items"}
+          </button>
+        </div>
+      ) : null}
+      <div className={folds && !open ? "hidden sm:block" : undefined}>
+        <ul className="divide-y">
+          {rows.map((r) => r.node)}
+          {rows.length === 0 || (unchanged && rows.length === 1) ? (
+            <li className="px-5 py-3 text-sm text-muted-foreground">
+              {reactivate
+                ? "Your subscription is reactivated on its current plan."
+                : isChange
+                  ? view.coupons.length > 0
+                    ? "This link applies a discount to your subscription. Your plan does not change."
+                    : "This link does not change your plan."
+                  : "Every line on this order is free of charge."}
+            </li>
+          ) : null}
+        </ul>
+        {view.allow_coupons && !sessionEnded ? (
+          <CouponBox applied={view.coupons} refusals={view.coupon_refusals ?? {}} />
+        ) : view.coupons.length > 0 ? (
+          <div className="space-y-2 border-t bg-muted/40 px-5 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {view.coupons.length > 1 ? "Discounts applied" : "Discount applied"}
+              </span>
+              {view.coupons.map((c) => (
+                <Chip key={c} className="font-mono">
+                  {c}
+                </Chip>
+              ))}
+            </div>
+            <CouponRefusals refusals={view.coupon_refusals ?? {}} />
+          </div>
+        ) : null}
+      </div>
+      {isPurchase && view.purchase ? <PurchaseTotal purchase={view.purchase} /> : null}
+      {view.mode === "create" ? <CreateTotals view={view} /> : null}
+      {isChange && view.nextPayment ? (
+        <ChangeRecurring
+          next={view.nextPayment}
+          // A refused change has no next payment of its own: the preview prices the change.
+          preview={view.change?.blocked ? undefined : view.change?.preview}
+          tz={view.business.timezone}
+          reactivate={reactivate}
+          unchanged={unchanged}
+        />
+      ) : null}
+    </StorefrontSection>
+  );
+}
+
+/**
+ * A signup's money, in the order the buyer pays it: today's invoice line by line, then
+ * the payments after it. Every figure is the engine's; a figure it cannot state yet (no
+ * address, so no tax) is left out with a line that says why.
+ */
+function CreateTotals({ view }: { view: CheckoutView }) {
+  const tz = view.business.timezone;
+  const due = view.dueToday;
+  const next = view.nextPayment;
+  const every = planInterval(view);
+  const cur = due?.currency ?? next?.currency ?? view.items[0]?.currency ?? "";
+  const totals = (
+    view.offer
+      ? view.offer.lines.filter((l) => l.quantity > 0).map((l) => l.line_total_minor)
+      : view.items.map((i) => i.line_total_minor)
+  ) as Array<number | null | undefined>;
+  const subtotal =
+    totals.length > 0 && totals.every((t) => typeof t === "number")
+      ? (totals as number[]).reduce((a, b) => a + b, 0)
+      : null;
+  const intro = next?.intro ?? null;
+  const later: React.ReactNode[] = [];
+  if (next && every) {
+    if (intro && intro.periods > 1) {
+      const n = intro.periods - 1;
+      later.push(
+        <Figure
+          key="intro"
+          label={`Next ${n} ${n === 1 ? "payment" : "payments"}, with your discount`}
+          value={`${money(intro.totalMinor, cur)}${n > 1 ? " each" : ""}`}
+        />,
+      );
+    }
+    const from = due?.regularFrom ?? (!intro ? due?.nextChargeAt : undefined);
+    later.push(
+      <Figure
+        key="regular"
+        label={`Then every ${every}${from ? ` from ${fmtDate(from, tz)}` : ""}`}
+        value={money(next.totalMinor, cur)}
+        hint={
+          [
+            !from && intro ? "After your discount ends." : null,
+            next.taxMinor > 0 ? `Includes ${money(next.taxMinor, cur)} tax.` : null,
+            next.excludesUsage ? "We bill usage in addition to this amount." : null,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
+      />,
+    );
+  }
+  const noAddress = (
+    <p className="text-xs text-muted-foreground">
+      {view.coupons.length > 0
+        ? "We show your discount and the tax when you enter your billing address."
+        : "We show the tax when you enter your billing address."}
+    </p>
+  );
+  if (due?.trial) {
+    const when = due.firstChargeAt ? fmtDate(due.firstChargeAt, tz) : null;
+    const firstAmount = due.firstChargeMinor;
+    return (
+      <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
+        {due.trialPeriod ? (
+          <Figure
+            label="Free trial"
+            value={trialLength(due.trialPeriod)}
+            hint={
+              due.trialEndsAt ? `Your trial ends on ${fmtDate(due.trialEndsAt, tz)}.` : undefined
+            }
+          />
+        ) : null}
+        <Figure label="Due today" value={money(0, cur)} strong />
+        <div className="mt-1 flex flex-col gap-2 border-t pt-3">
+          <Figure
+            label={when ? `First payment on ${when}` : "First payment, when your trial ends"}
+            value={firstAmount != null ? money(firstAmount, cur) : ""}
+            hint={
+              firstAmount != null && intro && next
+                ? "With your discount."
+                : firstAmount == null && subtotal != null
+                  ? `${money(subtotal, cur)} before tax and discounts.`
+                  : undefined
+            }
+          />
+          {intro ? later : null}
+          {!intro && next && every ? (
+            <Figure
+              label={`Then every ${every}`}
+              value={money(next.totalMinor, cur)}
+              hint={next.excludesUsage ? "We bill usage in addition to this amount." : undefined}
+            />
+          ) : null}
+          {firstAmount == null ? noAddress : null}
+        </div>
+      </div>
+    );
+  }
+  if (!due) {
+    return (
+      <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
+        {subtotal != null ? <Figure label="Subtotal" value={money(subtotal, cur)} strong /> : null}
+        {noAddress}
+      </div>
+    );
+  }
+  const credit = due.totalMinor - due.amountDueMinor;
+  return (
+    <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
+      {due.subtotalMinor != null ? (
+        <Figure label="Subtotal" value={money(due.subtotalMinor, cur)} />
+      ) : null}
+      {(due.discountLines ?? []).map((d, i) => (
+        <Figure
+          key={`d-${i}`}
+          label={d.label === "Discounts" ? "Discounts" : `Discount (${d.label})`}
+          value={`−${money(d.amountMinor, cur)}`}
+          credit
+        />
+      ))}
+      {(due.taxLines ?? []).map((t, i) => (
+        <Figure key={`t-${i}`} label={t.label} value={money(t.amountMinor, cur)} />
+      ))}
+      {(due.taxLines ?? []).length === 0 && due.taxMinor > 0 ? (
+        <Figure label="Tax" value={money(due.taxMinor, cur)} />
+      ) : null}
+      {credit > 0 ? (
+        <Figure label="Account credit" value={`−${money(credit, cur)}`} credit />
+      ) : null}
+      <div className="mt-1 border-t pt-2">
+        <Figure label="Due today" value={money(due.amountDueMinor, cur)} strong />
+      </div>
+      {later.length > 0 ? (
+        <div className="mt-1 flex flex-col gap-2 border-t pt-3">{later}</div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * What the subscription costs after a change: the regular amount (only discounts that never
+ * end are in it), and the next payment the engine prices for it, dated.
+ */
+function ChangeRecurring({
+  next,
+  preview,
+  tz,
+  reactivate,
+  unchanged = false,
+}: {
+  next: CheckoutNextPayment;
+  preview?: CheckoutChangePreview | undefined;
+  tz: string | null;
+  reactivate: boolean;
+  unchanged?: boolean;
+}) {
+  const cur = next.currency;
+  const notes = [
+    next.taxMinor > 0 ? `Includes ${money(next.taxMinor, cur)} tax.` : null,
+    next.includesExistingItems ? "This is for all items on your subscription." : null,
+    next.limitedDiscountsExcluded ? "This amount does not include discounts that end." : null,
+    next.excludesUsage ? "We bill usage in addition to this amount." : null,
+  ].filter(Boolean);
+  return (
+    <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
+      <Figure
+        label={
+          reactivate
+            ? "Your subscription costs"
+            : unchanged
+              ? "Your plan costs"
+              : "Your plan costs after the change"
+        }
+        value={money(next.totalMinor, cur)}
+        strong
+        hint={notes.join(" ") || undefined}
+      />
+      {preview?.nextRenewalAt && preview.nextRenewalAmountDueMinor != null ? (
+        <p className="text-xs text-muted-foreground">
+          Your next payment is{" "}
+          <span className="font-medium text-foreground tabular-nums">
+            {money(preview.nextRenewalAmountDueMinor, preview.currency)}
+          </span>{" "}
+          on {fmtDate(preview.nextRenewalAt, tz)}.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A payment-link line: priced like every other order line (total on the right), with the
+ * controls the link allows on their own row under it. Every change is a server write and a
+ * refresh, so the totals below are always the engine's.
+ */
+function OfferLine({
+  line: l,
+  currency,
+  locked,
+}: {
+  line: NonNullable<CheckoutView["offer"]>["lines"][number];
+  currency: string;
+  locked: boolean;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const set = async (quantity: number) => {
+    setBusy(true);
+    const res = await checkoutSetItemAction(l.price, quantity);
+    setBusy(false);
+    if (!res.ok) return void toast.error(res.error ?? "We could not change your order.");
+    router.refresh();
+  };
+  const chosen = l.quantity > 0;
+  const controls =
+    locked || (!l.optional && !(chosen && l.adjustable)) ? null : (
+      <div className="flex items-center gap-3">
+        {chosen && l.adjustable ? (
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              aria-label={`Fewer ${l.name}`}
+              disabled={busy || l.quantity <= l.min}
+              onClick={() => void set(l.quantity - 1)}
+            >
+              −
+            </Button>
+            <span className="w-8 text-center text-sm tabular-nums" aria-live="polite">
+              {l.quantity}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              aria-label={`More ${l.name}`}
+              disabled={busy || l.quantity >= l.max}
+              onClick={() => void set(l.quantity + 1)}
+            >
+              +
+            </Button>
+          </div>
+        ) : null}
+        {l.optional ? (
+          chosen ? (
+            <button
+              type="button"
+              className="text-sm text-primary hover:underline disabled:opacity-60"
+              disabled={busy}
+              onClick={() => void set(0)}
+            >
+              Remove
+            </button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void set(l.adjustable ? l.min || 1 : l.min)}
+            >
+              Add
+            </Button>
+          )
+        ) : null}
+      </div>
+    );
+  const unit =
+    l.unit_amount_minor != null
+      ? `${money(l.unit_amount_minor, currency)}${l.interval ? ` / ${l.interval}` : ""}`
+      : l.amount;
+  return (
+    <OrderLine
+      name={l.name}
+      subline={chosen ? lineSubline(l, currency) : `Optional · ${unit}`}
+      total={
+        chosen ? (l.line_total_minor != null ? money(l.line_total_minor, currency) : l.amount) : ""
+      }
+      image={l.image_url ?? null}
+      muted={!chosen}
+    >
+      {controls}
+    </OrderLine>
+  );
+}
+
+/**
+ * The one place a payment is committed: a full-width button, and under it one line that
+ * says what is charged and when. The same treatment for a subscription, a change and a
+ * purchase.
+ */
+function CommitArea({ summary, children }: { summary?: string | null; children: React.ReactNode }) {
+  return (
+    <div id="checkout-commit" className="flex flex-col gap-2 pt-1">
+      {children}
+      {summary ? <p className="text-center text-xs text-muted-foreground">{summary}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Phones: the total and a way to the payment step stay at the bottom of the screen, because
+ * the commit sits a long scroll below the order. Hidden while the commit itself is in view.
+ */
+function PhonePayBar({
+  name,
+  isChange,
+  amount,
+}: {
+  name: string | null;
+  isChange: boolean;
+  amount: string;
+}) {
+  const [hidden, setHidden] = React.useState(false);
+  React.useEffect(() => {
+    let io: IntersectionObserver | null = null;
+    const attach = () => {
+      const target = document.getElementById("checkout-commit");
+      if (!target) return false;
+      io = new IntersectionObserver(([e]) => setHidden(Boolean(e?.isIntersecting)));
+      io.observe(target);
+      return true;
+    };
+    if (attach()) return () => io?.disconnect();
+    // The commit mounts once the details are saved: watch for it.
+    const mo = new MutationObserver(() => {
+      if (attach()) mo.disconnect();
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      mo.disconnect();
+      io?.disconnect();
+    };
+  }, []);
+  if (hidden) return null;
+  const go = () => {
+    const target =
+      document.getElementById("checkout-commit") ??
+      document.getElementById("checkout-details") ??
+      document.getElementById("checkout-payment");
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card px-4 py-3 shadow-lg sm:hidden">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-xs text-muted-foreground">
+            {name ? `${name} · ` : ""}
+            {isChange ? "Due now" : "Due today"}
+          </div>
+          <div className="text-base font-semibold tabular-nums">{amount}</div>
+        </div>
+        <Button onClick={go} className="shrink-0">
+          Go to payment
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -2327,7 +3057,7 @@ function previewOutcome(
     return { title: "Your new term", footer: "Due today", note: null };
   }
   if (preview.immediateCharge) {
-    return { title: "Due today", footer: "Total due now", note: null };
+    return { title: "What you pay today", footer: "Due today", note: null };
   }
   if (preview.dueAtTrialEnd) {
     const when = fmtDate(preview.dueAtTrialEnd, tz);
@@ -2351,194 +3081,7 @@ function previewOutcome(
       note: "We do not charge you today. We bill this amount on your next invoice.",
     };
   }
-  return { title: "This change costs nothing today", footer: "Total due now", note: null };
-}
-
-/**
- * What this composition costs every period, tax included — the checkout's copy of the
- * portal's plan-card footer, deliberately down to the wording ("includes CGST (9.00%)"),
- * because a buyer meets this figure at checkout and then again in their portal and must
- * not have to work out that they are the same number.
- *
- * It is NOT what is collected today: a change collects a proration (the card below), and
- * a signup's first invoice can differ from the steady state (a trial, a first-month
- * coupon). So it is labelled as the recurring figure and never as the amount due.
- */
-function NextPaymentStrip({
-  next,
-  isChange,
-  pendingCreditMinor = 0,
-}: {
-  next: CheckoutNextPayment;
-  isChange: boolean;
-  /**
-   * Credit this change is about to create, which will be spent at the next renewal.
-   * `next` is priced against the balance as it stands BEFORE the change, so it cannot
-   * know about it — see `CheckoutChangePreview.refundableCreditAddedMinor`.
-   */
-  pendingCreditMinor?: number;
-}) {
-  // What the buyer will actually be asked for: the recurring figure less any credit
-  // already on the account AND the credit this change hands forward. This is the same
-  // number the operator's rail prints as "Next invoice of …" (`next_renewal.amount_due_minor`),
-  // so the two screens quote one figure for one subscription.
-  const nextDueMinor = Math.max(0, next.amountDueMinor - pendingCreditMinor);
-  return (
-    <div className="border-t bg-muted/40 px-5 py-4">
-      <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-        {isChange ? "From your next payment" : "Each billing period"}
-      </div>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-sm text-muted-foreground">
-          {isChange ? "Your plan costs" : "Total per period"}
-        </span>
-        <span className="text-lg font-semibold tabular-nums">
-          {money(next.totalMinor, next.currency)}
-        </span>
-      </div>
-      {/* Itemised as the INVOICE itemises it — an Indian buyer is sent CGST and SGST
-          lines, so a lump figure here leaves them unable to match the two. */}
-      {next.taxLines.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-1">
-          {next.taxLines.map((t, i) => (
-            <div
-              key={`${t.label}-${i}`}
-              className="flex items-center justify-between gap-3 text-xs text-muted-foreground"
-            >
-              <span>includes {t.label}</span>
-              <span className="tabular-nums">{money(t.amountMinor, next.currency)}</span>
-            </div>
-          ))}
-        </div>
-      ) : next.taxMinor > 0 ? (
-        <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span>includes tax</span>
-          <span className="tabular-nums">{money(next.taxMinor, next.currency)}</span>
-        </div>
-      ) : null}
-      {/* Credit on the account changes what is actually taken, and a buyer comparing this
-          with their bank statement needs to know that — same rule as the portal's card. */}
-      {nextDueMinor !== next.totalMinor ? (
-        <div className="mt-2 text-xs text-muted-foreground">
-          {money(nextDueMinor, next.currency)} to pay after
-          {pendingCreditMinor > 0 ? " the credit from this change" : " your account credit"}.
-        </div>
-      ) : null}
-      {/* The lines above are the ones this change TOUCHES; the figure prices the whole
-          subscription. Unsaid, the difference between the two is an unexplained amount on
-          a screen asking for money. */}
-      {next.includesExistingItems ? (
-        <div className="mt-2 text-xs text-muted-foreground">
-          Includes all items on your subscription, not only the lines above.
-        </div>
-      ) : null}
-      {/* Metered lines cannot be projected for a period that has not happened. Saying so
-          is the difference between a floor and a promise. */}
-      {next.excludesUsage ? (
-        <div className="mt-2 text-xs text-muted-foreground">
-          We bill usage in addition to this amount.
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * A payment-link order: each line with the controls the link allows — a quantity stepper on
- * an adjustable line, Remove on an optional one, Add on an optional line not chosen. Every
- * change is a server write followed by a refresh, so the total is always the engine's.
- */
-function OfferLines({
-  lines,
-  currency,
-  locked,
-}: {
-  lines: NonNullable<CheckoutView["offer"]>["lines"];
-  currency: string;
-  locked: boolean;
-}) {
-  const router = useRouter();
-  const [busy, setBusy] = React.useState<string | null>(null);
-  const set = async (price: string, quantity: number) => {
-    setBusy(price);
-    const res = await checkoutSetItemAction(price, quantity);
-    setBusy(null);
-    if (!res.ok) return void toast.error(res.error ?? "We could not change your order.");
-    router.refresh();
-  };
-  return (
-    <>
-      {lines.map((l) => {
-        const chosen = l.quantity > 0;
-        const working = busy === l.price;
-        return (
-          <Row key={l.price} className={chosen ? undefined : "text-muted-foreground"}>
-            <div className="flex min-w-0 flex-1 items-center gap-3">
-              <ProductGlyph src={l.image_url} fallback={<Package />} />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{l.name}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {l.amount}
-                  {currency ? ` · ${currency}` : ""}
-                </div>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {chosen && l.adjustable && !locked ? (
-                <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label={`Fewer ${l.name}`}
-                    disabled={working || l.quantity <= l.min}
-                    onClick={() => void set(l.price, l.quantity - 1)}
-                  >
-                    −
-                  </Button>
-                  <span className="w-8 text-center text-sm tabular-nums">{l.quantity}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label={`More ${l.name}`}
-                    disabled={working || l.quantity >= l.max}
-                    onClick={() => void set(l.price, l.quantity + 1)}
-                  >
-                    +
-                  </Button>
-                </div>
-              ) : chosen && l.quantity > 1 ? (
-                <span className="text-sm tabular-nums">× {l.quantity}</span>
-              ) : null}
-              {l.optional && !locked ? (
-                chosen ? (
-                  <button
-                    type="button"
-                    className="text-xs text-primary hover:underline disabled:opacity-60"
-                    disabled={working}
-                    onClick={() => void set(l.price, 0)}
-                  >
-                    Remove
-                  </button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={working}
-                    onClick={() => void set(l.price, l.adjustable ? l.min || 1 : l.min)}
-                  >
-                    Add
-                  </Button>
-                )
-              ) : null}
-            </div>
-          </Row>
-        );
-      })}
-    </>
-  );
+  return { title: "This change costs nothing today", footer: "Due today", note: null };
 }
 
 /** What a ship-to needs: the engine's `SHIPPING_ADDRESS_REQUIREMENTS`. */
@@ -2595,36 +3138,50 @@ function withNulls(
 /** The buyer's saved details, folded to a few lines above the payment step. */
 function DetailsSummary({
   details,
+  countries,
   onEdit,
 }: {
   details: CheckoutCustomerDetails;
+  countries: Country[];
   onEdit: () => void;
 }) {
   const a = details.address;
   const name = [a?.first_name, a?.last_name].filter(Boolean).join(" ");
-  const place = [a?.line1, a?.city, a?.postal_code, a?.country].filter(Boolean).join(", ");
-  const sh = details.shipping_address;
-  const shipPlace = sh
-    ? [sh.line1, sh.city, sh.postal_code, sh.country].filter(Boolean).join(", ")
-    : "";
+  const countryName = (code: string | null | undefined) =>
+    code ? (countries.find((c) => c.code === code)?.name ?? code) : null;
+  const place = (x: CheckoutAddressDetails | null | undefined) =>
+    x
+      ? [
+          x.line1,
+          x.line2,
+          x.city,
+          [x.state ?? x.state_code, x.postal_code].filter(Boolean).join(" "),
+          countryName(x.country),
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : "";
+  const billTo = place(a);
+  const shipTo = place(details.shipping_address);
   return (
-    <StorefrontSection title="Your details">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 text-sm">
-          {name || a?.company ? (
-            <div className="font-medium">{[name, a?.company].filter(Boolean).join(" · ")}</div>
-          ) : null}
-          {details.email ? <div className="text-muted-foreground">{details.email}</div> : null}
-          {place ? <div className="text-muted-foreground">{place}</div> : null}
-          {shipPlace ? <div className="text-muted-foreground">Ship to: {shipPlace}</div> : null}
-        </div>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="shrink-0 text-sm text-primary hover:underline"
-        >
+    <StorefrontSection
+      title="Your details"
+      action={
+        <button type="button" onClick={onEdit} className="text-sm text-primary hover:underline">
           Edit
         </button>
+      }
+    >
+      <div className="min-w-0 text-sm">
+        {name || a?.company ? (
+          <div className="font-medium">{[name, a?.company].filter(Boolean).join(" · ")}</div>
+        ) : null}
+        {details.email ? <div className="text-muted-foreground">{details.email}</div> : null}
+        {billTo ? <div className="text-muted-foreground">{billTo}</div> : null}
+        {shipTo ? <div className="text-muted-foreground">Ship to: {shipTo}</div> : null}
+        {details.tax_registration_number ? (
+          <div className="text-muted-foreground">Tax ID: {details.tax_registration_number}</div>
+        ) : null}
       </div>
     </StorefrontSection>
   );
@@ -2633,47 +3190,34 @@ function DetailsSummary({
 /** A purchase's total, itemised the way its invoice will be. */
 function PurchaseTotal({ purchase }: { purchase: CheckoutPurchase }) {
   const cur = purchase.currency;
+  const credit = purchase.total_minor - purchase.amount_due_minor;
   return (
-    <div className="border-t bg-muted/40 px-5 py-4">
-      <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-        Due today
-      </div>
-      <div className="flex flex-col gap-1 text-sm">
-        <div className="flex items-center justify-between gap-3 text-muted-foreground">
-          <span>Subtotal</span>
-          <span className="tabular-nums">{money(purchase.subtotal_minor, cur)}</span>
-        </div>
-        {purchase.tax_lines.map((t, i) => (
-          <div
-            key={`${t.label}-${i}`}
-            className="flex items-center justify-between gap-3 text-muted-foreground"
-          >
-            <span>{t.label}</span>
-            <span className="tabular-nums">{money(t.amount_minor, cur)}</span>
-          </div>
-        ))}
-        {purchase.tax_lines.length === 0 && purchase.tax_minor > 0 ? (
-          <div className="flex items-center justify-between gap-3 text-muted-foreground">
-            <span>Tax</span>
-            <span className="tabular-nums">{money(purchase.tax_minor, cur)}</span>
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-2 flex items-baseline justify-between gap-3 border-t pt-2">
-        <span className="text-sm font-medium">Total</span>
-        <span className="text-lg font-semibold tabular-nums">
-          {money(purchase.total_minor, cur)}
-        </span>
-      </div>
-      {purchase.amount_due_minor !== purchase.total_minor ? (
-        <div className="mt-2 text-xs text-muted-foreground">
-          {money(purchase.amount_due_minor, cur)} to pay after your account credit.
-        </div>
+    <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
+      <Figure label="Subtotal" value={money(purchase.subtotal_minor, cur)} />
+      {(purchase.discounts ?? []).map((d) => (
+        <Figure
+          key={`d-${d.code}`}
+          label={`Discount (${d.label})`}
+          value={`−${money(d.amount_minor, cur)}`}
+          credit
+        />
+      ))}
+      {purchase.tax_lines.map((t, i) => (
+        <Figure key={`${t.label}-${i}`} label={t.label} value={money(t.amount_minor, cur)} />
+      ))}
+      {purchase.tax_lines.length === 0 && purchase.tax_minor > 0 ? (
+        <Figure label="Tax" value={money(purchase.tax_minor, cur)} />
       ) : null}
+      {credit > 0 ? (
+        <Figure label="Account credit" value={`−${money(credit, cur)}`} credit />
+      ) : null}
+      <div className="mt-1 border-t pt-2">
+        <Figure label="Due today" value={money(purchase.amount_due_minor, cur)} strong />
+      </div>
       {!purchase.tax_known ? (
-        <div className="mt-2 text-xs text-muted-foreground">
-          We add tax after you enter your billing address.
-        </div>
+        <p className="text-xs text-muted-foreground">
+          We show the tax when you enter your billing address.
+        </p>
       ) : null}
     </div>
   );
@@ -2687,6 +3231,8 @@ function PurchaseTotal({ purchase }: { purchase: CheckoutPurchase }) {
 function PurchasePayStep({
   scope,
   purchase,
+  commit,
+  blocked = false,
   businessName,
   brandColor,
   prefill,
@@ -2696,6 +3242,9 @@ function PurchasePayStep({
 }: {
   scope: string;
   purchase: CheckoutPurchase;
+  commit: CommitCopy;
+  /** One page: the details above are not valid, so nothing can be paid yet. */
+  blocked?: boolean;
   businessName: string;
   brandColor: string | null;
   prefill?: BuyerPrefill;
@@ -2705,6 +3254,8 @@ function PurchasePayStep({
   onSessionEnded: () => void;
 }) {
   const [save, setSave] = React.useState(false);
+  /** Nothing to pay: no provider opens and no method is kept. */
+  const free = purchase.amount_due_minor <= 0;
   const challenge = usePaymentChallenge({
     ...(prefill ? { prefill } : {}),
     scope,
@@ -2712,38 +3263,80 @@ function PurchasePayStep({
     brandColor,
     isChange: false,
     purchase: true,
+    showsRefusal: true,
     onSessionEnded,
     onCompleted: onDone,
   });
-  const due = money(purchase.amount_due_minor, purchase.currency);
   return (
     <StorefrontSection title="Payment">
       {challenge.panel ?? (
-        <div className="flex flex-col gap-4">
+        <div id="checkout-payment" className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground">
-            Select Pay to choose how you pay. Your payment provider opens over this page.
+            {free
+              ? "You pay nothing for this purchase."
+              : "Your payment provider opens over this page. You select how you pay there."}
           </p>
-          <ConsentBoxes />
-          {purchase.save_payment_method === "ask" ? (
+          {/* A choice about the payment method, kept apart from the consent boxes. */}
+          {purchase.save_payment_method === "ask" && !free ? (
             <CheckboxField
               checked={save}
               onCheckedChange={setSave}
               label="Save my payment method for my next purchases"
+              hint="Optional."
             />
           ) : null}
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            {save ? (
-              <Button onClick={onSaveMethod}>Continue</Button>
+          <ConsentBoxes />
+          {blocked ? <DetailsBlockedNote /> : null}
+          <CommitArea summary={commit.summary}>
+            {save && !free ? (
+              <Button onClick={onSaveMethod} disabled={blocked} className="w-full" size="lg">
+                Continue to card details
+              </Button>
             ) : (
-              <Button onClick={() => void challenge.run({})} disabled={challenge.busy}>
-                {challenge.busy ? "Paying…" : `Pay ${due}`}
+              <Button
+                onClick={() => void challenge.run({})}
+                disabled={blocked || challenge.busy}
+                className="w-full"
+                size="lg"
+              >
+                {challenge.busy ? commit.busy : commit.label}
               </Button>
             )}
-          </div>
+          </CommitArea>
         </div>
       )}
+      <PaymentRefusal message={challenge.refusal} />
       {challenge.dialog}
     </StorefrontSection>
+  );
+}
+
+/** One page: the commit waits for valid details, and says so beside the button. */
+function DetailsBlockedNote() {
+  return (
+    <Alert tone="warning">Correct the highlighted fields in your details. Then you can pay.</Alert>
+  );
+}
+
+/** The last refused payment, kept on the card after its toast closes. */
+function PaymentRefusal({ message }: { message: string | null }) {
+  return <RefusalAlert message={message} className="mt-4" />;
+}
+
+/**
+ * The change already waits for payment (`apply_when_paid`), from this session or an earlier
+ * one: paying here pays that same invoice, and the change expires unpaid at `heldExpiresAt`.
+ */
+function HeldChangeNotice({ preview, tz }: { preview: CheckoutChangePreview; tz: string | null }) {
+  const until = fmtDateTime(preview.heldExpiresAt!, tz);
+  return (
+    <Alert tone="info" title="This change waits for payment">
+      <p>
+        {preview.amountDueMinor > 0
+          ? `Pay ${money(preview.amountDueMinor, preview.currency)} before ${until} to complete this change. Until then, your plan does not change.`
+          : "Your payment is in progress. Your plan changes when the payment is complete."}
+      </p>
+    </Alert>
   );
 }
 
@@ -2752,11 +3345,14 @@ function PurchasePayStep({
 function PreviewCard({
   preview,
   tz,
+  oldPlan,
   reactivation,
 }: {
   preview: CheckoutChangePreview;
   /** Business timezone from the session payload — see the fmtDate call below. */
   tz: string | null;
+  /** The plan being left, named in the credit sentence. */
+  oldPlan: string | null;
   reactivation?: { startsAt: string | null };
 }) {
   const total = Math.abs(preview.immediateCharge ? preview.amountDueMinor : preview.totalMinor);
@@ -2804,10 +3400,23 @@ function PreviewCard({
   // `fmtDate` and not `toLocaleDateString`: the credited period is rendered on a page that
   // hydrates, and Node and the browser disagree on the default locale — see the note on the
   // renewal date below, which threw the whole tree away over exactly this.
-  const creditSentences = creditLegSentences(narrative, (m) => money(m, preview.currency), {
-    audience: "buyer",
-    fmtWhen: (iso) => fmtDate(iso, tz),
-  });
+  const creditSentences = buyerCreditSentences(
+    narrative,
+    (m) => money(m, preview.currency),
+    (iso) => fmtDate(iso, tz),
+    oldPlan,
+  );
+  /** Where the charged lines end: this period's end, as the renewal dates it. */
+  const until = preview.termReset
+    ? null
+    : preview.nextRenewalAt
+      ? fmtDate(preview.nextRenewalAt, tz)
+      : preview.creditedPeriodEnd
+        ? fmtDate(preview.creditedPeriodEnd, tz)
+        : null;
+  /** The invoice total is its own row only when tax or a discount makes it differ. */
+  const showInvoiceTotal =
+    invoiceTotalMinor !== (creditNoteMinor > 0 ? chargeLinesMinor : preview.subtotalMinor);
   return (
     <StorefrontSection title={outcome.title} bodyClassName="p-0">
       <div className="flex flex-col gap-2 px-5 py-4 text-sm">
@@ -2818,7 +3427,9 @@ function PreviewCard({
             distinguished, which is the part that matters. */}
         {shownLines.map((l, i) => (
           <div key={i} className="flex items-start justify-between gap-3">
-            <span className="min-w-0 text-muted-foreground">{l.description}</span>
+            <span className="min-w-0 text-muted-foreground">
+              {buyerLineLabel(l.description, until)}
+            </span>
             <span
               className={cn(
                 "shrink-0 tabular-nums",
@@ -2860,7 +3471,7 @@ function PreviewCard({
             footer total was smaller than the lines plus tax by an unnamed amount. */}
         {preview.promotionalDiscountMinor > 0 ? (
           <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">Promotional credits</span>
+            <span className="text-muted-foreground">Promotional credit</span>
             <span className="shrink-0 text-success tabular-nums">
               −{money(preview.promotionalDiscountMinor, preview.currency)}
             </span>
@@ -2899,12 +3510,14 @@ function PreviewCard({
             already shown above. −752.00 + 7,986.24 − 8,121.60 = −887.36. */}
         {creditNoteMinor > 0 ? (
           <>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">Invoice total</span>
-              <span className="shrink-0 tabular-nums">
-                {money(invoiceTotalMinor, preview.currency)}
-              </span>
-            </div>
+            {showInvoiceTotal ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Total before credit</span>
+                <span className="shrink-0 tabular-nums">
+                  {money(invoiceTotalMinor, preview.currency)}
+                </span>
+              </div>
+            ) : null}
             {/* THE ONLY CREDIT ROW — `invoice_estimate.credits_applied`, the slice that
                 offsets THIS invoice. `invoiceTotal − this = amount due`, so the column now
                 subtracts once and lands on the footer with no add-back.
@@ -2921,7 +3534,7 @@ function PreviewCard({
                 would have read as a second credit. That problem is gone with the row. */}
             {creditAppliedHereMinor > 0 ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Credit applied</span>
+                <span className="text-muted-foreground">Credit for unused time</span>
                 <span className="shrink-0 text-success tabular-nums">
                   −{money(creditAppliedHereMinor, preview.currency)}
                 </span>
@@ -2931,7 +3544,7 @@ function PreviewCard({
         ) : null}
         {preview.creditsAppliedMinor > 0 ? (
           <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">Applied from your balance</span>
+            <span className="text-muted-foreground">Account credit</span>
             <span className="shrink-0 text-success tabular-nums">
               −{money(preview.creditsAppliedMinor, preview.currency)}
             </span>
@@ -2960,9 +3573,7 @@ function PreviewCard({
           the shape that guessing the type from a non-zero amount mislabels. */}
       {creditSentences.length > 0 ? (
         <div className="border-t px-5 py-4">
-          <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-            Credits
-          </div>
+          <div className="mb-1.5 text-sm font-medium">Credit for unused time</div>
           <div className="flex flex-col gap-1.5 text-sm text-muted-foreground">
             {creditSentences.map((s, i) => (
               <p key={i}>{s}</p>
@@ -3006,6 +3617,8 @@ function PreviewCard({
  */
 function ConfirmChangeStep({
   scope,
+  commit,
+  itemsUnchanged,
   reactivation,
   preview,
   tz,
@@ -3014,6 +3627,7 @@ function ConfirmChangeStep({
   hasPaymentMethod,
   paymentMethod,
   mandate,
+  blocked = false,
   onDone,
   onNeedCard,
   onEditDetails,
@@ -3021,6 +3635,9 @@ function ConfirmChangeStep({
 }: {
   /** Non-secret per-session key for the redirect-leg stash. */
   scope: string;
+  commit: CommitCopy;
+  /** The link asks for the items the subscription already has. */
+  itemsUnchanged: boolean;
   /** Present when confirming reactivates a cancelled subscription. */
   reactivation?: { startsAt: string | null };
   preview: CheckoutChangePreview | undefined;
@@ -3033,6 +3650,8 @@ function ConfirmChangeStep({
   paymentMethod?: NonNullable<CheckoutView["change"]>["paymentMethod"];
   /** Absent = no mandate is involved; see the field's note in lib/checkout-api.ts. */
   mandate?: CheckoutChangeMandate;
+  /** Confirm would refuse the change; the reason shows above, so offer no confirm. */
+  blocked?: boolean;
   onDone: (outcome: CompletionOutcome) => void;
   onNeedCard: () => void;
   /** Back to the buyer's own billing details — the way out of a gateway error that needs them. */
@@ -3060,10 +3679,13 @@ function ConfirmChangeStep({
     brandColor,
     isChange: true,
     reactivate: reactivation != null,
+    showsRefusal: true,
     onSessionEnded,
     onCompleted: onDone,
   });
   const startsOn = reactivation?.startsAt ? fmtDate(reactivation.startsAt, tz) : null;
+  void preview;
+  if (blocked) return null;
   const confirm = async () => {
     setBusy(true);
     try {
@@ -3086,7 +3708,7 @@ function ConfirmChangeStep({
    */
   const reauth = Boolean(mandate?.reauthorizationRequired);
   return (
-    <StorefrontSection title="Confirm">
+    <StorefrontSection title={reactivation ? "Reactivate" : "Confirm your change"}>
       <div className="flex flex-col gap-3">
         <PoNumberInput />
         {reauth && mandate ? (
@@ -3108,23 +3730,30 @@ function ConfirmChangeStep({
               </p>
               <p className="mt-2">
                 Your bank does not let us increase the limit. The next step creates a new
-                authorisation for up to{" "}
+                authorization for up to{" "}
                 <span className="font-medium tabular-nums">
                   {money(mandate.requiredCeilingMinor, mandate.currency)}
                 </span>{" "}
                 per charge. Your existing payment method stays on your account.
               </p>
             </Alert>
-            <Button onClick={onNeedCard} className="self-start">
-              Continue to payment
-            </Button>
+            <CommitArea>
+              <Button onClick={onNeedCard} className="w-full" size="lg">
+                Set up a new authorization
+              </Button>
+            </CommitArea>
           </>
         ) : hasPaymentMethod ? (
           <>
             <p className="text-sm text-muted-foreground">
               {reactivation
-                ? "Your subscription restarts when you confirm. We charge"
-                : "Your plan changes when you confirm. We charge"}{" "}
+                ? "Your subscription restarts when you confirm."
+                : itemsUnchanged
+                  ? preview
+                    ? "Your plan does not change. Your discount applies when you confirm."
+                    : "Your plan does not change."
+                  : "Your plan changes when you confirm."}{" "}
+              Pay with{" "}
               {paymentMethod ? (
                 <span className="font-medium text-foreground">
                   {instrumentLabel(paymentMethod)}
@@ -3132,7 +3761,7 @@ function ConfirmChangeStep({
               ) : (
                 "the card on your account"
               )}
-              .{startsOn ? ` Your new term starts on ${startsOn}.` : ""}
+              .{startsOn ? ` Your new billing period starts on ${startsOn}.` : ""}
             </p>
             {/* The limit this change will be debited against, when the instrument rides a
                 mandate and can carry it. Said plainly BEFORE the buyer confirms, because a
@@ -3145,25 +3774,27 @@ function ConfirmChangeStep({
                 {money(mandate.largestDebitMinor, mandate.currency)}
               </p>
             ) : null}
-            <div className="flex flex-wrap items-center gap-2">
+            <CommitArea summary={commit.summary}>
               {/* `challenge.busy` too: leg 2 of an authentication runs after `confirm` has
                   already returned, and a re-enabled button there would post a third leg. */}
-              <Button onClick={confirm} disabled={busy || challenge.busy}>
-                {busy || challenge.busy
-                  ? reactivation
-                    ? "Reactivating…"
-                    : "Confirming…"
-                  : reactivation
-                    ? reactivateLabel(preview)
-                    : "Confirm change"}
+              <Button
+                onClick={confirm}
+                disabled={busy || challenge.busy}
+                className="w-full"
+                size="lg"
+              >
+                {busy || challenge.busy ? commit.busy : commit.label}
               </Button>
-              {/* "Manage cards", not "Use a different card": the buyer may already hold one
-                  that suits them better, and the step behind this button now lists what they
-                  have before offering to add another. */}
-              <Button variant="outline" onClick={onNeedCard} disabled={busy || challenge.busy}>
-                Manage cards
-              </Button>
-            </div>
+            </CommitArea>
+            {/* Lists the methods the buyer holds before offering to add another. */}
+            <button
+              type="button"
+              onClick={onNeedCard}
+              disabled={busy || challenge.busy}
+              className="self-center text-sm text-primary hover:underline disabled:opacity-60"
+            >
+              Use a different payment method
+            </button>
           </>
         ) : (
           <>
@@ -3173,9 +3804,11 @@ function ConfirmChangeStep({
                 : "Add a card to complete this change."}
               {startsOn ? ` Your new term starts on ${startsOn}.` : ""}
             </p>
-            <Button onClick={onNeedCard} className="self-start">
-              Add card
-            </Button>
+            <CommitArea>
+              <Button onClick={onNeedCard} className="w-full" size="lg">
+                Continue to payment method
+              </Button>
+            </CommitArea>
             {/* The way OUT of a gateway error that needs the buyer's own details.
                 RazorPay refuses to vault a card for recurring payments without a phone number and
                 says "add a phone number to the customer" — an operator action, shown to a buyer
@@ -3191,6 +3824,7 @@ function ConfirmChangeStep({
           </>
         )}
       </div>
+      <PaymentRefusal message={challenge.refusal} />
       {challenge.dialog}
     </StorefrontSection>
   );
@@ -3202,6 +3836,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function DetailsStep({
   onDone,
   onCancel,
+  onValidity,
   autoSave = false,
   isChange,
   lockEmail,
@@ -3221,6 +3856,8 @@ function DetailsStep({
   onDone: (prefill: BuyerPrefill, saved: CheckoutCustomerDetails) => void;
   /** Present only when this step was reached by an explicit edit — see `detailsReturnTo`. */
   onCancel?: () => void;
+  /** One page: whether the form is valid now, so the commit below can wait for it. */
+  onValidity?: (valid: boolean) => void;
   /**
    * One-page layout: save by itself once the form is valid and the buyer pauses, so the
    * payment section below can open without a Continue click. Identical data is not re-sent.
@@ -3284,23 +3921,114 @@ function DetailsStep({
     wantsShipping && shipToBilling ? { ...fieldStates, ...SHIP_REQUIRED } : fieldStates;
   const emailLocked = isChange || lockEmail === true;
   const [busy, setBusy] = React.useState(false);
+  const [showTaxId, setShowTaxId] = React.useState(Boolean(customer?.tax_registration_number));
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const formRef = React.useRef<HTMLFormElement>(null);
   const lastSent = React.useRef<string | null>(null);
   const autoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [savedHere, setSavedOnce] = React.useState(false);
   const savedOnce = customer != null || savedHere;
+  /** The fields to correct, named; null until a save is tried on an invalid form. */
+  const [problems, setProblems] = React.useState<string[] | null>(null);
+  /** The country selected in the address, for the tax ID's help. */
+  const [country, setCountry] = useDefaultState<string>(customer?.address?.country ?? "");
+  const readCountry = () => {
+    const v = formRef.current?.querySelector<HTMLInputElement>('input[name="country"]')?.value;
+    if (v !== undefined && v !== country) setCountry(v);
+  };
+  React.useEffect(() => {
+    const input = formRef.current?.querySelector<HTMLInputElement>('input[name="country"]');
+    if (!input) return;
+    const mo = new MutationObserver(() => setCountry(input.value));
+    mo.observe(input, { attributes: true, attributeFilter: ["value"] });
+    return () => mo.disconnect();
+  }, [setCountry]);
+  /**
+   * Every fault on the form, in our words: the fields this step renders get their own
+   * error; the address fields (a shared component) are named in the summary and
+   * highlighted by the browser's own invalid state.
+   */
+  const validate = (form: HTMLFormElement) => {
+    const fd = new FormData(form);
+    const errors: Record<string, string> = {};
+    const list: string[] = [];
+    if (!emailLocked) {
+      const email = String(fd.get("email") ?? "").trim();
+      if (!email) errors.email = "Enter your email address.";
+      else if (!EMAIL_RE.test(email))
+        errors.email = "Enter a valid email address, for example name@example.com.";
+      if (errors.email) list.push(errors.email);
+    }
+    if (!String(fd.get("first_name") ?? "").trim() && !String(fd.get("company") ?? "").trim())
+      list.push("Enter the name to show on your invoices.");
+    const countryValue = String(fd.get("country") ?? "").trim();
+    if (!countryValue && state("billing.country") === "mandatory")
+      list.push("Select your country.");
+    for (const el of Array.from(form.elements)) {
+      const input = el as HTMLInputElement;
+      if (!input.name || input.type === "hidden" || input.name === "email") continue;
+      if (input.name === "first_name" || input.willValidate === false) continue;
+      if (input.checkValidity()) continue;
+      // Already named above.
+      if (input.name === "country" && list.includes("Select your country.")) continue;
+      const { name, picked } = fieldLabelOf(form, input);
+      if (input.name === "tax_registration_number" || input.name === "po_number")
+        errors[input.name] = input.validity.valueMissing
+          ? `Enter your ${name}.`
+          : `Check your ${name}.`;
+      // "Address line 1" → "address line 1"; an acronym ("ZIP code") keeps its case.
+      const lower = /^[A-Z][A-Z]/.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1);
+      const verb = picked ? "Select" : "Enter";
+      list.push(input.validity.valueMissing ? `${verb} ${lower}.` : `Check ${lower}.`);
+    }
+    return { errors, list };
+  };
+  const report = (form: HTMLFormElement) => {
+    const { errors, list } = validate(form);
+    setFieldErrors(errors);
+    setProblems(list.length > 0 ? list : null);
+    onValidity?.(list.length === 0);
+    return list.length === 0;
+  };
   /** Debounced: after each edit, save if the form is valid and differs from the last save. */
   const scheduleAutoSave = () => {
+    readCountry();
     if (!autoSave) return;
     if (autoTimer.current) clearTimeout(autoTimer.current);
     autoTimer.current = setTimeout(() => {
       const form = formRef.current;
-      if (!form || busy || !form.checkValidity()) return;
+      if (!form || busy) return;
+      // Before the first save the form is still being filled: say nothing until a field
+      // is left or Enter is pressed. After it, an edit that breaks the form shows at once,
+      // and the commit below waits for it.
+      const { list } = validate(form);
+      if (list.length > 0) {
+        if (savedOnce) report(form);
+        else onValidity?.(false);
+        return;
+      }
+      setProblems(null);
+      setFieldErrors({});
+      onValidity?.(true);
       const snapshot = JSON.stringify([...new FormData(form).entries()]);
       if (snapshot === lastSent.current) return;
       form.requestSubmit();
     }, 900);
+  };
+  /** Leaving the email field checks it, so a typo shows before the buyer reaches Pay. */
+  const onBlurField = (e: React.FocusEvent<HTMLFormElement>) => {
+    const t = e.target as unknown as HTMLInputElement;
+    if (t.name === "email" && !emailLocked) {
+      const v = t.value.trim();
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        if (v && !EMAIL_RE.test(v))
+          next.email = "Enter a valid email address, for example name@example.com.";
+        else delete next.email;
+        return next;
+      });
+    }
+    scheduleAutoSave();
   };
   React.useEffect(
     () => () => {
@@ -3310,36 +4038,20 @@ function DetailsStep({
   );
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    // Change mode renders no email field — the customer is pinned — so `validate` skips it.
+    // Every fault shows on the form: its field highlighted, and named in the summary.
+    if (!report(form)) {
+      const first = form.querySelector<HTMLElement>(":invalid:not(fieldset), [aria-invalid=true]");
+      first?.focus();
+      return;
+    }
+    const fd = new FormData(form);
     const email = String(fd.get("email") ?? "").trim();
     const line1 = String(fd.get("line1") ?? "").trim();
     const country = String(fd.get("country") ?? "")
       .trim()
       .toUpperCase();
-
-    const errors: Record<string, string> = {};
-    // Change mode renders no email field — the customer is pinned — so there is nothing to
-    // validate and nothing to send. Validating a field that is not on screen would block the
-    // form on an error the buyer cannot see or fix.
-    if (!emailLocked) {
-      if (!email) errors.email = "Enter your email address";
-      else if (!EMAIL_RE.test(email)) errors.email = "Enter a valid email address";
-    }
-    setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) return;
-
-    // The billing contact is the invoice identity, so one of first name / company has
-    // to be there. Toasted rather than inline for the same reason line1 and country
-    // are: they live inside the shared `AddressFields`, which has no channel for this
-    // form's local error map. The native `required` on first name normally catches it
-    // first — this is the backstop for a submit that got past the browser.
-    if (!String(fd.get("first_name") ?? "").trim() && !String(fd.get("company") ?? "").trim()) {
-      return void toast.error("Enter the name to show on your invoices");
-    }
-    if (!line1 && state("billing.line1") === "mandatory")
-      return void toast.error("Enter address line 1.");
-    if (country ? !/^[A-Z]{2}$/.test(country) : state("billing.country") === "mandatory")
-      return void toast.error("Enter a 2-letter country code, for example US or IN.");
     const opt = (k: string) => {
       const v = String(fd.get(k) ?? "").trim();
       return v === "" ? undefined : v;
@@ -3392,8 +4104,12 @@ function DetailsStep({
     setBusy(false);
     if (!res.ok) {
       if (res.error === NO_SESSION) return void onSessionEnded();
-      return void toast.error(res.error ?? "We could not save your details.");
+      setProblems([res.error ?? "We could not save your details. Try again."]);
+      onValidity?.(false);
+      return;
     }
+    setProblems(null);
+    onValidity?.(true);
     /**
      * The name for the gateway's sheet is the BILLING CONTACT the buyer just typed — the
      * same rule the portal's `accountHolderName` applies, resolved from this form's own
@@ -3410,6 +4126,14 @@ function DetailsStep({
         // nothing to forward — `undefined` in, nothing prefilled, which is honest.
         email: emailLocked ? null : email,
         contact: opt("phone") ?? null,
+        address: {
+          line1: line1 || null,
+          city: opt("city") ?? null,
+          state: opt("state") ?? null,
+          state_code: opt("state_code") ?? null,
+          postal_code: opt("postal_code") ?? null,
+          country: country || null,
+        },
       },
       /**
        * Echo the saved details back so a SECOND visit to this step prefills them. The
@@ -3449,11 +4173,12 @@ function DetailsStep({
       <form
         ref={formRef}
         id="checkout-details"
+        noValidate
         onSubmit={submit}
         onChange={scheduleAutoSave}
         onInput={scheduleAutoSave}
-        onBlurCapture={scheduleAutoSave}
-        className="flex flex-col gap-3"
+        onBlurCapture={onBlurField}
+        className="flex flex-col gap-3 [&_input:user-invalid]:border-destructive [&_input:user-invalid]:ring-destructive/20"
       >
         {/* Identity is not editable on a change checkout: that session is pinned to the target
             subscription's owner at mint time, and the engine refuses to repoint it from a PUBLIC
@@ -3467,6 +4192,7 @@ function DetailsStep({
               defaultValue={customer?.email ?? ""}
               required
               autoComplete="email"
+              inputMode="email"
             />
           </Field>
         )}
@@ -3493,15 +4219,27 @@ function DetailsStep({
             name="tax_registration_number"
             value={customer?.tax_registration_number ?? ""}
           />
+        ) : taxIdState !== "mandatory" && !showTaxId ? (
+          <>
+            <input type="hidden" name="tax_registration_number" value="" />
+            <button
+              type="button"
+              onClick={() => setShowTaxId(true)}
+              className="self-start text-sm text-primary hover:underline"
+            >
+              + Add a tax ID
+            </button>
+          </>
         ) : (
           <Field
             name="tax_registration_number"
-            label="Tax registration number"
+            label={country === "IN" ? "GSTIN" : "Tax ID"}
             required={taxIdState === "mandatory"}
+            error={fieldErrors.tax_registration_number}
             help={
-              taxIdState === "mandatory"
-                ? "GSTIN in India. We print it on your invoice so that you can claim input tax credit."
-                : "GSTIN in India. This is optional. To claim input tax credit, it must be on your invoice. If you add it later, invoices that you already have do not change."
+              country === "IN"
+                ? "We print it on your invoices, so that you can claim input tax credit."
+                : "We print it on your invoices."
             }
           >
             <Input
@@ -3509,22 +4247,20 @@ function DetailsStep({
               defaultValue={customer?.tax_registration_number ?? ""}
               required={taxIdState === "mandatory"}
               maxLength={50}
-              className="font-mono"
               autoComplete="off"
+              className="max-w-72"
             />
           </Field>
         )}
         {shipping === "hide" ? null : (
           <section className="flex flex-col gap-3">
-            <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-              Shipping address
-            </h3>
+            <h3 className="text-sm font-medium">Shipping address</h3>
             {shipping === "show" ? (
               <CheckboxField
                 checked={addShipping}
                 onCheckedChange={setAddShipping}
                 label="Add a shipping address"
-                hint="This is optional."
+                hint="Optional."
               />
             ) : null}
             {wantsShipping ? (
@@ -3540,6 +4276,7 @@ function DetailsStep({
                 value={savedShip}
                 prefix="ship_"
                 contactHeading="Recipient"
+                autoCompleteSection="shipping"
                 fieldStates={SHIP_FIELD_STATES}
               />
             ) : null}
@@ -3547,12 +4284,33 @@ function DetailsStep({
         )}
         {/* Change mode asks on the confirm step, which every change passes through. */}
         {isChange ? null : <PoNumberInput />}
+        {problems ? (
+          <Alert tone="error" title="Correct the highlighted fields.">
+            <ul className="list-disc pl-4">
+              {problems.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          </Alert>
+        ) : null}
         <div className="flex flex-wrap items-center gap-3">
-          {/* One page: after the first save, edits save themselves; the status replaces the button. */}
-          {autoSave && savedOnce ? (
-            <span className="text-xs text-muted-foreground" aria-live="polite">
-              {busy ? "Saving…" : "Details saved."}
-            </span>
+          {/* One page: details save themselves once valid; a status line replaces the button.
+              The hidden submit keeps Enter working, which checks the form. */}
+          {autoSave ? (
+            <>
+              <button type="submit" className="sr-only" tabIndex={-1} aria-hidden>
+                Save
+              </button>
+              <span className="text-xs text-muted-foreground" aria-live="polite">
+                {busy
+                  ? "Saving…"
+                  : problems
+                    ? ""
+                    : savedOnce
+                      ? "Details saved."
+                      : "We save your details when they are complete."}
+              </span>
+            </>
           ) : (
             <Button type="submit" disabled={busy}>
               {/* Reached by an explicit edit, the forward word is wrong: the buyer came from the
@@ -3581,6 +4339,10 @@ function CardStep({
   brandColor,
   isChange,
   purchase,
+  commit,
+  blocked = false,
+  moneyDueToday,
+  currency,
   reactivateLabel: reactivateCta,
   preferNew,
   prefill,
@@ -3589,6 +4351,14 @@ function CardStep({
   onEditDetails,
   onSessionEnded,
 }: {
+  /** What the committing button says, and the line under it. */
+  commit: CommitCopy;
+  /** One page: the details above are not valid, so nothing can be committed yet. */
+  blocked?: boolean;
+  /** Money is taken today (names the method chooser). */
+  moneyDueToday: boolean;
+  /** The currency the buyer pays in: rails that cannot move it are not offered. */
+  currency: string | null;
   /** Non-secret per-session key for the redirect-leg stash. */
   scope: string;
   businessName: string;
@@ -3614,8 +4384,11 @@ function CardStep({
   /** Present when this step was reached by a side door (from Review) that must swing back. */
   onBack?: () => void;
   onDone: (outcome: CompletionOutcome) => void;
-  /** Back to the buyer's own billing details — the way out of a gateway error that needs them. */
-  onEditDetails: () => void;
+  /**
+   * Back to the buyer's own billing details — the way out of a gateway error that needs
+   * them. Only where the details are not already on screen (a plan change).
+   */
+  onEditDetails?: () => void;
   /** Raised when the engine says the session is gone — terminal, so the parent takes over. */
   onSessionEnded: () => void;
 }) {
@@ -3737,13 +4510,16 @@ function CardStep({
    * `method_types`; ours returns it, so the options offered are the real ones — and a
    * gateway that narrows its list cannot have a dead radio rendered for it.
    */
-  const allowedMethods =
+  const allowedMethods = railsForCurrency(
     activeGateway?.method_types && activeGateway.method_types.length > 0
       ? activeGateway.method_types
       : // `card` alone, not the Indian set: the server resolves the real list
         // (`effectiveMethodTypes`), so a fallback that invents UPI for a Stripe buyer is a
         // guess we no longer have any reason to make.
-        ["card"];
+        ["card"],
+    // A rail that cannot move this currency (UPI for a buyer paying in dollars) is not offered.
+    currency,
+  );
 
   // Above the ceiling a card/UPI mandate needs the payer's approval on EVERY debit,
   // while a netbanking e-mandate authenticates once here and then runs unattended.
@@ -3805,18 +4581,13 @@ function CardStep({
     reactivate: reactivateCta != null,
     purchase,
     ...(prefill ? { prefill } : {}),
+    showsRefusal: true,
     onSessionEnded,
     onCompleted: onDone,
   });
-  /** The action label: "Pay" for a purchase, otherwise what the subscription flow says. */
-  const cta = purchase ? "Pay" : (reactivateCta ?? (isChange ? "Confirm change" : "Subscribe"));
-  const busyCta = purchase
-    ? "Paying…"
-    : reactivateCta
-      ? "Reactivating…"
-      : isChange
-        ? "Confirming…"
-        : "Subscribing…";
+  /** The committing action, with its amount ("Subscribe and pay $252.04", "Start free trial"). */
+  const cta = commit.label;
+  const busyCta = commit.busy;
 
   const runEmbeddedCheckout = async (
     descriptor: RazorpayCheckoutDescriptor,
@@ -3841,7 +4612,16 @@ function CardStep({
      * reported as "please try again". Cleared on a dismissal (they left) and on success
      * (it is spent); a failure keeps it, exactly as the redirect return leg does.
      */
-    if (result.status === "failed") return void toast.error(result.message);
+    if (result.status === "failed")
+      return void challenge.showRefusal(
+        refusalMessage(
+          "We could not save your payment method.",
+          result.message,
+          "Try again, or use a different payment method.",
+        ),
+      );
+    // A setup always names its payment; "unconfirmed" is only for a charge.
+    if (result.status !== "authorized") return;
     setSaving(true);
     // The setup intent, not the payment id — see the return-leg note above.
     await complete(result.paymentId, paymentIntent);
@@ -3854,13 +4634,23 @@ function CardStep({
     const result = await openGatewaySdk(sdk, {
       businessName,
       purpose: "setup",
+      // The gateway's commit says what this page says ("Subscribe and pay $X").
+      confirmLabel: cta,
       ...(prefill ? { prefill } : {}),
     });
     if (result.status === "dismissed") {
       clearPendingVaultSetup(scope);
       return;
     }
-    if (result.status === "failed") return void toast.error(result.message);
+    // Beside Pay and kept there: the gateway's sheet is closed, and a toast goes by itself.
+    if (result.status === "failed")
+      return void challenge.showRefusal(
+        refusalMessage(
+          "We could not save your payment method.",
+          result.message,
+          "Try again, or use a different payment method.",
+        ),
+      );
     setSaving(true);
     await complete(undefined, paymentIntent, result.clientResult);
     clearPendingVaultSetup(scope);
@@ -3912,7 +4702,7 @@ function CardStep({
   /** A missing required box stops the payment before any gateway step opens. */
   const consentBlocked = () => {
     const refusal = consentRefusal(consentState, consentState.current());
-    if (refusal) toast.error(refusal);
+    if (refusal) consentState.flag();
     return refusal !== null;
   };
   const begin = async () => {
@@ -3924,6 +4714,7 @@ function CardStep({
      */
     const strandedRail = isRazorpay && activeMethodType === "bank_transfer";
     const authTab = strandedRail ? window.open("", "_blank") : null;
+    challenge.showRefusal(null);
     setStarting(true);
     const res = await checkoutBeginSetupAction(
       window.location.origin,
@@ -3940,7 +4731,8 @@ function CardStep({
     setStarting(false);
     if (!res.ok) {
       authTab?.close();
-      return void toast.error(res.error);
+      // Often the gateway's own refusal (a phone number it will not take): kept beside Pay.
+      return void challenge.showRefusal(res.error);
     }
     /**
      * The rail RazorPay never returns from: hold THIS tab and put the authorization
@@ -4110,9 +4902,7 @@ function CardStep({
       the list unconditionally; this is a deliberate departure.) */}
       {gateways && gateways.length > 1 ? (
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-            Payment provider
-          </div>
+          <div className="text-sm font-medium">Payment provider</div>
           {/* ⚠️ The gateway KEY is deliberately not rendered: "RAZORPAY" / "TMTEST" is our
           routing detail, means nothing to a payer, and reads like an unfinished
           screen. The account's own label is the only part addressed to them. */}
@@ -4162,7 +4952,8 @@ function CardStep({
           /* Buyer language. "Select mandate type for Razorpay" named our provider and a
          piece of NPCI vocabulary in one line; what the payer is choosing is where
          the money comes from. */
-          heading="Pay future invoices from"
+          heading={moneyDueToday ? "Payment method" : "Payment method for future payments"}
+          currency={currency}
           /* Null, not an empty fragment: the chooser renders the notice slot when it is
          truthy, and a fragment with nothing in it is still truthy — an empty gap
          under the selected rail. */
@@ -4222,11 +5013,17 @@ function CardStep({
         <AchAuthorization text={achText} accepted={achAccepted} onAcceptedChange={setAchAccepted} />
       ) : null}
 
-      <CommitBar>
+      {/* The gateway collects the card in its own form, and its button commits ("Subscribe
+          and pay …"). This one opens that form, and says so. */}
+      {blocked ? <DetailsBlockedNote /> : null}
+      <CommitArea summary={commit.summary}>
         <Button
           onClick={begin}
-          disabled={starting || saving || challenge.busy || (achText != null && !achAccepted)}
-          className="sm:shrink-0"
+          disabled={
+            blocked || starting || saving || challenge.busy || (achText != null && !achAccepted)
+          }
+          className="w-full"
+          size="lg"
         >
           {starting
             ? "Starting…"
@@ -4245,10 +5042,12 @@ function CardStep({
                         : isRazorpay && activeMethodType === "bank_transfer"
                           ? "Authorize Netbanking e-Mandate"
                           : achText
-                            ? "Add bank account"
-                            : "Add card"}
+                            ? "Enter bank account details"
+                            : activeMethodType === "card"
+                              ? "Enter card details"
+                              : "Continue"}
         </Button>
-      </CommitBar>
+      </CommitArea>
     </>
   );
 
@@ -4257,17 +5056,24 @@ function CardStep({
       {/* The summary above stays on screen: a buyer typing a card number is entitled
           to see what they are about to be charged for, and this is the same overlay
           RazorPay puts up for a mandate. */}
-      <div className="flex flex-col gap-3">
-        <ConsentBoxes />
+      <div id="checkout-payment" className="flex flex-col gap-3">
+        {/* With saved methods listed below, the buyer selects one or adds another. */}
         <p className="text-sm text-muted-foreground">
-          {purchase
-            ? "Add a payment method. We save it for your next purchases."
-            : reactivateCta
-              ? `Add ${instrumentNoun} to reactivate your subscription.`
-              : isChange
-                ? `Add ${instrumentNoun} to complete your plan change.`
-                : `Add ${instrumentNoun} to activate your subscription.`}
+          {saved && saved.length > 0
+            ? purchase
+              ? "Select a payment method, or add a new one. We save a new payment method for your next purchases."
+              : "Select a payment method, or add a new one."
+            : purchase
+              ? "Add a payment method. We save it for your next purchases."
+              : reactivateCta
+                ? `Add ${instrumentNoun} to reactivate your subscription.`
+                : isChange
+                  ? `Add ${instrumentNoun} to complete your plan change.`
+                  : commit.label === "Start free trial"
+                    ? `Add ${instrumentNoun} to start your free trial. We charge it when the trial ends.`
+                    : `Add ${instrumentNoun} to activate your subscription.`}
         </p>
+        <ConsentBoxes />
         {/* The ceiling the buyer is about to authorise, said BEFORE the provider's own modal
             says it. RazorPay states "up to ₹X" inside its sheet, and a number the buyer meets
             there for the first time reads like a surprise; met here, beside the plan it was
@@ -4296,9 +5102,7 @@ function CardStep({
             {/* Covers both kinds of row now: the saved instruments AND "Add a new payment
                 method", which is not one of them — the old heading named only the former
                 while the group contained both. */}
-            <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-              Pay with
-            </div>
+            <div className="text-sm font-medium">Pay with</div>
             <RadioGroup
               value={chosen}
               onValueChange={setChosen}
@@ -4389,41 +5193,53 @@ function CardStep({
             {chosen !== "new" ? (
               /* The same commit bar the add-a-new-method half ends on, so the step does not
                  change shape when the buyer switches between a saved card and a new one. */
-              <CommitBar>
-                {/* `challenge.busy` too: leg 2 of an authentication runs after `useSaved` has
-                    already returned, so the button must stay held until it settles. */}
-                <Button
-                  onClick={useSaved}
-                  disabled={saving || challenge.busy}
-                  className="sm:shrink-0"
-                >
-                  {saving || challenge.busy ? "Confirming…" : cta}
-                </Button>
-              </CommitBar>
+              <>
+                {blocked ? <DetailsBlockedNote /> : null}
+                <CommitArea summary={commit.summary}>
+                  {/* `challenge.busy` too: leg 2 of an authentication runs after `useSaved`
+                      has already returned, so the button must stay held until it settles. */}
+                  <Button
+                    onClick={useSaved}
+                    disabled={blocked || saving || challenge.busy}
+                    className="w-full"
+                    size="lg"
+                  >
+                    {saving || challenge.busy ? busyCta : cta}
+                  </Button>
+                </CommitArea>
+              </>
             ) : null}
           </div>
         ) : null}
 
         {/* Both secondary ways OUT of this step, kept together at the bottom. `order-last`
             pins them below whatever the step grows above them. */}
-        <div className="order-last flex flex-wrap items-center gap-4">
-          {/* Present only when this step was reached from Review — which is exactly when
-              replacing that section with no return path stranded the buyer. */}
-          {onBack ? (
-            <button type="button" onClick={onBack} className="text-xs text-primary hover:underline">
-              ← Back to review
-            </button>
-          ) : null}
-          {/* The gateway error that needs a phone number is raised HERE, when the vault setup
-              starts, so this is where a buyer reads it — and needs a way to fix it. */}
-          <button
-            type="button"
-            onClick={onEditDetails}
-            className="text-xs text-primary hover:underline"
-          >
-            Edit billing details
-          </button>
-        </div>
+        {onBack || onEditDetails ? (
+          <div className="order-last flex flex-wrap items-center gap-4">
+            {/* Present only when this step was reached from Review — which is exactly when
+                replacing that section with no return path stranded the buyer. */}
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="text-sm text-primary hover:underline"
+              >
+                Back to review
+              </button>
+            ) : null}
+            {/* The gateway error that needs a phone number is raised HERE, when the vault
+                setup starts, so a plan change (no details on screen) needs a way to them. */}
+            {onEditDetails ? (
+              <button
+                type="button"
+                onClick={onEditDetails}
+                className="text-sm text-primary hover:underline"
+              >
+                Edit billing details
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {/* Standalone placement: this step IS the add-a-method step (every signup, nothing
             saved yet), so there is no "Pay with" group above to nest under. When there IS a
             saved-methods list, these same fields render nested inside its "Add a new payment
@@ -4440,11 +5256,7 @@ function CardStep({
               ? "Confirm your plan change"
               : "Add a payment method"
         }
-        description={
-          stripeSetup
-            ? "Your card details go directly to Stripe. They never reach this page or our servers."
-            : undefined
-        }
+        description={stripeSetup ? privacyText(businessName, "card") : undefined}
       >
         {stripeSetup ? (
           <StripeIntentForm
@@ -4467,30 +5279,72 @@ function CardStep({
               })
             }
             onCancel={() => setSetup(null)}
+            // A refusal is returned, so the dialog shows it: the alert beside Pay is under it.
             onAuthorized={async (pm) => {
-              await complete(pm, stripeSetup.payment_intent);
+              const refused = await complete(pm, stripeSetup.payment_intent);
               clearPendingVaultSetup(scope);
+              return refused ?? undefined;
             }}
           />
-        ) : setup ? (
+        ) : setup && setup.provider === "tmtest" ? (
           <TokenSetup
             label={cta}
             busyLabel={busyCta}
+            // The typed card goes as the token, without the setup intent: completing
+            // through the intent saves the gateway's default card and drops this one. No
+            // double save: tmtest's intent is never approved on this path.
             onSubmit={async (value) => {
-              await complete(value, setup.payment_intent);
+              // Closed on a refusal, so the alert beside the button is in view.
+              if (await complete(value)) setSetup(null);
             }}
             onCancel={() => setSetup(null)}
           />
+        ) : setup ? (
+          /* A live gateway that came back without what its own form needs (a Stripe account
+             with no publishable key). Never the test token field: say what happened. */
+          <div className="flex flex-col gap-4">
+            <Alert tone="error">
+              We could not open the card form. The payment setup of {businessName} is not complete.
+              Contact {businessName}, or try again later.
+            </Alert>
+            <PaymentDialogFooter>
+              <Button variant="outline" onClick={() => setSetup(null)}>
+                Close
+              </Button>
+            </PaymentDialogFooter>
+          </div>
         ) : null}
       </PaymentDialog>
       {/* The 3DS sheet for the FIRST CHARGE — a different dialog from the add-card one
           above, and both can be reached in one visit: add the card, then authenticate the
           payment it is about to make. */}
+      <PaymentRefusal message={challenge.refusal} />
       {challenge.dialog}
     </StorefrontSection>
   );
 }
 
+/**
+ * The words a buyer reads for an invalid input. A combobox posts through an unlabelled
+ * input beside its trigger, so its label is the trigger's. Never the input's `name`.
+ */
+function fieldLabelOf(
+  form: HTMLFormElement,
+  input: HTMLInputElement,
+): { name: string; picked: boolean } {
+  const labelFor = (id: string | null | undefined) =>
+    id ? form.querySelector(`label[for="${CSS.escape(id)}"]`)?.textContent?.trim() : undefined;
+  const trigger = input.parentElement?.querySelector<HTMLElement>('[role="combobox"]');
+  const text =
+    labelFor(input.id) ||
+    input.getAttribute("aria-label") ||
+    labelFor(trigger?.id) ||
+    trigger?.getAttribute("aria-label") ||
+    "the highlighted field";
+  return { name: text.replace(/\*/g, "").trim(), picked: trigger != null };
+}
+
+/** The test gateway only (`setup.provider === "tmtest"`): a magic card number, typed. */
 function TokenSetup({
   label,
   busyLabel,
@@ -4514,20 +5368,29 @@ function TokenSetup({
   };
   return (
     <div className="flex flex-col gap-4">
-      <Input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Card token (test gateway)"
-        className="font-mono"
-      />
-      <div className="flex justify-end gap-2">
+      <Field
+        name="test_card"
+        label="Test card number"
+        help="This is a test. No money moves and no real card is saved. Enter a test card number, for example 4242424242424242."
+      >
+        <Input
+          name="test_card"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="4242424242424242"
+          inputMode="numeric"
+          autoComplete="off"
+          className="tabular-nums"
+        />
+      </Field>
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={busy || !value.trim()}>
           {busy ? busyLabel : label}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </div>
   );
 }

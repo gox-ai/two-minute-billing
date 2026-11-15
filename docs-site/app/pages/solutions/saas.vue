@@ -45,7 +45,7 @@ const selfServe = [
     body: "Trial or paid sign-up on a page with your brand, showing exactly what is due today.",
   },
   {
-    icon: "i-lucide-arrow-up-right",
+    icon: "i-lucide-link",
     title: "Upgrade links",
     body: "Send a checkout link that changes an existing subscription, with the proration shown before they pay.",
   },
@@ -242,8 +242,8 @@ useMarketingSeo({
       <MkShot
         src="/product/fragments/subscription-items"
         alt="A subscription with a Growth plan and two extra seats as an add-on, and the tax on the next renewal"
-        :width="1556"
-        :height="1156"
+        :width="1339"
+        :height="1134"
       />
     </MkPageZig>
 
@@ -335,8 +335,8 @@ useMarketingSeo({
       <MkShot
         src="/product/fragments/mrr-chart"
         alt="The MRR trend over 30 days, with the change against the previous period"
-        :width="1560"
-        :height="858"
+        :width="1344"
+        :height="1247"
       />
     </MkPageZig>
 

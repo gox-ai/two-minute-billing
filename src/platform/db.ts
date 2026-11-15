@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
@@ -16,6 +17,7 @@ const queryClient = postgres(config.DATABASE_URL, {
   // passes run concurrently (after TICK_SCAN_LIMIT, the pass budget and the gateway's own
   // rate limit), and it was the only one that could not be seen or changed from config.
   max: config.DB_POOL_MAX,
+  ...(config.DB_IDLE_TIMEOUT_S ? { idle_timeout: config.DB_IDLE_TIMEOUT_S } : {}),
   onnotice: () => {},
   // Opt-in per process (see config.PG_STATEMENT_TIMEOUT_MS). The worker sets it so a
   // query that never returns cannot become a tick that never ends; the API, importer
@@ -26,6 +28,17 @@ const queryClient = postgres(config.DATABASE_URL, {
 });
 
 const pool = drizzle(queryClient, { schema, casing: "snake_case" });
+
+// Reports and analytics read here (`withTenantRead`). Unset = the primary pool, so nothing
+// changes until a replica exists. Same pool size and idle timeout as the primary.
+const replicaClient = config.DATABASE_REPLICA_URL
+  ? postgres(config.DATABASE_REPLICA_URL, {
+      max: config.DB_POOL_MAX,
+      ...(config.DB_IDLE_TIMEOUT_S ? { idle_timeout: config.DB_IDLE_TIMEOUT_S } : {}),
+      onnotice: () => {},
+    })
+  : null;
+const readPool = replicaClient ? drizzle(replicaClient, { schema, casing: "snake_case" }) : pool;
 
 /**
  * The connection with NO tenant: row-level security does not filter it. Only for work that spans
@@ -174,6 +187,18 @@ export function afterCommit(fn: () => Promise<void>): boolean {
   return true;
 }
 
+/** RLS role + org (+ Time Travel pin), all transaction-local, so a transaction pooler is safe. */
+async function scopeToTenant(tx: Tx, organizationId: string): Promise<void> {
+  await tx.execute(sql`set local role tmbilling_app`);
+  await tx.execute(sql`select set_config('app.org_id', ${organizationId}, true)`);
+  // Time Travel: `app_now()` column defaults read this. Unset outside a pin, so they
+  // fall back to now(). ISO string — a Date in a raw sql fragment throws at runtime.
+  const pin = activeClockPin();
+  if (pin) {
+    await tx.execute(sql`select set_config('app.business_now', ${pin.now.toISOString()}, true)`);
+  }
+}
+
 /**
  * Run a function inside a transaction scoped to one organization, with RLS
  * ENFORCED. We switch to the non-privileged `tmbilling_app` role and set
@@ -192,6 +217,7 @@ export async function withTenant<T>(
     accessMode?: "read only" | "read write";
   },
 ): Promise<T> {
+  if (replicaScope.getStore()) return withTenantRead(organizationId, fn, config?.isolationLevel);
   // Only probe while a request is tracking writes for THIS org and has not been
   // marked yet: every other caller (the worker, seeds, verify scripts, and every
   // request without an Idempotency-Key) pays nothing.
@@ -201,16 +227,7 @@ export async function withTenant<T>(
   const hooks: Array<() => Promise<void>> = [];
   const result = await commitHooks.run(hooks, () =>
     pool.transaction(async (tx) => {
-      await tx.execute(sql`set local role tmbilling_app`);
-      await tx.execute(sql`select set_config('app.org_id', ${organizationId}, true)`);
-      // Time Travel: `app_now()` column defaults read this. Unset outside a pin, so they
-      // fall back to now(). ISO string — a Date in a raw sql fragment throws at runtime.
-      const pin = activeClockPin();
-      if (pin) {
-        await tx.execute(
-          sql`select set_config('app.business_now', ${pin.now.toISOString()}, true)`,
-        );
-      }
+      await scopeToTenant(tx, organizationId);
       const out = await fn(tx);
       // After the callback, so a write anywhere inside it counts — and before the
       // commit, so the mark is atomic with that write.
@@ -253,6 +270,43 @@ export async function withTenantTx<T>(
   return tx ? fn(tx) : withTenant(organizationId, fn);
 }
 
+/**
+ * `withTenant` for report reads: a READ ONLY transaction on `DATABASE_REPLICA_URL` (the primary
+ * when unset). The replica lags, so never use it for read-your-writes (auth, idempotency, a
+ * page that shows what the request just changed) or inside a write.
+ */
+export async function withTenantRead<T>(
+  organizationId: string,
+  fn: (tx: Tx) => Promise<T>,
+  isolationLevel?: "read committed" | "repeatable read" | "serializable",
+): Promise<T> {
+  return readPool.transaction(
+    async (tx) => {
+      await scopeToTenant(tx, organizationId);
+      return fn(tx);
+    },
+    { accessMode: "read only", ...(isolationLevel ? { isolationLevel } : {}) },
+  );
+}
+
+const replicaScope = new AsyncLocalStorage<true>();
+
+/**
+ * Wrap a report route's handler: every `withTenant` it reaches runs as `withTenantRead`. Routing
+ * by route, not by module, because the same report code also runs inside jobs, which must read
+ * the primary. A write inside fails loudly (read-only transaction), never silently.
+ */
+export function onReplica(
+  handler: (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>,
+): (req: FastifyRequest, reply: FastifyReply) => Promise<unknown> {
+  return (req, reply) => replicaScope.run(true, () => handler(req, reply));
+}
+
+/** Leave an `onReplica` scope: for the one write a report route makes (its audit row). */
+export function onPrimary<T>(fn: () => T): T {
+  return replicaScope.exit(fn);
+}
+
 /** Liveness check used by the /health route. */
 export async function pingDb(): Promise<boolean> {
   try {
@@ -267,5 +321,5 @@ export async function pingDb(): Promise<boolean> {
 }
 
 export async function closeDb(): Promise<void> {
-  await queryClient.end({ timeout: 5 });
+  await Promise.all([queryClient.end({ timeout: 5 }), replicaClient?.end({ timeout: 5 })]);
 }

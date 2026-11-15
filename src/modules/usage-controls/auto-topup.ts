@@ -3,8 +3,13 @@
  * clock pass. A run raises a purchase invoice with a pending paid grant; the grant activates
  * only when the invoice is paid. A decline voids the invoice and turns the config off: no
  * dunning, no retry.
+ *
+ * A unit with no money rate (0527): the config has a threshold in units and a pack price. A
+ * run buys whole packs on the same invoice, charge and decline path; the pack line makes the
+ * pending grant, and the units reach the balance when the invoice is paid. Nothing is given
+ * before that: an event that arrives while a run is open is refused when the balance is short.
  */
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { config as appConfig } from "@/platform/config";
 import {
@@ -39,7 +44,10 @@ import { voidInvoice } from "@/modules/invoicing/ops";
 import { activatePaidCreditGrants } from "@/modules/credits/packs";
 import { insertCreditGrant, unitRate } from "@/modules/credits/service";
 import { liveBalance } from "@/modules/credits/balance";
-import { stepsForMinor } from "@/modules/credits/units";
+import { formatSteps, stepsForMinor } from "@/modules/credits/units";
+import { parseUnitSteps } from "@/modules/credits/credit-cost";
+import { resolveCreditEngineRules } from "@/modules/credits/policy";
+import { packAwareLineAmount } from "@/modules/catalog/pricing";
 import { settlePaymentFailed, settlePaymentSucceeded } from "@/modules/payments/settlement";
 import { methodTypeOf } from "@/modules/payments/method-type";
 import { recordTransaction } from "@/modules/transactions/service";
@@ -54,6 +62,8 @@ import {
   ownNoticeLeadHours,
 } from "@/modules/payment-methods/notice-duty";
 import { declineHiddenFromPayer } from "@/providers/decline-codes";
+import { classifyDecline } from "@/modules/subscriptions/decline-policy";
+import { dunningMethodKind } from "@/modules/subscriptions/dunning-schedule";
 import { ProviderIndeterminateError, strandedObjectId } from "@/providers/types";
 import {
   AUTO_TOPUP_OPEN_RUN_STATUSES,
@@ -61,6 +71,7 @@ import {
   businesses,
   creditAutoTopupRuns,
   creditAutoTopups,
+  creditUnitBalances,
   creditUnits,
   customers,
   events,
@@ -68,13 +79,25 @@ import {
   paymentMethods,
   payments,
   preDebitNotices,
+  prices,
+  products,
   type AutoTopupMethod,
   type AutoTopupSchedule,
   type AutoTopupTrigger,
   type CreditApplicability,
   type CreditTaxTreatment,
 } from "@db/schema";
-import { leadCoverMinor, scheduleSlotOn, topupAmount } from "./auto-topup-amount";
+import {
+  leadCoverMinor,
+  nextTopupTryAt,
+  packTopup,
+  purchaseLimitHit,
+  scheduleSlotOn,
+  topupAmount,
+  topupRetryHours,
+  type PurchaseLimits,
+  type PurchaseWindow,
+} from "./auto-topup-amount";
 import { measureBurn } from "./measure";
 import { registerUsageAlertsDailyStep } from "./alerts-pass";
 
@@ -95,6 +118,8 @@ const STUCK_CHARGING_MS = 10 * 60_000;
 const OPEN = [...AUTO_TOPUP_OPEN_RUN_STATUSES];
 /** Runs that count against the monthly cap. */
 const CAP_STATUSES = ["notice_sent", "charging", "pending", "succeeded"] as const;
+/** Runs that count against `purchase_limits`: open or paid. */
+const PURCHASE_STATUSES = ["created", ...CAP_STATUSES] as const;
 
 export class AutoTopupError extends Error {
   constructor(
@@ -151,8 +176,35 @@ export interface AutoTopupInput {
   maxRunsPerDay?: number;
   /** `pm_…`; null = the customer's charge order. */
   paymentMethod?: string | null;
-  grant: GrantConfig;
+  /** Not for a unit with no rate: the pack carries the grant's settings. */
+  grant?: GrantConfig | null;
+  /** A unit with no rate: the threshold in credits (decimal text) and the pack a run buys. */
+  thresholdUnits?: string | null;
+  packPrice?: string | null;
+  packQuantity?: number | null;
+  /** "Recharge to N units" (decimal text): whole packs to reach at least N. Method `target`. */
+  targetUnits?: string | null;
+  /** The most the config may buy in an hour, a day, a week and a month. */
+  purchaseLimits?: PurchaseLimits | null;
 }
+
+type Price = typeof prices.$inferSelect;
+
+/** The pack a config buys, with the name its invoice line shows. */
+async function packOf(tx: Tx, where: ReturnType<typeof eq> | undefined) {
+  const [p] = await tx
+    .select({
+      price: prices,
+      name: sql<string>`coalesce(${prices.externalName}, ${products.name})`,
+    })
+    .from(prices)
+    .innerJoin(products, eq(products.id, prices.productId))
+    .where(where)
+    .limit(1);
+  return p ?? null;
+}
+
+const packOfPrice = (p: Price) => (p.grantsCredit?.kind === "pack" ? p.grantsCredit : null);
 
 const err = (m: string) => new AutoTopupError(`We could not save automatic top-up. ${m}`);
 
@@ -194,6 +246,27 @@ async function firstCandidate(
   return (
     chargeOrder(await resolveChargeCandidates({ organizationId, customerId, currency }))[0] ?? null
   );
+}
+
+/**
+ * Whether a run of this top-up has a payment method to charge: its own method when it names
+ * one, else any method in the charge order (a run falls through to a backup). An invalid
+ * method never counts. The dashboard, the portal and Enable all read this one rule.
+ */
+export async function autoTopupCanCharge(
+  organizationId: string,
+  customerId: string,
+  pmId: string | null,
+  currency: string,
+): Promise<boolean> {
+  if (pmId) {
+    const pm = await firstCandidate(organizationId, customerId, pmId, currency);
+    return !!pm && pm.status !== "invalid";
+  }
+  const order = chargeOrder(
+    await resolveChargeCandidates({ organizationId, customerId, currency }),
+  );
+  return order.some((pm) => pm.status !== "invalid");
 }
 
 /** ₹15,000 on an INR card / UPI mandate (Decision 3); null elsewhere. */
@@ -259,7 +332,7 @@ export async function autoTopupLead(cfg: Config): Promise<LeadCheck | null> {
     cfg.paymentMethodId,
     cfg.currency,
   );
-  if (!pm) return null;
+  if (!pm || cfg.packPriceId) return null;
   return leadCheckFor({
     organizationId: cfg.organizationId,
     businessId: cfg.businessId,
@@ -268,6 +341,51 @@ export async function autoTopupLead(cfg: Config): Promise<LeadCheck | null> {
     pm,
     thresholdMinor: cfg.thresholdMinor ?? 0n,
     now: stampNow(cfg.businessId),
+  });
+}
+
+/**
+ * The customer's automatic top-ups of units with no rate, as the portal shows them: what a
+ * run buys and when, in buyer terms. No ids of ours beyond the unit.
+ */
+export async function portalUnitTopups(tx: Tx, customerId: string) {
+  const rows = await tx
+    .select({
+      cfg: creditAutoTopups,
+      unit: creditUnits,
+      price: prices,
+      name: sql<string>`coalesce(${prices.externalName}, ${products.name})`,
+    })
+    .from(creditAutoTopups)
+    .innerJoin(creditUnits, eq(creditUnits.id, creditAutoTopups.unitId))
+    .innerJoin(prices, eq(prices.id, creditAutoTopups.packPriceId))
+    .innerJoin(products, eq(products.id, prices.productId))
+    .where(eq(creditAutoTopups.customerId, customerId))
+    .orderBy(asc(creditAutoTopups.createdAt));
+  return rows.flatMap(({ cfg, unit, price, name }) => {
+    const gc = packOfPrice(price);
+    if (!gc) return [];
+    const quantity = cfg.packQuantity ?? 1;
+    return [
+      {
+        unit: unit.key,
+        unit_name: unit.name,
+        unit_plural_name: unit.pluralName,
+        decimals: unit.decimals,
+        currency: cfg.currency,
+        trigger: cfg.trigger,
+        // In the unit's smallest step, as the balances are.
+        threshold_amount: cfg.thresholdUnits != null ? Number(cfg.thresholdUnits) : null,
+        target_amount: cfg.targetUnits != null ? Number(cfg.targetUnits) : null,
+        pack_name: name,
+        // One purchase: the pack's credits and price, before tax.
+        pack_credits_amount: gc.amount * quantity,
+        pack_amount_minor: Number(packAwareLineAmount(price, quantity)),
+        status: cfg.status,
+        // payment_declined | retries_exhausted | operator | customer
+        disabled_reason: cfg.disabledReason,
+      },
+    ];
   });
 }
 
@@ -322,14 +440,44 @@ export async function putAutoTopup(input: {
   const { organizationId, businessId } = input;
   const c = input.config;
   const now = stampNow(businessId);
-  if ((c.trigger === "threshold") !== (c.thresholdMinor != null))
+  // A unit with no rate buys a pack: its own rules, checked with the unit below.
+  const byPack = c.packPrice != null;
+  if (!byPack && (c.thresholdUnits != null || c.packQuantity != null || c.targetUnits != null))
+    throw err("threshold_units, pack_quantity and target_units need pack_price.");
+  if (byPack) {
+    if (!c.unitKey) throw err("pack_price needs a credit unit that has no rate.");
+    if (c.amountMinor != null || c.targetMinor != null)
+      throw err(
+        "A top-up that buys a pack takes no amount_minor and no target_minor. The pack sets the amount.",
+      );
+    if (c.packQuantity != null && c.targetUnits != null)
+      throw err("Send pack_quantity or target_units, not both.");
+    if ((c.method === "target") !== (c.targetUnits != null))
+      throw err(
+        "A top-up that buys a pack uses the fixed method with pack_quantity, or the target method with target_units.",
+      );
+    if (c.thresholdMinor != null) throw err("A top-up that buys a pack takes threshold_units.");
+    if ((c.trigger === "threshold") !== (c.thresholdUnits != null))
+      throw err("A threshold top-up needs threshold_units, and only a threshold top-up takes it.");
+  }
+  if (!byPack && (c.trigger === "threshold") !== (c.thresholdMinor != null))
     throw err("A threshold top-up needs threshold_minor, and only a threshold top-up takes it.");
   if ((c.trigger === "schedule") !== (c.schedule != null))
     throw err("A schedule top-up needs a schedule, and only a schedule top-up takes it.");
-  if ((c.method === "fixed") !== (c.amountMinor != null))
+  if (!byPack && (c.method === "fixed") !== (c.amountMinor != null))
     throw err("A fixed top-up needs amount_minor, and only a fixed top-up takes it.");
-  if ((c.method === "target") !== (c.targetMinor != null))
+  if (!byPack && (c.method === "target") !== (c.targetMinor != null))
     throw err("A target top-up needs target_minor, and only a target top-up takes it.");
+  for (const [w, lim] of Object.entries(c.purchaseLimits ?? {}))
+    if (
+      !lim ||
+      (lim.count == null && lim.amount_minor == null) ||
+      (lim.count != null && (!Number.isInteger(lim.count) || lim.count < 1)) ||
+      (lim.amount_minor != null && (!Number.isInteger(lim.amount_minor) || lim.amount_minor < 1))
+    )
+      throw err(
+        `purchase_limits.${w} needs count or amount_minor, each a whole number of 1 or more.`,
+      );
   if (c.schedule?.every === "week" && !(c.schedule.weekday >= 1 && c.schedule.weekday <= 7))
     throw err("The weekday must be 1 (Monday) to 7 (Sunday).");
   if (c.schedule?.every === "month" && !(c.schedule.day >= 1 && c.schedule.day <= 31))
@@ -337,8 +485,8 @@ export async function putAutoTopup(input: {
   if (c.monthlyCapMinor <= 0n) throw err("monthly_cap_minor must be more than 0.");
   const maxRuns = c.maxRunsPerDay ?? 3;
   if (maxRuns < 1 || maxRuns > 10) throw err("max_runs_per_day must be 1 to 10.");
-  if (!c.grant?.tax_treatment) throw err("Set a tax treatment for the credit.");
-  if (c.grant.tax_treatment === "taxed_at_use" && c.unitKey)
+  if (!byPack && !c.grant?.tax_treatment) throw err("Set a tax treatment for the credit.");
+  if (c.grant?.tax_treatment === "taxed_at_use" && c.unitKey)
     throw err("Credit in a custom unit is taxed at purchase.");
 
   const prep = await withTenant(organizationId, async (tx) => {
@@ -351,6 +499,62 @@ export async function putAutoTopup(input: {
     if (!currency) throw err("Send a currency.");
     if (unit && c.currency && c.currency.toUpperCase() !== unit.currency)
       throw err(`The credit unit ${unit.key} is priced in ${unit.currency}.`);
+    // A unit with a rate is bought for an amount of money; a unit with no rate by the pack.
+    if (unit && unit.minorPerUnitE12 === null && !byPack)
+      throw err(
+        `The credit unit ${unit.key} has no rate. Send pack_price: a credit pack that grants ${unit.pluralName}.`,
+      );
+    if (byPack && unit && unit.minorPerUnitE12 !== null)
+      throw err(`The credit unit ${unit.key} has a rate. Send amount_minor, not pack_price.`);
+    let pack: {
+      priceId: string;
+      amountMinor: bigint;
+      quantity: number;
+      taxTreatment: string;
+    } | null = null;
+    let thresholdUnits: bigint | null = null;
+    let targetUnits: bigint | null = null;
+    if (byPack && unit) {
+      const found = await packOf(
+        tx,
+        and(eq(prices.businessId, businessId), eq(prices.publicId, c.packPrice!)),
+      );
+      if (!found) throw new AutoTopupError(`No such price: ${c.packPrice}`, 404);
+      const gc = packOfPrice(found.price);
+      if (!gc || !found.price.active || found.price.type !== "one_time" || gc.unit !== unit.key)
+        throw err(
+          `The price ${c.packPrice} is not an active credit pack that grants ${unit.pluralName}.`,
+        );
+      // "Recharge to N units" counts single packs.
+      const quantity = c.targetUnits != null ? 1 : (c.packQuantity ?? 1);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000)
+        throw err("pack_quantity must be a whole number from 1 to 1000.");
+      const amountMinor = packAwareLineAmount(found.price, quantity);
+      if (amountMinor <= 0n)
+        throw err("The credit pack has no price. Use a pack that has a price.");
+      pack = {
+        priceId: found.price.id,
+        amountMinor,
+        quantity,
+        taxTreatment: gc.tax_treatment ?? "taxed_at_purchase",
+      };
+      if (c.thresholdUnits != null) {
+        thresholdUnits = parseUnitSteps(c.thresholdUnits, unit.decimals);
+        if (thresholdUnits === null)
+          throw err(
+            `threshold_units must be a number of 0 or more, with at most ${unit.decimals} decimals.`,
+          );
+      }
+      if (c.targetUnits != null) {
+        targetUnits = parseUnitSteps(c.targetUnits, unit.decimals);
+        if (targetUnits === null || targetUnits <= 0n)
+          throw err(
+            `target_units must be a number more than 0, with at most ${unit.decimals} decimals.`,
+          );
+        if (thresholdUnits !== null && targetUnits <= thresholdUnits)
+          throw err("target_units must be more than threshold_units.");
+      }
+    }
     let pmId: string | null = null;
     if (c.paymentMethod) {
       const [pm] = await tx
@@ -371,16 +575,29 @@ export async function putAutoTopup(input: {
       .from(businesses)
       .where(eq(businesses.id, businessId))
       .limit(1);
-    return { customer, unitId, currency, pmId, limits: biz?.cfg?.top_up_limits?.[currency] };
+    return {
+      customer,
+      unitId,
+      currency,
+      pmId,
+      pack,
+      thresholdUnits,
+      targetUnits,
+      limits: biz?.cfg?.top_up_limits?.[currency],
+    };
   });
-  const { customer, currency } = prep;
+  const { customer, currency, pack } = prep;
+  // From here a pack config reads as a fixed top-up of the pack's price.
+  const fixedMinor = pack ? pack.amountMinor : (c.amountMinor ?? null);
   const min = prep.limits?.min_minor != null ? BigInt(prep.limits.min_minor) : null;
   const max = prep.limits?.max_minor != null ? BigInt(prep.limits.max_minor) : null;
   if (min != null && max != null && min > max) throw err("The top-up limits are not valid.");
-  if (c.method === "fixed" && max != null && c.amountMinor! > max)
+  if (c.method === "fixed" && max != null && fixedMinor! > max)
     throw err(`The amount must be ${formatMoney(max, currency)} or less.`);
-  if (c.method === "fixed" && min != null && c.amountMinor! < min)
+  if (c.method === "fixed" && min != null && fixedMinor! < min && !pack)
     throw err(`The amount must be ${formatMoney(min, currency)} or more.`);
+  if (pack && pack.amountMinor > c.monthlyCapMinor)
+    throw err("monthly_cap_minor must be the price of the pack or more.");
 
   const pm = await firstCandidate(organizationId, customer.id, prep.pmId, currency);
   if (!pm)
@@ -390,8 +607,8 @@ export async function putAutoTopup(input: {
   const afa = afaCapFor(pm, currency);
   if (afa != null) {
     const needs =
-      c.method === "fixed"
-        ? c.amountMinor!
+      c.method === "fixed" || pack
+        ? fixedMinor!
         : c.trigger === "threshold"
           ? c.targetMinor! - c.thresholdMinor!
           : c.targetMinor!;
@@ -400,12 +617,18 @@ export async function putAutoTopup(input: {
         "A card or UPI mandate can pay at most ₹15,000 without the payer. Lower the amount, or use a netbanking mandate.",
       );
   }
-  if (c.method === "target" && c.trigger === "threshold" && c.targetMinor! <= c.thresholdMinor!)
+  if (
+    !pack &&
+    c.method === "target" &&
+    c.trigger === "threshold" &&
+    c.targetMinor! <= c.thresholdMinor!
+  )
     throw err("The target must be more than the threshold.");
 
   // The lead-time rule: on a notice rail, the threshold must cover the notice lead of usage.
+  // It is a money rule (burn in money), so a threshold in units is not checked.
   let lead: LeadCheck | null = null;
-  if (c.trigger === "threshold") {
+  if (c.trigger === "threshold" && !pack) {
     lead = await leadCheckFor({
       organizationId,
       businessId,
@@ -422,14 +645,24 @@ export async function putAutoTopup(input: {
   const values = {
     trigger: c.trigger,
     thresholdMinor: c.thresholdMinor ?? null,
+    thresholdUnits: prep.thresholdUnits,
+    packPriceId: pack?.priceId ?? null,
+    packQuantity: pack && prep.targetUnits === null ? pack.quantity : null,
+    targetUnits: prep.targetUnits,
+    purchaseLimits:
+      c.purchaseLimits && Object.keys(c.purchaseLimits).length ? c.purchaseLimits : null,
     schedule: c.schedule ?? null,
     method: c.method,
-    amountMinor: c.amountMinor ?? null,
+    // A pack config: the price of one purchase when it was saved. A run reads the price again.
+    amountMinor: c.method === "fixed" ? fixedMinor : null,
     targetMinor: c.targetMinor ?? null,
     monthlyCapMinor: c.monthlyCapMinor,
     maxRunsPerDay: maxRuns,
     paymentMethodId: prep.pmId,
-    grantConfig: c.grant as unknown as Record<string, unknown>,
+    grantConfig: (pack ? { tax_treatment: pack.taxTreatment } : c.grant) as unknown as Record<
+      string,
+      unknown
+    >,
     status: "active" as const,
     disabledReason: null,
     disabledAt: null,
@@ -468,9 +701,34 @@ export async function putAutoTopup(input: {
           })
           .returning();
     await activateUsageControls(tx, businessId, customer.id);
+    await syncGateThreshold(tx, saved!);
     return saved!;
   });
   return { config: row, lead };
+}
+
+/**
+ * Copy an active threshold in units to the customer's balance row, where the gate reads it
+ * with the row it locks; clear it when the config is off. The gate's mark starts again.
+ */
+async function syncGateThreshold(tx: Tx, cfg: Config): Promise<void> {
+  if (!cfg.unitId || !cfg.packPriceId) return;
+  const threshold =
+    cfg.status === "active" && cfg.trigger === "threshold" ? cfg.thresholdUnits : null;
+  await tx
+    .insert(creditUnitBalances)
+    .values({
+      organizationId: cfg.organizationId,
+      businessId: cfg.businessId,
+      customerId: cfg.customerId,
+      unitId: cfg.unitId,
+      availableSteps: 0n,
+      topupThresholdSteps: threshold,
+    })
+    .onConflictDoUpdate({
+      target: [creditUnitBalances.customerId, creditUnitBalances.unitId],
+      set: { topupThresholdSteps: threshold, topupDueAt: null },
+    });
 }
 
 /** The first control turns on the dirty mark; a config change re-marks the customer. */
@@ -496,13 +754,13 @@ export async function setAutoTopupStatus(input: {
   if (!cfg) throw new AutoTopupError("This customer has no automatic top-up.", 404);
   const now = stampNow(input.businessId);
   if (input.status === "active") {
-    const pm = await firstCandidate(
+    const canCharge = await autoTopupCanCharge(
       input.organizationId,
       cfg.customerId,
       cfg.paymentMethodId,
       cfg.currency,
     );
-    if (!pm || pm.status === "invalid")
+    if (!canCharge)
       throw new AutoTopupError(
         "We could not turn on automatic top-up. The customer has no payment method that we can charge. Add a payment method, then try again.",
       );
@@ -524,6 +782,7 @@ export async function setAutoTopupStatus(input: {
       .returning();
     if (input.status === "active")
       await activateUsageControls(tx, input.businessId, cfg.customerId);
+    await syncGateThreshold(tx, row!);
     return row!;
   });
 }
@@ -584,12 +843,27 @@ export async function serializeAutoTopup(
       : [];
     const [u] = cfg.unitId
       ? await tx
-          .select({ key: creditUnits.key })
+          .select({ key: creditUnits.key, decimals: creditUnits.decimals })
           .from(creditUnits)
           .where(eq(creditUnits.id, cfg.unitId))
       : [];
-    return { customer: c?.id ?? null, pm: pm?.id ?? null, unit: u?.key ?? null };
+    const [pk] = cfg.packPriceId
+      ? await tx.select({ id: prices.publicId }).from(prices).where(eq(prices.id, cfg.packPriceId))
+      : [];
+    return {
+      customer: c?.id ?? null,
+      pm: pm?.id ?? null,
+      unit: u?.key ?? null,
+      decimals: u?.decimals ?? 0,
+      pack: pk?.id ?? null,
+    };
   });
+  const hasPaymentMethod = await autoTopupCanCharge(
+    organizationId,
+    cfg.customerId,
+    cfg.paymentMethodId,
+    cfg.currency,
+  );
   return {
     object: "auto_topup",
     id: cfg.publicId,
@@ -598,6 +872,14 @@ export async function serializeAutoTopup(
     unit: refs.unit,
     trigger: cfg.trigger,
     threshold_minor: n(cfg.thresholdMinor),
+    // A unit with no rate: the threshold in credits and the pack a run buys.
+    threshold_units:
+      cfg.thresholdUnits != null ? formatSteps(cfg.thresholdUnits, refs.decimals) : null,
+    pack_price: refs.pack,
+    pack_quantity: cfg.packQuantity,
+    // "Recharge to N units": a run buys whole packs to reach at least this.
+    target_units: cfg.targetUnits != null ? formatSteps(cfg.targetUnits, refs.decimals) : null,
+    purchase_limits: cfg.purchaseLimits ?? null,
     schedule: cfg.schedule,
     method: cfg.method,
     amount_minor: n(cfg.amountMinor),
@@ -605,6 +887,8 @@ export async function serializeAutoTopup(
     monthly_cap_minor: Number(cfg.monthlyCapMinor),
     max_runs_per_day: cfg.maxRunsPerDay,
     payment_method: refs.pm,
+    // False: a run has no method to charge, so Enable is refused and a run would fail.
+    has_payment_method: hasPaymentMethod,
     grant: cfg.grantConfig,
     status: cfg.status,
     disabled_reason: cfg.disabledReason,
@@ -666,6 +950,8 @@ export async function serializeAutoTopupRuns(organizationId: string, runs: Run[]
     payment: r.paymentId ? (maps.pay.get(r.paymentId) ?? null) : null,
     charge_after: iso(r.chargeAfter),
     decline_code: r.declineCode,
+    // Charge tries that failed. A unit with no money rate tries a soft decline again.
+    attempts: r.attempts,
     failure_message: r.failureMessage,
     created_at: iso(r.createdAt),
     updated_at: iso(r.updatedAt),
@@ -817,8 +1103,9 @@ function calendarOf(now: Date, tz: string) {
 async function skipOnce(
   tx: Tx,
   cfg: Config,
-  reason: "monthly_cap" | "daily_limit",
+  reason: "monthly_cap" | "daily_limit" | "purchase_limit" | "trial",
   periodKey: string,
+  extra: Record<string, unknown> = {},
 ): Promise<void> {
   const [seen] = await tx
     .select({ id: events.id })
@@ -840,7 +1127,7 @@ async function skipOnce(
       "credit_auto_topup_skipped",
       { id: cfg.publicId, customer: await customerPublicId(tx, cfg.customerId) },
       cfg.resourceVersion,
-      { reason, period_key: `${reason}:${periodKey}` },
+      { reason, period_key: `${reason}:${periodKey}`, ...extra },
     ),
   });
 }
@@ -854,8 +1141,39 @@ async function customerPublicId(tx: Tx, id: string): Promise<string | null> {
   return c?.p ?? null;
 }
 
+interface PackRun {
+  priceId: string;
+  /** Packs on the invoice line. */
+  quantity: number;
+  name: string;
+}
+
+/** `purchase_limits`: true when a window is full. Emits the skip once per window and period. */
+async function overPurchaseLimit(
+  tx: Tx,
+  cfg: Config,
+  runs: Run[],
+  amountMinor: bigint,
+  now: Date,
+  cal: ReturnType<typeof calendarOf>,
+): Promise<boolean> {
+  const hit: PurchaseWindow | null = purchaseLimitHit({
+    limits: cfg.purchaseLimits,
+    runs: runs.filter((r) => (PURCHASE_STATUSES as readonly string[]).includes(r.status)),
+    amountMinor,
+    now,
+    dayStart: cal.dayStart,
+    monthStart: cal.monthStart,
+  });
+  if (!hit) return false;
+  const period =
+    hit === "hour" ? now.toISOString().slice(0, 13) : hit === "month" ? cal.month : cal.day;
+  await skipOnce(tx, cfg, "purchase_limit", `${hit}:${period}`, { window: hit });
+  return true;
+}
+
 type Decision =
-  | { kind: "run"; amount: bigint; triggerKey: string | null }
+  | { kind: "run"; amount: bigint; triggerKey: string | null; pack?: PackRun }
   | { kind: "none" }
   | { kind: "skipped" };
 
@@ -887,7 +1205,14 @@ export async function createRunFor(
           eq(creditAutoTopupRuns.configId, cfg.id),
           gte(
             creditAutoTopupRuns.createdAt,
-            cal.monthStart < cal.dayStart ? cal.monthStart : cal.dayStart,
+            new Date(
+              Math.min(
+                cal.monthStart.getTime(),
+                cal.dayStart.getTime(),
+                // The week of `purchase_limits`.
+                now.getTime() - 7 * 86_400_000,
+              ),
+            ),
           ),
         ),
       );
@@ -898,6 +1223,7 @@ export async function createRunFor(
         and(eq(creditAutoTopupRuns.configId, cfg.id), inArray(creditAutoTopupRuns.status, OPEN)),
       );
     if (openRuns.length > 0) return { kind: "none" };
+    const waiting = await waitsForCrossing(tx, cfg);
     let triggerKey: string | null = null;
     if (cfg.trigger === "schedule") {
       const slot = scheduleSlotOn(cfg.schedule!, cal.day);
@@ -910,13 +1236,6 @@ export async function createRunFor(
       .from(customers)
       .where(eq(customers.id, cfg.customerId))
       .limit(1);
-    const bal = await liveBalance(tx, {
-      customerId: cfg.customerId,
-      currency: cfg.currency,
-      now,
-      businessConfig: biz?.cfg ?? null,
-      customerSettings: cust?.settings ?? null,
-    });
     const lim = biz?.cfg?.top_up_limits?.[cfg.currency];
     const used = runs
       .filter(
@@ -925,6 +1244,91 @@ export async function createRunFor(
           (CAP_STATUSES as readonly string[]).includes(r.status),
       )
       .reduce((s, r) => s + r.amountMinor, 0n);
+    if (cfg.packPriceId) {
+      // A unit with no rate: the balance the gate offers, against the threshold in units.
+      const found = await packOf(tx, eq(prices.id, cfg.packPriceId));
+      const gc = found ? packOfPrice(found.price) : null;
+      if (!found || !gc || !found.price.active) return { kind: "none" };
+      const quantity = cfg.packQuantity ?? 1;
+      const { unitBalanceAt } = await import("@/modules/credits/usage-settlement");
+      const balanceSteps = await unitBalanceAt(tx, {
+        customerId: cfg.customerId,
+        unitId: cfg.unitId!,
+        now,
+      });
+      if (waiting) {
+        if (balanceSteps > cfg.thresholdUnits!) await rearm(tx, cfg, waiting, now);
+        return { kind: "none" };
+      }
+      // The gate's mark is answered: above the threshold it starts again.
+      if (cfg.trigger === "threshold" && balanceSteps > cfg.thresholdUnits!)
+        await tx
+          .update(creditUnitBalances)
+          .set({ topupDueAt: null })
+          .where(
+            and(
+              eq(creditUnitBalances.customerId, cfg.customerId),
+              eq(creditUnitBalances.unitId, cfg.unitId!),
+              isNotNull(creditUnitBalances.topupDueAt),
+            ),
+          );
+      // A free trial charges nothing: a unit top-up waits for the trial to end.
+      // The same subscription the gate reads: the customer's oldest live one.
+      const [primary] = (await tx.execute(sql`
+        select status from subscriptions
+        where customer_id = ${cfg.customerId} and status in ('active', 'in_trial')
+        order by created_at, id limit 1`)) as unknown as Array<{ status: string }>;
+      if (primary?.status === "in_trial") {
+        await skipOnce(tx, cfg, "trial", cal.day);
+        return { kind: "skipped" };
+      }
+      const pack = packTopup({
+        trigger: cfg.trigger,
+        thresholdSteps: cfg.thresholdUnits,
+        targetSteps: cfg.targetUnits,
+        balanceSteps,
+        packSteps: BigInt(gc.amount) * BigInt(quantity),
+        packMinor: packAwareLineAmount(found.price, quantity),
+        minMinor: lim?.min_minor != null ? BigInt(lim.min_minor) : null,
+        maxMinor: lim?.max_minor != null ? BigInt(lim.max_minor) : null,
+        afaCapMinor: afaCapFor(pm, cfg.currency),
+        monthlyCapMinor: cfg.monthlyCapMinor,
+        usedThisMonthMinor: used,
+      });
+      if (pack.kind === "none") return { kind: "none" };
+      if (pack.kind === "skip") {
+        await skipOnce(tx, cfg, "monthly_cap", cal.month);
+        return { kind: "skipped" };
+      }
+      const made = runs.filter((r) => r.createdAt.getTime() >= cal.dayStart.getTime()).length;
+      if (made >= cfg.maxRunsPerDay) {
+        await skipOnce(tx, cfg, "daily_limit", cal.day);
+        return { kind: "skipped" };
+      }
+      if (await overPurchaseLimit(tx, cfg, runs, pack.amountMinor, now, cal))
+        return { kind: "skipped" };
+      return {
+        kind: "run",
+        amount: pack.amountMinor,
+        triggerKey,
+        pack: {
+          priceId: found.price.id,
+          quantity: quantity * Number(pack.purchases),
+          name: found.name,
+        },
+      };
+    }
+    const bal = await liveBalance(tx, {
+      customerId: cfg.customerId,
+      currency: cfg.currency,
+      now,
+      businessConfig: biz?.cfg ?? null,
+      customerSettings: cust?.settings ?? null,
+    });
+    if (waiting) {
+      if (bal.balanceMinor > (cfg.thresholdMinor ?? 0n)) await rearm(tx, cfg, waiting, now);
+      return { kind: "none" };
+    }
     const amount = topupAmount({
       trigger: cfg.trigger,
       method: cfg.method,
@@ -949,11 +1353,13 @@ export async function createRunFor(
       await skipOnce(tx, cfg, "daily_limit", cal.day);
       return { kind: "skipped" };
     }
+    if (await overPurchaseLimit(tx, cfg, runs, amount.amountMinor, now, cal))
+      return { kind: "skipped" };
     return { kind: "run", amount: amount.amountMinor, triggerKey };
   });
   if (decision.kind !== "run") return decision.kind;
   try {
-    await createRunAndInvoice(cfg, decision.amount, decision.triggerKey);
+    await createRunAndInvoice(cfg, decision.amount, decision.triggerKey, decision.pack);
     return "created";
   } catch (e) {
     // A concurrent creation won: the open-run index (or the slot) refused this one.
@@ -969,10 +1375,42 @@ export async function createRunFor(
   }
 }
 
+/**
+ * A hard decline left the threshold top-up on (`auto_topup_on_hard_decline: keep_enabled`):
+ * no new run until the balance goes above the threshold and crosses it again. The wait ends
+ * when the config changes after the failed run (an edit, an enable, or `rearm`).
+ */
+async function waitsForCrossing(tx: Tx, cfg: Config): Promise<Date | null> {
+  if (cfg.trigger !== "threshold") return null;
+  const [last] = await tx
+    .select({
+      status: creditAutoTopupRuns.status,
+      code: creditAutoTopupRuns.declineCode,
+      at: creditAutoTopupRuns.updatedAt,
+    })
+    .from(creditAutoTopupRuns)
+    .where(eq(creditAutoTopupRuns.configId, cfg.id))
+    .orderBy(desc(creditAutoTopupRuns.createdAt), desc(creditAutoTopupRuns.id))
+    .limit(1);
+  const waits =
+    last?.status === "failed" &&
+    last.code != null &&
+    isHardDecline(last.code) &&
+    last.at.getTime() >= cfg.updatedAt.getTime();
+  return waits ? last.at : null;
+}
+
+/** The balance is above the threshold again: the next crossing may start a run. */
+async function rearm(tx: Tx, cfg: Config, failedAt: Date, now: Date): Promise<void> {
+  const at = new Date(Math.max(now.getTime(), failedAt.getTime() + 1));
+  await tx.update(creditAutoTopups).set({ updatedAt: at }).where(eq(creditAutoTopups.id, cfg.id));
+}
+
 async function createRunAndInvoice(
   cfg: Config,
   amount: bigint,
   triggerKey: string | null,
+  pack?: PackRun,
 ): Promise<void> {
   const grant = cfg.grantConfig as unknown as GrantConfig;
   const runPublicId = publicId("atur");
@@ -983,8 +1421,9 @@ async function createRunAndInvoice(
         )
       )[0]!
     : null;
-  const units = unit ? stepsForMinor(amount, unitRate(unit)) : amount;
-  const what = unit ? `${unit.pluralName}` : `${cfg.currency} credit`;
+  // A pack run sells no units here: its line makes the pending grant (`createPendingPackGrants`).
+  const units = pack ? 0n : unit ? stepsForMinor(amount, unitRate(unit)) : amount;
+  const what = pack ? pack.name : unit ? `${unit.pluralName}` : `${cfg.currency} credit`;
   const { invoice } = await createInvoiceFromLines({
     organizationId: cfg.organizationId,
     businessId: cfg.businessId,
@@ -994,14 +1433,23 @@ async function createRunAndInvoice(
     applyCredit: true,
     collect: false,
     originToken: `atu:${runPublicId}`,
+    oneOff: true,
     lines: [
-      {
-        description: `Automatic top-up: ${what}`,
-        amountMinor: amount,
-        quantity: 1,
-        kind: "one_time",
-        creditPack: grant.tax_treatment,
-      },
+      pack
+        ? {
+            description: `Automatic top-up: ${what}`,
+            amountMinor: amount,
+            priceId: pack.priceId,
+            quantity: pack.quantity,
+            kind: "one_time",
+          }
+        : {
+            description: `Automatic top-up: ${what}`,
+            amountMinor: amount,
+            quantity: 1,
+            kind: "one_time",
+            creditPack: grant.tax_treatment,
+          },
     ],
     inTx: async (tx, created) => {
       // The lock and the open-run index make a second concurrent run roll this back.
@@ -1042,6 +1490,26 @@ async function createRunAndInvoice(
               ),
             )
           : null;
+      if (pack) {
+        // The gate's mark is answered by this run.
+        await tx
+          .update(creditUnitBalances)
+          .set({ topupDueAt: null })
+          .where(
+            and(
+              eq(creditUnitBalances.customerId, cfg.customerId),
+              eq(creditUnitBalances.unitId, cfg.unitId!),
+            ),
+          );
+        // The pack line made its pending grant. Paid at raise by the money balance: active now.
+        await activatePaidCreditGrants(tx, {
+          organizationId: cfg.organizationId,
+          invoiceId: created.invoice.id,
+        });
+        return;
+      }
+      // After any discount on the line, excl. tax (`paidCreditCostBasisMinor`).
+      const cost = created.lines[0]!.costBasisMinor;
       await insertCreditGrant(tx, {
         organizationId: cfg.organizationId,
         businessId: cfg.businessId,
@@ -1049,7 +1517,7 @@ async function createRunAndInvoice(
         currency: cfg.currency,
         unit,
         amount: units,
-        costBasisMinor: amount,
+        costBasisMinor: cost,
         category: "paid",
         priority: grant.priority,
         effectiveAt: now,
@@ -1062,25 +1530,26 @@ async function createRunAndInvoice(
         status: "pending",
       });
       // The sale moves into pending credit until the invoice is paid (as a pack does).
-      await postEntries(
-        {
-          organizationId: cfg.organizationId,
-          businessId: cfg.businessId,
-          customerId: cfg.customerId,
-          sourceType: "invoice",
-          sourceId: created.invoice.publicId,
-          lines: [
-            { account: "revenue", direction: "debit", amountMinor: amount, currency: cfg.currency },
-            {
-              account: CREDIT_LEDGER_ACCOUNTS.pending,
-              direction: "credit",
-              amountMinor: amount,
-              currency: cfg.currency,
-            },
-          ],
-        },
-        tx,
-      );
+      if (cost > 0n)
+        await postEntries(
+          {
+            organizationId: cfg.organizationId,
+            businessId: cfg.businessId,
+            customerId: cfg.customerId,
+            sourceType: "invoice",
+            sourceId: created.invoice.publicId,
+            lines: [
+              { account: "revenue", direction: "debit", amountMinor: cost, currency: cfg.currency },
+              {
+                account: CREDIT_LEDGER_ACCOUNTS.pending,
+                direction: "credit",
+                amountMinor: cost,
+                currency: cfg.currency,
+              },
+            ],
+          },
+          tx,
+        );
       // Paid at raise by the money balance: the grant is active now.
       await activatePaidCreditGrants(tx, {
         organizationId: cfg.organizationId,
@@ -1133,12 +1602,13 @@ async function advanceRun(
       );
   if (candidates.length === 0) {
     if (!(await claim(run, ["created", "notice_sent"], "charging"))) return null;
-    await declineRun(
+    return failRun(
       run,
+      cfg,
       "no_payment_method",
       "The customer has no payment method that we can charge.",
+      true,
     );
-    return "failed";
   }
   const due = await withTenant(
     run.organizationId,
@@ -1277,8 +1747,10 @@ async function chargeRun(
     email: customer!.email,
     phone: customer!.phone,
   };
-  let last: { code: string; message: string | null } | null = null;
+  let last: { code: string; message: string | null; retriable: boolean | null } | null = null;
+  let lastPm: Pm | null = null;
   for (const pm of candidates) {
+    lastPm = pm;
     const payId = publicId("pay");
     let booked: typeof payments.$inferSelect | null = null;
     const book = async () =>
@@ -1329,7 +1801,11 @@ async function chargeRun(
         !router,
       );
       await settle(run, pm, pay, attempt);
-      last = { code: attempt.result.failure!.code, message: attempt.result.failure!.message };
+      last = {
+        code: attempt.result.failure!.code,
+        message: attempt.result.failure!.message,
+        retriable: !router,
+      };
       continue;
     }
     if (a.deferredUntil) {
@@ -1395,11 +1871,91 @@ async function chargeRun(
     last = {
       code: a.result.failure?.code ?? "card_declined",
       message: a.result.failure?.message ?? null,
+      retriable: a.result.failure?.retriable ?? null,
     };
     if (!shouldTryBackup(a.result)) break;
   }
-  await declineRun(run, last?.code ?? "card_declined", last?.message ?? null);
-  return "failed";
+  const code = last?.code ?? "card_declined";
+  return failRun(run, cfg, code, last?.message ?? null, isHardDecline(code), lastPm?.type ?? null);
+}
+
+/** A decline that a new try cannot change: smart dunning's classification (0530). */
+const isHardDecline = (code: string) => classifyDecline(code) !== "retry";
+
+/**
+ * A run's charge failed. A soft decline is tried again on the business's schedule
+ * (`credit_config.auto_topup_retry_hours`, per payment method kind, default 4 then 12 hours;
+ * `auto_topup_retries: false` turns retries off): the run goes back to `created` with its
+ * next try time and stays the one run in flight. The last try turns the top-up off; so does a
+ * hard decline, unless `auto_topup_on_hard_decline` is `keep_enabled`. Nothing is granted before a payment: a usage event in between is refused when
+ * the balance is short.
+ */
+async function failRun(
+  run: Run,
+  cfg: Config,
+  code: string,
+  message: string | null,
+  hard: boolean,
+  methodType: string | null = null,
+): Promise<"failed" | null> {
+  const now = stampNow(run.businessId);
+  const failedTries = run.attempts + 1;
+  const [biz] = await withTenant(run.organizationId, (tx) =>
+    tx
+      .select({ cfg: businesses.creditConfig })
+      .from(businesses)
+      .where(eq(businesses.id, run.businessId))
+      .limit(1),
+  );
+  const hours = topupRetryHours(biz?.cfg, dunningMethodKind(methodType));
+  // `auto_topup_on_hard_decline: keep_enabled`: a hard decline ends the run, not the top-up.
+  const keepOn =
+    hard && resolveCreditEngineRules(biz?.cfg).autoTopupOnHardDecline === "keep_enabled";
+  // Retries off: the first decline ends the run as before, with no retry event.
+  if (!hours.length) {
+    await declineRun(run, code, message, undefined, undefined, keepOn);
+    return "failed";
+  }
+  const nextAt = hard ? null : nextTopupTryAt({ failedTries, now, hours });
+  if (!nextAt) {
+    await declineRun(
+      run,
+      code,
+      message,
+      hard ? "hard_decline" : "retries_exhausted",
+      failedTries,
+      keepOn,
+    );
+    return "failed";
+  }
+  await withTenant(run.organizationId, async (tx) => {
+    const [r] = await tx
+      .update(creditAutoTopupRuns)
+      .set({
+        status: "created",
+        attempts: failedTries,
+        chargeAfter: nextAt,
+        declineCode: code,
+        failureMessage: message,
+        updatedAt: now,
+      })
+      .where(and(eq(creditAutoTopupRuns.id, run.id), inArray(creditAutoTopupRuns.status, OPEN)))
+      .returning();
+    if (!r) return;
+    const [inv] = await tx
+      .select({ p: invoices.publicId })
+      .from(invoices)
+      .where(eq(invoices.id, r.invoiceId!))
+      .limit(1);
+    await emitRunEvent(tx, "credit_auto_topup_retry_scheduled", cfg, r, {
+      invoice: inv?.p ?? null,
+      decline_code: code,
+      attempt: failedTries,
+      max_attempts: hours.length + 1,
+      next_attempt_at: nextAt.toISOString(),
+    });
+  });
+  return null;
 }
 
 const failed = (pm: Pm, code: string, message: string, retriable: boolean): ChargeAttempt => ({
@@ -1526,28 +2082,49 @@ async function markSucceeded(run: Run): Promise<boolean> {
 const FAILED_MESSAGE = (reason: string | null) =>
   `We could not add credit to your account.${reason ? ` Your bank declined the payment (${reason}).` : " Your bank declined the payment."} Automatic top-up is now off. Update your payment method, then turn on automatic top-up again.`;
 
+const FAILED_KEPT_MESSAGE = (reason: string | null) =>
+  `We could not add credit to your account.${reason ? ` Your bank declined the payment (${reason}).` : " Your bank declined the payment."} Automatic top-up stays on. It tries again when your balance goes below the threshold again. Update your payment method.`;
+
 /** The decline path: run failed, config off, event and email, then the invoice voided. */
-async function declineRun(run: Run, code: string, message: string | null): Promise<void> {
+async function declineRun(
+  run: Run,
+  code: string,
+  message: string | null,
+  /** Why the top-up is turned off (with retries on). */
+  off?: "hard_decline" | "retries_exhausted",
+  failedTries?: number,
+  /** A hard decline under `keep_enabled`: the run fails and the top-up stays on. */
+  keepOn = false,
+): Promise<void> {
   const hidden = declineHiddenFromPayer(code);
   const reason = hidden ? null : code.replace(/_/g, " ");
   const invPublicId = await withTenant(run.organizationId, async (tx) => {
     const now = stampNow(run.businessId);
     const [r] = await tx
       .update(creditAutoTopupRuns)
-      .set({ status: "failed", declineCode: code, failureMessage: message, updatedAt: now })
+      .set({
+        status: "failed",
+        declineCode: code,
+        failureMessage: message,
+        updatedAt: now,
+        ...(failedTries != null ? { attempts: failedTries } : {}),
+      })
       .where(and(eq(creditAutoTopupRuns.id, run.id), inArray(creditAutoTopupRuns.status, OPEN)))
       .returning();
     if (!r) return null;
-    const [cfg] = await tx
-      .update(creditAutoTopups)
-      .set({
-        status: "disabled",
-        disabledReason: "payment_declined",
-        disabledAt: now,
-        updatedAt: now,
-      })
-      .where(eq(creditAutoTopups.id, r.configId))
-      .returning();
+    const [cfg] = keepOn
+      ? await tx.select().from(creditAutoTopups).where(eq(creditAutoTopups.id, r.configId))
+      : await tx
+          .update(creditAutoTopups)
+          .set({
+            status: "disabled",
+            disabledReason: off === "retries_exhausted" ? "retries_exhausted" : "payment_declined",
+            disabledAt: now,
+            updatedAt: now,
+          })
+          .where(eq(creditAutoTopups.id, r.configId))
+          .returning();
+    if (!keepOn) await syncGateThreshold(tx, cfg!);
     const [inv] = await tx
       .select({ p: invoices.publicId })
       .from(invoices)
@@ -1558,8 +2135,19 @@ async function declineRun(run: Run, code: string, message: string | null): Promi
       decline_code: code,
       // Null when the code is ours, not the payer's to read (`declineHiddenFromPayer`).
       decline_reason: reason,
-      message: FAILED_MESSAGE(reason),
+      message: keepOn ? FAILED_KEPT_MESSAGE(reason) : FAILED_MESSAGE(reason),
+      ...(keepOn ? { stays_enabled: true } : {}),
     });
+    if (off && !keepOn)
+      await emitRunEvent(
+        tx,
+        off === "hard_decline"
+          ? "credit_auto_topup_hard_declined"
+          : "credit_auto_topup_retries_exhausted",
+        cfg!,
+        r,
+        { invoice: inv?.p ?? null, decline_code: code, attempts: r.attempts },
+      );
     return inv?.p ?? null;
   });
   if (invPublicId) await voidQuietly(run, invPublicId, "auto_topup_declined");
@@ -1587,7 +2175,7 @@ async function reconcileRun(
 ): Promise<"succeeded" | "pending" | "failed" | null> {
   const ctx = await loadRunContext(run);
   if (!ctx) return null;
-  const { inv } = ctx;
+  const { inv, cfg } = ctx;
   if (run.status === "failed") {
     if (["payment_due", "posted", "not_paid"].includes(inv.status))
       await voidQuietly(run, inv.publicId, "auto_topup_declined");
@@ -1606,8 +2194,24 @@ async function reconcileRun(
     return null;
   }
   if (pay.status === "failed") {
-    await declineRun(run, pay.failureCode ?? "card_declined", pay.failureMessage ?? null);
-    return "failed";
+    const code = pay.failureCode ?? "card_declined";
+    const [pm] = pay.paymentMethodId
+      ? await withTenant(run.organizationId, (tx) =>
+          tx
+            .select({ type: paymentMethods.type })
+            .from(paymentMethods)
+            .where(eq(paymentMethods.id, pay.paymentMethodId!))
+            .limit(1),
+        )
+      : [];
+    return failRun(
+      run,
+      cfg,
+      code,
+      pay.failureMessage ?? null,
+      isHardDecline(code),
+      pm?.type ?? null,
+    );
   }
   if (pay.status === "succeeded") return (await markSucceeded(run)) ? "succeeded" : null;
   if (run.status === "charging") await claim(run, ["charging"], "pending");
@@ -1630,6 +2234,8 @@ export async function recheckAutoTopupThresholds(now: Date): Promise<{ warned: n
       and(
         eq(creditAutoTopups.status, "active"),
         eq(creditAutoTopups.trigger, "threshold"),
+        // The lead-time rule is in money: a threshold in units is not checked.
+        isNotNull(creditAutoTopups.thresholdMinor),
         or(isNull(creditAutoTopups.thresholdLowAt), lte(creditAutoTopups.thresholdLowAt, weekAgo)),
         scanBusinessFilter(creditAutoTopups.businessId),
       ),

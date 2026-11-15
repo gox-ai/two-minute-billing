@@ -16,11 +16,13 @@ import { Input } from "@/components/ui/input";
 import { CurrencySelect } from "@/components/form/currency-select";
 import { MoneyInput } from "@/components/form/money-input";
 import { CheckboxField } from "@/components/ui/checkbox";
-import { money, toMajor, fmtDate } from "@/lib/format";
+import { money, toMajor } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { ActionButton } from "@/components/action-button";
 import { RailButton, railItemClass, railToneClass } from "@/components/patterns/action-rail";
 import { paymentMethodOptions } from "@/components/invoices/collect-invoice-dialog";
 import { cn } from "@/lib/utils";
+import { accountHolderName } from "@/lib/names";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { editCustomerAction, archiveCustomerAction, restoreCustomerAction } from "@/app/actions";
 import { offlineMethodOptions } from "@/lib/offline-methods";
@@ -327,7 +329,7 @@ export function CollectPaymentDialog({
         </DialogHeader>
         {unpaid.length === 0 ? (
           <>
-            <p className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
               No amount is due. There is nothing to collect.
             </p>
             <DialogFooter>
@@ -494,7 +496,7 @@ export function ChangeBillingDateDialog({
           <Field
             name="billing_date"
             label="Day of month"
-            help="Enter 1–31. Leave blank to use the default."
+            help="Enter 1–31. For example, 1 is the first day of the month. Leave blank to use the default."
           >
             <Input
               name="billing_date"
@@ -503,14 +505,17 @@ export function ChangeBillingDateDialog({
               max={31}
               step={1}
               defaultValue={currentDate ?? ""}
-              placeholder="e.g. 1 = first of month"
             />
           </Field>
-          <Field name="billing_date_mode" label="Mode">
+          <Field
+            name="billing_date_mode"
+            label="Billing date source"
+            help="Using defaults follows the business setting. Manually set uses the day above."
+          >
             <SelectField
               name="billing_date_mode"
               defaultValue={currentMode ?? "manually_set"}
-              ariaLabel="Billing date mode"
+              ariaLabel="Billing date source"
               options={BILLING_DATE_MODE_OPTIONS}
             />
           </Field>
@@ -568,18 +573,17 @@ export function RecordOfflinePaymentDialog({
   const currency = selected?.currency ?? "USD";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Record offline payment</DialogTitle>
           <DialogDescription>
             Mark an outstanding invoice as paid by an external method, such as bank transfer, cash
-            or cheque. We record the payment in the ledger and do not charge a gateway. Leave the
-            amount blank to mark the full balance as paid.
+            or cheque. We record the payment in the ledger and do not charge a gateway.
           </DialogDescription>
         </DialogHeader>
         {payable.length === 0 ? (
           <>
-            <p className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
               This customer has no outstanding invoices.
             </p>
             <DialogFooter>
@@ -592,69 +596,74 @@ export function RecordOfflinePaymentDialog({
           <ActionForm
             action={recordOfflinePaymentAction}
             onSuccess={() => onOpenChange(false)}
-            className="flex flex-col gap-4"
+            className="flex min-h-0 flex-1 flex-col gap-4"
           >
             <HiddenFields fields={{ biz, cus }} />
-            <Field name="invoice" label="Invoice" required>
-              <SelectField
-                name="invoice"
-                required
-                ariaLabel="Invoice"
-                value={invoiceId}
-                onValueChange={setInvoiceId}
-                placeholder="Select an invoice…"
-                options={payable.map((i) => ({
-                  value: i.id,
-                  label: `${i.id} \u2014 ${money(i.amount_due_minor ?? i.total_minor, i.currency)} due`,
-                }))}
-              />
-            </Field>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {/* Amount in MAJOR units, capped at the selected invoice's remaining
+            <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6">
+              <Field name="invoice" label="Invoice" required>
+                <SelectField
+                  name="invoice"
+                  required
+                  ariaLabel="Invoice"
+                  value={invoiceId}
+                  onValueChange={setInvoiceId}
+                  placeholder="Select an invoice…"
+                  options={payable.map((i) => ({
+                    value: i.id,
+                    label: `${i.number ?? i.id} \u2014 ${money(i.amount_due_minor ?? i.total_minor, i.currency)} due`,
+                  }))}
+                />
+              </Field>
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                {/* Amount in MAJOR units, capped at the selected invoice's remaining
                   balance. Blank posts '' — `recordOfflinePaymentAction` then omits
                   `amount_minor`, which the engine reads as "mark the full balance
                   paid". That is why MoneyInput must never substitute a 0. */}
-              <Field name="amount_minor" label="Amount" help="Leave blank for the full balance.">
-                <MoneyInput
+                <Field
                   name="amount_minor"
-                  currency={currency}
-                  max={toMajor(dueMinor, currency)}
-                  placeholder="full balance"
-                />
-              </Field>
-              {/* Same control, same reason as the invoice's — see lib/offline-methods.
+                  label="Amount"
+                  help="Leave blank to mark the full balance as paid."
+                >
+                  <MoneyInput
+                    name="amount_minor"
+                    currency={currency}
+                    max={toMajor(dueMinor, currency)}
+                  />
+                </Field>
+                {/* Same control, same reason as the invoice's — see lib/offline-methods.
                   Its placeholder was `bank_transfer`, a value from the refund enum, which
                   is a good sign the closed set was always the intent here. */}
-              <Field name="method" label="Method">
-                <SelectField
-                  name="method"
-                  ariaLabel="Payment method"
-                  placeholder="Select…"
-                  options={offlineMethodOptions()}
-                />
+                <Field name="method" label="Method">
+                  <SelectField
+                    name="method"
+                    ariaLabel="Payment method"
+                    placeholder="Select…"
+                    options={offlineMethodOptions()}
+                  />
+                </Field>
+              </div>
+              <Field
+                name="date"
+                label="Payment date"
+                help="The date when the money arrived. Leave blank to use the current time."
+              >
+                <DateTimeField name="date" />
+              </Field>
+              <Field
+                name="reference"
+                label="Reference number"
+                help="Optional. For example, a check number or a bank transaction ID."
+              >
+                <Input name="reference" maxLength={100} />
+              </Field>
+              <Field
+                name="comment"
+                label="Note"
+                help="Optional. We add this text to the Comments timeline."
+              >
+                <Input name="comment" maxLength={500} />
               </Field>
             </div>
-            <Field
-              name="date"
-              label="Payment date"
-              help="The date when the money arrived. Leave blank to use the current time."
-            >
-              <DateTimeField name="date" />
-            </Field>
-            <Field
-              name="reference"
-              label="Reference number"
-              help="Optional. For example, a check number or a bank transaction ID."
-            >
-              <Input name="reference" placeholder="optional" maxLength={100} />
-            </Field>
-            <Field
-              name="comment"
-              label="Note"
-              help="Optional. We add this text to the Comments timeline."
-            >
-              <Input name="comment" maxLength={500} placeholder="optional" />
-            </Field>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
@@ -767,7 +776,7 @@ export function EditBillingAddressButton({
   customer: Customer;
   /** Country reference data, fetched server-side by the customer page. */
   countries: Country[];
-  /** Render as a rail text link, labelled "Edit Billing Info". */
+  /** Render as a rail text link, labelled like the dialog title. */
   rail?: boolean;
   label?: string;
 }) {
@@ -777,7 +786,7 @@ export function EditBillingAddressButton({
     <>
       {rail ? (
         <RailButton opensDialog expanded={open} onClick={() => setOpen(true)}>
-          {label ?? "Edit Billing Info"}
+          {label ?? "Edit billing address"}
         </RailButton>
       ) : (
         <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
@@ -790,7 +799,11 @@ export function EditBillingAddressButton({
         onOpenChange={setOpen}
         wide
         title="Edit billing address"
-        description={<span className="font-mono text-xs">{customer.id}</span>}
+        // The record's own title: company, then the person, then the email.
+        description={
+          customer.company?.trim() ||
+          accountHolderName(customer) || <span className="font-mono text-xs">{customer.id}</span>
+        }
       >
         <ActionForm
           action={editCustomerAction}

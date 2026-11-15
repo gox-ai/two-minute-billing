@@ -3,6 +3,7 @@
 import { apiGet, apiGetOrNull, apiWrite, type PagedList } from "@/lib/api";
 import { resetRules, type PlanCreditResets } from "@/lib/billing-rules";
 import { resolveCreditConfig, type CreditConfigInput } from "@/lib/credits";
+import type { TopupRetryStored } from "@/lib/topup-retry";
 import type {
   CreditApplicability,
   CreditCategory,
@@ -55,7 +56,15 @@ export interface CreditHold {
   id: string;
   customer: string;
   currency: string;
+  /** 0 for a hold in units. */
   amount_minor: number;
+  /** A hold in units: the credit unit's id and the credits held, as a decimal. */
+  unit?: string | null;
+  units?: string | null;
+  /** What the hold still reserves: less than `units` once a step of a lease is captured. */
+  remaining_units?: string | null;
+  /** A lease: what its captures took so far. Null for a hold in money. */
+  captured_units?: string | null;
   meter: string | null;
   scope: Record<string, string> | null;
   status: "held" | "captured" | "released" | "expired";
@@ -80,6 +89,8 @@ export interface CreditTransaction {
   cost_minor: number;
   currency: string;
   invoice: string | null;
+  /** cst_…: the usage settlement that made this draw. Absent on an older API. */
+  settlement?: string | null;
   created_at: string;
 }
 
@@ -88,7 +99,13 @@ export interface CreditBalance {
   currency: string;
   available_minor: number;
   /** Per custom unit, in the unit's smallest step. */
-  available_units: Array<{ unit: string; units: number }>;
+  available_units: Array<{
+    unit: string;
+    units: number;
+    /** A unit with no money rate: reserved by open holds, and used but not settled yet. */
+    held_units?: number;
+    unsettled_units?: number;
+  }>;
   balance: {
     grants_minor: number;
     unbilled_usage_minor: number;
@@ -126,7 +143,8 @@ export interface CreditUnitWrite {
   name?: string;
   plural_name?: string;
   currency?: string;
-  minor_per_unit?: string;
+  /** Null = a unit with no money value. */
+  minor_per_unit?: string | null;
   decimals?: number;
   expected_version?: number;
 }
@@ -209,9 +227,13 @@ export const updateCustomerCreditSettings = (
 ) => apiWrite(c(biz, cus), { credit_settings: settings }, "PATCH");
 
 /** PATCH business `credit_config` whole. */
+/** `unit_grant_limits` left out keeps the stored value; `{}` removes every limit. */
 export const updateCreditConfig = (
   biz: string,
-  config: ResolvedCreditConfig,
+  // The retry keys are sent only when they change: an omitted key keeps its stored value.
+  config: Omit<ResolvedCreditConfig, "unit_grant_limits" | keyof TopupRetryStored> &
+    Partial<Pick<ResolvedCreditConfig, "unit_grant_limits">> &
+    TopupRetryStored,
   expectedVersion?: number,
 ) =>
   apiWrite(

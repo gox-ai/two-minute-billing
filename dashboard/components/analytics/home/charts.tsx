@@ -4,7 +4,8 @@ import * as React from "react";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart } from "echarts/charts";
 import { EChart } from "@/components/charts/echart";
-import { countCompact } from "@/lib/format";
+import { countCompact, pctFromBps } from "@/lib/format";
+import { axisMinInterval, successRates } from "@/components/charts/axis";
 import { formatters, useChartTokens } from "@/components/charts/bucket-bars";
 
 export { BucketBars } from "@/components/charts/bucket-bars";
@@ -97,14 +98,15 @@ export function MovementBars({
 }
 
 /**
- * Payment attempts per bucket with the failures among them overlaid, and the success rate as
- * a line on its own 0–100% axis. A bucket with no attempts has no rate, not a zero one.
+ * Payment attempts per bucket with the failures among them overlaid, on one count axis. The
+ * success rate is the card's figure and sparkline, not a second axis here; the tooltip still
+ * gives each bucket's rate ("—" for a bucket with no attempts).
  */
 export function AttemptsChart({
   labels,
   attempts,
   failures,
-  height = 220,
+  height = 200,
 }: {
   labels: string[];
   attempts: Array<number | null>;
@@ -113,22 +115,21 @@ export function AttemptsChart({
 }) {
   const t = useChartTokens();
   const option = React.useMemo(() => {
-    const rate = attempts.map((a, i) =>
-      a != null && a > 0 ? Math.round(((a - (failures[i] ?? 0)) / a) * 1000) / 10 : null,
-    );
+    const rate = successRates(attempts, failures);
     return {
-      grid: { left: 44, right: 44, top: 12, bottom: 28 },
+      grid: { left: 44, right: 8, top: 12, bottom: 28 },
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },
         formatter: (ps: Array<{ dataIndex: number; axisValueLabel: string }>) => {
           const i = ps[0]?.dataIndex ?? 0;
           const n = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("en"));
+          const r = rate[i];
           return [
             ps[0]?.axisValueLabel ?? "",
             `Attempts: ${n(attempts[i])}`,
             `Failed: ${n(failures[i])}`,
-            `Success rate: ${rate[i] == null ? "—" : `${rate[i]}%`}`,
+            `Success rate: ${r == null ? "—" : pctFromBps(Math.round(r * 10000), 1)}`,
           ].join("<br/>");
         },
       },
@@ -139,20 +140,12 @@ export function AttemptsChart({
         axisLine: { lineStyle: { color: t.grid } },
         axisLabel: { color: t.label, fontSize: 12, hideOverlap: true },
       },
-      yAxis: [
-        {
-          type: "value",
-          splitLine: { lineStyle: { color: t.grid } },
-          axisLabel: { color: t.label, fontSize: 12, formatter: (v: number) => countCompact(v) },
-        },
-        {
-          type: "value",
-          min: 0,
-          max: 100,
-          splitLine: { show: false },
-          axisLabel: { color: t.label, fontSize: 12, formatter: (v: number) => `${v}%` },
-        },
-      ],
+      yAxis: {
+        type: "value",
+        minInterval: axisMinInterval("count"),
+        splitLine: { lineStyle: { color: t.grid } },
+        axisLabel: { color: t.label, fontSize: 12, formatter: (v: number) => countCompact(v) },
+      },
       series: [
         {
           name: "Attempts",
@@ -168,17 +161,6 @@ export function AttemptsChart({
           barMaxWidth: 18,
           barGap: "-100%",
           itemStyle: { color: t.loss, borderRadius: [3, 3, 0, 0] },
-        },
-        {
-          name: "Success rate",
-          type: "line",
-          yAxisIndex: 1,
-          data: rate,
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { color: t.ink, width: 2 },
-          itemStyle: { color: t.ink },
-          z: 4,
         },
       ],
     };

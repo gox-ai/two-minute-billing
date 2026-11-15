@@ -2,9 +2,18 @@
  * The two price resolvers (design G1b § 3.3). Each answers with the value AND the row it came
  * from, so a rated line can cite it.
  *
- * - list price: the `model_prices` row for (provider, model or alias, token type, currency)
- *   with the greatest `effective_from ≤ at`.
+ * - list price: the `model_prices` row for (provider, model or alias, kind, unit, tier,
+ *   currency) with the greatest `effective_from ≤ at`.
  * - model cost: the organization's own cost row live at `at`; else the list price.
+ *
+ * Unit: a key that names one matches only that unit; a key with none tries `token`, then
+ * `request` (the list before 0524). Tier: exact (quality, resolution); same quality with no
+ * resolution; same resolution with no quality; no tier. The first that has a row live at the
+ * instant wins.
+ *
+ * Provider: a key with none resolves when exactly one provider lists the model, or when exactly
+ * one of them has a row in a unit the key tries (any kind). Several such providers (an image
+ * price under openai and azure) is `ambiguous_provider`: the meter must name the provider.
  *
  * Rating needs many lookups inside one window and a synchronous rate resolver, so the rows are
  * loaded once into a `ModelPriceBook` and resolved in memory. `resolveListPrice` and
@@ -16,6 +25,7 @@
 import { sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { fixed12FromNumeric } from "@/platform/fixed";
+import { LEGACY_UNITS, tierOrder } from "./units";
 
 export interface ModelKey {
   /** Null or absent = the provider is not known; resolved when the model is under one only. */
@@ -24,6 +34,11 @@ export interface ModelKey {
   model: string;
   tokenType: string;
   currency: string;
+  /** Absent = `token`, else `request`. */
+  unit?: string | null;
+  /** '' or absent = no tier. */
+  quality?: string | null;
+  resolution?: string | null;
 }
 
 export interface ListPriceHit {
@@ -35,6 +50,9 @@ export interface ListPriceHit {
   /** The list's own model id (an alias resolves to it). */
   model: string;
   tokenType: string;
+  unit: string;
+  quality: string;
+  resolution: string;
   currency: string;
   /** Fixed12 minor units per `quantityDivisor` units. */
   unitAmount: bigint;
@@ -54,6 +72,9 @@ export interface CostHit {
   provider: string | null;
   model: string;
   tokenType: string;
+  unit: string;
+  quality: string;
+  resolution: string;
   currency: string;
   unitAmount: bigint;
   quantityDivisor: bigint;
@@ -76,6 +97,10 @@ export interface ListRow {
   provider: string;
   model: string;
   token_type: string;
+  /** Absent = token / no tier. */
+  unit?: string;
+  quality?: string;
+  resolution?: string;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: string;
@@ -92,6 +117,9 @@ export interface CostRow {
   provider: string | null;
   model: string;
   token_type: string;
+  unit?: string;
+  quality?: string;
+  resolution?: string;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: string;
@@ -108,6 +136,22 @@ export interface Candidate {
 const NEG_INF = Number.NEGATIVE_INFINITY;
 const POS_INF = Number.POSITIVE_INFINITY;
 
+type TieredRow = { unit?: string; quality?: string; resolution?: string };
+const tierOfRow = (r: TieredRow) => ({
+  unit: r.unit ?? "token",
+  quality: r.quality ?? "",
+  resolution: r.resolution ?? "",
+});
+
+/** (unit, quality, resolution) a key tries, in order. */
+export function lookupOrder(key: ModelKey): Array<[string, string, string]> {
+  const units = key.unit ? [key.unit] : LEGACY_UNITS;
+  const tiers = tierOrder(key.quality ?? "", key.resolution ?? "");
+  return units.flatMap((u) => tiers.map(([q, r]) => [u, q, r] as [string, string, string]));
+}
+const rowIs = (r: TieredRow, [u, q, res]: [string, string, string]) =>
+  (r.unit ?? "token") === u && (r.quality ?? "") === q && (r.resolution ?? "") === res;
+
 function toListHit(r: ListRow): ListPriceHit {
   return {
     kind: "list",
@@ -116,6 +160,7 @@ function toListHit(r: ListRow): ListPriceHit {
     provider: r.provider,
     model: r.model,
     tokenType: r.token_type,
+    ...tierOfRow(r),
     currency: r.currency,
     unitAmount: fixed12FromNumeric(r.unit_amount_decimal),
     quantityDivisor: BigInt(r.quantity_divisor),
@@ -134,6 +179,7 @@ function toCostHit(r: CostRow): CostHit {
     provider: r.provider,
     model: r.model,
     tokenType: r.token_type,
+    ...tierOfRow(r),
     currency: r.currency,
     unitAmount: fixed12FromNumeric(r.unit_amount_decimal),
     quantityDivisor: BigInt(r.quantity_divisor),
@@ -150,51 +196,86 @@ const toMs = (r: { to_ms: string | null }) => (r.to_ms == null ? POS_INF : Numbe
  * per rating window; every method is synchronous.
  */
 export class ModelPriceBook {
+  /** `provider model unit` of every loaded list row, any kind, currency or tier. */
+  private readonly priced = new Set<string>();
+
   constructor(
     /** model value → list models it names (exact id or alias). */
     private readonly candidates: Map<string, Candidate[]>,
-    /** `provider model token currency` → rows by effective_from ascending. */
+    /** `provider model kind currency` → rows (every unit and tier) by effective_from ascending. */
     private readonly listRows: Map<string, ListRow[]>,
     private readonly costRows: CostRow[],
-  ) {}
+  ) {
+    for (const rows of listRows.values())
+      for (const r of rows)
+        this.priced.add(`${r.provider}\u0000${r.model}\u0000${r.unit ?? "token"}`);
+  }
 
-  /** The list model a key names: one provider, exact id before alias. */
+  /**
+   * The list model a key names: one provider, exact id before alias. With no provider and
+   * several candidates, only providers with a row in a unit the key tries count, so a model
+   * that gains image prices under other providers still resolves its tokens. When none or
+   * several have such a row, it stays ambiguous.
+   */
   private listModel(key: ModelKey): Candidate | PriceMiss {
     let cands = this.candidates.get(key.model) ?? [];
     if (key.provider) cands = cands.filter((c) => c.provider === key.provider);
-    const providers = new Set(cands.map((c) => c.provider));
+    let providers = new Set(cands.map((c) => c.provider));
     if (providers.size === 0) return { kind: null, reason: "not_found" };
+    if (providers.size > 1) {
+      const units = new Set(lookupOrder(key).map(([u]) => u));
+      const pricing = cands.filter((c) =>
+        [...units].some((u) => this.priced.has(`${c.provider}\u0000${c.model}\u0000${u}`)),
+      );
+      const pp = new Set(pricing.map((c) => c.provider));
+      if (pp.size === 1) {
+        cands = pricing;
+        providers = pp;
+      }
+    }
     if (providers.size > 1) return { kind: null, reason: "ambiguous_provider" };
     return cands.find((c) => c.exact) ?? cands.sort((a, b) => a.model.localeCompare(b.model))[0]!;
   }
 
+  /** The key's rows in every unit and tier it tries. */
   private listRowsFor(key: ModelKey): ListRow[] | PriceMiss {
     const m = this.listModel(key);
     if ("kind" in m) return m;
+    const order = lookupOrder(key);
     return (
       this.listRows.get(
         `${m.provider}\u0000${m.model}\u0000${key.tokenType}\u0000${key.currency}`,
       ) ?? []
-    );
+    ).filter((r) => order.some((o) => rowIs(r, o)));
   }
 
-  /** The `model_prices` row in effect at `at`. */
+  /** The `model_prices` row in effect at `at`: the first unit and tier with one. */
   listPrice(key: ModelKey, at: Date): ListPriceResult {
     const rows = this.listRowsFor(key);
     if (!Array.isArray(rows)) return rows;
     const t = at.getTime();
-    let hit: ListRow | null = null;
-    for (const r of rows) if (fromMs(r) <= t) hit = r;
-    return hit ? toListHit(hit) : { kind: null, reason: "not_found" };
+    for (const o of lookupOrder(key)) {
+      let hit: ListRow | null = null;
+      for (const r of rows) if (rowIs(r, o) && fromMs(r) <= t) hit = r;
+      if (hit) return toListHit(hit);
+    }
+    return { kind: null, reason: "not_found" };
   }
 
-  /** Cost rows that can price this key: the event's model value, or the list model it names. */
-  private costRowsFor(key: ModelKey): CostRow[] | PriceMiss {
+  /**
+   * Cost rows of one unit and tier that can price this key: the event's model value, or the
+   * list model it names. An exact provider beats a provider-less row.
+   */
+  private costRowsFor(key: ModelKey, o: [string, string, string]): CostRow[] | PriceMiss {
     const m = this.listModel(key);
     const names = new Set([key.model]);
     if (!("kind" in m)) names.add(m.model);
     const rows = this.costRows.filter(
-      (r) => names.has(r.model) && r.token_type === key.tokenType && r.currency === key.currency,
+      (r) =>
+        names.has(r.model) &&
+        r.token_type === key.tokenType &&
+        r.currency === key.currency &&
+        rowIs(r, o),
     );
     if (key.provider) {
       const exact = rows.filter((r) => r.provider === key.provider);
@@ -209,20 +290,20 @@ export class ModelPriceBook {
 
   /** Your cost live at `at`; else the list price at `at`. */
   modelCost(key: ModelKey, at: Date): ModelCostResult {
-    const rows = this.costRowsFor(key);
-    if (!Array.isArray(rows)) return rows;
-    const t = at.getTime();
-    const live = rows.find((r) => fromMs(r) <= t && t < toMs(r));
-    return live ? toCostHit(live) : this.listPrice(key, at);
+    const own = this.ownCost(key, at);
+    return own.kind || own.reason === "ambiguous_provider" ? own : this.listPrice(key, at);
   }
 
   /** Your cost only (no list fallback), for a `cost` markup base and the cost columns. */
   ownCost(key: ModelKey, at: Date): CostHit | PriceMiss {
-    const rows = this.costRowsFor(key);
-    if (!Array.isArray(rows)) return rows;
     const t = at.getTime();
-    const live = rows.find((r) => fromMs(r) <= t && t < toMs(r));
-    return live ? toCostHit(live) : { kind: null, reason: "not_found" };
+    for (const o of lookupOrder(key)) {
+      const rows = this.costRowsFor(key, o);
+      if (!Array.isArray(rows)) return rows;
+      const live = rows.find((r) => fromMs(r) <= t && t < toMs(r));
+      if (live) return toCostHit(live);
+    }
+    return { kind: null, reason: "not_found" };
   }
 
   /**
@@ -238,12 +319,14 @@ export class ModelPriceBook {
     };
     const list = this.listRowsFor(key);
     if (Array.isArray(list)) for (const r of list) add(fromMs(r));
-    const cost = this.costRowsFor(key);
-    if (Array.isArray(cost))
-      for (const r of cost) {
-        add(fromMs(r));
-        add(toMs(r));
-      }
+    for (const o of lookupOrder(key)) {
+      const cost = this.costRowsFor(key, o);
+      if (Array.isArray(cost))
+        for (const r of cost) {
+          add(fromMs(r));
+          add(toMs(r));
+        }
+    }
     return [...out].sort((a, b) => a - b).map((t) => new Date(t));
   }
 }
@@ -293,7 +376,8 @@ export async function loadModelPriceBook(
     )}]::text[]`;
     // Rows that start before the window end; the in-memory pick takes the latest at an instant.
     const rows = (await tx.execute(sql`
-      select p.id, p.public_id, p.provider, p.model, p.token_type, p.currency::text as currency,
+      select p.id, p.public_id, p.provider, p.model, p.token_type, p.unit, p.quality, p.resolution,
+        p.currency::text as currency,
         p.unit_amount_decimal::text as unit_amount_decimal,
         p.quantity_divisor::text as quantity_divisor,
         case when p.effective_from = '-infinity' then null
@@ -315,7 +399,8 @@ export async function loadModelPriceBook(
   if (organizationId) {
     const names = [...new Set([...values, ...cands.map((c) => c.model)])];
     costRows = (await tx.execute(sql`
-      select id, public_id, provider, model, token_type, currency::text as currency,
+      select id, public_id, provider, model, token_type, unit, quality, resolution,
+        currency::text as currency,
         unit_amount_decimal::text as unit_amount_decimal,
         quantity_divisor::text as quantity_divisor,
         (extract(epoch from effective_from) * 1000)::bigint::text as from_ms,
@@ -332,6 +417,14 @@ export async function loadModelPriceBook(
       order by effective_from asc`)) as unknown as CostRow[];
   }
   return new ModelPriceBook(candidates, listRows, costRows);
+}
+
+/** `tokens` at a resolved price, in Fixed12 minor units, truncated. */
+export function tokensCostFixed12(
+  tokens: number,
+  price: Pick<ListPriceHit, "unitAmount" | "quantityDivisor">,
+): bigint {
+  return (BigInt(tokens) * price.unitAmount) / price.quantityDivisor;
 }
 
 const instant = (at: Date) => ({ start: at, end: new Date(at.getTime() + 1) });

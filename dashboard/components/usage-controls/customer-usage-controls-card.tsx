@@ -24,7 +24,7 @@ export async function CustomerUsageControlsCard({ biz, cus }: { biz: string; cus
       <div className="flex flex-col gap-1 text-sm tabular-nums">
         <div className="flex justify-between gap-4">
           <span className="text-muted-foreground">Credit runway</span>
-          <span>{runway ? runwayLabel(runway.runway_days) : "—"}</span>
+          <span>{runway ? runwayLabel(runway.runway_days, runway) : "—"}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-muted-foreground">Spend limits</span>

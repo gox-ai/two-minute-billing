@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { getMe } from "@/lib/api";
 import { orgTz } from "@/lib/org-tz-server";
 import { requirePermission } from "@/lib/session";
@@ -9,14 +8,16 @@ import {
   type AccountBilling,
   type PlanPrice,
 } from "@/lib/account-billing";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import { SettingsCard, SettingsPage } from "@/components/settings/settings-layout";
 import { ActionButton } from "@/components/action-button";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Chip } from "@/components/patterns/chip";
-import { ErrorState } from "@/components/states";
+import { EmptyState, ErrorState } from "@/components/states";
 import { choosePlanAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +36,24 @@ export default async function BillingPage({
 }: {
   searchParams: Promise<{ interval?: string; done?: string; portal_error?: string }>;
 }) {
-  if (!accountBillingEnabled()) notFound();
   await requirePermission("settings:manage", "admin");
+  if (!accountBillingEnabled()) {
+    return (
+      <SettingsPage title="Billing" crumbs={CRUMBS}>
+        <SettingsCard title="Plan and billing">
+          <EmptyState
+            title="This setting is not available"
+            description="This edition has no account billing, so there is no plan to manage. Return to the settings."
+            action={
+              <Button asChild size="sm" variant="outline">
+                <Link href="/settings">Go to settings</Link>
+              </Button>
+            }
+          />
+        </SettingsCard>
+      </SettingsPage>
+    );
+  }
   const { interval: wanted, done, portal_error: portalError } = await searchParams;
   // An organization screen: no single business applies, so the organization's timezone.
   const tz = await orgTz();
@@ -61,6 +78,8 @@ export default async function BillingPage({
     over && used != null
       ? shown.find((p) => p.volume_limit_minor != null && p.volume_limit_minor >= used)
       : undefined;
+  // Applied at checkout to the first paid plan; the page only says so.
+  const offer = !account.plan && !account.agreement ? (account.offer ?? null) : null;
   const overLimitRestricted =
     account.status === "restricted" && account.restricted_reason === "over_limit";
 
@@ -95,6 +114,14 @@ export default async function BillingPage({
           Test mode has every feature. Contact us to turn live mode on.
         </Alert>
       ) : null}
+      {offer ? (
+        <Alert tone="info" title={`${offer.name}: ${offer.percent_off}% off your first year`}>
+          {offerText(offer)}
+          {offer.ends_at
+            ? ` Select a plan on or before ${fmtDate(offer.ends_at, tz)} to get this offer.`
+            : null}
+        </Alert>
+      ) : null}
       {over && !overLimitRestricted ? (
         <Alert tone="warning" title="You billed more than your plan covers this month">
           Your billing carries on.{" "}
@@ -111,7 +138,9 @@ export default async function BillingPage({
           account.plan || account.restricted_reason === "unpaid" ? (
             // A plain link, not a client navigation: the portal link it opens is single-use.
             <Button asChild size="sm" variant="outline">
-              <a href="/settings/billing/portal">Invoices and payment method</a>
+              <a data-document-link href="/settings/billing/portal">
+                Invoices and payment method
+              </a>
             </Button>
           ) : undefined
         }
@@ -156,11 +185,13 @@ export default async function BillingPage({
             {band != null && used != null ? (
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
                 <div
+                  key={drawKey([used, band])}
                   className={cn(
-                    "anim-grow h-full rounded-full",
+                    BAR_GROW,
+                    "h-full rounded-full",
                     over ? "bg-warning" : "bg-primary",
                   )}
-                  style={{ width: `${Math.min(100, (used / band) * 100)}%` }}
+                  style={barStyle(Math.min(100, (used / band) * 100))}
                 />
               </div>
             ) : null}
@@ -177,7 +208,7 @@ export default async function BillingPage({
         <SettingsCard title="Plans">
           <p className="px-5 py-4 text-sm text-muted-foreground">
             Your organization is on a custom agreement, so there is no plan to select here.{" "}
-            <a href={CONTACT_URL} className="text-primary hover:underline">
+            <a data-document-link href={CONTACT_URL} className="text-primary hover:underline">
               Contact us
             </a>{" "}
             to change it.
@@ -209,13 +240,18 @@ export default async function BillingPage({
         >
           <div className="grid gap-4 p-5 md:grid-cols-3">
             {shown.map((p) => (
-              <PlanCard key={p.id} price={p} account={account} />
+              <PlanCard
+                key={p.id}
+                price={p}
+                account={account}
+                offer={offer?.intervals.includes(p.interval) ? offer.percent_off : null}
+              />
             ))}
           </div>
           <p className="px-5 pb-5 text-sm text-muted-foreground">
             Bill more than {money(shown.at(-1)?.volume_limit_minor ?? null, account.currency)} a
             month, or need a contract?{" "}
-            <a href={CONTACT_URL} className="text-primary hover:underline">
+            <a data-document-link href={CONTACT_URL} className="text-primary hover:underline">
               Contact us about Enterprise
             </a>
             .
@@ -226,6 +262,18 @@ export default async function BillingPage({
   );
 }
 
+/** Which plans the offer covers, and what the buyer pays less on. */
+function offerText(offer: NonNullable<AccountBilling["offer"]>): string {
+  const p = offer.percent_off;
+  const month = offer.intervals.includes("month");
+  const year = offer.intervals.includes("year");
+  if (month && year)
+    return `Select a paid plan to get this offer. On a monthly plan, you pay ${p}% less on your first 12 invoices. On a yearly plan, you pay ${p}% less on your first invoice.`;
+  if (year)
+    return `Select a yearly plan to get this offer. You pay ${p}% less on your first yearly invoice.`;
+  return `Select a monthly plan to get this offer. You pay ${p}% less on your first 12 invoices.`;
+}
+
 /** A price with no cents when the amount is whole ("$29", not "$29.00"). */
 function whole(minor: number, currency: string): string {
   return minor % 100 === 0
@@ -233,7 +281,16 @@ function whole(minor: number, currency: string): string {
     : money(minor, currency);
 }
 
-function PlanCard({ price, account }: { price: PlanPrice; account: AccountBilling }) {
+function PlanCard({
+  price,
+  account,
+  offer,
+}: {
+  price: PlanPrice;
+  account: AccountBilling;
+  /** The campaign's percent off this plan's first year, when it applies. */
+  offer: number | null;
+}) {
   const monthly =
     price.interval === "year"
       ? account.prices.find(
@@ -251,7 +308,11 @@ function PlanCard({ price, account }: { price: PlanPrice; account: AccountBillin
     >
       <div className="flex items-center justify-between">
         <div className="font-semibold">{price.name}</div>
-        {current ? <Chip tone="blue">Current plan</Chip> : null}
+        {current ? (
+          <Chip tone="blue">Current plan</Chip>
+        ) : offer ? (
+          <Chip tone="green">{`${offer}% off first year`}</Chip>
+        ) : null}
       </div>
       {/* Yearly reads per month — what a month costs — with the monthly price struck beside it. */}
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-2xl font-semibold tabular-nums">

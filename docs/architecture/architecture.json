@@ -1,8 +1,8 @@
 {
   "$schema": "https://tmbilling.dev/architecture.schema.json",
   "name": "tmbilling",
-  "description": "Module dependency + data-flow graph for the tmbilling billing platform. Machine-readable backbone for the flow visualization and the per-module READMEs in src/modules/<name>/README.md.",
-  "generated": "2026-07-06",
+  "description": "Module dependency + data-flow graph for the tmbilling billing platform. Machine-readable backbone for the flow visualization and the per-module READMEs in src/modules/<name>/README.md. `dependsOn` lists the runtime imports between modules (type-only imports excluded), as in the code.",
+  "generated": "2026-11-15",
   "hierarchy": [
     "Organization",
     "Business",
@@ -14,7 +14,7 @@
       "id": "kernel",
       "name": "Platform kernel",
       "color": "#64748b",
-      "note": "src/platform/* \u2014 cross-cutting; no domain logic"
+      "note": "src/platform/* — cross-cutting; no domain logic"
     },
     {
       "id": "foundation",
@@ -92,7 +92,7 @@
     {
       "id": "platform.fixed",
       "file": "src/platform/fixed.ts",
-      "role": "Fixed12 decimal arithmetic (bigint \u00d7 10^12) for meter rates and quantities"
+      "role": "Fixed12 decimal arithmetic (bigint × 10^12) for meter rates and quantities"
     },
     {
       "id": "platform.ingest-rate",
@@ -106,17 +106,26 @@
     "adapters": [
       "tmtest",
       "stripe",
-      "paypal",
       "razorpay",
-      "mock"
+      "paypal",
+      "gocardless",
+      "braintree",
+      "cashfree",
+      "adyen",
+      "checkoutcom",
+      "authorizenet",
+      "square",
+      "mollie",
+      "payu",
+      "cybersource"
     ],
-    "note": "The engine never imports an adapter directly \u2014 it resolves one from a gateway_accounts row via the registry."
+    "note": "The engine never imports an adapter directly — it resolves one from a gateway_accounts row via the registry."
   },
   "nodes": [
     {
       "id": "tenancy",
       "layer": "foundation",
-      "responsibility": "Organizations, businesses, API keys \u2014 the tenant + isolation boundary.",
+      "responsibility": "Organizations, businesses, API keys — the tenant + isolation boundary.",
       "tables": [
         "tenancy"
       ],
@@ -152,6 +161,8 @@
       ],
       "emits": [],
       "dependsOn": [
+        "audit",
+        "emails",
         "tenancy"
       ]
     },
@@ -185,7 +196,14 @@
         "buildEventData"
       ],
       "emits": [],
-      "dependsOn": []
+      "dependsOn": [
+        "credit-notes",
+        "customers",
+        "invoicing",
+        "payment-methods",
+        "subscriptions",
+        "transactions"
+      ]
     },
     {
       "id": "webhooks",
@@ -209,10 +227,18 @@
       ],
       "dependsOn": [
         "audit",
+        "checkout",
+        "credit-notes",
+        "disputes",
+        "dunning-policies",
         "events",
         "invoicing",
         "ledger",
+        "payment-intents",
+        "payment-methods",
+        "payment-requests",
         "payments",
+        "refunds",
         "subscriptions",
         "transactions"
       ]
@@ -234,15 +260,24 @@
       ],
       "emits": [],
       "dependsOn": [
-        "events",
+        "assistant",
+        "audit",
+        "checkout",
+        "credit-notes",
+        "customer-portal",
         "customers",
-        "invoicing"
+        "events",
+        "invoicing",
+        "payment-requests",
+        "receipts",
+        "subscriptions",
+        "usage-controls"
       ]
     },
     {
       "id": "hubspot",
       "layer": "foundation",
-      "responsibility": "HubSpot CRM sync \u2014 OAuth connection per business, record links, the push queue fed by the integrations sink, sync runs and their log.",
+      "responsibility": "HubSpot CRM sync — OAuth connection per business, record links, the push queue fed by the integrations sink, sync runs and their log.",
       "tables": [
         "hubspot"
       ],
@@ -255,8 +290,17 @@
       ],
       "emits": [],
       "dependsOn": [
+        "audit",
+        "catalog",
+        "coupons",
+        "custom-fields",
+        "customers",
+        "emails",
         "events",
-        "customers"
+        "integrations",
+        "invoicing",
+        "payment-methods",
+        "subscriptions"
       ]
     },
     {
@@ -276,7 +320,8 @@
       "emits": [],
       "dependsOn": [
         "events",
-        "hubspot"
+        "hubspot",
+        "invoicing"
       ]
     },
     {
@@ -293,7 +338,9 @@
         "listAuditLogs"
       ],
       "emits": [],
-      "dependsOn": []
+      "dependsOn": [
+        "events"
+      ]
     },
     {
       "id": "request-log",
@@ -316,7 +363,7 @@
     {
       "id": "ops",
       "layer": "foundation",
-      "responsibility": "Instrumentation the engine runs on \u2014 billing-clock tick records (counters, per-item errors, overrun guard), worker heartbeats, the stranded queue-lock release, the due-work index, HTTP request stats.",
+      "responsibility": "Instrumentation the engine runs on — billing-clock tick records (counters, per-item errors, overrun guard), worker heartbeats, the stranded queue-lock release, the due-work index, HTTP request stats.",
       "tables": [
         "platform(clock_ticks)",
         "platform(worker_heartbeats)"
@@ -333,9 +380,7 @@
         "recordHttpRequest"
       ],
       "emits": [],
-      "dependsOn": [
-        "subscriptions"
-      ]
+      "dependsOn": []
     },
     {
       "id": "catalog",
@@ -366,8 +411,11 @@
       ],
       "dependsOn": [
         "audit",
+        "credits",
         "events",
-        "webhooks"
+        "subscriptions",
+        "tax",
+        "tenancy"
       ]
     },
     {
@@ -394,9 +442,11 @@
         "coupon_set.created"
       ],
       "dependsOn": [
+        "audit",
         "catalog",
+        "customers",
         "events",
-        "webhooks"
+        "subscriptions"
       ]
     },
     {
@@ -440,6 +490,7 @@
         "subscription_entitlement.set"
       ],
       "dependsOn": [
+        "credits",
         "events"
       ]
     },
@@ -469,12 +520,22 @@
         "invoice.paid"
       ],
       "dependsOn": [
+        "audit",
+        "credit-notes",
+        "credits",
+        "custom-fields",
+        "dunning-policies",
         "events",
         "invoicing",
         "ledger",
+        "metadata-rules",
+        "metrics",
         "payment-methods",
-        "webhooks",
-        "metadata-rules"
+        "payments",
+        "request-log",
+        "subscriptions",
+        "tenancy",
+        "transactions"
       ]
     },
     {
@@ -494,9 +555,7 @@
         "setRulesConfig"
       ],
       "emits": [],
-      "dependsOn": [
-        "tenancy"
-      ]
+      "dependsOn": []
     },
     {
       "id": "wallet",
@@ -515,25 +574,30 @@
         "wallet.topped_up"
       ],
       "dependsOn": [
+        "credits",
         "customers",
         "events",
         "gateway",
         "invoicing",
         "ledger",
         "payments",
-        "transactions",
-        "webhooks"
+        "transactions"
       ]
     },
     {
       "id": "credits",
       "layer": "customer",
-      "responsibility": "Credit units, credit grants and holds (G3/G4a). Promotional and paid grants (paid only through an invoice), drawdown in a fixed order before and after tax, expiry into breakage, restore on invoice void, credit packs and plan credits on prices, the derived live balance, holds with capture and release, and the access check with the blocking policy ladder.",
+      "responsibility": "Credit units, credit grants and holds (G3/G4a). Promotional and paid grants (paid only through an invoice), units with or without a money rate (the second kind keeps a real-time balance row per customer and unit, and pays the usage of a meter that has a credit cost: the credits are taken at ingest and settled against the grants each hour and in the period invoice, with revenue on use), drawdown in a fixed order before and after tax, expiry into breakage, restore on invoice void, credit packs and plan credits on prices, the derived live balance, holds with capture and release (leases: partial capture, extend; in units too), money overage past the balance (a unit or meter price) and an overdraft floor by unit, plan and customer, void after settlement and the full pack refund re-draw, the credit reports (deferred revenue roll-forward, grant activity, runway in units, refused demand), and the access check with the blocking policy ladder. The engine rules are business settings in `credit_config` (policy.ts `resolveCreditEngineRules`; unset keeps the old rule): usage in a trial, customers with no subscription and their overdraft and invoice delay, restored-credit expiry, auto top-up after a hard decline, capture past a hold.",
       "tables": [
         "credit_units",
         "credit_grants",
         "credit_grant_movements",
-        "credit_holds"
+        "credit_holds",
+        "credit_unit_balances",
+        "meter_credit_costs",
+        "credit_usage_events",
+        "credit_usage_settlements",
+        "credit_grant_grace"
       ],
       "routeFile": "credits-routes.ts + credit-hold-routes.ts",
       "keyFunctions": [
@@ -546,7 +610,11 @@
         "createCreditHold",
         "captureCreditHold",
         "releaseCreditHold",
-        "checkAccess"
+        "checkAccess",
+        "putMeterCreditCost",
+        "gateCreditUsage",
+        "settleCreditUsage",
+        "resolveCreditEngineRules"
       ],
       "emits": [
         "credit_unit_created",
@@ -561,14 +629,21 @@
         "credit_hold_created",
         "credit_hold_captured",
         "credit_hold_released",
-        "credit_hold_expired"
+        "credit_hold_expired",
+        "credit_usage_refused",
+        "credit_usage_settled"
       ],
       "dependsOn": [
+        "audit",
+        "catalog",
         "customers",
         "events",
         "invoicing",
         "ledger",
         "metering",
+        "subscriptions",
+        "team-alerts",
+        "usage-controls",
         "webhooks"
       ]
     },
@@ -609,22 +684,28 @@
         "credit_auto_topup_scheduled",
         "credit_auto_topup_succeeded",
         "credit_auto_topup_failed",
+        "credit_auto_topup_retry_scheduled",
+        "credit_auto_topup_hard_declined",
+        "credit_auto_topup_retries_exhausted",
         "credit_auto_topup_skipped",
         "credit_auto_topup_threshold_low",
         "usage_threshold_reached"
       ],
       "dependsOn": [
         "catalog",
+        "credit-notes",
         "credits",
         "customers",
         "emails",
         "events",
+        "gateway",
         "invoicing",
+        "ledger",
         "metering",
         "payment-methods",
         "payments",
         "subscriptions",
-        "webhooks"
+        "transactions"
       ]
     },
     {
@@ -651,22 +732,28 @@
         "invoice.written_off"
       ],
       "dependsOn": [
+        "audit",
+        "credits",
         "customers",
         "events",
         "invoicing",
         "ledger",
         "refunds",
-        "webhooks"
+        "tax",
+        "transactions"
       ]
     },
     {
       "id": "subscriptions",
       "layer": "billing",
-      "responsibility": "The subscription engine + billing clock: create/change/cancel/pause/resume option sets, scheduled changes, dunning, estimates, ad-hoc/unbilled charges, renewals.",
+      "responsibility": "The subscription engine + billing clock: create/change/cancel/pause/resume option sets, scheduled changes, dunning, estimates, ad-hoc/unbilled charges, renewals. A declined change charge follows `billing_rules_config.failed_change_charge`: `start_dunning`, `next_renewal`, `revert` (undo the change and void its invoice in one transaction, change-revert.ts) or `apply_when_paid` (the new-business default: the change is held in subscription_pending_changes until its invoice is paid, then replayed as of the request; unpaid, it expires and the invoice is voided, pending-change.ts).",
       "tables": [
         "subscriptions",
-        "scheduled-changes",
-        "unbilled-charges"
+        "subscription_items",
+        "scheduled_changes",
+        "unbilled_charges",
+        "renewal_skips",
+        "subscription_pending_changes"
       ],
       "routeFile": "subscription-routes.ts",
       "routes": 18,
@@ -678,33 +765,49 @@
         "cancelSubscriptionWithOptions",
         "estimateChange",
         "scheduleChange",
-        "addAdHocCharge"
+        "addAdHocCharge",
+        "applyPaidPendingChange",
+        "endPendingChange",
+        "revertChange"
       ],
       "emits": [
-        "subscription.created",
-        "subscription.started",
-        "subscription.activated",
-        "subscription.changed",
-        "subscription.renewed",
-        "subscription.canceled",
-        "subscription.paused",
-        "subscription.resumed",
-        "subscription.trial_ending"
+        "subscription_created",
+        "subscription_started",
+        "subscription_activated",
+        "subscription_changed",
+        "subscription_pending_change_created",
+        "subscription_pending_change_applied",
+        "subscription_pending_change_expired",
+        "subscription_renewed",
+        "subscription_canceled",
+        "subscription_paused",
+        "subscription_resumed",
+        "subscription_trial_ending"
       ],
       "dependsOn": [
         "audit",
         "catalog",
+        "checkout",
         "coupons",
         "credit-notes",
+        "credits",
+        "custom-fields",
         "customers",
+        "dunning-policies",
         "events",
         "invoicing",
         "ledger",
+        "metadata-rules",
         "metering",
         "metrics",
+        "payment-intents",
+        "payment-methods",
+        "payment-requests",
+        "payments",
+        "receipts",
         "tax",
-        "webhooks",
-        "metadata-rules"
+        "tenancy",
+        "usage-controls"
       ]
     },
     {
@@ -743,22 +846,28 @@
         "catalog",
         "coupons",
         "credit-notes",
+        "credits",
         "customers",
+        "dunning-policies",
+        "emails",
         "events",
         "gateway",
         "ledger",
         "metering",
+        "payment-intents",
         "payment-methods",
+        "payments",
         "subscriptions",
         "tax",
         "transactions",
+        "usage-controls",
         "webhooks"
       ]
     },
     {
       "id": "metering",
       "layer": "billing",
-      "responsibility": "Usage ingestion and rating. Usage records per subscription item (idempotent, add/remove), and usage events (G1a): meters, per-event-key dedup, per-org ingest limit, monthly partitions, 15-minute rollups with an exact-edge live read, late usage, customer usage keys, partition archive. Measurement (sum/max/last/count/min/avg/unique/weighted_sum, recurring levels) and rating (rateMeteredItem; rateMeterItem per group combination from a rate card). Usage by day in the business time zone, and model_price_list rating per price segment (G1b).",
+      "responsibility": "Usage ingestion and rating. Usage records per subscription item (idempotent, add/remove), and usage events (G1a): meters, per-event-key dedup, per-org ingest limit, monthly partitions, 15-minute rollups with an exact-edge live read, late usage, customer usage keys, partition archive. Measurement (sum/max/last/count/min/avg/unique/weighted_sum, recurring levels) and rating (rateMeteredItem; rateMeterItem per group combination from a rate card). Usage by day in the business time zone, and model_price_list rating per price segment (G1b). The daily cost fold (usage_cost_daily): the cost of all usage per day, customer, meter and group values, by the usage line's cost rule.",
       "tables": [
         "usage",
         "meters",
@@ -769,7 +878,8 @@
         "usage_rollup_state",
         "usage_meter_levels",
         "usage_archives",
-        "ingest_rate_counters"
+        "ingest_rate_counters",
+        "usage_cost_daily"
       ],
       "routeFile": "usage-routes.ts (+ subscription usage)",
       "keyFunctions": [
@@ -784,7 +894,8 @@
         "rateMeterItem",
         "addUsageKey",
         "customerUsageHistory",
-        "loadModelPriceBook"
+        "loadModelPriceBook",
+        "foldUsageCostDays"
       ],
       "emits": [
         "usage.recorded",
@@ -795,7 +906,11 @@
       ],
       "dependsOn": [
         "catalog",
-        "subscriptions"
+        "credits",
+        "events",
+        "model-prices",
+        "subscriptions",
+        "usage-controls"
       ]
     },
     {
@@ -821,28 +936,37 @@
         "model_prices_changed"
       ],
       "dependsOn": [
-        "metering",
-        "catalog",
-        "emails"
+        "audit",
+        "auth",
+        "emails",
+        "events",
+        "metering"
       ]
     },
     {
       "id": "metrics",
       "layer": "billing",
-      "responsibility": "MRR/ARR/ARPU/churn per currency + converted-to-base FX roll-up. Usage margin (G1b): revenue after discounts and line credit notes, before tax, minus line cost, per customer, model or meter.",
+      "responsibility": "MRR/ARR/ARPU/churn per currency + converted-to-base FX roll-up. Usage margin (G1b): revenue after discounts and line credit notes, before tax, minus line cost, per customer, model, meter or plan; scope=all adds cost-only usage (the daily cost fold, less what invoice lines cover) and every revenue line by customer and plan. Reports read metric_daily (business-local days). An organization answer reads each business at its own local today and sums them (public-query.ts `dayGroups`), so it equals the sum of the business answers; periods are labelled on the earliest of those days.",
       "tables": [
+        "metric_daily",
         "(derived)"
       ],
       "routeFile": "metrics-routes.ts",
       "routes": 2,
       "keyFunctions": [
         "computeBusinessMetrics",
-        "usageMargin"
+        "usageMargin",
+        "resolveAnalytics"
       ],
       "emits": [],
       "dependsOn": [
         "catalog",
-        "metering"
+        "customers",
+        "invoicing",
+        "metering",
+        "payments",
+        "segments",
+        "subscriptions"
       ]
     },
     {
@@ -858,16 +982,15 @@
       ],
       "emits": [],
       "dependsOn": [
-        "tenancy",
+        "emails",
         "invoicing",
-        "webhooks",
-        "emails"
+        "metering"
       ]
     },
     {
       "id": "gateway",
       "layer": "payments",
-      "responsibility": "Gateway accounts (encrypted creds), currency\u00d7method router, inbound webhook ingestion + reconciliation.",
+      "responsibility": "Gateway accounts (encrypted creds), currency×method router, inbound webhook ingestion + reconciliation.",
       "tables": [
         "gateway"
       ],
@@ -910,14 +1033,20 @@
         "payment_source.role_changed"
       ],
       "dependsOn": [
+        "audit",
+        "customers",
         "events",
+        "gateway",
+        "invoicing",
+        "payment-intents",
+        "subscriptions",
         "webhooks"
       ]
     },
     {
       "id": "customer-portal",
       "layer": "customer",
-      "responsibility": "Buyer self-serve portal: customer-scoped pstk_ entry tokens exchanged for psst_ sessions; /portal/v1/* payment-method + invoices + subscriptions surface, and an operator revoke that kills both credentials (org key never reaches the buyer). There is no self-serve way in \u2014 an operator or integration mints every link. Usage so far, projected bill and usage by day, each behind its business setting.",
+      "responsibility": "Buyer self-serve portal: customer-scoped pstk_ entry tokens exchanged for psst_ sessions; /portal/v1/* payment-method + invoices + subscriptions surface, and an operator revoke that kills both credentials (org key never reaches the buyer). There is no self-serve way in — an operator or integration mints every link. Usage so far, projected bill and usage by day, each behind its business setting.",
       "tables": [
         "portal-sessions"
       ],
@@ -930,16 +1059,21 @@
       ],
       "emits": [],
       "dependsOn": [
-        "payment-methods",
+        "catalog",
+        "checkout",
+        "coupons",
         "customers",
+        "emails",
         "invoicing",
-        "checkout"
+        "reason-codes",
+        "subscriptions",
+        "tenancy"
       ]
     },
     {
       "id": "checkout",
       "layer": "customer",
-      "responsibility": "Hosted checkout: operator mints a price-scoped cstk_ token; buyer subscribes at /checkout/<token> via /checkout/v1/* (enter details, vault card, create subscription) \u2014 org key never reaches the buyer. mode='change' instead changes an EXISTING subscription's plan (upgrade/downgrade, proration preview, customer pinned at mint).",
+      "responsibility": "Hosted checkout: operator mints a price-scoped cstk_ token; buyer subscribes at /checkout/<token> via /checkout/v1/* (enter details, vault card, create subscription) — org key never reaches the buyer. mode='change' instead changes an EXISTING subscription's plan (upgrade/downgrade, proration preview, customer pinned at mint).",
       "tables": [
         "checkout-sessions"
       ],
@@ -952,18 +1086,27 @@
       ],
       "emits": [],
       "dependsOn": [
+        "assistant",
         "catalog",
+        "coupons",
+        "credits",
+        "customer-portal",
         "customers",
+        "emails",
+        "events",
+        "invoicing",
+        "metadata-rules",
+        "payment-intents",
         "payment-methods",
         "subscriptions",
-        "emails",
-        "metadata-rules"
+        "tax",
+        "tenancy"
       ]
     },
     {
       "id": "payment-intents",
       "layer": "payments",
-      "responsibility": "On-session 3DS/SCA intents: create \u2192 authorize \u2192 consume; expiry sweep.",
+      "responsibility": "On-session 3DS/SCA intents: create → authorize → consume; expiry sweep.",
       "tables": [
         "payment-intents"
       ],
@@ -983,12 +1126,16 @@
         "invoice.paid"
       ],
       "dependsOn": [
+        "credits",
+        "customers",
         "events",
         "gateway",
         "invoicing",
         "ledger",
-        "transactions",
-        "webhooks"
+        "payment-methods",
+        "payments",
+        "refunds",
+        "transactions"
       ]
     },
     {
@@ -1012,9 +1159,12 @@
         "transaction.reconciled"
       ],
       "dependsOn": [
+        "customers",
+        "disputes",
         "events",
+        "payment-methods",
         "payments",
-        "webhooks"
+        "refunds"
       ]
     },
     {
@@ -1037,10 +1187,21 @@
         "invoice.payment_due"
       ],
       "dependsOn": [
+        "audit",
+        "credits",
+        "customers",
+        "disputes",
+        "dunning-policies",
         "events",
         "invoicing",
         "ledger",
+        "metrics",
+        "payment-intents",
+        "payment-methods",
+        "payment-requests",
+        "refunds",
         "subscriptions",
+        "transactions",
         "wallet",
         "webhooks"
       ]
@@ -1063,16 +1224,21 @@
         "refund.failed"
       ],
       "dependsOn": [
+        "credit-notes",
+        "credits",
+        "customers",
         "events",
         "ledger",
-        "transactions",
-        "webhooks"
+        "payment-requests",
+        "payments",
+        "subscriptions",
+        "transactions"
       ]
     },
     {
       "id": "migration",
       "layer": "tooling",
-      "responsibility": "Import from another billing system or generic JSON (idempotent, no double-charge) + reconcile \u2014 CLI only.",
+      "responsibility": "Import from another billing system or generic JSON (idempotent, no double-charge) + reconcile — CLI only.",
       "tables": [
         "migration"
       ],
@@ -1084,11 +1250,16 @@
       "dependsOn": [
         "catalog",
         "coupons",
+        "custom-fields",
         "customers",
+        "gateway",
         "invoicing",
         "ledger",
         "metrics",
         "subscriptions",
+        "tax",
+        "tenancy",
+        "transactions",
         "wallet"
       ]
     },
@@ -1116,8 +1287,7 @@
         "coupons",
         "customers",
         "emails",
-        "invoicing",
-        "tax"
+        "invoicing"
       ]
     },
     {
@@ -1136,7 +1306,10 @@
         "timeTravelledBusinessIds"
       ],
       "emits": [],
-      "dependsOn": []
+      "dependsOn": [
+        "credits",
+        "usage-controls"
+      ]
     },
     {
       "id": "comments",
@@ -1173,7 +1346,15 @@
       "emits": [],
       "dependsOn": [
         "audit",
-        "custom-fields"
+        "credit-notes",
+        "custom-fields",
+        "customers",
+        "emails",
+        "events",
+        "gateway",
+        "invoicing",
+        "subscriptions",
+        "transactions"
       ]
     },
     {
@@ -1228,8 +1409,8 @@
       ],
       "emits": [],
       "dependsOn": [
-        "customers",
         "custom-fields",
+        "customers",
         "metrics",
         "subscriptions"
       ]
@@ -1278,13 +1459,17 @@
       ],
       "dependsOn": [
         "customers",
+        "emails",
         "events",
         "gateway",
         "invoicing",
         "ledger",
+        "payment-intents",
         "payments",
         "receipts",
-        "transactions"
+        "refunds",
+        "transactions",
+        "webhooks"
       ]
     },
     {
@@ -1334,8 +1519,92 @@
       ],
       "dependsOn": [
         "audit",
+        "credit-notes",
+        "customers",
         "events",
-        "ledger"
+        "ledger",
+        "payment-requests",
+        "subscriptions"
+      ]
+    },
+    {
+      "id": "assistant-tools",
+      "layer": "tooling",
+      "responsibility": "Read-only tool catalogue for AI assistants; served over MCP at /mcp. Calls /v1 routes in-process with the caller's key.",
+      "tables": [],
+      "routeFile": "mcp-routes.ts",
+      "keyFunctions": [
+        "TOOLS",
+        "callRoute",
+        "capResult"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "assistant-docs"
+      ]
+    },
+    {
+      "id": "oauth",
+      "layer": "tooling",
+      "responsibility": "OAuth 2.1 authorization server for the MCP server: discovery, DCR + client metadata documents, PKCE codes, rotating refresh tokens, member consent. Grants are backed by read-only API keys.",
+      "tables": [
+        "oauth"
+      ],
+      "routeFile": "oauth-routes.ts",
+      "keyFunctions": [
+        "approveRequest",
+        "exchangeCode",
+        "refreshTokens",
+        "authenticateOAuthAccess"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "auth",
+        "tenancy"
+      ]
+    },
+    {
+      "id": "assistant-docs",
+      "layer": "tooling",
+      "responsibility": "The assistant's docs index: help pages, API reference pages and module READMEs in Postgres full-text search; exact API operations from the OpenAPI document.",
+      "tables": [
+        "assistant-docs"
+      ],
+      "routeFile": "(none)",
+      "keyFunctions": [
+        "ensureDocsIndex",
+        "searchDocs",
+        "apiOperation"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "model-prices"
+      ]
+    },
+    {
+      "id": "assistant",
+      "layer": "tooling",
+      "responsibility": "Billy, the in-app assistant: model per organization (own key, else platform, else off); turns that call the tool catalogue with the member's session; the figure check; follow-ups and questions with options; screenshots; feedback; changes the member confirms (allowlist in three tiers, owner switches, 'via assistant' audit source); conversations, usage and the monthly allowance.",
+      "tables": [
+        "assistant",
+        "assistant_actions",
+        "assistant_attachments"
+      ],
+      "routeFile": "assistant-routes.ts",
+      "keyFunctions": [
+        "runTurn",
+        "checkFigures",
+        "resolveLlm",
+        "monthUsage",
+        "proposeAction",
+        "confirmAction"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "assistant-docs",
+        "assistant-tools",
+        "emails",
+        "model-prices"
       ]
     }
   ],

@@ -21,6 +21,7 @@ import {
   mfaResetCookieOptions,
   sessionCookieOptions,
 } from "@/lib/auth-cookies";
+import { THEME_COOKIE } from "@/lib/theme-cookie";
 import {
   clearMfaChallenge,
   isMfaChallenge,
@@ -30,6 +31,7 @@ import {
   storeTrustedBrowser,
   trustedBrowserHeader,
 } from "@/lib/mfa-challenge";
+import { signInUrl } from "@/lib/sign-in-url";
 
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
@@ -76,6 +78,8 @@ async function authPost(
  */
 async function storeToken(token: string) {
   (await cookies()).set(SESSION_COOKIE, token, sessionCookieOptions());
+  // A new session paints the account's saved theme, not the last person's (lib/theme-cookie.ts).
+  (await cookies()).set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
 }
 
 /**
@@ -187,8 +191,11 @@ export async function loginAction(
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
+  // A failed attempt sends the email back, so the reset form keeps it (`KeptInput`). Never
+  // the password.
+  const values = { email: String(formData.get("email") ?? "") };
   const parsed = parseForm(loginSchema, formData);
-  if (parsed.error) return parsed.error;
+  if (parsed.error) return { ...parsed.error, values };
 
   // The API answers one of three ways: a session (done), a CHALLENGE (the password was right
   // and a second factor is outstanding), or a refusal.
@@ -216,9 +223,9 @@ export async function loginAction(
     redirect(mfaStepUrl(safeRedirectTo(String(formData.get(REDIRECT_PARAM) ?? ""))));
   }
 
-  if (!res.ok) return actionError(json.error?.message ?? "Sign-in failed.");
+  if (!res.ok) return actionError(json.error?.message ?? "Sign-in failed.", { values });
   const token = tokenFromSetCookie(res.headers.get("set-cookie"));
-  if (!token) return actionError("Sign-in failed.");
+  if (!token) return actionError("Sign-in failed.", { values });
   await storeToken(token);
   redirect(safeRedirectTo(String(formData.get(REDIRECT_PARAM) ?? "")) ?? LANDING_PATH);
 }
@@ -288,7 +295,7 @@ export async function inviteAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const parsed = parseForm(inviteSchema, formData);
   if (parsed.error) return parsed.error;
 
@@ -324,7 +331,7 @@ export async function changePasswordAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const parsed = parseForm(changePasswordSchema, formData);
   if (parsed.error) return parsed.error;
 
@@ -366,7 +373,7 @@ export async function changePasswordAction(
  */
 export async function switchOrganizationAction(formData: FormData) {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}/auth/switch_organization`, {
     method: "POST",
     headers: {
@@ -388,7 +395,7 @@ export async function switchOrganizationAction(formData: FormData) {
 /** Accept or decline a pending invite (0498). The API checks it belongs to this session's user. */
 async function answerInvite(verb: "accept" | "decline", organization: string): Promise<boolean> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}/auth/invitations/${encodeURIComponent(organization)}/${verb}`, {
     method: "POST",
     headers: {
@@ -595,7 +602,7 @@ async function mfaFetch(
   body?: unknown,
 ): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; error?: string }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {
@@ -787,7 +794,7 @@ async function memberWrite(
   init: { method: "PATCH" | "DELETE" | "POST"; body?: unknown },
 ): Promise<{ ok: boolean; error?: string }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   /**
    * A BODILESS WRITE STILL SENDS `{}` — the same thing `apiWrite`/`apiDelete` in lib/api.ts
    * have always done, and it is not a style choice. Declaring

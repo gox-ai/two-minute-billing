@@ -6,7 +6,7 @@ import { resolveGrantScopes } from "./scope";
 import { isExactWindowGrant } from "./reset-windows";
 import { sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
-import { MONEY_RATE, stepsForMinor } from "./units";
+import { hasRate, MONEY_RATE, stepsForMinor } from "./units";
 import { planGrantApplication, type PlannerGrant, type PlannerLine } from "./planner";
 import type {
   BusinessCreditConfig,
@@ -23,6 +23,7 @@ export interface BalanceGrant {
   publicId: string;
   unitId: string | null;
   unitKey: string | null;
+  /** Null = money. Rate 0 = a unit with no rate (`hasRate`). */
   unit: { minorPerUnitE12: bigint; decimals: number } | null;
   category: "paid" | "promotional";
   priority: number;
@@ -72,6 +73,7 @@ export async function loadBalanceSnapshot(
       select coalesce(sum(amount_minor), 0)::text as held, count(*)::int as n
       from credit_holds
       where customer_id = ${input.customerId} and status = 'held' and currency = ${cur}
+        and unit_id is null
         and expires_at > ${input.now.toISOString()}::timestamptz
     )
     select 'h' as kind, null as id, null as public_id, null as unit_id, null as unit_key,
@@ -100,9 +102,9 @@ export async function loadBalanceSnapshot(
       unitId: (r.unit_id as string | null) ?? null,
       unitKey: (r.unit_key as string | null) ?? null,
       unit:
-        r.minor_per_unit_e12 != null
+        r.unit_id != null
           ? {
-              minorPerUnitE12: BigInt(r.minor_per_unit_e12 as string),
+              minorPerUnitE12: BigInt((r.minor_per_unit_e12 as string | null) ?? 0),
               decimals: Number(r.decimals),
             }
           : null,
@@ -172,6 +174,7 @@ export function simulateDrawdown(
   lines: Array<Pick<UnbilledUsageLine, "pricePublicId" | "window" | "amountMinor" | "slices">>,
   postTaxRateBps = 0,
 ): Map<string, bigint> {
+  // A grant with no face (a unit with no rate) pays no money line.
   const planned = grants.filter((g) => g.faceLeft > 0n).map(toPlanner);
   const usage: PlannerLine[] = lines.map((l, i) => ({
     key: String(i),
@@ -208,10 +211,25 @@ export interface LiveBalance {
   overdraftLimitMinor: bigint;
   /** balance − uncovered usage + overdraft limit: what a blocking check may still spend. */
   availableMinor: bigint;
-  availableUnits: Array<{ unit: string; units: bigint }>;
+  /** `heldUnits` / `unsettledUnits`: only for a unit with no rate. */
+  availableUnits: Array<{
+    unit: string;
+    units: bigint;
+    heldUnits?: bigint;
+    unsettledUnits?: bigint;
+  }>;
   grants: BalanceGrant[];
   usage: UnbilledUsageLine[];
 }
+
+/** One `available_units` entry as the API shows it. */
+export const serializeAvailableUnits = (u: LiveBalance["availableUnits"][number]) => ({
+  unit: u.unit,
+  units: Number(u.units),
+  ...(u.heldUnits !== undefined
+    ? { held_units: Number(u.heldUnits), unsettled_units: Number(u.unsettledUnits ?? 0n) }
+    : {}),
+});
 
 /** Overdraft limit for a currency: the customer's, else the business's, else 0 (C2). */
 export function overdraftLimit(
@@ -224,6 +242,24 @@ export function overdraftLimit(
   const b = biz?.overdraft_limit_minor?.[currency];
   return b != null ? BigInt(b) : 0n;
 }
+
+/**
+ * Units left on a grant after a simulated draw of `drawnMinor` of money. A unit with no rate
+ * is never drawn by money usage: all its units are left.
+ */
+export function unitsLeftAfterDraw(
+  g: Pick<BalanceGrant, "unit" | "unitsLeft" | "faceLeft">,
+  drawnMinor: bigint,
+): bigint {
+  const rate = g.unit ?? MONEY_RATE;
+  if (!hasRate(rate)) return g.unitsLeft;
+  const drawn = drawnMinor >= g.faceLeft ? g.unitsLeft : stepsForMinor(drawnMinor, rate);
+  return g.unitsLeft - (drawn > g.unitsLeft ? g.unitsLeft : drawn);
+}
+
+/** Grants that can pay a money line: money, and units with a rate. */
+export const ratedOnly = (grants: BalanceGrant[]) =>
+  grants.filter((g) => hasRate(g.unit ?? MONEY_RATE));
 
 /** When a plan grant renews (its window end); null for other grants and rolled-over credit. */
 export function grantRenewsAt(g: Pick<BalanceGrant, "source" | "sourceRef" | "expiresAt">) {
@@ -274,7 +310,12 @@ export async function liveBalance(
         })
       : []);
   // Split at reset-window grant edges, as the invoice does (G3b §3.4).
-  const usage = await sliceUsageLines(tx, input.customerId, rated, snap.grants.map(toPlanner));
+  const usage = await sliceUsageLines(
+    tx,
+    input.customerId,
+    rated,
+    ratedOnly(snap.grants).map(toPlanner),
+  );
   const drawn = simulateDrawdown(snap.grants, usage);
   let grantsMinor = 0n;
   let covered = 0n;
@@ -285,9 +326,28 @@ export async function liveBalance(
     const d = drawn.get(g.id) ?? 0n;
     covered += d;
     const key = g.unitKey ?? currency;
-    const unitsDrawn = d >= g.faceLeft ? g.unitsLeft : stepsForMinor(d, g.unit ?? MONEY_RATE);
-    const unitsLeft = g.unitsLeft - (unitsDrawn > g.unitsLeft ? g.unitsLeft : unitsDrawn);
-    perUnit.set(key, (perUnit.get(key) ?? 0n) + unitsLeft);
+    perUnit.set(key, (perUnit.get(key) ?? 0n) + unitsLeftAfterDraw(g, d));
+  }
+  // A unit with no rate: the figure the gate offers at this instant (grants in their window,
+  // less what usage took and no settlement drew yet).
+  const unrated = new Map<string, string>();
+  for (const g of snap.grants)
+    if (g.unit && !hasRate(g.unit) && g.unitId && g.unitKey) unrated.set(g.unitKey, g.unitId);
+  const parts = new Map<string, { heldUnits: bigint; unsettledUnits: bigint }>();
+  if (unrated.size) {
+    const { unitBalanceView } = await import("./usage-settlement");
+    for (const [key, unitId] of unrated) {
+      const view = await unitBalanceView(tx, {
+        customerId: input.customerId,
+        unitId,
+        now: input.now,
+      });
+      // A term plan grant that waits for its renewal pays though its window ended.
+      if (perUnit.has(key) || view.offered > 0n || view.held > 0n) {
+        perUnit.set(key, view.offered);
+        parts.set(key, { heldUnits: view.held, unsettledUnits: view.unsettled });
+      }
+    }
   }
   const balanceMinor = grantsMinor - covered - snap.openHoldsMinor;
   const od = overdraftLimit(input.businessConfig, input.customerSettings, currency);
@@ -304,7 +364,11 @@ export async function liveBalance(
     uncoveredUsageMinor: uncovered,
     overdraftLimitMinor: od,
     availableMinor: balanceMinor - uncovered + od,
-    availableUnits: [...perUnit.entries()].map(([unit, units]) => ({ unit, units })),
+    availableUnits: [...perUnit.entries()].map(([unit, units]) => ({
+      unit,
+      units,
+      ...parts.get(unit),
+    })),
     grants: snap.grants,
     usage,
   };

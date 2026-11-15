@@ -1503,6 +1503,7 @@ export async function settlePaymentFailed(
           dunningAppliesTo(dunningCfg, {
             hasSubscription: inv.subscriptionId != null,
             subscriptionStatus: sub?.status ?? null,
+            purpose: inv.purpose,
           }),
         periodEndsAt: dunningPeriodEndsAt(dunningCfg, dunningAnchor(inv)),
         dueDate: dunningAnchor(inv),

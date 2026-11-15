@@ -358,11 +358,14 @@ export async function listTransactions(
 export interface TransactionDetailed {
   txn: Transaction;
   invoicePublicId: string | null;
+  /** The invoice's display number (INV-229), so a screen names it instead of the id. */
+  invoiceNumber: string | null;
   customerPublicId: string | null;
   customerEmail: string | null;
   /** RESOLVED account-holder name (`customers/names.ts`), not a single column. */
   customerName: string | null;
   creditNotePublicId: string | null;
+  creditNoteNumber: string | null;
   subscriptionPublicId: string | null;
   pmBrand: string | null;
   pmLast4: string | null;
@@ -416,6 +419,7 @@ export interface TransactionDetailed {
 const detailedSelect = {
   txn: transactions,
   invoicePublicId: invoices.publicId,
+  invoiceNumber: invoices.number,
   customerPublicId: customers.publicId,
   customerEmail: customers.email,
   // Four columns for one name, resolved by `toDetailed` — the money log named the
@@ -425,6 +429,7 @@ const detailedSelect = {
   cusLastName: customers.lastName,
   cusCompany: customers.company,
   creditNotePublicId: creditNotes.publicId,
+  creditNoteNumber: creditNotes.number,
   subscriptionPublicId: subscriptions.publicId,
   // The gateway ACCOUNT, and the payment this transaction reverses — both already
   // stored on every refund (1,663 and 1,666 of 1,780 rows), both invisible until now.
@@ -462,6 +467,7 @@ type DetailedRow = {
 const toDetailed = (r: DetailedRow): TransactionDetailed => ({
   txn: r.txn,
   invoicePublicId: r.invoicePublicId,
+  invoiceNumber: r.invoiceNumber,
   customerPublicId: r.customerPublicId,
   customerEmail: r.customerEmail,
   customerName: accountHolderName({
@@ -471,6 +477,7 @@ const toDetailed = (r: DetailedRow): TransactionDetailed => ({
     email: r.customerEmail,
   }),
   creditNotePublicId: r.creditNotePublicId,
+  creditNoteNumber: r.creditNoteNumber,
   subscriptionPublicId: r.subscriptionPublicId,
   pmBrand: r.pmBrand,
   pmLast4: r.pmLast4,

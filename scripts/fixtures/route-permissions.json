@@ -12,6 +12,9 @@
     "DELETE /v1/businesses/:biz/customer_segments/:seg": "any",
     "DELETE /v1/businesses/:biz/customers/:cus": "ops",
     "DELETE /v1/businesses/:biz/customers/:cus/contacts/:con": "ops",
+    "DELETE /v1/businesses/:biz/customers/:cus/discounts/:id": {
+      "key": "customers:manage"
+    },
     "DELETE /v1/businesses/:biz/customers/:cus/payment_methods/:pm": "ops",
     "DELETE /v1/businesses/:biz/customers/:cus/spend_limits/:limit": {
       "key": "usage_controls:manage"
@@ -44,6 +47,9 @@
     "DELETE /v1/businesses/:biz/subscriptions/:sub": "ops",
     "DELETE /v1/businesses/:biz/subscriptions/:sub/discount": "ops",
     "DELETE /v1/businesses/:biz/subscriptions/:sub/items/:item": "ops",
+    "DELETE /v1/businesses/:biz/subscriptions/:sub/pending_change": {
+      "key": "subscriptions:manage"
+    },
     "DELETE /v1/businesses/:biz/subscriptions/:sub/usage_invoice_threshold": {
       "key": "usage_controls:manage"
     },
@@ -174,6 +180,7 @@
     "GET /v1/businesses/:biz/emails": "any",
     "GET /v1/businesses/:biz/emails/:id": "any",
     "GET /v1/businesses/:biz/emails/activity": "any",
+    "GET /v1/businesses/:biz/emails/report": "any",
     "GET /v1/businesses/:biz/emails/reminders": "any",
     "GET /v1/businesses/:biz/emails/ses": "any",
     "GET /v1/businesses/:biz/emails/smtp": "any",
@@ -185,6 +192,9 @@
     "GET /v1/businesses/:biz/features/:feature": "any",
     "GET /v1/businesses/:biz/gateway_accounts": "any",
     "GET /v1/businesses/:biz/gateway_accounts/:gwa": "any",
+    "GET /v1/businesses/:biz/gateway_accounts/:gwa/balance": {
+      "key": "gateways:view"
+    },
     "GET /v1/businesses/:biz/gateway_accounts/:gwa/webhook_endpoint": "any",
     "GET /v1/businesses/:biz/gateway_requests": "any",
     "GET /v1/businesses/:biz/gateway_requests/:id": "any",
@@ -206,6 +216,9 @@
     "GET /v1/businesses/:biz/invoices/:inv/dunning_journey": "any",
     "GET /v1/businesses/:biz/invoices/:inv/html": "any",
     "GET /v1/businesses/:biz/invoices/:inv/pdf": "any",
+    "GET /v1/businesses/:biz/invoices/:inv/refund_gateway_account": {
+      "key": "invoices:view"
+    },
     "GET /v1/businesses/:biz/metadata_key_rules": "any",
     "GET /v1/businesses/:biz/metadata_key_rules/:id": "any",
     "GET /v1/businesses/:biz/metadata_observed_keys": "any",
@@ -286,6 +299,7 @@
     "GET /v1/businesses/:biz/transactions/:txn": "any",
     "GET /v1/businesses/:biz/transfer_configurations": "admin",
     "GET /v1/businesses/:biz/transfer_configurations/:job": "any",
+    "GET /v1/businesses/:biz/transfer_configurations/:job/items": "any",
     "GET /v1/businesses/:biz/unbilled_charges": "any",
     "GET /v1/businesses/:biz/usage_alerts": {
       "key": "usage_controls:view"
@@ -429,6 +443,9 @@
     "POST /v1/businesses/:biz/credit_holds/:hold/capture": {
       "key": "credit_holds:manage"
     },
+    "POST /v1/businesses/:biz/credit_holds/:hold/extend": {
+      "key": "credit_holds:manage"
+    },
     "POST /v1/businesses/:biz/credit_holds/:hold/release": {
       "key": "credit_holds:manage"
     },
@@ -457,6 +474,9 @@
     "POST /v1/businesses/:biz/customers/:cus/change_billing_date": "ops",
     "POST /v1/businesses/:biz/customers/:cus/clear_personal_data": "ops",
     "POST /v1/businesses/:biz/customers/:cus/collect_payment": "ops",
+    "POST /v1/businesses/:biz/customers/:cus/discounts": {
+      "key": "customers:manage"
+    },
     "POST /v1/businesses/:biz/customers/:cus/contacts": "ops",
     "POST /v1/businesses/:biz/customers/:cus/credit_grants": {
       "key": "credits:manage"
@@ -602,6 +622,7 @@
     "POST /v1/businesses/:biz/team_alert_recipients/resend": {
       "key": "settings:manage"
     },
+    "POST /v1/businesses/:biz/test_data/reset": "admin",
     "POST /v1/businesses/:biz/test_mode": "manager",
     "POST /v1/businesses/:biz/time_travel/advance": "admin",
     "POST /v1/businesses/:biz/time_travel/start": "admin",
@@ -609,6 +630,21 @@
     "POST /v1/businesses/:biz/transactions/:txn/sync": "ops",
     "POST /v1/businesses/:biz/transfer_configurations": "admin",
     "POST /v1/businesses/:biz/transfer_configurations/preview": "admin",
+    "POST /v1/businesses/:biz/transfer_configurations/:job/apply": {
+      "key": "transfers:manage"
+    },
+    "POST /v1/businesses/:biz/transfer_configurations/:job/cancel": {
+      "key": "transfers:manage"
+    },
+    "POST /v1/businesses/:biz/transfer_configurations/:job/items": {
+      "key": "transfers:manage"
+    },
+    "POST /v1/businesses/:biz/transfer_configurations/:job/retry": {
+      "key": "transfers:manage"
+    },
+    "POST /v1/businesses/:biz/transfer_configurations/plans": {
+      "key": "transfers:manage"
+    },
     "POST /v1/businesses/:biz/unbilled_charges/invoice_now": "ops",
     "POST /v1/businesses/:biz/unbilled_charges/invoice_now_estimate": "any",
     "POST /v1/businesses/:biz/usage_alerts": {
@@ -663,6 +699,135 @@
       "key": "usage_controls:manage"
     },
     "PUT /v1/businesses/:biz/tax_regions/:txg/components": "manager",
-    "PUT /v1/businesses/:biz/tax_regions/:txg/state_registrations": "manager"
+    "PUT /v1/businesses/:biz/tax_regions/:txg/state_registrations": "manager",
+    "POST /mcp": {
+      "key": "mcp:use"
+    },
+    "POST /mcp/:biz": {
+      "key": "mcp:use"
+    },
+    "GET /v1/businesses/:biz/invoices/:inv/explanation": {
+      "key": "invoices:view"
+    },
+    "GET /v1/businesses/:biz/mrr_bridge": {
+      "key": "reports:view"
+    },
+    "GET /auth/oauth/requests/:id": {
+      "key": "mcp:use"
+    },
+    "POST /auth/oauth/requests/:id/approve": {
+      "key": "mcp:connect"
+    },
+    "POST /auth/oauth/requests/:id/deny": {
+      "key": "mcp:connect"
+    },
+    "GET /auth/oauth/grants": {
+      "key": "api_keys:view"
+    },
+    "DELETE /auth/oauth/grants/:id": {
+      "key": "mcp:connect"
+    },
+    "GET /auth/assistant/status": {
+      "key": "assistant:view"
+    },
+    "GET /auth/assistant/conversations": {
+      "key": "assistant:view"
+    },
+    "GET /auth/assistant/conversations/:id": {
+      "key": "assistant:view"
+    },
+    "DELETE /auth/assistant/conversations/:id": {
+      "key": "assistant:use"
+    },
+    "PATCH /auth/assistant/conversations/:id": {
+      "key": "assistant:use"
+    },
+    "GET /auth/assistant/shared/:id": {
+      "key": "assistant:view"
+    },
+    "POST /auth/assistant/messages": {
+      "key": "assistant:use"
+    },
+    "PUT /auth/assistant/messages/:id/feedback": {
+      "key": "assistant:use"
+    },
+    "GET /auth/assistant/mentions": {
+      "key": "assistant:view"
+    },
+    "POST /auth/assistant/attachments": {
+      "key": "assistant:use"
+    },
+    "DELETE /auth/assistant/attachments/:id": {
+      "key": "assistant:use"
+    },
+    "POST /auth/assistant/actions/:id/confirm": {
+      "key": "assistant:use"
+    },
+    "POST /auth/assistant/actions/:id/edit": {
+      "key": "assistant:use"
+    },
+    "POST /auth/assistant/actions/:id/cancel": {
+      "key": "assistant:use"
+    },
+    "POST /auth/assistant/support/requests": {
+      "key": "assistant:use"
+    },
+    "GET /auth/assistant/support/requests": {
+      "key": "assistant:view"
+    },
+    "GET /auth/assistant/support/requests/:id": {
+      "key": "assistant:view"
+    },
+    "POST /auth/assistant/support/requests/:id/messages": {
+      "key": "assistant:use"
+    },
+    "POST /auth/assistant/support/requests/:id/read": {
+      "key": "assistant:use"
+    },
+    "GET /auth/assistant/settings": {
+      "key": "settings:view"
+    },
+    "PUT /auth/assistant/settings": {
+      "key": "settings:manage"
+    },
+    "DELETE /v1/businesses/:biz/meters/:meter/credit_cost": {
+      "key": "meters:manage"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_usage": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/meters/:meter/credit_cost": {
+      "key": "catalog:view"
+    },
+    "PUT /v1/businesses/:biz/meters/:meter/credit_cost": {
+      "key": "meters:manage"
+    },
+    "GET /v1/businesses/:biz/credit_units/:unit/overdraft_limits": {
+      "key": "credits:view"
+    },
+    "PUT /v1/businesses/:biz/credit_units/:unit/overdraft_limits/plans/:product": {
+      "key": "credits:manage"
+    },
+    "DELETE /v1/businesses/:biz/credit_units/:unit/overdraft_limits/plans/:product": {
+      "key": "credits:manage"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_overdraft_limits": {
+      "key": "credits:view"
+    },
+    "PUT /v1/businesses/:biz/customers/:cus/credit_overdraft_limits/:unit": {
+      "key": "credits:manage"
+    },
+    "DELETE /v1/businesses/:biz/customers/:cus/credit_overdraft_limits/:unit": {
+      "key": "credits:manage"
+    },
+    "GET /v1/businesses/:biz/reports/credit_deferred_revenue": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/customers/:cus/credit_grants/:grant/activity": {
+      "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/reports/credit_refused_demand": {
+      "key": "credits:view"
+    }
   }
 }

@@ -44,6 +44,11 @@ it bills your customers on schedule, chases the payments that fail, and keeps th
 - **Billing rules per business**: proration, plan-change timing, dunning, payment application,
   small invoices, tax rounding and team alerts. A business that sets nothing keeps the defaults.
 - **Revenue analytics**: MRR, ARR, churn, retention and cohorts, built in.
+- **Billy, the in-app assistant**: ask about any invoice, customer or payment and get an answer
+  from your own data, with every figure checked and a link to where you act. Billy prepares
+  changes, such as a plan change or a refund, that you confirm.
+- **An MCP server** so Claude, ChatGPT, Cursor and other AI tools can read your billing data,
+  read-only, with your sign-in or a read-only key.
 
 It is not a payment provider. Your payment gateway moves the money, through your own account
 at your own rates. Two Minute Billing decides who owes what, when to charge them, and what
@@ -82,15 +87,66 @@ Your app reports what each customer uses. Two Minute Billing prices it and puts 
   A meter counts them, and a rate card bills each model, region or plan tier at its own rate.
 - **Usage-based pricing**: tiered, volume and package prices, a minimum commitment with a true-up,
   usage invoiced every month on an annual plan, and usage so far in the dashboard and the portal.
-- **AI model price list**: a dated copy of public AI model prices, checked twice a day. Bill each
-  model and token type at its list price or your cost plus a markup, and see your margin per model.
-- **Prepaid credits**: your own credit unit, credit packs, plan credits that roll over, holds,
-  an overdraft limit, and an access check your app calls to stop usage when credit runs out.
+- **AI model price list**: a dated copy of public AI model prices, checked every hour, with token,
+  image, second of audio or video and character prices. Bill each model at its list price or your
+  cost plus a markup, and see your margin per model.
+- **Prepaid credits**: credits in money or in your own unit (1 image = 1 credit), credit packs,
+  plan credits that roll over, holds for multi-step jobs, and credits taken as each usage event
+  arrives (a 402 when they run out). Bill overage in money, set an overdraft limit, and see
+  deferred credit revenue, grant activity and runway in units. A free trial never bills overage.
 - **Spend controls**: spend limits, alerts before a limit, credit runway, automatic top-up,
   early usage invoices at a threshold, a rate-change preview and a usage widget for your app.
 
 Guides: [usage and AI billing](https://twominutebilling.com/help/guides/usage-and-ai-billing) ·
 [AI billing overview](https://twominutebilling.com/solutions/ai-billing).
+
+## Billy and your AI tools
+
+**Billy** is the assistant in the dashboard. It answers questions such as "why is this invoice
+unpaid?" or "why did MRR drop last month?" from your own data, reading through the API with the
+signed-in member's permissions, and it checks every figure in its answer against what it read.
+When a request needs a choice, it asks with buttons. When an owner turns actions on, it prepares
+changes that the member confirms; nothing changes before that. Guide:
+[Ask Billy](https://twominutebilling.com/help/guides/ask-billy).
+
+The **MCP server** lets an AI tool you already use read one business, read-only: add
+`https://mcp.twominutebilling.com/mcp` on Cloud, or your own API host followed by `/mcp` when
+self-hosted. Guide: [AI assistants (MCP)](https://twominutebilling.com/help/developers/getting-started/connect-ai-assistants).
+
+## Set it up with a coding agent
+
+Six Agent Skills take Claude Code, Codex, Cursor or any agent that reads skills from "add billing"
+to a verified integration:
+
+```bash
+npx skills add https://twominutebilling.com
+```
+
+Then ask: *"Use the two-minute-billing skill to add billing to this project, in test mode."*
+
+In Claude Code you can also install the same skills as a plugin, from
+[gox-ai/two-minute-billing-skills](https://github.com/gox-ai/two-minute-billing-skills):
+
+```text
+/plugin marketplace add gox-ai/two-minute-billing-skills
+/plugin install two-minute-billing@two-minute-billing
+```
+
+| Skill | What the agent does |
+|---|---|
+| `two-minute-billing` | Gets a test connection — Cloud, or a local Docker install with no clicks — and checks the key's mode with the server before any write |
+| `two-minute-billing-pricing` | Finds the value metric, picks the price model, writes the catalog as code with a dry run by default |
+| `two-minute-billing-integrate` | Checkout, portal, a signed webhook route and feature gating, with guides for Next.js, Express, Fastify, Hono, NestJS, FastAPI, Django, Rails, Laravel and Go |
+| `two-minute-billing-usage` | Usage events with retry-safe keys, AI tokens per model, prepaid credits and the access check |
+| `two-minute-billing-verify` | Proves it on real test invoices: test cards for each failure, the clock moved forward a month by API, every invoice compared with the expected figures |
+| `two-minute-billing-go-live` | Picks the gateway per currency and country, then audits the live business with a key that cannot write |
+
+Safety is checked by code, not only asked for: the scripts refuse any key that can change live data,
+read keys from the environment so they never enter the chat, and post test webhooks only to this
+machine. Every skill is type-checked against the SDK and every event name against the engine in CI,
+and a suite runs each script against a real engine. For the agent's own reading:
+[`llms.txt`](https://twominutebilling.com/llms.txt), every docs page as markdown (add `.md`), and
+`/openapi.json` on your API host.
 
 ## What it does
 
@@ -108,6 +164,8 @@ Guides: [usage and AI billing](https://twominutebilling.com/help/guides/usage-an
 | **Billing rules** | Each business sets its own: upgrade and downgrade proration and timing, the action at trial end, payment application, small-invoice handling, charge on the due date, tax per currency and tax rounding, and team alerts for overdue invoices and failed webhooks. |
 | **Reporting** | The metrics above, plus receivables, cancellations and dashboards you build yourself. |
 | **Time Travel** | Fast-forward a test business's clock to watch a year of renewals, dunning and webhooks in seconds. |
+| **Billy (assistant)** | Answers from your own data through the API, with your permissions; checks every figure; asks a question with options when it needs a choice; reads screenshots; prepares changes you confirm (money changes need a second confirmation and an owner switch). Your own OpenAI, Anthropic or Google key, or a local model when self-hosted. |
+| **AI tools (MCP)** | A read-only MCP server at `/mcp` with OAuth sign-in or a read-only key, for Claude, ChatGPT, Cursor and other MCP clients. |
 | **API and webhooks** | A documented REST API with idempotency keys on every write, signed outbound webhooks, and a typed TypeScript SDK ([`@two-minute-billing/sdk`](./sdk/README.md)). |
 
 ## Payment gateways
@@ -293,6 +351,8 @@ The API client in [`sdk/`](./sdk) (`@two-minute-billing/sdk`) is [MIT](./sdk/LIC
 embedded in any application.
 
 **Third-party data.** AI model prices are synced from
-[genai-prices](https://github.com/pydantic/genai-prices) (MIT, copyright Pydantic Services Inc.).
-Each installation downloads the list into its own database. The test fixture in
-`test/unit/fixtures/` keeps the original notice beside it.
+[genai-prices](https://github.com/pydantic/genai-prices) (MIT, copyright Pydantic Services Inc.)
+and, for image, video and audio prices, LiteLLM's
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm) (MIT License,
+Copyright (c) 2023 Berri AI). Each installation downloads the lists into its own database. The test fixtures in
+`test/unit/fixtures/` keep the original notices beside them.

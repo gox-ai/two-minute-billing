@@ -1,8 +1,8 @@
+import { Plus } from "lucide-react";
 import { listBusinesses, listTaxRegions } from "@/lib/api";
 import { createTaxRegionAction } from "@/app/actions";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { CreateDialog } from "@/components/create-dialog";
@@ -35,9 +35,12 @@ export default async function TaxRegionsPage({ params }: { params: Promise<{ biz
 
   /* Hoisted so the zero-state can hold the real control too: "Add a region for each country
      you collect tax in." named an action the empty screen gave no way to take. */
-  const addRegion = (
+  const addRegionDialog = (variant: "default" | "outline") => (
     <CreateDialog
       triggerLabel="Create region"
+      triggerSize="sm"
+      triggerIcon={<Plus className="size-4" />}
+      triggerVariant={variant}
       title="Create a taxable region"
       description="Create one region for each country where you collect tax. You configure rates on the region."
     >
@@ -65,22 +68,19 @@ export default async function TaxRegionsPage({ params }: { params: Promise<{ biz
   );
 
   return (
-    <>
-      <PageHeader
-        title="Taxes"
-        breadcrumbs={[
+    <TaxRegionsTable
+      page={{
+        title: "Taxes",
+        breadcrumbs: [
           { label: name, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: "Taxes" },
-        ]}
-        actions={addRegion}
-      />
-
-      <Card>
-        <CardContent className="space-y-5">
-          <TaxRegionsTable biz={biz} rows={regions.data} createAction={addRegion} />
-        </CardContent>
-      </Card>
-    </>
+        ],
+      }}
+      biz={biz}
+      rows={regions.data}
+      createSlot={addRegionDialog("default")}
+      createAction={addRegionDialog("outline")}
+    />
   );
 }

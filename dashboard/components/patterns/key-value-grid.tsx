@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { NoWrapDates } from "@/components/patterns/nowrap-dates";
 import { CopyButton } from "@/components/patterns/copy-button";
 
 export interface KeyValueRow {
@@ -37,10 +38,16 @@ export function KeyValueGrid({
   return (
     <dl className={cn("divide-y divide-border/70 text-sm", className)}>
       {items.map((r, i) => (
-        <div key={i} className="grid grid-cols-[minmax(7rem,2fr)_5fr]">
-          <dt className="bg-muted/50 px-3 py-2 font-medium text-foreground/70">{r.label}</dt>
-          <dd className="flex min-w-0 items-center gap-1 px-3 py-2">
-            <span className="min-w-0 wrap-break-word">{r.value ?? "—"}</span>
+        // On a phone a value too long for the label's line takes the full width under it; the
+        // label band then fills its own line.
+        <div key={i} className="grid grid-cols-[minmax(7rem,2fr)_5fr] max-sm:flex max-sm:flex-wrap">
+          <dt className="bg-muted/50 px-3 py-2 font-medium text-foreground/70 max-sm:flex-[1_0_7rem]">
+            {r.label}
+          </dt>
+          <dd className="flex min-w-0 items-center gap-1 px-3 py-2 max-sm:flex-[999_1_auto]">
+            <span className="min-w-0 wrap-break-word">
+              <NoWrapDates>{r.value ?? "—"}</NoWrapDates>
+            </span>
             {r.copy ? <CopyButton value={r.copy} /> : null}
           </dd>
         </div>

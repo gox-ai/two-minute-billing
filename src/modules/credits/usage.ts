@@ -11,8 +11,9 @@ import { FOLD_GRACE_MS, peekMeterCutoff, rateMeterItem } from "@/modules/meterin
 import { rateMeteredItem } from "@/modules/metering/rating";
 import { formatFixed12 } from "@/platform/fixed";
 import {
+  heldUsageWindow,
   usageWindowForNextInvoice,
-  type NextInvoiceUsageWindow,
+  type UsageWindow,
 } from "@/modules/subscriptions/usage-window";
 
 /** Subscriptions whose usage an invoice will bill or whose features apply now. */
@@ -80,6 +81,8 @@ export interface UnbilledUsageLine {
   amountMinor: bigint;
   /** Split at reset-window grant edges (G3b), set by the balance. */
   slices?: LineSlice[];
+  /** The closed window of a held invoice (usage grace), not the current period. */
+  held?: true;
 }
 
 /**
@@ -101,61 +104,80 @@ export async function ratedUnbilledUsage(
 ): Promise<UnbilledUsageLine[]> {
   const items = input.items ?? (await liveMeteredItems(tx, input));
   const out: UnbilledUsageLine[] = [];
-  const windows = new Map<string, NextInvoiceUsageWindow | null>();
+  // During a usage grace a held invoice still bills the closed window: rate it too, so the
+  // balance draws the closing grants and does not hide the new term's usage.
+  const windows = new Map<string, Array<UsageWindow & { held?: true }>>();
   for (const r of items) {
-    if (!windows.has(r.sub.id)) windows.set(r.sub.id, await usageWindowForNextInvoice(tx, r.sub));
-    const w = windows.get(r.sub.id);
-    if (!w) continue;
-    const end = new Date(
-      Math.max(w.start.getTime(), Math.min(input.asOf.getTime(), w.end.getTime())),
-    );
-    const closed = end.getTime() >= w.end.getTime();
-    if (r.snap.meter) {
-      const peek = await peekMeterCutoff(tx, {
-        businessId: r.sub.businessId,
-        customerId: input.customerId,
-        meterId: r.snap.meter.id,
-      });
-      // A cutoff `at` past now + the grace reads every event received so far.
-      const at = input.cutoffAt
-        ? new Date(input.cutoffAt.getTime() + FOLD_GRACE_MS)
-        : new Date(Date.now() + FOLD_GRACE_MS + 1_000);
-      const rated = await rateMeterItem(tx, {
-        item: { ...r.item, priceSnapshot: r.snap },
-        subscription: { customerId: input.customerId, currency: r.sub.currency },
-        window: { start: w.start, end },
-        cutoff: { ...peek, at },
-      });
-      const lines = rated.lines.filter((l) => !l.late);
-      const qty = lines.reduce((a, l) => a + l.quantity, 0n);
-      out.push({
-        subscriptionItemId: r.item.id,
-        priceId: r.priceId,
-        pricePublicId: r.snap.publicId,
-        meterId: r.snap.meter.id,
-        window: { start: w.start, end },
-        closed,
-        quantity: formatFixed12(qty),
-        amountMinor: lines.reduce((a, l) => a + l.amountMinor, 0n),
-      });
-      continue;
+    let ws = windows.get(r.sub.id);
+    if (!ws) {
+      const held = await heldUsageWindow(tx, r.sub.id);
+      const next = await usageWindowForNextInvoice(tx, r.sub);
+      ws = [];
+      if (held) ws.push({ start: held.start, end: held.end, held: true });
+      if (next) ws.push({ start: next.start, end: next.end });
+      windows.set(r.sub.id, ws);
     }
-    const rated = await rateMeteredItem(tx, {
-      item: { ...r.item, priceSnapshot: r.snap },
-      window: { start: w.start, end: w.end },
+    for (const w of ws) {
+      const line = await rateUnbilledWindow(tx, input, r, w);
+      out.push(w.held ? { ...line, held: true } : line);
+    }
+  }
+  return out;
+}
+
+async function rateUnbilledWindow(
+  tx: Tx,
+  input: { customerId: string; asOf: Date; cutoffAt?: Date },
+  r: MeteredItem,
+  w: UsageWindow,
+): Promise<UnbilledUsageLine> {
+  const end = new Date(
+    Math.max(w.start.getTime(), Math.min(input.asOf.getTime(), w.end.getTime())),
+  );
+  const closed = end.getTime() >= w.end.getTime();
+  if (r.snap.meter) {
+    const peek = await peekMeterCutoff(tx, {
+      businessId: r.sub.businessId,
+      customerId: input.customerId,
+      meterId: r.snap.meter.id,
     });
-    out.push({
+    // A cutoff `at` past now + the grace reads every event received so far.
+    const at = input.cutoffAt
+      ? new Date(input.cutoffAt.getTime() + FOLD_GRACE_MS)
+      : new Date(Date.now() + FOLD_GRACE_MS + 1_000);
+    const rated = await rateMeterItem(tx, {
+      item: { ...r.item, priceSnapshot: r.snap },
+      subscription: { customerId: input.customerId, currency: r.sub.currency },
+      window: { start: w.start, end },
+      cutoff: { ...peek, at },
+    });
+    const lines = rated.lines.filter((l) => !l.late);
+    const qty = lines.reduce((a, l) => a + l.quantity, 0n);
+    return {
       subscriptionItemId: r.item.id,
       priceId: r.priceId,
       pricePublicId: r.snap.publicId,
-      meterId: null,
-      window: { start: w.start, end: w.end },
+      meterId: r.snap.meter.id,
+      window: { start: w.start, end },
       closed,
-      quantity: formatFixed12(rated.quantity),
-      amountMinor: rated.amountMinor,
-    });
+      quantity: formatFixed12(qty),
+      amountMinor: lines.reduce((a, l) => a + l.amountMinor, 0n),
+    };
   }
-  return out;
+  const rated = await rateMeteredItem(tx, {
+    item: { ...r.item, priceSnapshot: r.snap },
+    window: { start: w.start, end: w.end },
+  });
+  return {
+    subscriptionItemId: r.item.id,
+    priceId: r.priceId,
+    pricePublicId: r.snap.publicId,
+    meterId: null,
+    window: { start: w.start, end: w.end },
+    closed,
+    quantity: formatFixed12(rated.quantity),
+    amountMinor: rated.amountMinor,
+  };
 }
 
 /** Money for one meter's unbilled usage, Σ over the customer's live items. */

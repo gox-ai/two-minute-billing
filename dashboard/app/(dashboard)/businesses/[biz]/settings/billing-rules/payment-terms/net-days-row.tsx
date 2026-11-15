@@ -17,6 +17,7 @@ export function NetDaysRow({ defaultValue }: { defaultValue: number | null }) {
       htmlFor="default_due_days"
       help="The number of days from issue to the due date. Enter 0 or leave blank to make an invoice due on issue."
       errorFor="default_due_days"
+      placement="end"
       control={
         <span className="inline-flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Net</span>
@@ -29,8 +30,8 @@ export function NetDaysRow({ defaultValue }: { defaultValue: number | null }) {
             max={365}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="—"
-            className="w-24 text-right tabular-nums"
+            placeholder="0"
+            className="w-20 tabular-nums"
           />
           <span className="text-sm text-muted-foreground">days</span>
         </span>

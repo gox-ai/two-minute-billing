@@ -27,6 +27,16 @@ export interface Dispute {
   payment_id: string | null;
   invoice_id: string | null;
   customer_id: string | null;
+  /** `cus_…`, from the matched payment. Null when the dispute matches no payment. */
+  customer: string | null;
+  customer_name: string | null;
+  /** `inv_…` and its number. */
+  invoice: string | null;
+  invoice_number: string | null;
+  /** `sub_…`: the subscription that the disputed invoice bills. */
+  subscription: string | null;
+  /** `txn_…`: the disputed payment's transaction. */
+  transaction: string | null;
   evidence_due_by: string | null;
   opened_at: string;
   closed_at: string | null;

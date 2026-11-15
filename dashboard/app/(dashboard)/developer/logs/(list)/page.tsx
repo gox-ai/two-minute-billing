@@ -44,7 +44,11 @@ export default async function RequestLogsPage({
     <RequestLogsTable
       page={{
         title: "Request logs",
-        breadcrumbs: [{ label: "Developers", href: "/developer" }, { label: "Request logs" }],
+        breadcrumbs: [
+          { label: "Overview", href: "/" },
+          { label: "Developer", href: "/developer" },
+          { label: "Request logs" },
+        ],
         description:
           "Requests that your API keys made, and changes made in this dashboard. Requests with an incorrect key or an unknown path are not in the log. We keep reads for 30 days and writes for 90 days.",
         actions: <span className="text-xs text-muted-foreground">Times in {tz}</span>,

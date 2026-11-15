@@ -184,9 +184,10 @@ function TileCard({
         (lifted ? " border-primary shadow-lg" : "")
       }
     >
-      <div className="flex items-start gap-2 border-b px-5 py-3.5">
+      {/* The title keeps a real basis: past it the controls wrap under, never squeezing it. */}
+      <div className="flex flex-wrap items-start gap-2 border-b px-5 py-3.5">
         {chrome}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-[1_1_12rem]">
           <h2 className="text-base font-semibold wrap-break-word">{label}</h2>
           <PinnedOptions tile={tile} />
         </div>
@@ -203,7 +204,9 @@ function TileCard({
           {actions}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      {/* Not a scroll box: the tile grows to its content (the wrapper sets only a min height),
+          so a figure is never behind a scrollbar. */}
+      <div className="flex-1 px-5 py-4">
         <TileBody tile={tile} biz={biz} />
       </div>
     </section>
@@ -456,7 +459,7 @@ export function BoardGrid({
   const grid = (
     <div
       ref={gridRef}
-      className="relative grid grid-cols-1 gap-5 md:grid-cols-6 xl:grid-cols-12"
+      className="relative grid grid-cols-1 gap-5 md:grid-cols-6 @min-[56.875rem]/main:grid-cols-12"
       onClick={arranging ? () => onSelect(null) : undefined}
       onKeyDown={
         arranging

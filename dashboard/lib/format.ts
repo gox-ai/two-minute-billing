@@ -2,6 +2,7 @@
 // use them without pulling node:crypto (lib/api) into the browser bundle.
 
 import { currencyExponent, toMajor } from "./money";
+import { plural } from "./labels";
 
 /**
  * Dates are rendered in the **business** timezone, not UTC — matching what the
@@ -221,7 +222,7 @@ export function couponDurationLabel(
 ): string {
   if (durationType === "once") return "One-time";
   if (durationType === "forever") return "Forever";
-  return durationInPeriods ? `${durationInPeriods} period(s)` : "Limited period";
+  return durationInPeriods ? plural(durationInPeriods, "period") : "Limited period";
 }
 
 /**

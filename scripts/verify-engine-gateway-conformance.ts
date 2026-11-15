@@ -958,6 +958,61 @@ await section("D6 operator outcome on a gateway dispute", async () => {
   ok("D6: the ledger balances", await s.balanced());
 });
 
+await section("D7 a dispute links to its payment and subscription", async () => {
+  const s = await scenario("d7");
+  const { payment, invoice, customer } = await s.bill();
+  // The payment is stored under the intent; the gateway's dispute names the capture.
+  const dp = `dp_d7_${RUN}`;
+  await s.deliver({
+    providerEventId: evId(dp),
+    type: "dispute.created",
+    providerDisputeId: dp,
+    providerChargeId: `cap_d7_${RUN}`,
+    providerIntentId: payment!.providerChargeId!,
+    disputeAmountMinor: 10000n,
+    disputeCurrency: "USD",
+  } as NormalizedProviderEvent);
+  const d = await disputeRow(dp);
+  ok(
+    "D7: a dispute that names the capture links through the intent id",
+    d.paymentId === payment!.id && d.invoiceId === invoice.id && d.customerId === customer.id,
+    `payment=${d.paymentId} invoice=${d.invoiceId} customer=${d.customerId}`,
+  );
+  const r = await app.inject({
+    method: "GET",
+    url: `/v1/businesses/${s.biz.publicId}/disputes/${d.publicId}`,
+    headers: { authorization: `Bearer ${org.secret}` },
+  });
+  const body = r.json() as Record<string, unknown>;
+  ok(
+    "D7: the API names the customer, invoice and subscription",
+    body.customer === customer.publicId &&
+      body.invoice === invoice.publicId &&
+      typeof body.subscription === "string" &&
+      String(body.subscription).startsWith("sub_") &&
+      typeof body.transaction === "string",
+    JSON.stringify({
+      customer: body.customer,
+      invoice: body.invoice,
+      subscription: body.subscription,
+      transaction: body.transaction,
+    }),
+  );
+  // A charge id and intent id that match nothing: kept under the business, unlinked.
+  const stray = `dp_d7_stray_${RUN}`;
+  await s.deliver({
+    providerEventId: evId(stray),
+    type: "dispute.created",
+    providerDisputeId: stray,
+    providerChargeId: `cap_none_${RUN}`,
+    providerIntentId: `ord_none_${RUN}`,
+    disputeAmountMinor: 500n,
+    disputeCurrency: "USD",
+  } as NormalizedProviderEvent);
+  const u = await disputeRow(stray);
+  ok("D7: an unmatched dispute is kept, with no payment", !!u && u.paymentId === null);
+});
+
 // ═══ § V — a late reversal takes only what the payment still holds ══════════════════════
 const ar = (s: Awaited<ReturnType<typeof scenario>>) => s.bal("accounts_receivable");
 const refund = (s: Awaited<ReturnType<typeof scenario>>, paymentPublicId: string, n: number) =>

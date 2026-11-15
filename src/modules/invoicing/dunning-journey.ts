@@ -318,6 +318,7 @@ export async function getDunningJourney(input: {
       !dunningAppliesTo(cfg, {
         hasSubscription: !!inv.subscriptionId,
         subscriptionStatus: sub?.status ?? null,
+        purpose: inv.purpose,
       })
     )
       return { ...base, projection: null, projectionNote: "dunning_off" };

@@ -9,9 +9,11 @@ import {
   SettingsPage,
   SettingsSummary,
 } from "@/components/settings/settings-layout";
+import { money, toMinor } from "@/lib/format";
 import { saveUpdateSubscriptionAction } from "../../actions";
 import { ChoiceRow, SwitchRow, UnsavedChoiceRow, type Choice } from "../_parts/rows";
 import { FormIds, ruleCrumbs } from "../_parts/shared";
+import { PendingChangeExpiryRows } from "./pending-change-rows";
 import {
   CHANGE_GATE_LABELS,
   CHANGE_PRORATION_LABELS,
@@ -20,6 +22,7 @@ import {
   PLAN_CHANGE_TIMING_UNSET,
   billingRules,
   DOWNGRADE_CREDIT_LABELS,
+  NET_CREDIT_DOCUMENT_LABELS,
   PLAN_CHANGE_COUPON_LABELS,
   PLAN_CHANGE_TERM_LABELS,
   lifecycleRules,
@@ -38,20 +41,33 @@ export const dynamic = "force-dynamic";
 // `default_invoice_immediately` is read by changeTermEnd directly, and by plan/item
 // changes only through unbilled_charges_config.on_change / on_one_time_charge while
 // those keys are unset (defaultInvoiceImmediately in proration.ts).
-// billing_rules_config.failed_change_charge. "Undo the change" is not offered: the change,
-// its credit notes and its invoice commit before the charge, and the ledger is append-only,
-// so a failed charge cannot take them back as one step.
+// billing_rules_config.failed_change_charge. `revert` acts only on a hard decline that ends
+// dunning at once (change-revert.ts): a soft decline is retried with the first three values.
+// `apply_when_paid` holds the change until its invoice is paid (pending-change.ts).
 const FAILED_CHANGE: Choice[] = [
+  {
+    value: "apply_when_paid",
+    label: FAILED_CHANGE_LABELS.apply_when_paid,
+    consequence:
+      "The change applies only when its invoice is paid. If the payment fails, the subscription stays as it was and we do not retry the invoice. A new payment with this or another card applies the change, priced as at the request. If nobody pays in the time below, we void the invoice. If the change also edits a discount or bills a one-time fee, we undo it as for Undo the change.",
+  },
   {
     value: "start_dunning",
     label: FAILED_CHANGE_LABELS.start_dunning,
-    consequence: "We retry the invoice on the dunning schedule, as for a failed renewal.",
+    consequence:
+      "We retry the invoice on the dunning schedule, as for a failed renewal. If the card cannot be retried, we do the dunning end action at once.",
   },
   {
     value: "next_renewal",
     label: FAILED_CHANGE_LABELS.next_renewal,
     consequence:
       "We make no retry until the current term ends. Then dunning retries the invoice on its schedule. A change that starts a new term, for example monthly to yearly, starts dunning at once.",
+  },
+  {
+    value: "revert",
+    label: FAILED_CHANGE_LABELS.revert,
+    consequence:
+      "If the card cannot be retried, we put the subscription back as it was before the change and void the invoice. The customer keeps the previous plan and its credits. If the change also adds or removes items, we do the dunning end action. We retry other failed charges on the dunning schedule.",
   },
 ];
 
@@ -122,6 +138,26 @@ const creditChoices = (saved: string): Choice[] => [
       ]
     : []),
 ];
+
+// billing_rules_config.net_credit_documents (lifecycle-config.ts). Unset = one credit note;
+// a business a person creates from 2026-11-13 stores two documents. Each consequence works
+// one example in the business currency: a 99 plan moved to a 39 plan half way through a paid month.
+const documentChoices = (currency: string): Choice[] => {
+  const m = (major: number) => money(toMinor(major, currency), currency);
+  const example = `Example, ${m(99)} to ${m(39)} at mid-month on a paid term`;
+  return [
+    {
+      value: "credit_note_and_invoice",
+      label: NET_CREDIT_DOCUMENT_LABELS.credit_note_and_invoice,
+      consequence: `${example}: a credit note of ${m(49.5)} for the unused time and an invoice of ${m(19.5)} for the new plan. The credit note pays the invoice, and ${m(30)} stays as credit. Each document shows its own tax. If the invoice for the term is not paid, the credit note reduces it first.`,
+    },
+    {
+      value: "one_credit_note",
+      label: NET_CREDIT_DOCUMENT_LABELS.one_credit_note,
+      consequence: `${example}: one credit note of ${m(30)}, the unused time less the new plan's charge. We raise no invoice for the new plan.`,
+    },
+  ];
+};
 
 const PERIOD_RULE =
   "A switch to a longer billing period, for example monthly to yearly, counts as an upgrade. A switch to a shorter billing period counts as a downgrade. On the same billing period, a higher monthly amount counts as an upgrade.";
@@ -215,6 +251,11 @@ export default async function UpdateSubscriptionSettings({
   const invoiceNow = b.default_invoice_immediately ?? false;
   const rules = billingRules(b);
   const life = lifecycleRules(b);
+  // Null on the read = not saved: the invoicing choice picks the documents, as before
+  // 2026-11-13. The row preselects what an immediate change gets, and a Save does not pin it.
+  const docsSaved = life.net_credit_documents !== null;
+  const docs =
+    life.net_credit_documents ?? (invoiceNow ? "credit_note_and_invoice" : "one_credit_note");
   const failedChange = rules.failed_change_charge;
   // An unsaved timing shows what the portal does, with the note that says what the
   // dashboard and the API do. The `_unset` field keeps a save of other rows from pinning it.
@@ -274,7 +315,13 @@ export default async function UpdateSubscriptionSettings({
                   label: "Term-end changes",
                   value: prorate ? "Prorated" : "Boundary moves, no adjustment",
                 },
-                { label: "Failed change charge", value: FAILED_CHANGE_LABELS[failedChange] },
+                {
+                  label: "Failed change charge",
+                  value:
+                    failedChange === "apply_when_paid"
+                      ? `${FAILED_CHANGE_LABELS[failedChange]} · ${rules.pending_change_expiry_hours} h, slow ${rules.pending_change_expiry_hours_slow} h`
+                      : FAILED_CHANGE_LABELS[failedChange],
+                },
                 {
                   label: "Upgrades",
                   value: `${CHANGE_PRORATION_LABELS[rules.upgrade_proration]} · ${timingSummary(rules.upgrade_timing, upTiming)}`,
@@ -291,6 +338,17 @@ export default async function UpdateSubscriptionSettings({
                 {
                   label: "Credit from a change",
                   value: DOWNGRADE_CREDIT_LABELS[life.downgrade_credit],
+                },
+                {
+                  label: "Documents for a credit from a change",
+                  // Unsaved: what a change made without its own choice gets today.
+                  value: docsSaved
+                    ? NET_CREDIT_DOCUMENT_LABELS[docs]
+                    : `${NET_CREDIT_DOCUMENT_LABELS[docs]} (not saved)`,
+                },
+                {
+                  label: "Downgrade with a past-due invoice",
+                  value: life.block_downgrade_when_past_due ? "Refused" : "Allowed",
                 },
               ]}
             />
@@ -309,9 +367,14 @@ export default async function UpdateSubscriptionSettings({
             <ChoiceRow
               name="failed_change_charge"
               label="When the charge for a change fails"
-              help="Applies to a change charge that we invoice and collect immediately. The change stays in place."
+              help="Applies to a change charge, or an added item, that we invoice and collect immediately."
               defaultValue={failedChange}
               options={FAILED_CHANGE}
+            />
+            <PendingChangeExpiryRows
+              hours={rules.pending_change_expiry_hours}
+              slowHours={rules.pending_change_expiry_hours_slow}
+              applies={failedChange === "apply_when_paid"}
             />
           </SettingsCard>
           <SettingsCard title="Plan changes" meta="Upgrades and downgrades">
@@ -385,6 +448,28 @@ export default async function UpdateSubscriptionSettings({
               help="Applies when a change gives the customer credit, for example a downgrade or a removed add-on."
               defaultValue={life.downgrade_credit}
               options={creditChoices(life.downgrade_credit)}
+            />
+            <UnsavedChoiceRow
+              saved={docsSaved}
+              saveLabel="Save this choice"
+              name="net_credit_documents"
+              label="Documents for a credit from a change"
+              help={`Applies when a change gives more credit than it charges, for example a downgrade. The net credit is the same with both choices.${
+                docsSaved
+                  ? ""
+                  : " Not saved. Until you save it, a change invoiced now gets a credit note and an invoice when the invoices of the term can take the whole credit. Other changes get one credit note."
+              }`}
+              defaultValue={docs}
+              options={documentChoices(b.default_currency ?? "USD")}
+            />
+            <input type="hidden" name="block_downgrade_when_past_due_form" value="1" />
+            <SwitchRow
+              name="block_downgrade_when_past_due"
+              label="Refuse a downgrade if past due"
+              help="Applies to a change that we apply now and that gives the customer credit. A change at the end of the term is always allowed."
+              defaultChecked={life.block_downgrade_when_past_due}
+              on="We refuse the change while the customer has a past-due invoice. Collect the payment first, or schedule the change for the end of the term."
+              off="A change that credits the customer applies now, even when the customer has a past-due invoice."
             />
           </SettingsCard>
           <SettingsCard title="Term-end changes" meta="When you move the end of a term">

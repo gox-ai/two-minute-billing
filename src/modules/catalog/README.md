@@ -60,6 +60,9 @@ as jsonb on the price. Rating fields become immutable once referenced by a live 
 - We support the full spread of pricing models (usage, package, percentage) — deliberate.
 
 ## Changelog
+- **2026-11-13 (0530)** — `meterForPrice` accepts a usage price on a meter with a credit cost when the price uses a rate: it then bills only the usage that credits do not pay. A price that bills event amounts is still refused. `grants_credit.unit_cost_basis` on a per-cycle price (credits README).
+- **2026-11-13 (0526)** — `meterForPrice` refuses a meter that has a credit cost: its usage is
+  paid in credits (credits README § "Usage paid in credits"), so it takes no money price.
 - **2026-11-03 (0484)** — Portal-only quantity limits. `attached_items.min_quantity`,
   `max_quantity`, `quantity_step`, `customer_can_change_quantity` (in `AttachedItemLink`, the
   applicable_plans `config` and the attached_item object; min > max refused) and
@@ -222,3 +225,6 @@ as jsonb on the price. Rating fields become immutable once referenced by a live 
 - **2026-11-03** — `amount_source: event_cost_or_list` (G1c): valid where `model_price_list` is, same markup, markup base, rates and customer override; `billsFromList()` covers both. Cover: `verify:model-price-billing` T15.
 - **2026-11-04 (G3b)** — `grants_credit.reset` and `first_window` on a recurring price, checked against the price's term (no hourly credits, no window longer than the term). Saving a reset wakes the price's items for the credit clock. Gate: `verify:plan-credit-resets`.
 - **2026-11-04 (G3b gaps)** — A price create, a `grants_credit` update or a restore is refused (CatalogError, 400) when it gives a plan with an allowance linked to its credits (`same_as_credits`) active per-cycle prices on different schedules; the message names the allowance. Gate: `verify:plan-credit-resets` §10.
+- **2026-11-12** — `packAwareLineAmount`: a credit pack's flat price is the price of one pack,
+  so a one-time line rates it × quantity (`computeLineAmount` ignores quantity for flat). Used by
+  the purchase checkout, the portal quote, `POST /invoices` and the checkout reminder.

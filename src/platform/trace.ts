@@ -121,6 +121,11 @@ export function joinSpan<T>(spanId: string | null | undefined, fn: () => T): T {
   return storage.run(spanContext(spanId ?? undefined), fn);
 }
 
+/** `joinSpan` when the record has a span; otherwise `fn` in the current context, unchanged. */
+export function joinSpanIfAny<T>(spanId: string | null | undefined, fn: () => T): T {
+  return spanId ? joinSpan(spanId, fn) : fn();
+}
+
 /** The active span id, or undefined outside a span. */
 export function getSpanId(): string | undefined {
   return storage.getStore()?.spanId;

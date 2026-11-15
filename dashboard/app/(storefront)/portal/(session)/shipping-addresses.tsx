@@ -8,6 +8,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -23,6 +24,7 @@ import {
   AddressFields,
   type AddressFieldKey,
   type AddressFieldState,
+  type AddressValue,
 } from "@/components/customers/address-fields";
 import type { Country } from "@/lib/api/geo";
 import type { PortalShippingAddress } from "@/lib/portal-api";
@@ -51,9 +53,12 @@ const SHIPPING_FIELD_STATES: Partial<Record<AddressFieldKey, AddressFieldState>>
 export function ShippingAddresses({
   addresses,
   countries,
+  billing,
 }: {
   addresses: PortalShippingAddress[];
   countries: Country[];
+  /** The billing address with its contact name resolved: the start of a new address. */
+  billing: AddressValue;
 }) {
   const router = useRouter();
   /** `null` = closed; `"new"` = add; else the address being edited. */
@@ -79,11 +84,25 @@ export function ShippingAddresses({
   }
 
   const current = editing === "new" ? null : editing;
+  /** Bumped by "Use my billing address" to remount the fields with the billing values. */
+  const [fill, setFill] = React.useState<{ n: number; value: AddressValue | null }>({
+    n: 0,
+    value: null,
+  });
+  // A new address starts in the billing country, for the billing contact.
+  const start: AddressValue = {
+    first_name: billing.first_name,
+    last_name: billing.last_name,
+    company: billing.company,
+    country: billing.country,
+  };
+  const hasBilling = Boolean(billing.line1 && billing.country);
 
   return (
     <>
       {addresses.length === 0 ? (
         <EmptyState
+          compact
           icon={<Truck />}
           title="No shipping address"
           description="Add the address where we send your orders."
@@ -139,7 +158,13 @@ export function ShippingAddresses({
       </div>
 
       {/* `data-brand`: Radix portals the dialog outside the storefront's brand wrapper. */}
-      <Dialog open={editing != null} onOpenChange={(o) => (o ? null : setEditing(null))}>
+      <Dialog
+        open={editing != null}
+        onOpenChange={(o) => {
+          if (!o) setEditing(null);
+          setFill({ n: 0, value: null });
+        }}
+      >
         <DialogContent size="md" data-brand className="flex max-h-[85vh] flex-col overflow-hidden">
           <DialogHeader className="pr-12">
             <DialogTitle>
@@ -154,32 +179,49 @@ export function ShippingAddresses({
               key={current?.id ?? "new"}
               action={portalSaveShippingAddressAction}
               onSuccess={() => setEditing(null)}
-              className="-mx-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6"
+              className="flex min-h-0 flex-1 flex-col gap-4"
             >
               {current ? <input type="hidden" name="addr" value={current.id} /> : null}
-              <Field
-                name="label"
-                label="Label"
-                help="This is optional. For example, Home or Office."
-              >
-                <Input name="label" defaultValue={current?.label ?? ""} maxLength={100} />
-              </Field>
-              <AddressFields
-                countries={countries}
-                value={current}
-                contactHeading="Recipient"
-                fieldStates={SHIPPING_FIELD_STATES}
-              />
-              {/* The first address becomes the default by itself; a default is changed with "Make default". */}
-              {!current && addresses.length > 0 ? (
-                <CheckboxField name="is_default" label="Make this my default shipping address" />
-              ) : null}
-              <div className="flex justify-end gap-2 pt-1 pb-1">
+              {/* The body scrolls; the footer stays in view on the long form. */}
+              <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 pb-1">
+                {hasBilling ? (
+                  <div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFill((f) => ({ n: f.n + 1, value: billing }))}
+                    >
+                      Use my billing address
+                    </Button>
+                  </div>
+                ) : null}
+                <AddressFields
+                  key={fill.n}
+                  countries={countries}
+                  value={fill.value ?? current ?? start}
+                  contactHeading="Recipient"
+                  autoCompleteSection="shipping"
+                  fieldStates={SHIPPING_FIELD_STATES}
+                />
+                <Field
+                  name="label"
+                  label="Label"
+                  help="This is optional. For example, Home or Office."
+                >
+                  <Input name="label" defaultValue={current?.label ?? ""} maxLength={100} />
+                </Field>
+                {/* The first address becomes the default by itself; a default is changed with "Make default". */}
+                {!current && addresses.length > 0 ? (
+                  <CheckboxField name="is_default" label="Make this my default shipping address" />
+                ) : null}
+              </div>
+              <DialogFooter className="shrink-0 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => setEditing(null)}>
                   Cancel
                 </Button>
                 <Button type="submit">{current ? "Save address" : "Add address"}</Button>
-              </div>
+              </DialogFooter>
             </ActionForm>
           ) : null}
         </DialogContent>

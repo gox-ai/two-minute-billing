@@ -22,7 +22,7 @@ export default async function ProductGroupsPage({ params }: { params: Promise<{ 
   } catch (e) {
     return (
       <>
-        <PageHeader title="Product Groups" />
+        <PageHeader title="Product groups" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -35,9 +35,10 @@ export default async function ProductGroupsPage({ params }: { params: Promise<{ 
   // Create + import are dialogs — they live in the list top bar as slots.
   const importDialog = (
     <CreateDialog
-      triggerLabel="Import Product Groups"
+      triggerLabel="Import product groups"
+      triggerSize="sm"
       triggerVariant="outline"
-      title="Import Product Groups"
+      title="Import product groups"
       description="Enter one group on each line, as name,description. The name is required. The description is optional."
     >
       <ActionForm action={importProductGroupsAction} className="space-y-3">
@@ -55,17 +56,17 @@ export default async function ProductGroupsPage({ params }: { params: Promise<{ 
       </ActionForm>
     </CreateDialog>
   );
-  const createDialog = <ProductGroupDialog biz={biz} triggerLabel="Create Product Group" />;
+  const createDialog = <ProductGroupDialog biz={biz} triggerLabel="Create product group" />;
 
   return (
     <>
       <GroupsTable
         page={{
-          title: "Product Groups",
+          title: "Product groups",
           breadcrumbs: [
             { label: name, href: `/businesses/${biz}` },
-            { label: "Product Catalog" },
-            { label: "Product Groups" },
+            { label: "Product catalog" },
+            { label: "Product groups" },
           ],
         }}
         biz={biz}

@@ -1588,6 +1588,22 @@ export class PayPalProvider implements PaymentProvider {
    * ledger reversal, and a failed lookup is not a verdict either (it throws, and the
    * caller leaves the payment pending and asks again next tick).
    */
+  /**
+   * The order a capture belongs to, or undefined. Never throws: a v1 sale id, a failed
+   * read or a missing link only means the dispute matches on the capture id alone.
+   */
+  private async orderOfCapture(captureId: string): Promise<string | undefined> {
+    try {
+      const cap = await this.api<{
+        supplementary_data?: { related_ids?: { order_id?: string } };
+      }>("dispute", "GET", `/v2/payments/captures/${encodeURIComponent(captureId)}`);
+      if (cap.status >= 300) return undefined;
+      return cap.json?.supplementary_data?.related_ids?.order_id || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async fetchChargeStatus(input: { providerChargeId: string }): Promise<ChargeResult> {
     const id = input.providerChargeId;
     const cap = await this.api<{ id?: string; status?: string; name?: string }>(
@@ -2507,6 +2523,7 @@ export class PayPalProvider implements PaymentProvider {
       const chargeId =
         r.disputed_transactions?.[0]?.seller_transaction_id ??
         r.disputed_transactions?.[0]?.buyer_transaction_id;
+      const orderId = chargeId ? await this.orderOfCapture(chargeId) : undefined;
       return [
         {
           providerEventId: eventId,
@@ -2514,6 +2531,8 @@ export class PayPalProvider implements PaymentProvider {
           providerDisputeId: r.dispute_id ?? r.id,
           ...provenance,
           providerChargeId: chargeId,
+          // A charge that did not complete at once is stored under its order id.
+          ...(orderId ? { providerIntentId: orderId } : {}),
           disputeReason: r.reason ?? null,
           // Our open status on `dispute.updated`; PayPal's own word otherwise.
           disputeStatus: transition.openStatus ?? r.status ?? null,

@@ -10,13 +10,15 @@ import {
   Users,
 } from "lucide-react";
 import { AreaChart } from "@/components/charts/area-chart";
+import { isBlankSeries } from "@/components/charts/axis";
 import { Alert } from "@/components/ui/alert";
 import { CompareDelta } from "@/components/analytics/compare-delta";
-import { measurePolarity, stockPoints } from "@/components/analytics/series-format";
+import { axisLabel, measurePolarity, stockPoints } from "@/components/analytics/series-format";
 import { chartKindFor } from "@/components/analytics/format";
 import { Grid, Block, BlockLink, Stack, spanClass } from "@/components/analytics/layout";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EMPTY_FIGURE, EmptyFigure } from "@/components/patterns/record-page";
 import { InfoTip } from "@/components/analytics/info-tip";
 import { explain, type CardInfo } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
@@ -75,7 +77,7 @@ export function Refusal({ entry, biz }: { entry: BatchEntry; biz: string }) {
 
 /** A series' points, gaps kept as gaps. */
 const points = (r: AnalyticsResult | null) => ({
-  labels: (r?.series ?? []).map((p) => p.label),
+  labels: (r?.series ?? []).map((p) => axisLabel(p.label)),
   values: (r?.series ?? []).map((p) => p.value ?? null),
 });
 
@@ -171,7 +173,7 @@ export function overviewZones({
     {
       key: "at_risk",
       label: "MRR at risk",
-      value: money(atRiskMinor, atRisk?.currency ?? cur),
+      value: moneyCompact(atRiskMinor, atRisk?.currency ?? cur),
       note: inDunning ? `${count(inDunning)} in dunning` : undefined,
       href: `/businesses/${biz}/retries`,
       tone: atRiskMinor > 0 ? "attention" : "neutral",
@@ -342,7 +344,13 @@ export function overviewZones({
               {
                 label: "ARPC",
                 value:
-                  arpa?.total == null ? null : money(Math.round(arpa.total), arpa.currency ?? cur),
+                  arpa?.total == null
+                    ? null
+                    : moneyCompact(Math.round(arpa.total), arpa.currency ?? cur),
+                title:
+                  arpa?.total == null
+                    ? undefined
+                    : money(Math.round(arpa.total), arpa.currency ?? cur),
               },
               // Paying includes subscriptions booked to stop at term end; renewing excludes them.
               {
@@ -388,7 +396,7 @@ export function overviewZones({
             span={3}
             label="Trial conversion, 30 days"
             icon={Hourglass}
-            featured
+            featured={!!hTrialConv}
             info={explain(G.trialConversion, G.trialsConverted, G.trialsEnded, G.newMrr30)}
             value={hTrialConv == null ? "—" : pctFromBps(hTrialConv, 1)}
             note={
@@ -478,7 +486,7 @@ export function overviewZones({
   // Churn by kind: drawn only once the engine attributes it, never from the unattributed rest.
   const kindOf = (k: string) => slices(pick(batch, "churn_kind")).find((r) => r.key === k) ?? null;
   const churnKinds = [
-    { key: "voluntary", label: "Voluntary", row: kindOf("voluntary"), fill: "bg-muted-foreground" },
+    { key: "voluntary", label: "Voluntary", row: kindOf("voluntary"), fill: "bg-chart-4" },
     { key: "involuntary", label: "Involuntary", row: kindOf("involuntary"), fill: "bg-chart-5" },
   ].filter((k) => k.row != null && k.row.total > 0);
   // The same split per bucket, matched to the churn bars by bucket start.
@@ -516,8 +524,8 @@ export function overviewZones({
         ) : null}
         {note ? <span className="block text-xs tabular-nums">{note}</span> : null}
       </span>
-      <span className={cn("text-2xl font-medium tabular-nums", warn && "text-warning")}>
-        {value}
+      <span className={cn("text-2xl font-semibold tabular-nums", warn && "text-warning")}>
+        {value === EMPTY_FIGURE ? <EmptyFigure /> : value}
       </span>
     </div>
   );
@@ -543,7 +551,7 @@ export function overviewZones({
   const performance = (
     <Stack>
       {modelLed ? null : (
-        <Grid>
+        <Grid even>
           {mrr ? (
             <Block
               span={8}
@@ -612,7 +620,7 @@ export function overviewZones({
               </div>
             </Block>
           ) : mrrEntry ? (
-            <div className="col-span-12 xl:col-span-8">
+            <div className="col-span-12 @min-[56.875rem]/main:col-span-8">
               <Refusal entry={mrrEntry} biz={biz} />
             </div>
           ) : null}
@@ -660,7 +668,7 @@ export function overviewZones({
         </Grid>
       )}
 
-      <Grid>
+      <Grid even>
         <Block
           span={modelLed ? 12 : 6}
           title="New accounts"
@@ -692,10 +700,11 @@ export function overviewZones({
               kind="count"
             />
           </div>
-          {newPayingSeries ? (
+          {newPayingSeries &&
+          !isBlankSeries([...createdPts.values, ...points(newPayingSeries).values]) ? (
             <div className="mt-2 flex gap-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
-                <span className="size-2 rounded-sm bg-chart-1" aria-hidden />
+                <span className="size-2 rounded-xs bg-chart-1" aria-hidden />
                 New accounts
               </span>
               <span className="flex items-center gap-1.5">
@@ -717,13 +726,7 @@ export function overviewZones({
             }
           >
             <Lead
-              value={
-                churnedMrr == null
-                  ? "—"
-                  : churnedMrr === 0
-                    ? moneyCompact(0, cur)
-                    : `−${moneyCompact(churnedMrr, cur)}`
-              }
+              value={churnedMrr == null ? "—" : signedMoney(-churnedMrr, cur)}
               title={churnedMrr == null ? undefined : money(churnedMrr, cur)}
               tone={churnedMrr ? "loss" : undefined}
               note={
@@ -740,7 +743,8 @@ export function overviewZones({
                 part={
                   churnInvoluntary ? { label: "Involuntary", values: churnInvoluntary } : undefined
                 }
-                tone="loss"
+                // Red marks only the involuntary share; the rest of churn is a neutral bar.
+                tone="soft"
                 kind="money"
                 currency={churnSeries?.currency ?? cur}
               />
@@ -754,7 +758,7 @@ export function overviewZones({
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
                   {churnKinds.map((k) => (
                     <span key={k.key} className="flex items-center gap-1.5">
-                      <span className={cn("size-2 rounded-sm", k.fill)} aria-hidden />
+                      <span className={cn("size-2 rounded-xs", k.fill)} aria-hidden />
                       {k.label} {moneyCompact(k.row!.total, cur)}
                     </span>
                   ))}
@@ -799,7 +803,7 @@ export function overviewZones({
                   className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-sm last:pb-0"
                 >
                   <span className="flex min-w-0 flex-[1_1_10rem] items-center gap-2">
-                    <span className={cn("size-2 shrink-0 rounded-sm", r.fill)} aria-hidden />
+                    <span className={cn("size-2 shrink-0 rounded-xs", r.fill)} aria-hidden />
                     {r.label}
                   </span>
                   <span className="w-24 shrink-0">
@@ -818,7 +822,7 @@ export function overviewZones({
         </Grid>
       ) : null}
 
-      <Grid>
+      <Grid even>
         {modelLed ? null : (
           <Block
             span={4}
@@ -850,7 +854,7 @@ export function overviewZones({
                   {
                     label: `${count(churnedCustomers)} left`,
                     v: churnedCustomers,
-                    fill: "bg-muted-foreground",
+                    fill: "bg-chart-4",
                   },
                 ].map((b) => (
                   <div key={b.label} className="flex items-center gap-3">

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDown, ArrowUp } from "lucide-react";
-import { pctFromBps } from "@/lib/format";
+import { changePct } from "@/components/analytics/format";
 import type { SeriesPolarity } from "@/components/analytics/series-format";
 
 /**
@@ -15,8 +15,7 @@ import type { SeriesPolarity } from "@/components/analytics/series-format";
  * so the direction is also spelled out in sr-only text. Hue never carries the sign
  * alone.
  *
- * Past ±1000% it switches to a multiple: a young business swings by five figures of
- * percent, which is true but unreadable and overflows the tile.
+ * Past 999% it reads "> 999%" (see `changePct`), so a young business does not overflow the tile.
  */
 export function Delta({
   bps,
@@ -31,8 +30,7 @@ export function Delta({
   const down = bps < 0;
   const Icon = down ? ArrowDown : ArrowUp;
   const abs = Math.abs(bps);
-  const text =
-    abs >= 100_000 ? `${Math.round(abs / 10_000).toLocaleString("en")}×` : pctFromBps(abs, 1);
+  const text = changePct(abs);
   const good = polarity === "neutral" ? null : polarity === "up_good" ? !down : down;
   return (
     <span

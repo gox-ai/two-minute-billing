@@ -12,6 +12,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import type { BreakdownRow } from "@/components/reports/report-format";
 
 type Sort = { col: "group" | "value"; dir: "asc" | "desc" } | null;
@@ -40,7 +41,7 @@ function SortHead({
         onClick={() => onSort(col)}
         aria-label={`Sort by ${children}`}
         className={cn(
-          "touch-target relative -mx-1 flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:text-foreground",
+          "touch-target relative -mx-1 flex w-full items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:text-foreground",
           right && "flex-row-reverse",
           active && "text-foreground",
         )}
@@ -89,7 +90,7 @@ export function ByOutcomeTable({ rows }: { rows: BreakdownRow[] }) {
             sort={sort}
             onSort={onSort}
             right
-            className="w-20 text-right 2xl:w-32"
+            className="w-20 text-right @min-[72.875rem]/main:w-32"
           >
             Share
           </SortHead>
@@ -112,10 +113,11 @@ export function ByOutcomeTable({ rows }: { rows: BreakdownRow[] }) {
             </TableCell>
             <TableCell>
               <div className="flex items-center justify-end gap-2">
-                <div className="hidden h-1.5 w-12 shrink-0 overflow-hidden rounded-md bg-muted 2xl:block">
+                <div className="hidden h-1.5 w-12 shrink-0 overflow-hidden rounded-md bg-muted @min-[72.875rem]/main:block">
                   <div
-                    className="anim-grow h-full rounded-md bg-primary"
-                    style={{ width: `${(share(r.value) * 100).toFixed(1)}%` }}
+                    key={drawKey([share(r.value)])}
+                    className={cn(BAR_GROW, "h-full rounded-md bg-primary")}
+                    style={barStyle(`${(share(r.value) * 100).toFixed(1)}%`)}
                   />
                 </div>
                 <span className="text-xs text-muted-foreground tabular-nums">

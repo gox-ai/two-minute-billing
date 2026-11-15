@@ -6,6 +6,7 @@ import { useDefaultState } from "@/lib/use-default-state";
 import { COUPON_CODE_RE } from "@/lib/limits";
 import { RecordCrumbs, RecordCard, Facts } from "@/components/patterns/record-page";
 import type { Crumb } from "@/components/page-header";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -102,14 +103,19 @@ export function FormFrame({
     <div className="flex flex-col gap-6">
       <RecordCrumbs items={crumbs} />
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-[-0.02em] wrap-break-word">{title}</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.02em] wrap-break-word">{title}</h1>
         {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">{children}</div>
-        <aside className="min-w-0 xl:sticky xl:top-4">{summary}</aside>
+        <aside className="min-w-0 @min-[56.875rem]/main:sticky @min-[56.875rem]/main:top-[calc(var(--compact-h,0px)+1rem)]">
+          {summary}
+        </aside>
       </div>
-      <div className="sticky bottom-0 z-10 -mx-5 -mb-8 flex flex-wrap items-center gap-3 border-t bg-card px-5 py-3 md:-mx-10 md:-mb-10 md:px-10">
+      <div
+        data-action-bar
+        className="sticky bottom-0 z-10 -mx-5 -mb-(--main-pb) flex flex-wrap items-center gap-3 border-t bg-card px-5 py-3 md:-mx-10 md:px-10"
+      >
         <p className="text-xs text-muted-foreground">{footerNote}</p>
         <div className="ml-auto flex items-center gap-2">
           <Button asChild variant="outline">
@@ -141,8 +147,8 @@ export function FormCard({
       <div
         className={cn(
           "grid grid-cols-1 gap-x-4 gap-y-5",
-          columns === 2 && "sm:grid-cols-2",
-          columns === 3 && "sm:grid-cols-3",
+          // A field fills its column; short fields set their own 80 / 120 width.
+          columns !== 1 && "sm:grid-cols-2",
         )}
       >
         {children}
@@ -153,7 +159,11 @@ export function FormCard({
 
 /** Spans the whole card row. */
 export function Wide({ children }: { children: React.ReactNode }) {
-  return <div className="min-w-0 sm:col-span-full">{children}</div>;
+  return (
+    <div data-wide className="min-w-0 sm:col-span-full">
+      {children}
+    </div>
+  );
 }
 
 export function SummaryCard({
@@ -170,12 +180,9 @@ export function SummaryCard({
   return (
     <RecordCard title="Summary">
       <div className="flex flex-col gap-4">
-        <p
-          aria-live="polite"
-          className="rounded-md bg-info-soft px-4 py-3 text-sm font-semibold wrap-break-word tabular-nums"
-        >
+        <Alert tone="info" className="wrap-break-word tabular-nums">
           {lead}
-        </p>
+        </Alert>
         <Facts rows={rows} />
         {children}
         {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
@@ -271,7 +278,10 @@ export function ChoiceCards({
   options,
   ariaLabel,
   columns = 2,
+  id,
 }: {
+  /** The field's label points here (`Field` injects it). */
+  id?: string;
   name?: string;
   value: string;
   onValueChange: (v: string) => void;
@@ -284,6 +294,7 @@ export function ChoiceCards({
     <>
       {name ? <input type="hidden" name={name} value={value} /> : null}
       <RadioGroup
+        id={id}
         value={value}
         onValueChange={onValueChange}
         aria-label={ariaLabel}
@@ -477,11 +488,12 @@ export function FrequencyField({
             min={1}
             value={count}
             onChange={(e) => onChange(interval, e.target.value)}
-            className="w-20 tabular-nums"
+            className="w-20 shrink-0 tabular-nums"
           />
           <IntervalSelect
             id={`${prefix}interval`}
             value={interval}
+            count={Number(count)}
             onChange={(v) => onChange(v, count)}
           />
         </div>
@@ -523,10 +535,12 @@ function FrequencySelect({
 function IntervalSelect({
   id,
   value,
+  count,
   onChange,
 }: {
   id: string;
   value: string;
+  count: number;
   onChange: (v: string) => void;
 }) {
   return (
@@ -535,8 +549,8 @@ function IntervalSelect({
       ariaLabel="Billing interval"
       value={value}
       onValueChange={onChange}
-      className="w-32"
-      options={INTERVALS.map((i) => ({ value: i, label: `${i}(s)` }))}
+      className="w-30"
+      options={INTERVALS.map((i) => ({ value: i, label: count === 1 ? i : `${i}s` }))}
     />
   );
 }

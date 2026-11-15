@@ -50,6 +50,11 @@ export const organizations = pgTable(
     /** When this calendar month's live volume first passed the plan's limit; NULL within it (0356). */
     overLimitSince: timestamp("over_limit_since", { withTimezone: true }),
     /**
+     * The assistant's monthly allowance on the platform's model, in US cents (0507). Written by
+     * account billing from the organization's plan; NULL = no allowance (the token cap applies).
+     */
+    assistantAllowanceUsdCents: integer("assistant_allowance_usd_cents"),
+    /**
      * Is this organization the PLATFORM's own — i.e. us, not a customer?
      *
      * The only thing that separates a tmbilling operator from a tenant. Every route under
@@ -567,8 +572,9 @@ export const businesses = pgTable(
     creditNoteNextNumber: bigint("credit_note_next_number", { mode: "bigint" })
       .notNull()
       .default(sql`1`),
-    // 0454: extra minutes (0–24) before a period's usage closes, for apps that buffer events.
-    usageCloseDelayMinutes: smallint("usage_close_delay_minutes").notNull().default(0),
+    // 0454, 0523: the usage grace window, 0–43200 minutes. A renewal runs on time; its invoice
+    // holds this long (capped per plan, `usage-close.ts`) so late events still bill on it.
+    usageCloseDelayMinutes: integer("usage_close_delay_minutes").notNull().default(0),
     // 0476: origins allowed to call the embeddable usage widget (CORS).
     usageWidgetOrigins: text("usage_widget_origins")
       .array()

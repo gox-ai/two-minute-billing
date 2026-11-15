@@ -1,3 +1,4 @@
+import { onReplica } from "@/platform/db";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { authenticate } from "@/platform/auth";
@@ -167,7 +168,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/analytics",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const q = req.query as Record<string, string | undefined>;
       if (!q.measure) return badRequest(reply, "measure is required");
       if (q.split_limit != null && !/^\d+$/.test(q.split_limit)) {
@@ -202,7 +203,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
           return refused(reply, e.message, { param: e.param, options: e.options });
         throw e;
       }
-    },
+    }),
   );
 
   /**
@@ -214,7 +215,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
   app.post(
     "/v1/analytics/query",
     { preHandler: [authenticate, requirePerm("reports:query")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const parsed = batchSchema.safeParse(req.body);
       if (!parsed.success) return badRequest(reply, parsed.error);
       const body = parsed.data;
@@ -288,7 +289,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
       return reply
         .header("cache-control", "private, no-store")
         .send({ object: "analytics_batch", as_of: now.toISOString(), data });
-    },
+    }),
   );
 }
 

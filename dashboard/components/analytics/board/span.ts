@@ -45,22 +45,22 @@ export const sameUnits = (a: TileUnits, b: TileUnits) =>
   a.width === b.width && a.height === b.height;
 
 /**
- * Static classes — Tailwind has to see each span literally. Below `xl` the grid really is
+ * Static classes — Tailwind has to see each span literally. Below a 56.875rem page column the grid really is
  * six columns, so a tile wider than six fills the row there rather than overflowing it.
  */
 export const SPAN_CLASS: Record<number, string> = {
-  1: "md:col-span-1 xl:col-span-1",
-  2: "md:col-span-2 xl:col-span-2",
-  3: "md:col-span-3 xl:col-span-3",
-  4: "md:col-span-4 xl:col-span-4",
-  5: "md:col-span-5 xl:col-span-5",
-  6: "md:col-span-6 xl:col-span-6",
-  7: "md:col-span-6 xl:col-span-7",
-  8: "md:col-span-6 xl:col-span-8",
-  9: "md:col-span-6 xl:col-span-9",
-  10: "md:col-span-6 xl:col-span-10",
-  11: "md:col-span-6 xl:col-span-11",
-  12: "md:col-span-6 xl:col-span-12",
+  1: "md:col-span-1 @min-[56.875rem]/main:col-span-1",
+  2: "md:col-span-2 @min-[56.875rem]/main:col-span-2",
+  3: "md:col-span-3 @min-[56.875rem]/main:col-span-3",
+  4: "md:col-span-4 @min-[56.875rem]/main:col-span-4",
+  5: "md:col-span-5 @min-[56.875rem]/main:col-span-5",
+  6: "md:col-span-6 @min-[56.875rem]/main:col-span-6",
+  7: "md:col-span-6 @min-[56.875rem]/main:col-span-7",
+  8: "md:col-span-6 @min-[56.875rem]/main:col-span-8",
+  9: "md:col-span-6 @min-[56.875rem]/main:col-span-9",
+  10: "md:col-span-6 @min-[56.875rem]/main:col-span-10",
+  11: "md:col-span-6 @min-[56.875rem]/main:col-span-11",
+  12: "md:col-span-6 @min-[56.875rem]/main:col-span-12",
 };
 
 export const spanClass = (width: number) => SPAN_CLASS[clamp(width, 1, BOARD_COLUMNS)]!;

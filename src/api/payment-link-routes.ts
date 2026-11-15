@@ -12,6 +12,7 @@ import {
   getPricingPage,
   listPaymentLinks,
   openPaymentLink,
+  paymentLinkBusiness,
   updatePaymentLink,
   type PaymentLinkView,
 } from "@/modules/checkout/payment-links";
@@ -194,9 +195,15 @@ export async function registerPaymentLinkRoutes(app: FastifyInstance) {
     )
       return;
     const { plink } = req.params as { plink: string };
+    // A refused link still names its business, so the page can show its contact.
     try {
       const session = await openPaymentLink(plink);
-      if (!session) return notFound(reply, "This payment link is not available");
+      // A refused link still names its business, so the page can show its contact.
+      if (!session)
+        return reply.code(404).send({
+          error: { type: "invalid_request_error", message: "This payment link is not available" },
+          business: await paymentLinkBusiness(plink),
+        });
       return reply.code(201).send({
         object: "checkout_session",
         id: session.publicId,
@@ -229,12 +236,17 @@ export async function registerPaymentLinkRoutes(app: FastifyInstance) {
         name: page.business.name,
         livemode: page.business.livemode,
         logo_url: page.business.logoUrl,
+        icon_url: page.business.iconUrl,
+        favicon_url: page.business.faviconUrl,
         brand_color: page.business.brandColor,
+        support_email: page.business.supportEmail,
+        website: page.business.website,
       },
       links: page.links.map((l) => ({
         id: l.id,
         name: l.name,
         mode: l.mode,
+        product: l.product,
         description: l.description,
         image_url: l.imageUrl,
         price: {
@@ -243,7 +255,10 @@ export async function registerPaymentLinkRoutes(app: FastifyInstance) {
           amount_minor: l.price.amountMinor,
           interval: l.price.interval,
           interval_count: l.price.intervalCount,
+          model: l.price.model,
         },
+        assistant_allowance_usd_cents: l.assistantAllowanceUsdCents,
+        assistant_credits: l.assistantCredits,
       })),
       // Shown with no checkout: the business's own sign-up is the way in.
       display_plans: page.displayPlans.map((p) => ({
@@ -253,6 +268,18 @@ export async function registerPaymentLinkRoutes(app: FastifyInstance) {
         amount_minor: p.amountMinor,
         interval: p.interval,
         limit_minor: p.limitMinor,
+        assistant_allowance_usd_cents: p.assistantAllowanceUsdCents,
+        assistant_credits: p.assistantCredits,
+      })),
+      // A coupon marked with `metadata.pricing_page_until`, until then.
+      offers: page.offers.map((o) => ({
+        name: o.name,
+        percent_off: o.percentOff,
+        periods: o.periods,
+        intervals: o.intervals,
+        ends_at: o.endsAt,
+        ends_on: o.endsOn,
+        code: o.code,
       })),
     };
   });

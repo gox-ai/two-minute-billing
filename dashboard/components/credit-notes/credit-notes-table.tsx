@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   ListPage,
@@ -11,14 +12,15 @@ import {
   type ListPageHeader,
 } from "@/components/patterns/list-page";
 import { makeListSource } from "@/lib/list-source";
-import { InfoCell, MoneyCell, TextCell } from "@/components/patterns/list-cells";
+import { MoneyCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusBadge } from "@/components/status-badge";
 import { creditNoteChipStatus } from "@/lib/credit-note-status";
 import { EmptyState } from "@/components/states";
-import { fmtDateShort } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { CustomerInfoCell } from "@/components/patterns/customer-info-cell";
-import { FileMinus } from "lucide-react";
+import { FileDown, FileMinus, Receipt, User } from "lucide-react";
+import { RowMenu, copyIdItem } from "@/components/patterns/row-menu";
 import type { CreditNote } from "@/lib/api/credit-notes";
 import { moneyCell } from "@/lib/table-export";
 import { KindBadge, reasonLabel } from "@/components/credit-notes/chips";
@@ -94,7 +96,7 @@ const KIND_OPTIONS = [
 
 const STATUS_OPTIONS = [
   { value: "adjusted", label: "Adjusted" },
-  { value: "refund_due", label: "Refund Due" },
+  { value: "refund_due", label: "Refund due" },
   { value: "refunded", label: "Refunded" },
   { value: "voided", label: "Voided" },
 ];
@@ -183,18 +185,19 @@ export function CreditNotesTable({
     () => [
       {
         id: "number",
-        header: "Credit Note",
+        header: "Credit note",
         accessorFn: (c) => c.number ?? c.id,
         cell: ({ row }) => (
-          <InfoCell
-            title={
-              <span className={cn(!row.original.number && "font-mono")}>
-                {row.original.number ?? row.original.id}
-              </span>
-            }
+          <Link
             href={`/businesses/${biz}/credit_notes/${row.original.id}`}
-            sub={row.original.number ? row.original.id : undefined}
-          />
+            data-record-title
+            className={cn(
+              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline",
+              !row.original.number && "font-mono",
+            )}
+          >
+            {row.original.number ?? row.original.id}
+          </Link>
         ),
       },
       {
@@ -202,15 +205,15 @@ export function CreditNotesTable({
         header: "Invoice",
         accessorFn: (c) => `${c.invoice_number ?? ""} ${c.invoice}`,
         cell: ({ row }) => (
-          <InfoCell
-            title={
-              <span className={cn(!row.original.invoice_number && "font-mono")}>
-                {row.original.invoice_number ?? row.original.invoice}
-              </span>
-            }
+          <Link
             href={`/businesses/${biz}/invoices/${row.original.invoice}`}
-            sub={row.original.invoice_number ? row.original.invoice : undefined}
-          />
+            className={cn(
+              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline",
+              !row.original.invoice_number && "font-mono",
+            )}
+          >
+            {row.original.invoice_number ?? row.original.invoice}
+          </Link>
         ),
       },
       {
@@ -237,6 +240,7 @@ export function CreditNotesTable({
         accessorFn: (c) => c.total_minor,
         meta: {
           align: "right",
+          phone: "aside",
           exportAs: [
             moneyCell<CreditNote>(
               "Total",
@@ -275,7 +279,7 @@ export function CreditNotesTable({
         accessorKey: "created_at",
         id: "created_at",
         header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
       // The index leads with the customer. Voided On is optional, so it starts hidden.
       {
@@ -292,12 +296,10 @@ export function CreditNotesTable({
       },
       {
         id: "voided_at",
-        header: "Voided On",
+        header: "Voided on",
         accessorFn: (c) => c.voided_at ?? "",
         cell: ({ row }) => (
-          <TextCell>
-            {row.original.voided_at ? fmtDateShort(row.original.voided_at, tz) : null}
-          </TextCell>
+          <TextCell>{row.original.voided_at ? fmtDate(row.original.voided_at, tz) : null}</TextCell>
         ),
       },
     ],
@@ -306,7 +308,7 @@ export function CreditNotesTable({
 
   const segments = React.useMemo<ListSegment<CreditNote>[]>(
     () => [
-      { id: "all", label: "All Credit Notes" },
+      { id: "all", label: "All credit notes" },
       {
         id: "refundable",
         label: "Refundable",
@@ -319,7 +321,7 @@ export function CreditNotesTable({
       },
       {
         id: "refund_due",
-        label: "Refund Due",
+        label: "Refund due",
         filters: [{ field: "status", op: "is", value: "refund_due" }],
       },
       {
@@ -335,7 +337,7 @@ export function CreditNotesTable({
       // this is not "status is refund_due", which stays true on a fully allocated note.
       {
         id: "available",
-        label: "Credit Available",
+        label: "Credit available",
         filters: [{ field: "available_minor", op: "gt", value: "0" }],
       },
       // Bad debt, by the coded reason rather than by kind: a ledger reconciliation has to
@@ -358,11 +360,11 @@ export function CreditNotesTable({
    */
   const filterFields = React.useMemo<ListFilterField<CreditNote>[]>(
     () => [
-      { id: "number", label: "Credit Note Number", group: "Identity", serverOps: TEXT_OPS },
-      { id: "id", label: "Credit Note Id", group: "Identity", serverOps: TEXT_OPS_NN },
+      { id: "number", label: "Credit note number", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Credit note ID", group: "Identity", serverOps: TEXT_OPS_NN },
       {
         id: "invoice",
-        label: "Invoice Id",
+        label: "Invoice ID",
         group: "Identity",
         serverOps: TEXT_OPS_NN,
         keywords: "document credited",
@@ -386,9 +388,9 @@ export function CreditNotesTable({
         serverOps: ENUM_OPS_NN,
       },
 
-      { id: "customer", label: "Customer Id", group: "Customer", serverOps: TEXT_OPS_NN },
-      { id: "customer_name", label: "Customer Name", group: "Customer", serverOps: TEXT_OPS },
-      { id: "customer_email", label: "Customer Email", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer", label: "Customer ID", group: "Customer", serverOps: TEXT_OPS_NN },
+      { id: "customer_name", label: "Customer name", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_email", label: "Customer email", group: "Customer", serverOps: TEXT_OPS },
 
       {
         id: "currency",
@@ -401,7 +403,7 @@ export function CreditNotesTable({
       },
       {
         id: "subtotal_minor",
-        label: "Sub Total (minor units)",
+        label: "Sub total (minor units)",
         type: "number",
         group: "Amounts",
         serverOps: NUM_OPS_NN,
@@ -445,7 +447,7 @@ export function CreditNotesTable({
       { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS_NN },
       // `status` records THAT a note was voided; this is the only way to bound a void to
       // a period, which is what a period-end reconciliation needs.
-      { id: "voided_at", label: "Voided On", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "voided_at", label: "Voided on", type: "date", group: "Dates", serverOps: DATE_OPS },
 
       {
         id: "reason_code",
@@ -457,7 +459,7 @@ export function CreditNotesTable({
       },
       {
         id: "reason",
-        label: "Reason Note",
+        label: "Reason note",
         group: "Other",
         serverOps: TEXT_OPS,
         hint: "The free-text note from when the credit note was issued, in addition to the coded reason",
@@ -491,7 +493,8 @@ export function CreditNotesTable({
       data={rows}
       server={{ total, hasMore, nextCursor, fetchPage }}
       segments={segments}
-      initialHidden={["voided_at"]}
+      // Off by default so the table fits its card at 1440px; all stay in the chooser.
+      initialHidden={["kind", "reason", "invoice", "available", "voided_at"]}
       filterFields={filterFields}
       savedViews={{ entity: "credit_notes", biz }}
       initialFilters={initialFilters}
@@ -504,15 +507,56 @@ export function CreditNotesTable({
         { id: "available_minor", label: "Available" },
       ]}
       createAction={createAction("Credit Note", createHref)}
-      searchPlaceholder="Search for number / ID…"
+      searchPlaceholder="Search by number or ID"
       exportName="credit-notes"
       persistKey={`credit-notes:${biz}`}
       rowHref={(c) => `/businesses/${biz}/credit_notes/${c.id}`}
+      rowMenu={(c) => {
+        const base = `/businesses/${biz}/credit_notes/${c.id}`;
+        return (
+          <RowMenu
+            label={c.number ?? c.id}
+            groups={[
+              {
+                label: "References",
+                items: [
+                  c.invoice
+                    ? {
+                        label: "View invoice",
+                        icon: <Receipt className="size-4" />,
+                        href: `/businesses/${biz}/invoices/${c.invoice}`,
+                      }
+                    : null,
+                  c.customer
+                    ? {
+                        label: "View customer",
+                        icon: <User className="size-4" />,
+                        href: `/businesses/${biz}/customers/${c.customer}`,
+                      }
+                    : null,
+                ],
+              },
+              {
+                label: "Quick actions",
+                items: [
+                  { label: "View credit note", icon: <FileMinus className="size-4" />, href: base },
+                  {
+                    label: "Download PDF",
+                    icon: <FileDown className="size-4" />,
+                    download: `${base}/pdf`,
+                  },
+                  copyIdItem("credit note", c.id),
+                ],
+              },
+            ]}
+          />
+        );
+      }}
       emptyState={
         <EmptyState
           icon={<FileMinus />}
           title="No credit notes"
-          description="No credit notes match this view, filter or search."
+          description="There are no credit notes in this view."
         />
       }
     />

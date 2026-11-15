@@ -62,12 +62,8 @@ export default async function CreditNotesPage({
     return (
       <>
         <PageHeader
-          title="Credit Notes"
-          breadcrumbs={[
-            { label: "Businesses", href: "/" },
-            { label: biz, href: `/businesses/${biz}` },
-            { label: "Credit Notes" },
-          ]}
+          title="Credit notes"
+          breadcrumbs={[{ label: biz, href: `/businesses/${biz}` }, { label: "Credit notes" }]}
         />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
@@ -84,7 +80,7 @@ export default async function CreditNotesPage({
       {/* Create lives in the list top bar; the table owns its empty state. */}
       <CreditNotesTable
         page={{
-          title: "Credit Notes",
+          title: "Credit notes",
           description: invoice ? (
             <span className="text-sm text-muted-foreground">
               Filtered to invoice <span className="font-mono">{invoice}</span>
@@ -97,11 +93,7 @@ export default async function CreditNotesPage({
                 : ""}
             </span>
           ) : undefined,
-          breadcrumbs: [
-            { label: "Businesses", href: "/" },
-            { label: name, href: `/businesses/${biz}` },
-            { label: "Credit Notes" },
-          ],
+          breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Credit notes" }],
           notice: (
             <>
               {msg ? (

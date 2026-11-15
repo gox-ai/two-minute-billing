@@ -55,8 +55,9 @@ export function AddFieldForm({ biz }: { biz: string }) {
           required
           help={
             <>
-              Use lowercase snake_case that starts with a letter. It shows as{" "}
-              <span className="font-mono">cf_&lt;name&gt;</span>. You cannot change it later.
+              Use lowercase letters, digits and underscores, and start with a letter. The API shows
+              the field with the prefix <span className="font-mono">cf_</span>. You cannot change it
+              later.
             </>
           }
         >

@@ -58,7 +58,7 @@ const org = await createOrganization({ name: "Gateway SDK Modes Co" });
 const orgId = org.organization.id;
 
 /** A test business whose own TM Test account answers with `mode`. */
-async function businessWithMode(name: string, mode: "sdk" | "form_post" | null) {
+async function businessWithMode(name: string, mode: "sdk" | "form_post" | "none" | null) {
   const biz = await createBusiness({
     organizationId: orgId,
     name,
@@ -84,6 +84,7 @@ async function businessWithMode(name: string, mode: "sdk" | "form_post" | null) 
 const sdk = await businessWithMode("SDK Biz", "sdk");
 const form = await businessWithMode("Form Post Biz", "form_post");
 const plain = await businessWithMode("Plain Biz", null);
+const atOnce = await businessWithMode("Pay At Once Biz", "none");
 
 const mkInvoice = async (b: typeof sdk, amountMinor: bigint) =>
   (
@@ -288,32 +289,56 @@ const clientResultRows = (intentAtGateway: string) =>
   );
 }
 
-// ── (d) client_result on a gateway with no submitClientResult ────────────────
+// ── (d) client_result on a gateway with no submitClientResult (`none`) ──────
 {
-  const pm = await vaultPaymentMethod({
+  const pm0 = await vaultPaymentMethod({
     organizationId: orgId,
     businessId: plain.biz.id,
     customer: plain.cus,
     token: "tok_4000000000003155",
     gatewayAccountId: plain.acct.publicId,
   });
-  const inv = await mkInvoice(plain, 4400n);
-  const { intent } = await createPaymentIntent({
+  const inv0 = await mkInvoice(plain, 4400n);
+  const { intent: def3ds } = await createPaymentIntent({
     organizationId: orgId,
     businessId: plain.biz.id,
     purpose: "payment",
-    paymentMethodPublicId: pm.publicId,
+    paymentMethodPublicId: pm0.publicId,
     gatewayAccountId: plain.acct.publicId,
+    amountMinor: Number(inv0.amountDueMinor),
+    currency: "USD",
+    session: "on_session",
+  });
+  ok(
+    "d: the default account keeps the redirect challenge for a vaulted 3DS card",
+    (def3ds.nextAction as BuyerAuthorization | null)?.mode === "redirect",
+  );
+}
+{
+  const pm = await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: atOnce.biz.id,
+    customer: atOnce.cus,
+    token: "tok_4000000000003155",
+    gatewayAccountId: atOnce.acct.publicId,
+  });
+  const inv = await mkInvoice(atOnce, 4400n);
+  const { intent } = await createPaymentIntent({
+    organizationId: orgId,
+    businessId: atOnce.biz.id,
+    purpose: "payment",
+    paymentMethodPublicId: pm.publicId,
+    gatewayAccountId: atOnce.acct.publicId,
     amountMinor: Number(inv.amountDueMinor),
     currency: "USD",
     session: "on_session",
   });
   ok(
-    "d: the default tmtest account is unchanged (redirect challenge)",
+    "d: a `none` account answers a vaulted 3DS card with the redirect challenge",
     (intent.nextAction as BuyerAuthorization | null)?.mode === "redirect",
   );
   const err = await catchErr(() =>
-    consumePaymentIntent(orgId, plain.biz.id, intent.publicId, inv.publicId, {
+    consumePaymentIntent(orgId, atOnce.biz.id, intent.publicId, inv.publicId, {
       clientResult: { nonce: "tmtest_ok" },
     }),
   );
@@ -322,7 +347,7 @@ const clientResultRows = (intentAtGateway: string) =>
     err instanceof PaymentIntentError && err.code === "client_result_unsupported",
     String((err as Error)?.message),
   );
-  const [att] = await listAttemptsForIntent(orgId, plain.biz.id, intent.publicId);
+  const [att] = await listAttemptsForIntent(orgId, atOnce.biz.id, intent.publicId);
   ok(
     "d: nothing changed on the attempt",
     att?.status === "requires_action" && att.idAtGateway === intent.intentAtGateway,
@@ -521,6 +546,46 @@ const json = (r: { body: string }) => JSON.parse(r.body) as Record<string, any>;
     d2.statusCode === 400 && d2.body.includes("The card was declined"),
     d2.body.slice(0, 200),
   );
+  // After a Decline the buyer presses Pay again: a new challenge, not "already with your bank".
+  const r1 = await api("POST", `/portal/v1/invoices/${inv2.publicId}/collect`, ptoken, {});
+  const r1Body = json(r1);
+  ok(
+    "g: Pay after a Decline opens a new challenge",
+    r1.statusCode === 200 &&
+      r1Body.status === "action_required" &&
+      r1Body.payment_intent?.id !== d1.payment_intent?.id,
+    r1.body.slice(0, 200),
+  );
+  const r2 = await api("POST", `/portal/v1/invoices/${inv2.publicId}/collect`, ptoken, {
+    payment_intent: r1Body.payment_intent?.id,
+    client_result: { nonce: "tmtest_ok" },
+  });
+  ok(
+    "g: …and Approve on it pays the invoice",
+    r2.statusCode === 200 && (await invoiceStatus(inv2.id)) === "paid",
+    r2.body.slice(0, 200),
+  );
+
+  // Portal add-card: Decline in the test gateway's dialog answers a message the page shows.
+  const pSetup = json(
+    await api("POST", "/portal/v1/payment_methods/setup", ptoken, {
+      return_url: "https://portal.test/done",
+      cancel_url: "https://portal.test/back",
+    }),
+  );
+  const pDecl = await api("POST", "/portal/v1/payment_methods", ptoken, {
+    payment_intent: pSetup.payment_intent,
+    client_result: { nonce: "tmtest_decline" },
+  });
+  const pDeclMsg = String(json(pDecl).error?.message ?? "");
+  ok(
+    "g: portal add-card Decline answers 4xx with a 'declined' message for the page to show",
+    pSetup.mode === "sdk" &&
+      pDecl.statusCode >= 400 &&
+      pDecl.statusCode < 500 &&
+      /declined/i.test(pDeclMsg),
+    pDecl.body.slice(0, 200),
+  );
 
   // Operator consume route.
   const inv3 = await mkInvoice(sdk, 5100n);
@@ -632,6 +697,11 @@ const json = (r: { body: string }) => JSON.parse(r.body) as Record<string, any>;
     sDecl.statusCode === 400,
     sDecl.body.slice(0, 200),
   );
+  ok(
+    "h: …with a 'declined' message for the card step to show",
+    /declined/i.test(String(json(sDecl).error?.message ?? "")),
+    sDecl.body.slice(0, 200),
+  );
   const setup2 = json(
     await api("POST", "/checkout/v1/setup", t2, {
       return_url: "https://shop.example.com/done",
@@ -734,6 +804,58 @@ const json = (r: { body: string }) => JSON.parse(r.body) as Record<string, any>;
   } finally {
     proto.acceptClientResult = orig;
   }
+}
+
+// ── (k) the default account: Pay with no instrument opens the Approve/Decline dialog ──
+{
+  const inv = await mkInvoice(plain, 4600n);
+  const { intent } = await buyerIntent(plain, inv);
+  ok(
+    "k: a default account answers a Pay-now intent with the sdk challenge",
+    (serializePaymentIntent(intent).next_action as BuyerAuthorization | null)?.mode === "sdk",
+  );
+  const declined = await catchErr(() =>
+    consumePaymentIntent(orgId, plain.biz.id, intent.publicId, inv.publicId, {
+      clientResult: { nonce: "tmtest_decline" },
+    }),
+  );
+  ok(
+    "k: Decline leaves the invoice unpaid",
+    (await invoiceStatus(inv.id)) !== "paid",
+    String((declined as Error | null)?.message),
+  );
+  const { intent: again } = await buyerIntent(plain, inv);
+  const paid = await consumePaymentIntent(orgId, plain.biz.id, again.publicId, inv.publicId, {
+    clientResult: { nonce: "tmtest_ok" },
+  });
+  ok(
+    "k: a new Pay with Approve settles it",
+    paid?.charge?.status === "succeeded" && (await invoiceStatus(inv.id)) === "paid",
+  );
+  const pm = await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: plain.biz.id,
+    customer: plain.cus,
+    token: "tok_4242",
+    gatewayAccountId: plain.acct.publicId,
+  });
+  const inv2 = await mkInvoice(plain, 4700n);
+  const { intent: saved } = await createPaymentIntent({
+    organizationId: orgId,
+    businessId: plain.biz.id,
+    purpose: "payment",
+    paymentMethodPublicId: pm.publicId,
+    gatewayAccountId: plain.acct.publicId,
+    amountMinor: Number(inv2.amountDueMinor),
+    currency: "USD",
+  });
+  ok("k: a saved card still authorizes with no dialog", saved.status === "authorized");
+  const inv3 = await mkInvoice(atOnce, 4800n);
+  const { intent: direct } = await buyerIntent(atOnce, inv3);
+  ok(
+    "k: `buyer_auth_mode=none` authorizes a Pay-now intent at once",
+    direct.status === "authorized" && !serializePaymentIntent(direct).next_action,
+  );
 }
 
 await app.close();

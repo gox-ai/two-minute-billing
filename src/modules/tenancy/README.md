@@ -30,6 +30,8 @@ authenticates with — see Invariants).
 | `createOrganization` / `updateOrganization` | org lifecycle |
 | `createBusiness` / `updateBusiness` | business lifecycle (creates the live row AND its test twin) + settings patch (with `expectedVersion` OCC) |
 | `ensureTestTwin` | the test twin of a live business, created on first use (idempotent) |
+| `twinSettings` | what a test twin copies from its live business (shared by creation and reset) |
+| `resetTestBusiness` (`reset-test-business.ts`) | a test business back to a new twin of its live business; same ids |
 | `enableLiveAccess` / `setOrganizationStatus` / `accountStateOf` | the live-mode lock, read-only status + reason and the over-limit notice (0354, 0356), set by account billing (back-office) |
 | `businessPairs` | live ↔ test public ids per business, for serialization |
 | `getBusinessByPublicId` / `listBusinesses` | resolve/enumerate businesses (mode-scoped) |
@@ -44,6 +46,7 @@ authenticates with — see Invariants).
 | `GET /v1/businesses` · `GET /v1/businesses/:biz` | list / fetch businesses |
 | `PATCH /v1/businesses/:biz` | update business settings (409 on version mismatch) |
 | `POST /v1/businesses/:biz/test_mode` | the business's test twin, created on first call |
+| `POST /v1/businesses/:biz/test_data/reset` | reset a test business (route in `time-travel-routes.ts`) |
 | (org + API-key endpoints) | via `routes.ts` / auth flows |
 
 ## Events emitted
@@ -93,6 +96,12 @@ None (audit-logged instead).
 
 ## Changelog
 
+- **2026-11-13** — **An unchanged settings PATCH writes nothing.** `updateBusiness` drops every field equal
+  to the stored value (`sameStoredValue`: jsonb by value, key order ignored), so a Save with no
+  change keeps `resource_version` and records no audit row, and a real change audits only what
+  moved. `expected_version` is still checked first, so a stale no-op still 409s.
+  `verify:settings-billing-rules`.
+- **2026-11-12** — `listApiKeys` leaves out a connected app's key (a key that an OAuth grant owns). It is listed with the connected apps and ends when the app is disconnected, so it no longer shows as an API key or accepts an access edit through the key routes.
 - **2026-11-04 (0499)** — A business always has a default currency: `businesses.default_currency` is NOT NULL (NULLs backfilled to USD; production had none), `createBusiness` requires it, and `POST /v1/businesses` refuses a request without `default_currency`.
 
 - **2026-11-03** — `businesses.invoice_rules_config` (0486, `PATCH invoice_rules_config`, keys
@@ -334,3 +343,15 @@ None (audit-logged instead).
 - **2026-11-03 (0489, review)** — `insertTestTwin` does not copy `team_alerts_config`.
 - **2026-11-05** — `accountStateOf` also returns `country` and `signupGateway` (from
   `signup_answers.gateway`), for the dashboard's first-run presets via `GET /auth/me`.
+- **2026-11-12** — `resetTestBusiness` (`POST /v1/businesses/:biz/test_data/reset`): a test business
+  becomes what a new twin of its live business is, with the same id and public id. One `systemDb`
+  transaction locks the row, deletes the ledger through `app_wipe_test_ledger`, then deletes this
+  business's rows from every table with a `business_id` column (discovered from the catalog, so a
+  new table is reset by default) except `RESET_KEEP`: audit and request logs, MCP grants, support
+  requests, Billy's chats, saved list views and dashboards, transfer history, platform state.
+  Deletes run children first; a table still referenced retries in a savepoint. The row's settings
+  are rewritten from `twinSettings(live)`, numbering and team alerts go back to their defaults,
+  the staff test limits stay; then a new TM Test Gateway and an audit row. A test business with
+  no live business is refused: there is no live business to copy, and engine defaults would
+  silently drop the operator's branding and addresses. `insertTestTwin` now uses `twinSettings`.
+  `verify:test-reset`.

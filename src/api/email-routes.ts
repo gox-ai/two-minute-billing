@@ -20,6 +20,7 @@ import {
   EMAIL_SORT_FIELDS,
   getEmail,
   getEmailActivity,
+  getEmailDeliveryReport,
   resendEmail,
   serializeEmail,
 } from "@/modules/emails/service";
@@ -145,6 +146,9 @@ const adhocEmailSchema = z.object({
   customer: z.string().max(64).optional(),
   invoice: z.string().max(64).optional(),
   credit_note: z.string().max(64).optional(),
+  // `subscription_restart`: the ended subscription, and the price of the new term.
+  subscription: z.string().max(64).optional(),
+  restart_price: z.enum(["current", "keep"]).optional(),
   to: z.string().email().max(320).optional(),
   note: z.string().max(2000).optional(),
 });
@@ -219,6 +223,31 @@ export async function registerEmailRoutes(app: FastifyInstance) {
       const activity = await getEmailActivity(req.organization!.id, business.id, parsed.data);
       if (!activity) return notFound(reply, "Business not found");
       return { object: "email_activity", ...activity };
+    },
+  );
+
+  /**
+   * Delivery report: counts by week (Monday to Sunday, business time zone) and by email type,
+   * for the last `weeks` weeks including this one. Read-only. Registered before `/emails/:id`.
+   */
+  app.get(
+    "/v1/businesses/:biz/emails/report",
+    { preHandler: [authenticate, requirePerm("emails:view")] },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const q = req.query as { weeks?: string };
+      const parsed = z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(52)
+        .default(12)
+        .safeParse(q.weeks ?? 12);
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const report = await getEmailDeliveryReport(req.organization!.id, business.id, parsed.data);
+      if (!report) return notFound(reply, "Business not found");
+      return { object: "email_delivery_report", ...report };
     },
   );
 
@@ -633,7 +662,7 @@ export async function registerEmailRoutes(app: FastifyInstance) {
       if (!parsed.success) return badRequest(reply, parsed.error);
       // `to` may be any address, so the recipient is counted as well as the business.
       const d = parsed.data;
-      const target = d.to ?? d.customer ?? d.invoice ?? d.credit_note;
+      const target = d.to ?? d.customer ?? d.invoice ?? d.credit_note ?? d.subscription;
       // Per business: a global recipient key would let one org block another's mail to a customer.
       const recipient = target ? `${business.id}:${target}` : null;
       if (
@@ -666,6 +695,8 @@ export async function registerEmailRoutes(app: FastifyInstance) {
           customerId: parsed.data.customer,
           invoiceId: parsed.data.invoice,
           creditNoteId: parsed.data.credit_note,
+          subscriptionId: parsed.data.subscription,
+          restartPrice: parsed.data.restart_price,
           to: parsed.data.to,
           note: parsed.data.note,
         });

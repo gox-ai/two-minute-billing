@@ -82,6 +82,8 @@ export interface World {
   reload(billed: Billed): Promise<Billed>;
   refundRows(paymentId: string): Promise<(typeof refunds.$inferSelect)[]>;
   dispute(providerDisputeId: string): Promise<typeof disputes.$inferSelect | undefined>;
+  /** Every dispute in this world's business. */
+  disputes(): Promise<(typeof disputes.$inferSelect)[]>;
   invoiceStatus(invoiceId: string): Promise<string>;
   /** Normalized types the route recorded for these provider event ids. */
   recordedTypes(eventIds: string[]): Promise<string[]>;
@@ -99,8 +101,18 @@ let n = 0;
 /**
  * Run the queued `process_gateway_webhook` jobs through graphile-worker, as a worker would. A
  * gateway that answers before processing (`webhook.processAfterAnswer`) books nothing until then.
+ *
+ * One drain at a time. Gateways run in parallel and `runOnce` takes any queued job, so a
+ * drain could return while its world's job still runs inside another gateway's drain.
  */
-export async function drainStoredWebhooks(): Promise<void> {
+let drainQueue: Promise<void> = Promise.resolve();
+export function drainStoredWebhooks(): Promise<void> {
+  const next = drainQueue.then(drainOnce, drainOnce);
+  drainQueue = next.catch(() => {});
+  return next;
+}
+
+async function drainOnce(): Promise<void> {
   await runOnce({
     connectionString: config.DATABASE_URL,
     concurrency: 1,
@@ -342,6 +354,8 @@ export async function newWorld(
         )
       )[0];
     },
+    disputes: () =>
+      withTenant(org.id, (tx) => tx.select().from(disputes).where(eq(disputes.businessId, biz.id))),
     async invoiceStatus(id) {
       const [inv] = await withTenant(org.id, (tx) =>
         tx.select().from(invoices).where(eq(invoices.id, id)),

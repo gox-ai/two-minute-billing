@@ -434,15 +434,18 @@ export async function sendLargeGrantAlert(input: {
   amountMinor: bigint;
   currency: string;
   alertAboveMinor: number;
+  /** A unit with no rate: the amount and the limit in units, as text. */
+  amountText?: string;
+  alertAboveText?: string;
 }): Promise<SendOutcome> {
   const biz = await loadAlertBusiness(input.organizationId, input.businessId);
   if (!biz) return "no_business";
   if (!biz.config.largeGrants.enabled) return "off";
   const recipients = await deliverableRecipients(biz.organizationId, biz.id, biz.config.recipients);
   if (recipients.length === 0) return "no_recipients";
-  const amount = formatMoney(input.amountMinor, input.currency);
+  const amount = input.amountText ?? formatMoney(input.amountMinor, input.currency);
   const subject = `${biz.name}: a ${input.kindLabel} of ${amount} is above your alert limit`;
-  const intro = `A team member or API key gave free credit above your alert limit of ${formatMoney(input.alertAboveMinor, input.currency)}. If you did not expect this, examine the audit log.`;
+  const intro = `A team member or API key gave free credit above your alert limit of ${input.alertAboveText ?? formatMoney(input.alertAboveMinor, input.currency)}. If you did not expect this, examine the audit log.`;
   const base = dashboardBase();
   const { html, text } = layout(
     subject,

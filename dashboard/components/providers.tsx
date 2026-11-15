@@ -1,9 +1,9 @@
-'use client'
+"use client";
 
-import * as React from 'react'
-import { ThemeProvider } from '@/components/theme-provider'
-import { Toaster } from '@/components/ui/sonner'
-import { TooltipProvider } from '@/components/ui/tooltip'
+import * as React from "react";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * Client provider boundary: theme + tooltips + global toaster (with undo
@@ -14,20 +14,21 @@ export function Providers({
   children,
   forcedTheme,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
   /**
    * Pin the theme for this tree and disable switching. The storefront passes
    * `light`: those pages are a MERCHANT's brand surface, and a merchant supplies
    * one logo for one background — see the storefront layout.
    */
-  forcedTheme?: 'light' | 'dark'
+  forcedTheme?: "light" | "dark";
 }) {
   return (
     <ThemeProvider forcedTheme={forcedTheme}>
       <TooltipProvider>
         {children}
-        <Toaster richColors closeButton position="bottom-right" />
+        {/* A banner: drops from the top edge, swipes or times out back up. */}
+        <Toaster closeButton position="top-center" swipeDirections={["top"]} />
       </TooltipProvider>
     </ThemeProvider>
-  )
+  );
 }

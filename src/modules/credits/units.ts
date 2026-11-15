@@ -7,7 +7,7 @@
  */
 
 export interface CreditUnitRate {
-  /** Minor units per whole unit × 10^12. */
+  /** Minor units per whole unit × 10^12. 0 = the unit has no money rate. */
   minorPerUnitE12: bigint;
   /** 0–4. */
   decimals: number;
@@ -15,6 +15,21 @@ export interface CreditUnitRate {
 
 export const E12 = 1_000_000_000_000n;
 export const MONEY_RATE: CreditUnitRate = { minorPerUnitE12: E12, decimals: 0 };
+
+/** A unit with no money rate: its credits have no face value and never convert to money. */
+export const hasRate = (rate: Pick<CreditUnitRate, "minorPerUnitE12">): boolean =>
+  rate.minorPerUnitE12 > 0n;
+
+/** A unit row's rate. Null = money. A unit with no rate reads as rate 0 (`hasRate`). */
+export function unitRate(
+  u: { minorPerUnitE12: bigint | null; decimals: number } | null,
+): CreditUnitRate {
+  return u ? { minorPerUnitE12: u.minorPerUnitE12 ?? 0n, decimals: u.decimals } : MONEY_RATE;
+}
+
+/** The unit has no money rate. Money (null) always has one. */
+export const isUnrated = (u: { minorPerUnitE12: bigint | null } | null): boolean =>
+  u !== null && u.minorPerUnitE12 === null;
 
 const pow10 = (n: number): bigint => 10n ** BigInt(n);
 
@@ -32,6 +47,7 @@ export function faceMinorFor(steps: bigint, rate: CreditUnitRate): bigint {
 
 /** Steps of the unit worth `minor`: round_half_up(money ÷ rate), at the unit's precision. */
 export function stepsForMinor(minor: bigint, rate: CreditUnitRate): bigint {
+  if (!hasRate(rate)) throw new RangeError("a credit unit with no rate has no money value");
   return divHalfUp(minor * E12 * pow10(rate.decimals), rate.minorPerUnitE12);
 }
 

@@ -3,9 +3,9 @@
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import { cn } from "@/lib/utils";
-import { Consequence, FieldLabel, SettingRow } from "@/components/settings/settings-layout";
+import { Consequence, SettingRow } from "@/components/settings/settings-layout";
 import {
   composeDocumentNumber,
   DYNAMIC_PREFIX_OPTIONS,
@@ -95,6 +95,7 @@ export function DocumentNumberingFields({
         htmlFor={prefixFieldName}
         errorFor={prefixFieldName}
         help="1–20 characters."
+        placement="end"
         control={
           <Input
             id={prefixFieldName}
@@ -103,7 +104,7 @@ export function DocumentNumberingFields({
             onChange={(e) => setP(e.target.value)}
             required
             maxLength={20}
-            className="w-40 font-mono"
+            className="w-30 font-mono"
           />
         }
       />
@@ -112,6 +113,7 @@ export function DocumentNumberingFields({
         htmlFor={nextNumberFieldName}
         errorFor={nextNumberFieldName}
         help={`Only increase this number. If a number in the same format is already issued, the next ${label} fails to issue.`}
+        placement="end"
         control={
           <Input
             id={nextNumberFieldName}
@@ -121,7 +123,7 @@ export function DocumentNumberingFields({
             step={1}
             value={n}
             onChange={(e) => setN(e.target.value)}
-            className="w-32 tabular-nums"
+            className="w-30 tabular-nums"
           />
         }
       />
@@ -129,75 +131,72 @@ export function DocumentNumberingFields({
         label="Dynamic prefix"
         htmlFor={`${fieldPrefix}dynamic_prefix`}
         help={`A date stamp between the prefix and the number, in this business's timezone (${timezone}).`}
+        placement="end"
         control={
-          <SelectField
+          <SelectAnswer
             name={`${fieldPrefix}dynamic_prefix`}
             value={dyn}
             onValueChange={(v) => setDyn(v as DynamicPrefix)}
             ariaLabel="Dynamic prefix"
             options={DYNAMIC_PREFIX_OPTIONS}
-            className="w-full sm:w-56"
           />
         }
-      >
-        {/* FY cannot render without knowing when the year turns, and markets disagree, so
-            it is an explicit choice whenever `fy` is picked. Hidden, never unmounted. */}
-        <div className={cn("flex flex-col gap-1.5", dyn !== "fy" && "hidden")}>
-          <FieldLabel htmlFor={`${fieldPrefix}fiscal_year_start_month`}>
-            Fiscal year starts in
-          </FieldLabel>
-          <SelectField
+      />
+      {/* FY cannot render without knowing when the year turns, and markets disagree, so
+          it is an explicit choice whenever `fy` is picked. Hidden, never unmounted. */}
+      <SettingRow
+        className={cn(dyn !== "fy" && "hidden")}
+        label="Fiscal year starts in"
+        htmlFor={`${fieldPrefix}fiscal_year_start_month`}
+        help="In India, the fiscal year is April–March. Most US and EU businesses use the calendar year."
+        placement="end"
+        control={
+          <SelectAnswer
             name={`${fieldPrefix}fiscal_year_start_month`}
             value={fym}
             onValueChange={setFym}
-            ariaLabel="Fiscal year start month"
+            ariaLabel="Fiscal year starts in"
             options={MONTH_OPTIONS}
-            className="w-full sm:w-56"
           />
-          <p className="m-0 text-sm text-muted-foreground">
-            In India, the fiscal year is April–March. Most US and EU businesses use the calendar
-            year.
-          </p>
-        </div>
-      </SettingRow>
+        }
+      />
       <SettingRow
-        label="Separators"
+        label={sepLabel}
+        htmlFor={`${fieldPrefix}separator1`}
         // With no stamp there is one joint and it takes separator 1, so separator 2 is
         // hidden — but still posted, so a save keeps its stored value.
         help={dyn === "none" ? "Between the prefix and the number." : undefined}
+        placement="end"
         control={
-          <div className="flex flex-wrap gap-4">
-            <div className="flex flex-col gap-1.5">
-              <FieldLabel htmlFor={`${fieldPrefix}separator1`}>{sepLabel}</FieldLabel>
-              <SelectField
-                name={`${fieldPrefix}separator1`}
-                value={s1}
-                onValueChange={(v) => setS1(v as NumberSeparator)}
-                ariaLabel={sepLabel}
-                options={SEPARATOR_OPTIONS}
-                className="w-44"
-              />
-            </div>
-            <div className={cn("flex flex-col gap-1.5", dyn === "none" && "hidden")}>
-              <FieldLabel htmlFor={`${fieldPrefix}separator2`}>
-                Separator — date to number
-              </FieldLabel>
-              <SelectField
-                name={`${fieldPrefix}separator2`}
-                value={s2}
-                onValueChange={(v) => setS2(v as NumberSeparator)}
-                ariaLabel="Separator before the number"
-                options={SEPARATOR_OPTIONS}
-                className="w-44"
-              />
-            </div>
-          </div>
+          <SelectAnswer
+            name={`${fieldPrefix}separator1`}
+            value={s1}
+            onValueChange={(v) => setS1(v as NumberSeparator)}
+            ariaLabel={sepLabel}
+            options={SEPARATOR_OPTIONS}
+          />
+        }
+      />
+      <SettingRow
+        className={cn(dyn === "none" && "hidden")}
+        label="Separator — date to number"
+        htmlFor={`${fieldPrefix}separator2`}
+        placement="end"
+        control={
+          <SelectAnswer
+            name={`${fieldPrefix}separator2`}
+            value={s2}
+            onValueChange={(v) => setS2(v as NumberSeparator)}
+            ariaLabel="Separator — date to number"
+            options={SEPARATOR_OPTIONS}
+          />
         }
       />
       <SettingRow
         label="Increment by"
         htmlFor={`${fieldPrefix}increment`}
         help={`The amount that the counter increases for each ${label}.`}
+        placement="end"
         control={
           <Input
             id={`${fieldPrefix}increment`}
@@ -208,7 +207,7 @@ export function DocumentNumberingFields({
             step={1}
             value={inc}
             onChange={(e) => setInc(e.target.value)}
-            className="w-28 tabular-nums"
+            className="w-20 tabular-nums"
           />
         }
       />

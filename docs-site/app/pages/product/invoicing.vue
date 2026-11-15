@@ -268,9 +268,9 @@ useMarketingSeo({
     >
       <MkShot
         src="/product/fragments/invoice-lines"
-        alt="Invoice line items with a discount, sales tax, the total and the amount paid"
-        :width="1556"
-        :height="676"
+        alt="Invoice line items with a prorated charge, sales tax, the total and the amount paid"
+        :width="1339"
+        :height="778"
       />
     </MkPageZig>
 

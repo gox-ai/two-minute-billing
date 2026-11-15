@@ -5,16 +5,23 @@ import { Grid, Stack, Block, BlockLink } from "@/components/analytics/layout";
 import { measureValueCompact } from "@/components/analytics/format";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { plural } from "@/lib/labels";
+import { EmptyFigure } from "@/components/patterns/record-page";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import { explain } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
 import type { ReportResult } from "@/lib/api";
 import type { BatchEntry } from "@/lib/analytics-api";
 import { AttemptsChart } from "./charts";
+import { axisLabel } from "@/components/analytics/series-format";
+import { isBlankSeries, successRates } from "@/components/charts/axis";
+import { RollingNumber } from "@/components/ui/rolling-number";
 import {
   BarList,
   Line,
   Lines,
   SegmentBar,
+  Sparkline,
   Tile,
   daysIn,
   disputeNote,
@@ -134,11 +141,19 @@ export function collectionsZones({
     },
   ];
 
-  const receivables = minor("recv_amount");
   const openInvoices = minor("recv_count");
   const rungs = ladder(aging?.rows);
+  // The headline is what is owed: the sum of the ageing buckets. The ladder is read live;
+  // `recv_amount` is today's stored row, which only the 5-minute worker pass writes, so it
+  // is null until that pass has run. Same rule, same total, so the buckets win when filled.
+  const bucketTotal = aging ? rungs.reduce((s, r) => s + r.amount, 0) : null;
+  const receivables = bucketTotal != null && bucketTotal > 0 ? bucketTotal : minor("recv_amount");
+  const todayQuiet = todayRows.every((r) => days.every((d) => minor(`w_${d.id}_${r.key}`) == null));
   const agingCur = aging?.currency ?? cur;
-  const rungFill = ["bg-muted-foreground/40", "bg-warning", "bg-destructive", "bg-destructive"];
+  // Bar and figure share one tone per rung: not yet due is a neutral share, the first month
+  // late a warning, older than that an attention.
+  const rungFill = ["bg-chart-4", "bg-warning", "bg-destructive", "bg-destructive"];
+  const rungInk = [undefined, "text-warning", "text-destructive", "text-destructive"];
 
   const dunning = pick(batch, "dunning");
   const state = (k: string) => slice(dunning, k) ?? 0;
@@ -167,43 +182,56 @@ export function collectionsZones({
 
   const current = (
     <Stack>
-      <Grid>
+      <Grid even>
         <Block span={top} title="Today so far" info={G.todaySoFar}>
-          <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-6 text-sm">
-            <span />
-            {days.map((d) => (
-              <span key={d.id} className="text-right text-xs font-semibold text-muted-foreground">
-                {d.label}
-              </span>
-            ))}
-            {todayRows.map((r) => (
-              <React.Fragment key={r.label}>
-                <span className="border-t py-2.5 text-muted-foreground">{r.label}</span>
-                {days.map((d) => {
-                  const v = minor(`w_${d.id}_${r.key}`);
-                  const href = r.href(d.id);
-                  const text = v == null ? "—" : r.fmt(v);
-                  return (
-                    <span
-                      key={d.id}
-                      className={cn(
-                        "border-t py-2.5 text-right tabular-nums",
-                        d.id === "today" ? "font-semibold" : "text-muted-foreground",
-                      )}
-                    >
-                      {href && v != null ? (
-                        <Link href={href} className="hover:underline">
-                          {text}
-                        </Link>
-                      ) : (
-                        text
-                      )}
-                    </span>
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </div>
+          {todayQuiet ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing billed or collected yet. Figures show here after the first invoice.
+            </p>
+          ) : (
+            // The label column gives way first (it wraps between words), so the two figure
+            // columns keep their room in a quarter-width card.
+            <div className="grid grid-cols-[minmax(min-content,1fr)_auto_auto] items-baseline gap-x-3 text-sm">
+              <span />
+              {days.map((d) => (
+                <span
+                  key={d.id}
+                  className="text-right text-xs font-semibold whitespace-nowrap text-muted-foreground"
+                >
+                  {d.label}
+                </span>
+              ))}
+              {todayRows.map((r) => (
+                <React.Fragment key={r.label}>
+                  <span className="border-t py-2.5 text-muted-foreground">{r.label}</span>
+                  {days.map((d) => {
+                    // A null day beside a known one is a day with no rows yet: a zero, not a gap.
+                    const known = days.some((o) => minor(`w_${o.id}_${r.key}`) != null);
+                    const v = minor(`w_${d.id}_${r.key}`) ?? (known ? 0 : null);
+                    const href = r.href(d.id);
+                    const text = v == null ? "—" : r.fmt(v);
+                    return (
+                      <span
+                        key={d.id}
+                        className={cn(
+                          "border-t py-2.5 text-right whitespace-nowrap tabular-nums",
+                          d.id === "today" ? "font-semibold" : "text-muted-foreground",
+                        )}
+                      >
+                        {href && v != null ? (
+                          <Link href={href} className="hover:underline">
+                            {text}
+                          </Link>
+                        ) : (
+                          text
+                        )}
+                      </span>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
         </Block>
 
         <Block
@@ -220,7 +248,7 @@ export function collectionsZones({
             className="text-2xl font-semibold tabular-nums"
             title={receivables == null ? undefined : money(receivables, cur)}
           >
-            {receivables == null ? "—" : money(receivables, cur)}
+            {receivables == null ? <EmptyFigure /> : moneyCompact(receivables, cur)}
           </span>
           {aging ? (
             <div className="mt-4 flex flex-col gap-3">
@@ -235,7 +263,7 @@ export function collectionsZones({
                       <span
                         className={cn(
                           "block text-sm font-semibold tabular-nums",
-                          i > 0 && r.amount > 0 && "text-destructive",
+                          r.amount > 0 && rungInk[i],
                         )}
                         title={money(r.amount, agingCur)}
                       >
@@ -275,10 +303,21 @@ export function collectionsZones({
           info={G.dunning}
           action={<BlockLink href={`/businesses/${biz}/retries`}>Retries</BlockLink>}
         >
+          {recoveryRate == null && dunningStates.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No invoices in dunning. The recovery rate shows here after a payment fails.
+            </p>
+          ) : null}
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="text-2xl font-semibold tabular-nums">
-              {recoveryRate == null ? "—" : pctFromBps(Math.round(recoveryRate * 10000), 0)}
-            </span>
+            {recoveryRate == null && dunningStates.length === 0 ? null : (
+              <span className="text-2xl font-semibold tabular-nums">
+                {recoveryRate == null ? (
+                  <EmptyFigure />
+                ) : (
+                  pctFromBps(Math.round(recoveryRate * 10000), 0)
+                )}
+              </span>
+            )}
             {recoveryRate != null ? (
               <span className="text-sm text-muted-foreground tabular-nums">
                 recovered · {count(state("succeeded"))} of {count(finished)}
@@ -328,7 +367,7 @@ export function collectionsZones({
               className="text-2xl font-semibold tabular-nums"
               title={toBill == null ? undefined : money(toBill, expectedCur)}
             >
-              {toBill == null ? "—" : moneyCompact(toBill, expectedCur)}
+              {toBill == null ? <EmptyFigure /> : moneyCompact(toBill, expectedCur)}
             </span>
             <span className="text-sm whitespace-nowrap text-muted-foreground">next 30 days</span>
           </div>
@@ -452,9 +491,12 @@ export function collectionsZones({
   const attSeries = pick(batch, "att_series");
   const failSeries = pick(batch, "fail_series");
   const attLabels = (attSeries?.series ?? []).map((p) => p.label);
+  const attValues = (attSeries?.series ?? []).map((p) => p.value ?? null);
   const failAt = new Map((failSeries?.series ?? []).map((p) => [p.label, p.value ?? null]));
   const successRate =
     attempts != null && failures != null && attempts > 0 ? 1 - failures / attempts : null;
+  const attFailures = attLabels.map((l) => failAt.get(l) ?? null);
+  const dailyRate = successRates(attValues, attFailures);
 
   // Success by gateway. Provisional dimension: nothing renders until the engine splits by it.
   const gwFailures = new Map(slices(pick(batch, "gw_fail_by")).map((r) => [r.key, r.total]));
@@ -497,7 +539,7 @@ export function collectionsZones({
 
   const performance = (
     <Stack>
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 @min-[56.875rem]/main:grid-cols-4">
         <Tile
           label="Collected"
           info={G.collected}
@@ -546,7 +588,7 @@ export function collectionsZones({
             <p className="text-sm text-muted-foreground">No failed payments in this period.</p>
           ) : (
             <div className="grid grid-cols-[minmax(0,max-content)_minmax(3rem,1fr)_auto] items-center gap-x-4 gap-y-2.5 text-sm">
-              {reasonRows.map((r) => (
+              {reasonRows.map((r, i) => (
                 <React.Fragment key={r.key}>
                   {r.other ? (
                     <span className="wrap-break-word text-muted-foreground">{r.label}</span>
@@ -560,11 +602,13 @@ export function collectionsZones({
                   )}
                   <span className="h-2 rounded-md bg-muted" aria-hidden>
                     <span
+                      key={drawKey([r.total, reasonWidest])}
                       className={cn(
-                        "anim-grow block h-full rounded-md",
-                        r.other ? "bg-muted-foreground/40" : "bg-warning",
+                        BAR_GROW,
+                        "block h-full rounded-md",
+                        r.other ? "bg-chart-4" : "bg-warning",
                       )}
-                      style={{ width: `${(r.total / reasonWidest) * 100}%` }}
+                      style={barStyle((r.total / reasonWidest) * 100, i)}
                     />
                   </span>
                   <span className="w-12 text-right tabular-nums">{count(r.total)}</span>
@@ -600,13 +644,17 @@ export function collectionsZones({
                 {cashParts
                   .filter((p) => p.minor !== 0)
                   .map((p) => (
-                    <span key={p.key} className="flex items-center gap-1.5">
-                      <span className={cn("size-2 rounded-sm", p.fill)} aria-hidden />
+                    <span
+                      key={p.key}
+                      className="flex items-center gap-1.5"
+                      title={money(p.minor, cur)}
+                    >
+                      <span className={cn("size-2 rounded-xs", p.fill)} aria-hidden />
                       {p.label}{" "}
                       {cashWhole > 0
                         ? pctFromBps(Math.round((p.minor / cashWhole) * 10000), 0)
                         : ""}{" "}
-                      · {money(p.minor, cur)}
+                      · {moneyCompact(p.minor, cur)}
                     </span>
                   ))}
               </div>
@@ -616,13 +664,7 @@ export function collectionsZones({
             <Lines>
               <Line
                 label="Refunds issued"
-                value={
-                  refunds == null
-                    ? "—"
-                    : refunds === 0
-                      ? moneyCompact(0, cur)
-                      : `−${moneyCompact(refunds, cur)}`
-                }
+                value={refunds == null ? "—" : signedMoney(-refunds, cur)}
               />
               <Line label="Credit notes raised" value={moneyOrDash(creditNotes)} />
               <Line label="Net recurring cash" value={moneyOrDash(netRecurring)} strong />
@@ -637,29 +679,48 @@ export function collectionsZones({
             span={gateways.length > 0 ? 8 : 12}
             title="Payment success"
             info={G.paymentSuccess}
-            chip={
-              successRate == null
-                ? undefined
-                : `${pctFromBps(Math.round(successRate * 10000), 1)} succeeded`
-            }
           >
-            <AttemptsChart
-              labels={attLabels}
-              attempts={(attSeries?.series ?? []).map((p) => p.value ?? null)}
-              failures={attLabels.map((l) => failAt.get(l) ?? null)}
-            />
-            <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
-              {[
-                { label: "Attempts", mark: "size-2 rounded-sm bg-chart-4" },
-                { label: "Failed", mark: "size-2 rounded-sm bg-chart-5" },
-                { label: "Success rate", mark: "h-0.5 w-3 bg-foreground" },
-              ].map((l) => (
-                <span key={l.label} className="flex items-center gap-1.5">
-                  <span className={l.mark} aria-hidden />
-                  {l.label}
-                </span>
-              ))}
-            </div>
+            {isBlankSeries(attValues) ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No payment attempts in this period.
+              </p>
+            ) : (
+              <>
+                {/* The period's rate is the card's figure; its daily trend sits beside it, so
+                    the bars below keep one count axis. */}
+                {successRate != null && attempts != null && failures != null ? (
+                  <div className="mb-4 flex items-center gap-3">
+                    <div className="flex min-w-0 flex-col">
+                      <span className="text-2xl font-semibold tracking-[-0.02em] tabular-nums">
+                        <RollingNumber value={pctFromBps(Math.round(successRate * 10000), 1)} />
+                      </span>
+                      <span className="mt-1.5 text-sm text-muted-foreground tabular-nums">
+                        {count(attempts - failures)} of {plural(attempts, "attempt")} succeeded
+                      </span>
+                    </div>
+                    <div className="ms-auto w-28 min-w-16 shrink" title="Success rate per day">
+                      <Sparkline values={dailyRate} joinGaps minSpan={0.2} className="h-12" />
+                    </div>
+                  </div>
+                ) : null}
+                <AttemptsChart
+                  labels={attLabels.map(axisLabel)}
+                  attempts={attValues}
+                  failures={attFailures}
+                />
+                <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                  {[
+                    { label: "Attempts", mark: "size-2 rounded-xs bg-chart-4" },
+                    { label: "Failed", mark: "size-2 rounded-xs bg-destructive" },
+                  ].map((l) => (
+                    <span key={l.label} className="flex items-center gap-1.5">
+                      <span className={l.mark} aria-hidden />
+                      {l.label}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
           </Block>
           {gateways.length > 0 ? (
             <Block span={4} title="Success by gateway" info={G.successByGateway}>
@@ -668,7 +729,7 @@ export function collectionsZones({
                   <Line
                     key={g.key}
                     label={g.label}
-                    note={`${count(g.attempts)} attempts`}
+                    note={plural(g.attempts, "attempt")}
                     value={pctFromBps(Math.round(g.rate * 10000), 1)}
                   />
                 ))}

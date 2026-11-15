@@ -29,12 +29,15 @@ import {
   resolveInvoiceCustomization,
 } from "@/modules/invoicing/customization";
 import {
+  CARD_LIMIT_CHECKOUT_REASON,
+  CARD_LIMIT_CHECKOUT_STEP,
   CARD_LIMIT_CODE,
   CARD_LIMIT_MESSAGE,
   cardLimitFor,
   overCardLimit,
   resolveCardPaymentLimits,
 } from "@/modules/invoicing/card-limit";
+import { payerRefusal } from "@/providers/decline-codes";
 import { classifyDecline, PARK_EVEN_IN_FIXED_MODE } from "@/modules/subscriptions/decline-policy";
 import { attachmentRule, resolveEmailConfig } from "@/modules/emails/config";
 import { computeBusinessMetrics } from "@/modules/metrics/service";
@@ -419,25 +422,23 @@ const customer = await createCustomer({
   ok("D8 the kept customer was never touched", kept.excludeFromReporting === false);
 }
 
-// ── E. Organization session policy ────────────────────────────────────────────
+// ── E. Organization session policy: 2FA roles only; the session windows are the installation's ──
 {
   ok(
-    "E1 unset idle = the installation value",
+    "E1 idle = the installation value",
     effectiveIdleMinutes(null) === config.SESSION_IDLE_MINUTES,
   );
   ok(
-    "E2 unset lifetime = the installation value",
-    effectiveAbsoluteTtlHours({ sessionAbsoluteTtlHours: null }) ===
-      config.SESSION_ABSOLUTE_TTL_HOURS,
+    "E2 lifetime = the installation value",
+    effectiveAbsoluteTtlHours(null) === config.SESSION_ABSOLUTE_TTL_HOURS,
   );
   ok(
-    "E3 a shorter idle wins",
-    effectiveIdleMinutes({ sessionIdleMinutes: 5 }) === Math.min(5, config.SESSION_IDLE_MINUTES),
+    "E3 a stored org idle timeout is ignored",
+    effectiveIdleMinutes({ sessionIdleMinutes: 5 }) === config.SESSION_IDLE_MINUTES,
   );
   ok(
-    "E4 a longer idle cannot loosen it",
-    effectiveIdleMinutes({ sessionIdleMinutes: config.SESSION_IDLE_MINUTES + 100 }) ===
-      config.SESSION_IDLE_MINUTES,
+    "E4 a stored org lifetime is ignored",
+    effectiveAbsoluteTtlHours({ sessionAbsoluteTtlHours: 1 }) === config.SESSION_ABSOLUTE_TTL_HOURS,
   );
   ok(
     "E5 unset roles = the installation roles",
@@ -445,22 +446,7 @@ const customer = await createCustomer({
   );
   ok("E6 org roles are added", rolesRequiringMfa({ mfaRequiredRoles: ["ops"] }).includes("ops"));
   ok("E7 roleRequiresMfa reads the org", roleRequiresMfa("ops", { mfaRequiredRoles: ["ops"] }));
-  ok(
-    "E8 a looser idle is refused",
-    sessionPolicyError({
-      sessionIdleMinutes: config.SESSION_IDLE_MINUTES + 1,
-      sessionAbsoluteTtlHours: null,
-      mfaRequiredRoles: null,
-    }) !== null,
-  );
-  ok(
-    "E9 an unknown role is refused",
-    sessionPolicyError({
-      sessionIdleMinutes: null,
-      sessionAbsoluteTtlHours: null,
-      mfaRequiredRoles: ["root"],
-    }) !== null,
-  );
+  ok("E8 an unknown role is refused", sessionPolicyError({ mfaRequiredRoles: ["root"] }) !== null);
 
   const s = await signup({
     email: `p1d-auth-${rnd()}@example.com`,
@@ -469,52 +455,65 @@ const customer = await createCustomer({
   });
   const sOrg = s.user.organizationId;
   const tokenHash = createHash("sha256").update(s.token).digest("hex");
-  ok("E10 a session resolves with no org policy", (await resolveSession(s.token)) !== null);
+  ok("E9 a session resolves", (await resolveSession(s.token)) !== null);
 
-  let refused = false;
-  try {
-    await setOrganizationSessionPolicy({
-      organizationId: sOrg,
-      actorUserId: s.user.userId,
-      actorRole: "owner",
-      policy: {
-        sessionIdleMinutes: config.SESSION_IDLE_MINUTES + 1,
-        sessionAbsoluteTtlHours: null,
-        mfaRequiredRoles: null,
-      },
-    });
-  } catch (e) {
-    refused = e instanceof SessionPolicyError;
-  }
-  ok("E11 the API refuses a looser idle timeout", refused);
   let locked = false;
   try {
     await setOrganizationSessionPolicy({
       organizationId: sOrg,
       actorUserId: s.user.userId,
       actorRole: "owner",
-      policy: {
-        sessionIdleMinutes: null,
-        sessionAbsoluteTtlHours: null,
-        mfaRequiredRoles: ["owner"],
-      },
+      policy: { mfaRequiredRoles: ["owner"] },
     });
   } catch (e) {
     locked = e instanceof TwoFactorSetupRequiredError;
   }
-  ok("E12 an owner without 2FA cannot require it for owners", locked);
+  ok("E10 an owner without 2FA cannot require it for owners", locked);
+  let refused = false;
+  try {
+    await setOrganizationSessionPolicy({
+      organizationId: sOrg,
+      actorUserId: s.user.userId,
+      actorRole: "owner",
+      policy: { mfaRequiredRoles: ["root"] },
+    });
+  } catch (e) {
+    refused = e instanceof SessionPolicyError;
+  }
+  ok("E11 the service refuses an unknown role", refused);
 
-  const idle = Math.min(5, config.SESSION_IDLE_MINUTES);
   const saved = await setOrganizationSessionPolicy({
     organizationId: sOrg,
     actorUserId: s.user.userId,
     actorRole: "owner",
-    policy: { sessionIdleMinutes: idle, sessionAbsoluteTtlHours: 1, mfaRequiredRoles: ["ops"] },
+    policy: { mfaRequiredRoles: ["ops"] },
   });
-  ok("E13 a stricter policy saves", saved.changed);
+  ok("E12 a role list saves", saved.changed);
+  const [o] = await systemDb
+    .select()
+    .from(organizations)
+    .where(eq(organizations.id, sOrg))
+    .limit(1);
+  ok("E13 stored roles", (o?.mfaRequiredRoles ?? []).join() === "ops");
+
+  // Values stored in the 0482 columns before 2026-11-06 must have no effect.
+  await systemDb
+    .update(organizations)
+    .set({ sessionIdleMinutes: 5, sessionAbsoluteTtlHours: 1 })
+    .where(eq(organizations.id, sOrg));
+  const env = config.SESSION_IDLE_MINUTES;
+  const idleFor = Math.min(env - 1, 20);
+  await systemDb
+    .update(sessions)
+    .set({
+      createdAt: new Date(Date.now() - 2 * 3600_000),
+      expiresAt: new Date(Date.now() + (env - idleFor) * 60_000),
+      lastActiveAt: new Date(Date.now() - idleFor * 60_000),
+    })
+    .where(eq(sessions.tokenHash, tokenHash));
   ok(
-    "E14 the session still resolves, now on the shorter window",
-    (await resolveSession(s.token)) !== null,
+    `E14 a stored 5-minute idle and 1-hour lifetime are ignored: idle ${idleFor} min, 2 h old, still signed in`,
+    config.SESSION_ABSOLUTE_TTL_HOURS > 2 ? (await resolveSession(s.token)) !== null : true,
   );
   const [row] = await systemDb
     .select()
@@ -522,77 +521,8 @@ const customer = await createCustomer({
     .where(eq(sessions.tokenHash, tokenHash))
     .limit(1);
   ok(
-    "E15 the idle deadline was pulled in to the org window",
-    !!row && row.expiresAt.getTime() <= Date.now() + idle * 60_000 + 1000,
-  );
-  await systemDb
-    .update(sessions)
-    .set({ createdAt: new Date(Date.now() - 2 * 3600_000) })
-    .where(eq(sessions.tokenHash, tokenHash));
-  ok(
-    "E16 past the org's 1-hour lifetime the session ends",
-    (await resolveSession(s.token)) === null,
-  );
-  const [o] = await systemDb
-    .select()
-    .from(organizations)
-    .where(eq(organizations.id, sOrg))
-    .limit(1);
-  ok("E17 stored roles", (o?.mfaRequiredRoles ?? []).join() === "ops");
-
-  // A session idle longer than a window the org shortened later must end, not be refreshed.
-  const t = await signup({
-    email: `p1d-idle-${rnd()}@example.com`,
-    password: `Pw-${rnd()}-${rnd()}-Zq9!`,
-    organizationName: "Idle Org",
-  });
-  const env = config.SESSION_IDLE_MINUTES;
-  const orgIdle = 5;
-  const idleFor = Math.min(env - 1, 20);
-  await setOrganizationSessionPolicy({
-    organizationId: t.user.organizationId,
-    actorUserId: t.user.userId,
-    actorRole: "owner",
-    policy: { sessionIdleMinutes: orgIdle, sessionAbsoluteTtlHours: null, mfaRequiredRoles: null },
-  });
-  const tHash = createHash("sha256").update(t.token).digest("hex");
-  const stampedAt = (idleMin: number, lastActive: boolean) =>
-    systemDb
-      .update(sessions)
-      .set({
-        // Stamped with the installation window when the member was last active.
-        expiresAt: new Date(Date.now() + (env - idleMin) * 60_000),
-        lastActiveAt: lastActive ? new Date(Date.now() - idleMin * 60_000) : null,
-      })
-      .where(eq(sessions.tokenHash, tHash));
-  await stampedAt(2, true);
-  ok(
-    "E18 active 2 minutes ago: still inside a 5-minute org window",
-    (await resolveSession(t.token)) !== null,
-  );
-  await stampedAt(idleFor, true);
-  ok(
-    `E19 idle ${idleFor} minutes under a ${orgIdle}-minute org window: rejected, not refreshed`,
-    env > orgIdle + 1 ? (await resolveSession(t.token)) === null : true,
-  );
-  const u = await signup({
-    email: `p1d-idle2-${rnd()}@example.com`,
-    password: `Pw-${rnd()}-${rnd()}-Zq9!`,
-    organizationName: "Idle Org 2",
-  });
-  await setOrganizationSessionPolicy({
-    organizationId: u.user.organizationId,
-    actorUserId: u.user.userId,
-    actorRole: "owner",
-    policy: { sessionIdleMinutes: orgIdle, sessionAbsoluteTtlHours: null, mfaRequiredRoles: null },
-  });
-  await systemDb
-    .update(sessions)
-    .set({ expiresAt: new Date(Date.now() + (env - idleFor) * 60_000), lastActiveAt: null })
-    .where(eq(sessions.tokenHash, createHash("sha256").update(u.token).digest("hex")));
-  ok(
-    "E20 a row from before 0482 (no last use) is measured from the installation window",
-    env > orgIdle + 1 ? (await resolveSession(u.token)) === null : true,
+    "E15 the refreshed deadline is the installation window",
+    !!row && row.expiresAt.getTime() > Date.now() + (env - 1) * 60_000,
   );
 }
 
@@ -1047,7 +977,14 @@ const customer = await createCustomer({
   const msg = (JSON.parse(done.body) as { error?: { message?: string } }).error?.message ?? "";
   ok(
     "G5 a hosted purchase above the card limit answers 400 with the card-limit message",
-    minted.statusCode === 201 && done.statusCode === 400 && msg === CARD_LIMIT_MESSAGE,
+    minted.statusCode === 201 &&
+      done.statusCode === 400 &&
+      msg ===
+        payerRefusal(
+          "We could not complete your purchase.",
+          CARD_LIMIT_CHECKOUT_REASON,
+          CARD_LIMIT_CHECKOUT_STEP,
+        ),
   );
   await app.close();
   ok(
@@ -1122,6 +1059,28 @@ const customer = await createCustomer({
   ok(
     "H4 the attach setting is preserved",
     rule?.pdf === false && rule.skipZeroPdf === false && rule.skipZeroSend === true,
+  );
+  // The request schema dropped these two keys, so the settings reported "saved" and stored nothing.
+  const custom = await api("PATCH", url, {
+    invoice_customization: {
+      payment_instructions: { mode: "preferred_offline", personalize: true },
+      credit_note: { service_period_basis: "credit_note_date" },
+    },
+  });
+  const [customRow] = await systemDb
+    .select({ c: businesses.invoiceCustomization })
+    .from(businesses)
+    .where(eq(businesses.id, legacy.id));
+  const kept = customRow!.c as {
+    payment_instructions?: { mode?: string; personalize?: boolean };
+    credit_note?: { service_period_basis?: string };
+  } | null;
+  ok(
+    "H4b payment instruction settings and the credit note service period basis are stored",
+    custom.statusCode === 200 &&
+      kept?.payment_instructions?.mode === "preferred_offline" &&
+      kept.payment_instructions.personalize === true &&
+      kept.credit_note?.service_period_basis === "credit_note_date",
   );
   // 0492 removes the key from stored rows and keeps `attachments`; a second run is a no-op.
   await systemDb

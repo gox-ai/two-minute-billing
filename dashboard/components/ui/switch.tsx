@@ -18,7 +18,7 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "peer inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all outline-none",
+        "peer group/switch inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-[background-color,box-shadow] duration-(--dur) outline-none",
         "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
         "data-[state=checked]:bg-solid data-[state=unchecked]:bg-switch-off",
         "disabled:cursor-not-allowed disabled:opacity-50",
@@ -29,8 +29,10 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "pointer-events-none block size-4 rounded-full bg-card ring-0 transition-transform",
-          "data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0.5",
+          "pointer-events-none block h-4 w-4 rounded-full bg-card ring-0 transition-[translate,width] duration-(--dur) ease-(--ease-spring)",
+          "data-[state=checked]:translate-x-3.5 data-[state=unchecked]:translate-x-0.5",
+          // Pressed, the thumb widens toward the travel; a checked thumb keeps its right edge.
+          "motion-safe:group-enabled/switch:group-active/switch:w-5 motion-safe:group-enabled/switch:group-active/switch:data-[state=checked]:translate-x-2.5",
         )}
       />
     </SwitchPrimitive.Root>

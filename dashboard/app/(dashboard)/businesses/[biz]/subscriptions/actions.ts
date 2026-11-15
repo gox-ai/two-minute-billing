@@ -12,7 +12,7 @@ import { apiPost, apiWrite, apiPatch } from "@/lib/api";
 import { requirePermission } from "@/lib/session";
 import { actionOk, actionError, parseForm, type ActionResult } from "@/lib/action-result";
 import { assertUtc, optUtcDateTime, utcDateTime } from "@/lib/zod-utc";
-import { fmtDate, fmtDateTime } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { businessTz } from "@/lib/business-tz-server";
 import { checkMetadata } from "@/lib/metadata-form";
 import type {
@@ -467,7 +467,7 @@ export async function estimateSubscriptionChangeAction(
   /** `end_of_term`: price the edit as the scheduled change books it at the term end. */
   changeOption?: "end_of_term",
   /** This change's own rules that move money; omitted = the business rule. */
-  rules?: Pick<ChangeRuleOverrides, "coupons" | "downgrade_credit">,
+  rules?: Pick<ChangeRuleOverrides, "coupons" | "downgrade_credit" | "net_credit_documents">,
 ): Promise<{ ok: true; estimate: ChangeEstimate } | { ok: false; error: string }> {
   await requirePermission("subscriptions:estimate", "manager");
   if (!biz || !sub) return { ok: false, error: "No changes to estimate" };
@@ -502,6 +502,7 @@ export async function estimateSubscriptionChangeAction(
     ...(changeOption ? { change_option: changeOption } : {}),
     ...(rules?.coupons ? { coupons: rules.coupons } : {}),
     ...(rules?.downgrade_credit ? { downgrade_credit: rules.downgrade_credit } : {}),
+    ...(rules?.net_credit_documents ? { net_credit_documents: rules.net_credit_documents } : {}),
   });
   return res.ok
     ? { ok: true, estimate: res.data as ChangeEstimate }
@@ -546,9 +547,10 @@ export async function estimateSubscriptionCancelAction(
 
 /** Business rules one change may override (`POST …/change`). Each is sent only when it differs. */
 export interface ChangeRuleOverrides {
-  on_charge_failure?: "start_dunning" | "next_renewal";
+  on_charge_failure?: "start_dunning" | "next_renewal" | "revert" | "apply_when_paid";
   coupons?: "keep" | "drop" | "keep_if_valid";
   downgrade_credit?: "credit_balance" | "refund";
+  net_credit_documents?: "credit_note_and_invoice" | "one_credit_note";
   plan_credits?: "full" | "prorated" | "next_window";
   allowances?: "new_window" | "keep_used" | "prorated";
 }
@@ -747,6 +749,9 @@ export async function applySubscriptionChangeAction(
         ...(payload.on_charge_failure ? { on_charge_failure: payload.on_charge_failure } : {}),
         ...(payload.coupons ? { coupons: payload.coupons } : {}),
         ...(payload.downgrade_credit ? { downgrade_credit: payload.downgrade_credit } : {}),
+        ...(payload.net_credit_documents
+          ? { net_credit_documents: payload.net_credit_documents }
+          : {}),
         ...(payload.plan_credits ? { plan_credits: payload.plan_credits } : {}),
         ...(payload.allowances ? { allowances: payload.allowances } : {}),
       });
@@ -1084,4 +1089,42 @@ export async function setSubscriptionShippingAddressAction(
   return res.ok
     ? actionOk("Shipping address changed.")
     : actionError(res.error ?? "We could not change the shipping address.");
+}
+
+/**
+ * A restart link for an ENDED subscription: a reactivating checkout the customer pays on.
+ * `current` lists the subscription's prices, so the new term bills today's catalogue price
+ * (a custom price on a line stays); `keep` lists nothing, so the lines keep their price.
+ */
+export async function createRestartLinkAction(
+  biz: string,
+  sub: string,
+  price: "current" | "keep",
+): Promise<{ ok: true; url: string; label: string } | { ok: false; error: string }> {
+  await requirePermission("checkout_sessions:manage", "ops");
+  if (!biz || !sub) return { ok: false, error: "The subscription ID is missing. Reload the page." };
+  const { getSubscription } = await import("@/lib/api");
+  const s = await getSubscription(biz, sub).catch(() => null);
+  if (!s) return { ok: false, error: "We could not find the subscription. Reload the page." };
+  if (s.status !== "cancelled")
+    return { ok: false, error: "You can send a restart link only for an ended subscription." };
+  const items =
+    price === "current"
+      ? (s.items ?? []).map((i) => ({ price: i.price, quantity: i.quantity }))
+      : [];
+  const res = await apiWrite(`/v1/businesses/${biz}/checkout_sessions`, {
+    mode: "change",
+    subscription: sub,
+    reactivate: true,
+    ...(items.length > 0 ? { items } : {}),
+  });
+  if (!res.ok) return { ok: false, error: res.error ?? "We could not create the restart link." };
+  const data = res.data as { id: string; token: string; url?: string; expires_at: string };
+  if (!data.url)
+    return { ok: false, error: "We could not create the restart link. The portal URL is not set." };
+  return {
+    ok: true,
+    url: data.url,
+    label: `Restart link (${data.id}). It works until ${fmtDateTime(data.expires_at, await businessTz(biz))}.`,
+  };
 }

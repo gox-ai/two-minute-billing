@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Copied from docs-site/skills by `pnpm cli:build`.
+cli/scripts/
 # Env files by PATTERN, not by name. These were the exact names `.env` and `.env.local`,
 # so `scripts/setup.sh`'s `dashboard/.env.local.bak` matched NEITHER and was committed in
 # 949b449 carrying a TMBILLING_API_KEY. An exact-name rule only ever covers the names
@@ -31,6 +33,8 @@ coverage/
 .data/
 .next.staging/
 .next.prev/
+.next-b/
+.next-b.new/
 next-env.d.ts
 *.tsbuildinfo
 # Local research material captured from third-party product UIs. ENTIRELY local — it is

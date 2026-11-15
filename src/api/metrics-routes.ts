@@ -1,5 +1,7 @@
+import { onReplica } from "@/platform/db";
 import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { authenticate } from "@/platform/auth";
 import { csvRow } from "@/platform/csv";
 import { listBusinesses } from "@/modules/tenancy/service";
@@ -26,6 +28,9 @@ import {
 } from "@/modules/metrics/reports/registry";
 import { AR_AGING_INTERVALS } from "@/modules/invoicing/ar-aging";
 import { resolveReport, ReportError } from "@/modules/metrics/reports/resolve";
+import { mrrBridge } from "@/modules/metrics/mrr-bridge";
+import { zonedDayEndExclusive, zonedDayStart, zonedDayString } from "@/platform/timezones";
+import { parseRequest } from "./strict-params";
 import {
   RAW_DATASETS,
   RawExportError,
@@ -40,13 +45,20 @@ import { writeAuditLog } from "@/modules/audit/service";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+const mrrBridgeQuery = z.object({
+  start: z.string().regex(DAY_RE, "start must be YYYY-MM-DD").optional(),
+  end: z.string().regex(DAY_RE, "end must be YYYY-MM-DD").optional(),
+  currency: z.string().length(3).optional(),
+  top: z.coerce.number().int().min(1).max(20).optional(),
+});
+
 // SaaS metrics (MRR/ARR/ARPU/churn) — read-only, RLS-scoped.
 export async function registerMetricsRoutes(app: FastifyInstance) {
   // Business Home analytics: KPIs + bucketed time-series + plan mix.
   app.get(
     "/v1/businesses/:biz/analytics",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const q = req.query as Record<string, string | undefined>;
@@ -58,7 +70,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         currency: q.currency,
       });
       return { object: "business_analytics", business: business.publicId, ...analytics };
-    },
+    }),
   );
 
   /**
@@ -70,7 +82,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/reports",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       return {
@@ -104,7 +116,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
           variants: r.variants ?? [],
         })),
       };
-    },
+    }),
   );
 
   /**
@@ -114,7 +126,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/reports/:key",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const { key } = req.params as { key: string };
@@ -210,7 +222,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         if (e instanceof ReportError) return badRequest(reply, e.message);
         throw e;
       }
-    },
+    }),
   );
 
   /**
@@ -222,11 +234,11 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/raw_export",
     { preHandler: [authenticate, requirePerm("reports:export")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       return { object: "list", data: RAW_DATASETS };
-    },
+    }),
   );
 
   /**
@@ -244,7 +256,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/raw_export/:dataset",
     { preHandler: [authenticate, requirePerm("reports:export")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const { dataset } = req.params as { dataset: string };
@@ -307,7 +319,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         if (e instanceof RawExportError) return badRequest(reply, e.message);
         throw e;
       }
-    },
+    }),
   );
 
   // Payments analytics: gateway-side volume/refunds/chargebacks/declines over a
@@ -316,7 +328,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/payments_analytics",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const q = req.query as Record<string, string | undefined>;
@@ -330,7 +342,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         paymentMethod: q.payment_method ?? null,
       });
       return { object: "business_payments_analytics", business: business.publicId, ...analytics };
-    },
+    }),
   );
 
   /**
@@ -344,7 +356,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
       preHandler: [authenticate, requirePerm("reports:view")],
       config: { repeatableQuery: ["bucket"] },
     },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const q = req.query as Record<string, string | string[] | undefined>;
@@ -386,26 +398,56 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         end,
         ...analytics,
       };
-    },
+    }),
   );
 
   // Per-business metrics.
   app.get(
     "/v1/businesses/:biz/metrics",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req, reply) => {
+    onReplica(async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
       const metrics = await computeBusinessMetrics(req.organization!.id, business.id, new Date());
       return { object: "metrics", business: business.publicId, ...metrics };
-    },
+    }),
+  );
+
+  // The MRR bridge: opening MRR, the change by reason with the largest movements, closing MRR.
+  app.get(
+    "/v1/businesses/:biz/mrr_bridge",
+    { preHandler: [authenticate, requirePerm("reports:view")] },
+    onReplica(async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const parsed = parseRequest(mrrBridgeQuery, req.query ?? {});
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const zone = business.timezone ?? null;
+      const end = parsed.data.end ?? zonedDayString(new Date(), zone);
+      const start =
+        parsed.data.start ??
+        zonedDayString(new Date(zonedDayStart(end, zone).getTime() - 29 * 86_400_000), zone);
+      if (start > end) return badRequest(reply, "start must be on or before end.");
+      const from = zonedDayStart(start, zone);
+      const to = zonedDayEndExclusive(end, zone);
+      if (to.getTime() - from.getTime() > 367 * 86_400_000) {
+        return badRequest(reply, "The range can be at most 366 days.");
+      }
+      const bridge = await mrrBridge(req.organization!.id, business.id, {
+        from,
+        to,
+        currency: (parsed.data.currency ?? business.defaultCurrency).toUpperCase(),
+        top: parsed.data.top ?? 5,
+      });
+      return { ...bridge, business: business.publicId, start, end };
+    }),
   );
 
   // Org-wide roll-up: each business's metrics + a combined MRR-by-currency total.
   app.get(
     "/v1/metrics",
     { preHandler: [authenticate, requirePerm("reports:view")] },
-    async (req) => {
+    onReplica(async (req) => {
       const now = new Date();
       const businesses = await listBusinesses(req.organization!.id);
       const perBusiness = await Promise.all(
@@ -441,6 +483,6 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         totals_by_currency: [...totals.entries()].map(([currency, t]) => ({ currency, ...t })),
         businesses: perBusiness,
       };
-    },
+    }),
   );
 }

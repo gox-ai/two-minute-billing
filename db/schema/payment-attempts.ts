@@ -90,5 +90,9 @@ export const paymentAttempts = pgTable(
     index("payment_attempts_span_idx")
       .on(t.spanId)
       .where(sql`span_id is not null`),
+    // A webhook's object → its attempt (0532).
+    index("payment_attempts_gateway_idx")
+      .on(t.idAtGateway)
+      .where(sql`id_at_gateway is not null`),
   ],
 );

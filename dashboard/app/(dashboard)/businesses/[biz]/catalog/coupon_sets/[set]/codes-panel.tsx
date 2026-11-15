@@ -19,7 +19,7 @@ import { Chip } from "@/components/patterns/chip";
 import { RecordCard } from "@/components/patterns/record-page";
 import { Pager, useLocalPages } from "@/components/patterns/pager";
 import { EmptyState } from "@/components/states";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { archiveCouponCodeAction } from "@/app/(dashboard)/businesses/[biz]/catalog/coupon_sets/actions";
 import type { CouponCode } from "@/lib/api/coupons";
 import { useBusinessTz } from "@/components/business-tz";

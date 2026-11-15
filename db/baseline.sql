@@ -11,7 +11,7 @@
 -- graphile_worker.add_job()), apply this file once, record the cut below in
 -- drizzle.__drizzle_migrations, then apply the migrations newer than the cut.
 --
--- baseline-cut: 0502_payment_method_collect_open_invoices 1793790000000
+-- baseline-cut: 0532_payment_attempt_gateway_idx 1795100000000
 --
 
 -- withTenant switches to this role; the grants below are what it may touch.
@@ -118,6 +118,74 @@ begin
     max_attempts => 1,
     -- Coalesce a burst of events into ONE pending nudge rather than one per event.
     job_key => 'webhook_outbox_nudge'
+  );
+end
+$$;
+
+
+--
+-- Name: app_queue_support_notice("uuid", "text"); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION "public"."app_queue_support_notice"("p_message" "uuid", "p_trace" "text" DEFAULT NULL::"text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_public text;
+  v_channel text;
+begin
+  select m.public_id into v_public
+    from public.support_messages m
+   where m.id = p_message
+     and m.author_kind = 'member'
+     and m.organization_id = nullif(current_setting('app.org_id', true), '')::uuid;
+  if v_public is null then
+    raise exception 'app_queue_support_notice: no member message % in this organization', p_message;
+  end if;
+  foreach v_channel in array array['chat', 'email'] loop
+    perform graphile_worker.add_job(
+      'support_notice_send',
+      json_strip_nulls(json_build_object(
+        'message', v_public,
+        'channel', v_channel,
+        '_trace', case when p_trace is null then null else json_build_object('traceId', p_trace) end
+      )),
+      max_attempts => 10,
+      -- One job per message and channel: a retry re-sends only the channel that failed.
+      job_key => 'support_notice:' || v_channel || ':' || v_public
+    );
+  end loop;
+end
+$$;
+
+
+--
+-- Name: app_queue_transfer_run("uuid", "text"); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION "public"."app_queue_transfer_run"("p_run" "uuid", "p_trace" "text" DEFAULT NULL::"text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  if not exists (
+    select 1 from public.transfer_configurations t
+     where t.id = p_run
+       and t.run_kind = 'async'
+       and t.status = 'queued'
+       and t.organization_id = nullif(current_setting('app.org_id', true), '')::uuid
+  ) then
+    raise exception 'app_queue_transfer_run: no queued transfer % in this organization', p_run;
+  end if;
+  perform graphile_worker.add_job(
+    'transfer_run',
+    json_strip_nulls(json_build_object(
+      'run', p_run::text,
+      '_trace', case when p_trace is null then null else json_build_object('traceId', p_trace) end
+    )),
+    max_attempts => 5,
+    job_key => 'transfer_run:' || p_run::text
   );
 end
 $$;
@@ -492,7 +560,7 @@ CREATE TABLE "public"."applied_coupons" (
     "organization_id" "uuid" NOT NULL,
     "business_id" "uuid" NOT NULL,
     "coupon_id" "uuid",
-    "subscription_id" "uuid" NOT NULL,
+    "subscription_id" "uuid",
     "public_id" "text" NOT NULL,
     "status" "text" DEFAULT 'active'::"text" NOT NULL,
     "remaining_periods" integer,
@@ -507,7 +575,13 @@ CREATE TABLE "public"."applied_coupons" (
     "period_anchor" timestamp with time zone,
     "period_used_minor" bigint DEFAULT 0 NOT NULL,
     "entered_by_customer" boolean DEFAULT false NOT NULL,
-    CONSTRAINT "applied_coupons_period_used_non_negative" CHECK (("period_used_minor" >= 0))
+    "customer_id" "uuid" NOT NULL,
+    "invoice_id" "uuid",
+    "scope" "text" DEFAULT 'subscription'::"text" NOT NULL,
+    CONSTRAINT "applied_coupons_customer_target_ck" CHECK ((("scope" <> 'customer'::"text") OR (("subscription_id" IS NULL) AND ("invoice_id" IS NULL)))),
+    CONSTRAINT "applied_coupons_period_used_non_negative" CHECK (("period_used_minor" >= 0)),
+    CONSTRAINT "applied_coupons_scope_ck" CHECK (("scope" = ANY (ARRAY['subscription'::"text", 'invoice'::"text", 'customer'::"text"]))),
+    CONSTRAINT "applied_coupons_scope_target_ck" CHECK (((("scope" <> 'subscription'::"text") OR ("subscription_id" IS NOT NULL)) AND (("scope" <> 'invoice'::"text") OR ("subscription_id" IS NULL))))
 );
 
 
@@ -527,6 +601,204 @@ CREATE TABLE "public"."applied_taxes" (
     "taxability_reason" "text" DEFAULT 'standard_rated'::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "tax_component_id" "uuid"
+);
+
+
+--
+-- Name: assistant_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_actions" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "conversation_id" "uuid",
+    "user_id" "uuid" NOT NULL,
+    "operation" "text" NOT NULL,
+    "method" "text" NOT NULL,
+    "path" "text" NOT NULL,
+    "body" "jsonb",
+    "tier" smallint NOT NULL,
+    "status" "text" NOT NULL,
+    "idempotency_key" "text" NOT NULL,
+    "summary" "jsonb" NOT NULL,
+    "result" "jsonb",
+    "expires_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "decided_at" timestamp with time zone,
+    CONSTRAINT "assistant_actions_method_check" CHECK (("method" = ANY (ARRAY['POST'::"text", 'PATCH'::"text", 'DELETE'::"text"]))),
+    CONSTRAINT "assistant_actions_status_check" CHECK (("status" = ANY (ARRAY['proposed'::"text", 'running'::"text", 'done'::"text", 'failed'::"text", 'cancelled'::"text", 'expired'::"text"]))),
+    CONSTRAINT "assistant_actions_tier_check" CHECK (("tier" = ANY (ARRAY[1, 2, 3])))
+);
+
+
+--
+-- Name: assistant_attachments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_attachments" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "conversation_id" "uuid",
+    "user_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "content_type" "text" NOT NULL,
+    "size" integer NOT NULL,
+    "data" "bytea" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "assistant_attachments_content_type_check" CHECK (("content_type" = ANY (ARRAY['image/png'::"text", 'image/jpeg'::"text", 'image/webp'::"text"]))),
+    CONSTRAINT "assistant_attachments_size_check" CHECK ((("size" > 0) AND ("size" <= 10485760)))
+);
+
+
+--
+-- Name: assistant_conversations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_conversations" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "title" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "archived_at" timestamp with time zone,
+    "pinned_at" timestamp with time zone,
+    "shared_at" timestamp with time zone
+);
+
+
+--
+-- Name: assistant_doc_chunks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_doc_chunks" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "source" "text" NOT NULL,
+    "path" "text" NOT NULL,
+    "url" "text",
+    "title" "text" NOT NULL,
+    "heading" "text",
+    "body" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "terms" "text",
+    "notes" "text",
+    "search" "tsvector" GENERATED ALWAYS AS ((((("setweight"("to_tsvector"('"english"'::"regconfig", COALESCE("title", ''::"text")), 'A'::"char") || "setweight"("to_tsvector"('"english"'::"regconfig", COALESCE("heading", ''::"text")), 'B'::"char")) || "setweight"("to_tsvector"('"english"'::"regconfig", COALESCE("terms", ''::"text")), 'B'::"char")) || "setweight"("to_tsvector"('"english"'::"regconfig", "body"), 'C'::"char")) || "setweight"("to_tsvector"('"english"'::"regconfig", COALESCE("notes", ''::"text")), 'D'::"char"))) STORED,
+    "embed_hash" "text",
+    CONSTRAINT "assistant_doc_chunks_source_check" CHECK (("source" = ANY (ARRAY['help'::"text", 'api'::"text", 'engine'::"text", 'ui'::"text", 'code'::"text"])))
+);
+
+
+--
+-- Name: assistant_doc_index; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_doc_index" (
+    "id" smallint NOT NULL,
+    "content_hash" "text" NOT NULL,
+    "chunks" integer NOT NULL,
+    "indexed_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "assistant_doc_index_id_check" CHECK (("id" = 1))
+);
+
+
+--
+-- Name: assistant_doc_vectors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_doc_vectors" (
+    "hash" "text" NOT NULL,
+    "model" "text" NOT NULL,
+    "dims" integer NOT NULL,
+    "vector" "bytea" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: assistant_embedding_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_embedding_usage" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid",
+    "kind" "text" NOT NULL,
+    "provider" "text" NOT NULL,
+    "model" "text" NOT NULL,
+    "inputs" integer NOT NULL,
+    "input_tokens" integer NOT NULL,
+    "cost_fixed12" numeric(38,0),
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "assistant_embedding_usage_kind_check" CHECK (("kind" = ANY (ARRAY['index'::"text", 'query'::"text"])))
+);
+
+
+--
+-- Name: assistant_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_messages" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "conversation_id" "uuid" NOT NULL,
+    "role" "text" NOT NULL,
+    "content" "text" NOT NULL,
+    "steps" "jsonb",
+    "data" "jsonb",
+    "figures" "jsonb",
+    "page" "jsonb",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "extras" "jsonb",
+    "feedback" "text",
+    "feedback_comment" "text",
+    "feedback_at" timestamp with time zone,
+    CONSTRAINT "assistant_messages_feedback_check" CHECK (("feedback" = ANY (ARRAY['up'::"text", 'down'::"text"]))),
+    CONSTRAINT "assistant_messages_role_check" CHECK (("role" = ANY (ARRAY['user'::"text", 'assistant'::"text"])))
+);
+
+
+--
+-- Name: assistant_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_settings" (
+    "organization_id" "uuid" NOT NULL,
+    "enabled" boolean DEFAULT true NOT NULL,
+    "provider" "text",
+    "model" "text",
+    "api_key_encrypted" "text",
+    "api_key_last4" "text",
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "allowance_warned_month" "text",
+    "actions_enabled" boolean DEFAULT false NOT NULL,
+    "money_actions_enabled" boolean DEFAULT false NOT NULL,
+    CONSTRAINT "assistant_settings_provider_check" CHECK (("provider" = ANY (ARRAY['openai'::"text", 'anthropic'::"text", 'google'::"text"])))
+);
+
+
+--
+-- Name: assistant_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."assistant_usage" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "conversation_id" "uuid",
+    "provider" "text" NOT NULL,
+    "model" "text" NOT NULL,
+    "billed_to" "text" NOT NULL,
+    "input_tokens" integer NOT NULL,
+    "output_tokens" integer NOT NULL,
+    "cost_fixed12" numeric(38,0),
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "assistant_usage_billed_to_check" CHECK (("billed_to" = ANY (ARRAY['platform'::"text", 'organization'::"text"])))
 );
 
 
@@ -697,7 +969,7 @@ CREATE TABLE "public"."businesses" (
     "receipt_next_number" bigint DEFAULT 1 NOT NULL,
     "test_customer_limit" integer,
     "test_subscription_limit" integer,
-    "usage_close_delay_minutes" smallint DEFAULT 0 NOT NULL,
+    "usage_close_delay_minutes" integer DEFAULT 0 NOT NULL,
     "credit_config" "jsonb",
     "usage_widget_origins" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     "usage_controls_active" boolean DEFAULT false NOT NULL,
@@ -718,7 +990,7 @@ CREATE TABLE "public"."businesses" (
     CONSTRAINT "businesses_ses_config_ck" CHECK ((("ses_config" IS NULL) OR ((("ses_config" ->> 'enabled'::"text") IS DISTINCT FROM 'true'::"text") OR ((COALESCE(("ses_config" ->> 'region'::"text"), ''::"text") <> ''::"text") AND (COALESCE(("ses_config" ->> 'accessKeyId'::"text"), ''::"text") <> ''::"text") AND ("ses_credentials_enc" IS NOT NULL))))),
     CONSTRAINT "businesses_smtp_config_ck" CHECK ((("smtp_config" IS NULL) OR ((("smtp_config" ->> 'enabled'::"text") IS DISTINCT FROM 'true'::"text") OR ((COALESCE(("smtp_config" ->> 'host'::"text"), ''::"text") <> ''::"text") AND (("smtp_config" ->> 'port'::"text") ~ '^[0-9]+$'::"text") AND ("smtp_credentials_enc" IS NOT NULL))))),
     CONSTRAINT "businesses_test_limits_nonneg" CHECK (((("test_customer_limit" IS NULL) OR ("test_customer_limit" >= 0)) AND (("test_subscription_limit" IS NULL) OR ("test_subscription_limit" >= 0)))),
-    CONSTRAINT "businesses_usage_close_delay_minutes_ck" CHECK ((("usage_close_delay_minutes" >= 0) AND ("usage_close_delay_minutes" <= 24))),
+    CONSTRAINT "businesses_usage_close_delay_minutes_ck" CHECK ((("usage_close_delay_minutes" >= 0) AND ("usage_close_delay_minutes" <= 43200))),
     CONSTRAINT "businesses_week_start_check" CHECK (("week_start" = ANY (ARRAY['sunday'::"text", 'monday'::"text"])))
 );
 
@@ -992,7 +1264,8 @@ CREATE TABLE "public"."coupon_item_constraints" (
     "constraint_type" "text" NOT NULL,
     "product_ids" "jsonb",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "price_ids" "jsonb"
+    "price_ids" "jsonb",
+    "billing_periods" "jsonb"
 );
 
 
@@ -1058,7 +1331,9 @@ CREATE TABLE "public"."coupons" (
     "valid_from" timestamp with time zone,
     "invoice_name" "text",
     "max_redemptions_per_customer" integer,
-    CONSTRAINT "coupons_max_redemptions_per_customer_ck" CHECK ((("max_redemptions_per_customer" IS NULL) OR ("max_redemptions_per_customer" > 0)))
+    "per_customer_limit_by" "text" DEFAULT 'customer'::"text" NOT NULL,
+    CONSTRAINT "coupons_max_redemptions_per_customer_ck" CHECK ((("max_redemptions_per_customer" IS NULL) OR ("max_redemptions_per_customer" > 0))),
+    CONSTRAINT "coupons_per_customer_limit_by_ck" CHECK (("per_customer_limit_by" = ANY (ARRAY['customer'::"text", 'email'::"text"])))
 );
 
 
@@ -1087,6 +1362,7 @@ CREATE TABLE "public"."credit_auto_topup_runs" (
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "resource_version" bigint DEFAULT 1 NOT NULL,
+    "attempts" integer DEFAULT 0 NOT NULL,
     CONSTRAINT "credit_auto_topup_runs_amount_minor_check" CHECK (("amount_minor" > 0)),
     CONSTRAINT "credit_auto_topup_runs_status_check" CHECK (("status" = ANY (ARRAY['created'::"text", 'notice_sent'::"text", 'charging'::"text", 'pending'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "credit_auto_topup_runs_trigger_check" CHECK (("trigger" = ANY (ARRAY['threshold'::"text", 'schedule'::"text"])))
@@ -1122,6 +1398,11 @@ CREATE TABLE "public"."credit_auto_topups" (
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "resource_version" bigint DEFAULT 1 NOT NULL,
+    "threshold_units" bigint,
+    "pack_price_id" "uuid",
+    "pack_quantity" integer,
+    "target_units" bigint,
+    "purchase_limits" "jsonb",
     CONSTRAINT "credit_auto_topups_amount_minor_check" CHECK ((("amount_minor" IS NULL) OR ("amount_minor" > 0))),
     CONSTRAINT "credit_auto_topups_disabled_ck" CHECK ((("status" = 'disabled'::"text") = ("disabled_at" IS NOT NULL))),
     CONSTRAINT "credit_auto_topups_fixed_ck" CHECK ((("method" = 'fixed'::"text") = ("amount_minor" IS NOT NULL))),
@@ -1129,15 +1410,39 @@ CREATE TABLE "public"."credit_auto_topups" (
     CONSTRAINT "credit_auto_topups_max_runs_per_day_check" CHECK ((("max_runs_per_day" >= 1) AND ("max_runs_per_day" <= 10))),
     CONSTRAINT "credit_auto_topups_method_check" CHECK (("method" = ANY (ARRAY['fixed'::"text", 'target'::"text"]))),
     CONSTRAINT "credit_auto_topups_monthly_cap_minor_check" CHECK (("monthly_cap_minor" > 0)),
+    CONSTRAINT "credit_auto_topups_pack_ck" CHECK (((("pack_price_id" IS NOT NULL) = (("pack_quantity" IS NOT NULL) <> ("target_units" IS NOT NULL))) AND (("pack_price_id" IS NOT NULL) OR (("pack_quantity" IS NULL) AND ("target_units" IS NULL))) AND (("pack_quantity" IS NULL) OR ("pack_quantity" >= 1)) AND (("target_units" IS NULL) OR ("target_units" > 0)) AND (("threshold_units" IS NULL) OR (("threshold_units" >= 0) AND ("threshold_minor" IS NULL) AND ("pack_price_id" IS NOT NULL))))),
     CONSTRAINT "credit_auto_topups_reason_ck" CHECK ((("disabled_reason" IS NULL) OR ("status" = 'disabled'::"text"))),
     CONSTRAINT "credit_auto_topups_schedule_check" CHECK ((("schedule" IS NULL) OR ("jsonb_typeof"("schedule") = 'object'::"text"))),
     CONSTRAINT "credit_auto_topups_schedule_ck" CHECK ((("trigger" = 'schedule'::"text") = ("schedule" IS NOT NULL))),
     CONSTRAINT "credit_auto_topups_status_check" CHECK (("status" = ANY (ARRAY['active'::"text", 'disabled'::"text"]))),
-    CONSTRAINT "credit_auto_topups_target_ck" CHECK ((("method" = 'target'::"text") = ("target_minor" IS NOT NULL))),
+    CONSTRAINT "credit_auto_topups_target_ck" CHECK ((("method" = 'target'::"text") = (("target_minor" IS NOT NULL) OR ("target_units" IS NOT NULL)))),
     CONSTRAINT "credit_auto_topups_target_minor_check" CHECK ((("target_minor" IS NULL) OR ("target_minor" > 0))),
-    CONSTRAINT "credit_auto_topups_threshold_ck" CHECK ((("trigger" = 'threshold'::"text") = ("threshold_minor" IS NOT NULL))),
+    CONSTRAINT "credit_auto_topups_threshold_ck" CHECK ((("trigger" = 'threshold'::"text") = (("threshold_minor" IS NOT NULL) OR ("threshold_units" IS NOT NULL)))),
     CONSTRAINT "credit_auto_topups_threshold_minor_check" CHECK ((("threshold_minor" IS NULL) OR ("threshold_minor" >= 0))),
     CONSTRAINT "credit_auto_topups_trigger_check" CHECK (("trigger" = ANY (ARRAY['threshold'::"text", 'schedule'::"text"])))
+);
+
+
+--
+-- Name: credit_grant_grace; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_grant_grace" (
+    "grant_id" "uuid" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "customer_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "available_steps" bigint NOT NULL,
+    "valid_from" timestamp with time zone NOT NULL,
+    "valid_until" timestamp with time zone NOT NULL,
+    "locks_at" timestamp with time zone NOT NULL,
+    "locked_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "held_steps" bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT "credit_grant_grace_available_ck" CHECK (("available_steps" >= 0)),
+    CONSTRAINT "credit_grant_grace_held_ck" CHECK ((("held_steps" >= 0) AND ("held_steps" <= "available_steps")))
 );
 
 
@@ -1159,6 +1464,7 @@ CREATE TABLE "public"."credit_grant_movements" (
     "invoice_id" "uuid",
     "ledger_transaction_id" "uuid",
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "settlement_id" "uuid",
     CONSTRAINT "credit_grant_movements_kind_check" CHECK (("kind" = ANY (ARRAY['grant'::"text", 'draw'::"text", 'expire'::"text", 'void'::"text", 'restore'::"text", 'rollover_in'::"text", 'rollover_out'::"text", 'activate'::"text"]))),
     CONSTRAINT "credit_grant_movements_sign_ck" CHECK (
 CASE
@@ -1166,6 +1472,25 @@ CASE
     WHEN ("kind" = ANY (ARRAY['draw'::"text", 'expire'::"text", 'void'::"text", 'rollover_out'::"text"])) THEN (("units" <= 0) AND ("face_minor" <= 0) AND ("cost_minor" <= 0))
     ELSE true
 END)
+);
+
+
+--
+-- Name: credit_grant_void_reasons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_grant_void_reasons" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "grant_id" "uuid" NOT NULL,
+    "reason" "text" NOT NULL,
+    "note" "text",
+    "created_by_user_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "credit_grant_void_reasons_note_ck" CHECK ((("note" IS NULL) OR ("char_length"("note") <= 500))),
+    CONSTRAINT "credit_grant_void_reasons_other_ck" CHECK ((("reason" <> 'other'::"text") OR ("note" IS NOT NULL))),
+    CONSTRAINT "credit_grant_void_reasons_reason_ck" CHECK (("reason" = ANY (ARRAY['customer_request'::"text", 'fraud'::"text", 'goodwill_reversal'::"text", 'billing_error'::"text", 'migration'::"text", 'other'::"text"])))
 );
 
 
@@ -1202,12 +1527,18 @@ CREATE TABLE "public"."credit_grants" (
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "resource_version" bigint DEFAULT 1 NOT NULL,
+    "unit_rated" boolean DEFAULT true NOT NULL,
+    "out_of_balance" boolean DEFAULT false NOT NULL,
     CONSTRAINT "credit_grants_amount_check" CHECK (("amount" > 0)),
     CONSTRAINT "credit_grants_applicability_check" CHECK (("jsonb_typeof"("applicability") = 'object'::"text")),
     CONSTRAINT "credit_grants_category_check" CHECK (("category" = ANY (ARRAY['paid'::"text", 'promotional'::"text"]))),
     CONSTRAINT "credit_grants_cost_basis_minor_check" CHECK (("cost_basis_minor" >= 0)),
     CONSTRAINT "credit_grants_expiry_ck" CHECK ((("expires_at" IS NULL) OR ("expires_at" > "effective_at"))),
-    CONSTRAINT "credit_grants_face_minor_check" CHECK (("face_minor" > 0)),
+    CONSTRAINT "credit_grants_face_rated_ck" CHECK (
+CASE
+    WHEN "unit_rated" THEN ("face_minor" > 0)
+    ELSE ("face_minor" = 0)
+END),
     CONSTRAINT "credit_grants_on_exhausted_check" CHECK (("on_exhausted" = ANY (ARRAY['block'::"text", 'bill'::"text"]))),
     CONSTRAINT "credit_grants_paid_invoice_ck" CHECK ((("category" <> 'paid'::"text") OR ("invoice_id" IS NOT NULL) OR ("restored_from_id" IS NOT NULL))),
     CONSTRAINT "credit_grants_priority_check" CHECK ((("priority" >= 0) AND ("priority" <= 100))),
@@ -1217,7 +1548,8 @@ CREATE TABLE "public"."credit_grants" (
     CONSTRAINT "credit_grants_status_check" CHECK (("status" = ANY (ARRAY['pending'::"text", 'active'::"text", 'expired'::"text", 'voided'::"text"]))),
     CONSTRAINT "credit_grants_tax_treatment_check" CHECK (("tax_treatment" = ANY (ARRAY['taxed_at_purchase'::"text", 'taxed_at_use'::"text"]))),
     CONSTRAINT "credit_grants_taxed_at_use_money_ck" CHECK ((("tax_treatment" IS DISTINCT FROM 'taxed_at_use'::"text") OR ("unit_id" IS NULL))),
-    CONSTRAINT "credit_grants_treatment_ck" CHECK ((("category" = 'paid'::"text") = ("tax_treatment" IS NOT NULL)))
+    CONSTRAINT "credit_grants_treatment_ck" CHECK ((("category" = 'paid'::"text") = ("tax_treatment" IS NOT NULL))),
+    CONSTRAINT "credit_grants_unrated_unit_ck" CHECK (("unit_rated" OR ("unit_id" IS NOT NULL)))
 );
 
 
@@ -1244,9 +1576,22 @@ CREATE TABLE "public"."credit_holds" (
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "resource_version" bigint DEFAULT 1 NOT NULL,
-    CONSTRAINT "credit_holds_amount_minor_check" CHECK (("amount_minor" > 0)),
+    "unit_id" "uuid",
+    "amount_units" bigint,
+    "captured_units" bigint,
+    "remaining_units" bigint,
+    CONSTRAINT "credit_holds_amount_ck" CHECK (
+CASE
+    WHEN ("unit_id" IS NULL) THEN (("amount_minor" > 0) AND ("amount_units" IS NULL) AND ("captured_units" IS NULL))
+    ELSE (("amount_minor" = 0) AND ("amount_units" > 0) AND (("captured_units" IS NULL) OR ("captured_units" >= 0)))
+END),
     CONSTRAINT "credit_holds_captured_ck" CHECK ((("status" = 'captured'::"text") = ("captured_minor" IS NOT NULL))),
     CONSTRAINT "credit_holds_captured_minor_check" CHECK ((("captured_minor" IS NULL) OR ("captured_minor" >= 0))),
+    CONSTRAINT "credit_holds_remaining_ck" CHECK (
+CASE
+    WHEN ("unit_id" IS NULL) THEN ("remaining_units" IS NULL)
+    ELSE (("remaining_units" >= 0) AND ("remaining_units" <= "amount_units"))
+END),
     CONSTRAINT "credit_holds_scope_check" CHECK ((("scope" IS NULL) OR ("jsonb_typeof"("scope") = 'object'::"text"))),
     CONSTRAINT "credit_holds_status_check" CHECK (("status" = ANY (ARRAY['held'::"text", 'captured'::"text", 'released'::"text", 'expired'::"text"])))
 );
@@ -1341,7 +1686,9 @@ CREATE TABLE "public"."credit_notes" (
     "payout_unconfirmed_minor" bigint DEFAULT 0 NOT NULL,
     "payout_duplicated_minor" bigint DEFAULT 0 NOT NULL,
     "payout_out_of_order_minor" bigint DEFAULT 0 NOT NULL,
+    "pack_refund" "text",
     CONSTRAINT "credit_notes_exchange_rate_valid" CHECK (((("exchange_rate" IS NULL) AND ("exchange_rate_base" IS NULL)) OR (("exchange_rate" > (0)::numeric) AND ("exchange_rate_base" IS NOT NULL)))),
+    CONSTRAINT "credit_notes_pack_refund_ck" CHECK ((("pack_refund" IS NULL) OR ("pack_refund" = 'full'::"text"))),
     CONSTRAINT "credit_notes_status_ck" CHECK (("status" = ANY (ARRAY['adjusted'::"text", 'refund_due'::"text", 'refunded'::"text", 'voided'::"text"])))
 );
 
@@ -1351,6 +1698,67 @@ CREATE TABLE "public"."credit_notes" (
 --
 
 COMMENT ON COLUMN "public"."credit_notes"."exchange_rate" IS 'Inherited from the invoice this note credits, so a reversal converts at the same rate as the document it reverses.';
+
+
+--
+-- Name: credit_overdraft_limits; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_overdraft_limits" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "product_id" "uuid",
+    "customer_id" "uuid",
+    "limit_steps" bigint NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "credit_overdraft_limits_nonnegative_ck" CHECK (("limit_steps" >= 0)),
+    CONSTRAINT "credit_overdraft_limits_one_layer_ck" CHECK ((("product_id" IS NULL) OR ("customer_id" IS NULL)))
+);
+
+
+--
+-- Name: credit_unit_balances; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_unit_balances" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "customer_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "available_steps" bigint DEFAULT 0 NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "held_steps" bigint DEFAULT 0 NOT NULL,
+    "pinned_steps" bigint DEFAULT 0 NOT NULL,
+    "topup_threshold_steps" bigint,
+    "topup_due_at" timestamp with time zone,
+    CONSTRAINT "credit_unit_balances_held_ck" CHECK (("held_steps" >= 0)),
+    CONSTRAINT "credit_unit_balances_pinned_ck" CHECK (("pinned_steps" >= 0))
+);
+
+
+--
+-- Name: credit_unit_policies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_unit_policies" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "overage_minor_per_unit_e12" bigint,
+    "negative_at_reset" "text" DEFAULT 'carry'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "credit_unit_policies_overage_ck" CHECK ((("overage_minor_per_unit_e12" IS NULL) OR ("overage_minor_per_unit_e12" > 0))),
+    CONSTRAINT "credit_unit_policies_reset_ck" CHECK (("negative_at_reset" = ANY (ARRAY['carry'::"text", 'forgive'::"text"])))
+);
 
 
 --
@@ -1365,7 +1773,7 @@ CREATE TABLE "public"."credit_units" (
     "name" "text" NOT NULL,
     "plural_name" "text" NOT NULL,
     "currency" character(3) NOT NULL,
-    "minor_per_unit_e12" bigint NOT NULL,
+    "minor_per_unit_e12" bigint,
     "decimals" smallint DEFAULT 0 NOT NULL,
     "locked_at" timestamp with time zone,
     "active" boolean DEFAULT true NOT NULL,
@@ -1374,6 +1782,88 @@ CREATE TABLE "public"."credit_units" (
     "resource_version" bigint DEFAULT 1 NOT NULL,
     CONSTRAINT "credit_units_decimals_check" CHECK ((("decimals" >= 0) AND ("decimals" <= 4))),
     CONSTRAINT "credit_units_minor_per_unit_e12_check" CHECK (("minor_per_unit_e12" > 0))
+);
+
+
+--
+-- Name: credit_usage_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_usage_events" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "customer_id" "uuid",
+    "meter_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "event_id" "uuid" NOT NULL,
+    "event_key" "text" NOT NULL,
+    "event_timestamp" timestamp with time zone NOT NULL,
+    "received_at" timestamp with time zone NOT NULL,
+    "part" smallint DEFAULT 0 NOT NULL,
+    "quantity" numeric DEFAULT 0 NOT NULL,
+    "credits_per_unit" numeric(20,6) NOT NULL,
+    "cost_source" "text" DEFAULT 'meter'::"text" NOT NULL,
+    "units_due" bigint DEFAULT 0 NOT NULL,
+    "units_uncovered" bigint DEFAULT 0 NOT NULL,
+    "units" bigint DEFAULT 0 NOT NULL,
+    "source" "text" DEFAULT 'balance'::"text" NOT NULL,
+    "grace_grant_id" "uuid",
+    "status" "text" NOT NULL,
+    "reason" "text",
+    "covered_by_hold" boolean DEFAULT false NOT NULL,
+    "settlement_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "overage_basis" "text",
+    "overage_rate_e12" bigint,
+    "overage_price_id" "uuid",
+    "overage_charge_id" "uuid",
+    "overage_invoice_id" "uuid",
+    "zero_reason" "text",
+    CONSTRAINT "credit_usage_events_cost_source_ck" CHECK (("cost_source" = ANY (ARRAY['meter'::"text", 'plan'::"text", 'subscription'::"text"]))),
+    CONSTRAINT "credit_usage_events_customer_ck" CHECK ((("customer_id" IS NOT NULL) OR ("status" = ANY (ARRAY['refused'::"text", 'skipped'::"text"])))),
+    CONSTRAINT "credit_usage_events_grace_ck" CHECK ((("source" = 'grace'::"text") = ("grace_grant_id" IS NOT NULL))),
+    CONSTRAINT "credit_usage_events_overage_ck" CHECK (((("source" <> 'overdraft'::"text") OR ("units_uncovered" = 0)) AND (("status" <> ALL (ARRAY['billed'::"text", 'forgiven'::"text"])) OR ("source" = 'overdraft'::"text")) AND (("status" <> 'billed'::"text") OR ("overage_invoice_id" IS NOT NULL)) AND (("status" <> 'forgiven'::"text") OR ("zero_reason" IS NOT NULL)) AND (("overage_basis" IS NULL) OR ("overage_basis" = ANY (ARRAY['meter'::"text", 'unit'::"text"]))) AND (("overage_basis" IS NULL) OR ("units_uncovered" > 0)) AND (COALESCE(("overage_basis" = 'meter'::"text"), false) = ("overage_price_id" IS NOT NULL)) AND (COALESCE(("overage_basis" = 'unit'::"text"), false) = ("overage_rate_e12" IS NOT NULL)) AND ("units_uncovered" <= "units_due"))),
+    CONSTRAINT "credit_usage_events_settled_ck" CHECK ((("status" = 'settled'::"text") = ("settlement_id" IS NOT NULL))),
+    CONSTRAINT "credit_usage_events_source_ck" CHECK (("source" = ANY (ARRAY['balance'::"text", 'grace'::"text", 'overdraft'::"text"]))),
+    CONSTRAINT "credit_usage_events_status_ck" CHECK (("status" = ANY (ARRAY['taken'::"text", 'pending'::"text", 'settled'::"text", 'refused'::"text", 'skipped'::"text", 'billed'::"text", 'forgiven'::"text"]))),
+    CONSTRAINT "credit_usage_events_unbilled_ck" CHECK ((("status" <> ALL (ARRAY['refused'::"text", 'skipped'::"text"])) OR (("units" = 0) AND ("reason" IS NOT NULL)))),
+    CONSTRAINT "credit_usage_events_units_ck" CHECK ((("units" >= 0) AND ("units_due" >= 0) AND ("units_uncovered" >= 0)))
+);
+
+
+--
+-- Name: credit_usage_settlements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."credit_usage_settlements" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "public_id" "text" NOT NULL,
+    "customer_id" "uuid" NOT NULL,
+    "meter_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "subscription_id" "uuid",
+    "seq" integer NOT NULL,
+    "kind" "text" DEFAULT 'usage'::"text" NOT NULL,
+    "grace_grant_id" "uuid",
+    "window_start" timestamp with time zone NOT NULL,
+    "window_end" timestamp with time zone NOT NULL,
+    "events" integer DEFAULT 0 NOT NULL,
+    "quantity" numeric DEFAULT 0 NOT NULL,
+    "units_due" bigint DEFAULT 0 NOT NULL,
+    "units_drawn" bigint DEFAULT 0 NOT NULL,
+    "quantity_uncovered" numeric DEFAULT 0 NOT NULL,
+    "currency" character(3) NOT NULL,
+    "revenue_minor" bigint DEFAULT 0 NOT NULL,
+    "status" "text" DEFAULT 'settled'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "corrects_event_id" "uuid",
+    "corrects_settlement_id" "uuid",
+    CONSTRAINT "credit_usage_settlements_kind_ck" CHECK ((("kind" = ANY (ARRAY['usage'::"text", 'late'::"text", 'correction'::"text", 'redraw'::"text"])) AND (("kind" = 'correction'::"text") = ("corrects_event_id" IS NOT NULL)) AND (("kind" = ANY (ARRAY['correction'::"text", 'redraw'::"text"])) = ("corrects_settlement_id" IS NOT NULL)))),
+    CONSTRAINT "credit_usage_settlements_units_ck" CHECK ((("units_due" >= 0) AND ("units_drawn" >= 0) AND ("units_drawn" <= "units_due") AND ("revenue_minor" >= 0))),
+    CONSTRAINT "credit_usage_settlements_window_ck" CHECK (("window_end" >= "window_start"))
 );
 
 
@@ -1474,7 +1964,8 @@ CREATE TABLE "public"."customer_meter_billing" (
     "cutoff_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
-    "resource_version" bigint DEFAULT 1 NOT NULL
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    "late_checked_at" timestamp with time zone
 );
 
 
@@ -2359,10 +2850,11 @@ CREATE TABLE "public"."invoices" (
     "dunning_exhausted_code" "text",
     "retry_hold_until" timestamp with time zone,
     "collect_trace_id" "text",
+    "hold_until" timestamp with time zone,
     CONSTRAINT "invoices_dunning_status_ck" CHECK ((("dunning_status" IS NULL) OR ("dunning_status" = ANY (ARRAY['in_progress'::"text", 'parked'::"text", 'succeeded'::"text", 'exhausted'::"text", 'stopped'::"text"])))),
     CONSTRAINT "invoices_exchange_rate_valid" CHECK (((("exchange_rate" IS NULL) AND ("exchange_rate_base" IS NULL)) OR (("exchange_rate" > (0)::numeric) AND ("exchange_rate_base" IS NOT NULL)))),
     CONSTRAINT "invoices_grant_credits_nonneg" CHECK ((("grant_credits_pre_tax_minor" >= 0) AND ("grant_credits_post_tax_minor" >= 0))),
-    CONSTRAINT "invoices_purpose_ck" CHECK ((("purpose" IS NULL) OR ("purpose" = ANY (ARRAY['usage_interim'::"text", 'credit_purchase'::"text"])))),
+    CONSTRAINT "invoices_purpose_ck" CHECK ((("purpose" IS NULL) OR ("purpose" = ANY (ARRAY['usage_interim'::"text", 'credit_purchase'::"text", 'late_usage'::"text"])))),
     CONSTRAINT "invoices_status_ck" CHECK (("status" = ANY (ARRAY['pending'::"text", 'posted'::"text", 'payment_due'::"text", 'not_paid'::"text", 'paid'::"text", 'voided'::"text"])))
 );
 
@@ -2514,6 +3006,27 @@ CREATE TABLE "public"."metadata_key_rules" (
 
 
 --
+-- Name: meter_credit_costs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."meter_credit_costs" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "meter_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL,
+    "credits_per_unit" numeric(20,6) NOT NULL,
+    "product_id" "uuid",
+    "subscription_id" "uuid",
+    "active" boolean DEFAULT true NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "meter_credit_costs_one_layer_ck" CHECK ((("product_id" IS NULL) OR ("subscription_id" IS NULL))),
+    CONSTRAINT "meter_credit_costs_positive_ck" CHECK (("credits_per_unit" > (0)::numeric))
+);
+
+
+--
 -- Name: meters; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2633,12 +3146,17 @@ CREATE TABLE "public"."model_cost_overrides" (
     "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
     "resource_version" bigint DEFAULT 1 NOT NULL,
+    "unit" "text" DEFAULT 'token'::"text" NOT NULL,
+    "quality" "text" DEFAULT ''::"text" NOT NULL,
+    "resolution" "text" DEFAULT ''::"text" NOT NULL,
     CONSTRAINT "model_cost_overrides_model_check" CHECK ((("char_length"("model") >= 1) AND ("char_length"("model") <= 200))),
     CONSTRAINT "model_cost_overrides_note_check" CHECK ((("note" IS NULL) OR ("char_length"("note") <= 500))),
     CONSTRAINT "model_cost_overrides_provider_check" CHECK ((("provider" IS NULL) OR (("char_length"("provider") >= 1) AND ("char_length"("provider") <= 100)))),
     CONSTRAINT "model_cost_overrides_quantity_divisor_check" CHECK (("quantity_divisor" > 0)),
+    CONSTRAINT "model_cost_overrides_tier_ck" CHECK ((("quality" ~ '^[a-z0-9_.x-]{0,40}$'::"text") AND ("resolution" ~ '^[a-z0-9_.x-]{0,40}$'::"text"))),
     CONSTRAINT "model_cost_overrides_token_type_check" CHECK ((("char_length"("token_type") >= 1) AND ("char_length"("token_type") <= 100))),
     CONSTRAINT "model_cost_overrides_unit_amount_decimal_check" CHECK (("unit_amount_decimal" >= (0)::numeric)),
+    CONSTRAINT "model_cost_overrides_unit_ck" CHECK (("unit" = ANY (ARRAY['token'::"text", 'request'::"text", 'image'::"text", 'video_second'::"text", 'audio_second'::"text", 'character'::"text", 'page'::"text", 'pixel'::"text"]))),
     CONSTRAINT "model_cost_overrides_window_ck" CHECK ((("effective_to" IS NULL) OR ("effective_to" > "effective_from")))
 );
 
@@ -2705,9 +3223,14 @@ CREATE TABLE "public"."model_prices" (
     "sync_run_id" "uuid" NOT NULL,
     "released_by" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "unit" "text" DEFAULT 'token'::"text" NOT NULL,
+    "quality" "text" DEFAULT ''::"text" NOT NULL,
+    "resolution" "text" DEFAULT ''::"text" NOT NULL,
     CONSTRAINT "model_prices_quantity_divisor_check" CHECK (("quantity_divisor" > 0)),
+    CONSTRAINT "model_prices_tier_ck" CHECK ((("quality" ~ '^[a-z0-9_.x-]{0,40}$'::"text") AND ("resolution" ~ '^[a-z0-9_.x-]{0,40}$'::"text"))),
     CONSTRAINT "model_prices_token_type_check" CHECK ((("char_length"("token_type") >= 1) AND ("char_length"("token_type") <= 100))),
-    CONSTRAINT "model_prices_unit_amount_decimal_check" CHECK (("unit_amount_decimal" >= (0)::numeric))
+    CONSTRAINT "model_prices_unit_amount_decimal_check" CHECK (("unit_amount_decimal" >= (0)::numeric)),
+    CONSTRAINT "model_prices_unit_ck" CHECK (("unit" = ANY (ARRAY['token'::"text", 'request'::"text", 'image'::"text", 'video_second'::"text", 'audio_second'::"text", 'character'::"text", 'page'::"text", 'pixel'::"text"])))
 );
 
 
@@ -2906,6 +3429,79 @@ CREATE VIEW "public"."mrr_movement_summary" AS
 
 
 --
+-- Name: oauth_clients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."oauth_clients" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "client_id" "text" NOT NULL,
+    "kind" "text" NOT NULL,
+    "client_name" "text",
+    "redirect_uris" "jsonb" NOT NULL,
+    "fetched_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "oauth_clients_kind_check" CHECK (("kind" = ANY (ARRAY['dcr'::"text", 'cimd'::"text"])))
+);
+
+
+--
+-- Name: oauth_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."oauth_grants" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "api_key_id" "uuid" NOT NULL,
+    "client_id" "text" NOT NULL,
+    "client_name" "text",
+    "scope" "text" NOT NULL,
+    "revoked_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: oauth_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."oauth_requests" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "client_id" "text" NOT NULL,
+    "redirect_uri" "text" NOT NULL,
+    "state" "text",
+    "code_challenge" "text" NOT NULL,
+    "scope" "text" NOT NULL,
+    "resource" "text",
+    "expires_at" timestamp with time zone NOT NULL,
+    "decided_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: oauth_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."oauth_tokens" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "grant_id" "uuid" NOT NULL,
+    "kind" "text" NOT NULL,
+    "token_hash" "text" NOT NULL,
+    "expires_at" timestamp with time zone NOT NULL,
+    "used_at" timestamp with time zone,
+    "redirect_uri" "text",
+    "code_challenge" "text",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "oauth_tokens_kind_check" CHECK (("kind" = ANY (ARRAY['code'::"text", 'access'::"text", 'refresh'::"text"])))
+);
+
+
+--
 -- Name: ops_http_stats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3047,6 +3643,8 @@ CREATE TABLE "public"."organizations" (
     "session_idle_minutes" integer,
     "session_absolute_ttl_hours" integer,
     "mfa_required_roles" "text"[],
+    "assistant_allowance_usd_cents" integer,
+    CONSTRAINT "organizations_assistant_allowance_usd_cents_check" CHECK ((("assistant_allowance_usd_cents" IS NULL) OR ("assistant_allowance_usd_cents" >= 0))),
     CONSTRAINT "organizations_ingest_rate_limit_per_second_ck" CHECK ((("ingest_rate_limit_per_second" IS NULL) OR ("ingest_rate_limit_per_second" >= 0))),
     CONSTRAINT "organizations_live_access_ck" CHECK (("live_access" = ANY (ARRAY['locked'::"text", 'enabled'::"text"]))),
     CONSTRAINT "organizations_mfa_grace_days_ck" CHECK ((("mfa_grace_days" >= 0) AND ("mfa_grace_days" <= 90))),
@@ -4320,6 +4918,109 @@ CREATE TABLE "public"."subscription_items" (
 
 
 --
+-- Name: subscription_pending_changes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."subscription_pending_changes" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "subscription_id" "uuid" NOT NULL,
+    "public_id" "text" NOT NULL,
+    "invoice_id" "uuid" NOT NULL,
+    "kind" "text" NOT NULL,
+    "request" "jsonb" NOT NULL,
+    "request_hash" "text" NOT NULL,
+    "plan" "jsonb" NOT NULL,
+    "fingerprint" "text" NOT NULL,
+    "credit_note_ids" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "restore" "jsonb",
+    "source" "text" DEFAULT 'api'::"text" NOT NULL,
+    "requested_at" timestamp with time zone NOT NULL,
+    "expires_at" timestamp with time zone NOT NULL,
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "end_reason" "text",
+    "applied_at" timestamp with time zone,
+    "ended_at" timestamp with time zone,
+    "kept_credit_note" "text",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "subscription_pending_changes_kind_ck" CHECK (("kind" = ANY (ARRAY['change'::"text", 'item_add'::"text"]))),
+    CONSTRAINT "subscription_pending_changes_reason_ck" CHECK ((("end_reason" IS NULL) OR ("end_reason" = ANY (ARRAY['expired'::"text", 'replaced'::"text", 'cancelled'::"text", 'voided'::"text", 'moved'::"text"])))),
+    CONSTRAINT "subscription_pending_changes_source_ck" CHECK (("source" = ANY (ARRAY['api'::"text", 'dashboard'::"text", 'checkout'::"text", 'portal'::"text"]))),
+    CONSTRAINT "subscription_pending_changes_status_ck" CHECK (("status" = ANY (ARRAY['pending'::"text", 'applied'::"text", 'expired'::"text", 'cancelled'::"text"])))
+);
+
+
+--
+-- Name: support_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."support_messages" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "request_id" "uuid" NOT NULL,
+    "author_kind" "text" NOT NULL,
+    "body" "text" NOT NULL,
+    "attachments" "jsonb",
+    "staff_by" "text",
+    "notified_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "support_messages_author_kind_check" CHECK (("author_kind" = ANY (ARRAY['member'::"text", 'staff'::"text", 'system'::"text"]))),
+    CONSTRAINT "support_messages_body_check" CHECK ((("length"("body") >= 1) AND ("length"("body") <= 8000)))
+);
+
+
+--
+-- Name: support_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."support_requests" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "number" integer NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "conversation_id" "uuid",
+    "subject" "text" NOT NULL,
+    "status" "text" NOT NULL,
+    "context" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "idempotency_key" "text" NOT NULL,
+    "last_member_reply_at" timestamp with time zone,
+    "last_staff_reply_at" timestamp with time zone,
+    "member_unread_at" timestamp with time zone,
+    "resolved_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "support_requests_status_check" CHECK (("status" = ANY (ARRAY['open'::"text", 'waiting'::"text", 'resolved'::"text"]))),
+    CONSTRAINT "support_requests_subject_check" CHECK ((("length"("subject") >= 1) AND ("length"("subject") <= 200)))
+);
+
+
+--
+-- Name: support_request_number_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE "public"."support_request_number_seq"
+    START WITH 1001
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: support_request_number_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE "public"."support_request_number_seq" OWNED BY "public"."support_requests"."number";
+
+
+--
 -- Name: tax_profiles; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4571,7 +5272,63 @@ CREATE TABLE "public"."transfer_configurations" (
     "live_override" boolean DEFAULT false NOT NULL,
     "plan_digest" "text",
     "options" "jsonb",
-    "twin_of" "uuid"
+    "twin_of" "uuid",
+    "run_kind" "text" DEFAULT 'sync'::"text" NOT NULL,
+    "conflict_policy" "jsonb",
+    "validation" "jsonb",
+    "counts" "jsonb",
+    "planned_by" "text",
+    "started_by" "text",
+    "started_by_user_id" "uuid",
+    "queued_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "heartbeat_at" timestamp with time zone,
+    "lease_token" "uuid",
+    "lease_count" integer DEFAULT 0 NOT NULL,
+    "cancel_requested_at" timestamp with time zone,
+    "cancelled_by" "text",
+    "notified_at" timestamp with time zone,
+    CONSTRAINT "transfer_configurations_run_kind_ck" CHECK (("run_kind" = ANY (ARRAY['sync'::"text", 'async'::"text"]))),
+    CONSTRAINT "transfer_configurations_status_ck" CHECK (("status" = ANY (ARRAY['planned'::"text", 'queued'::"text", 'running'::"text", 'succeeded'::"text", 'partially_failed'::"text", 'failed'::"text", 'cancelled'::"text", 'superseded'::"text"])))
+);
+
+
+--
+-- Name: transfer_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."transfer_items" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "transfer_id" "uuid" NOT NULL,
+    "seq" integer NOT NULL,
+    "pair" "text" DEFAULT 'main'::"text" NOT NULL,
+    "section" "text" NOT NULL,
+    "kind" "text" NOT NULL,
+    "key" "text" NOT NULL,
+    "label" "text" NOT NULL,
+    "action" "text" NOT NULL,
+    "excluded" boolean DEFAULT false NOT NULL,
+    "depends_on" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "diff" "jsonb",
+    "messages" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "source_ref" "text",
+    "fingerprint" "text" NOT NULL,
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "error" "text",
+    "skip_reason" "text",
+    "result_ref" "text",
+    "replaced" "jsonb",
+    "attempts" integer DEFAULT 0 NOT NULL,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "transfer_items_action_check" CHECK (("action" = ANY (ARRAY['create'::"text", 'update'::"text", 'unchanged'::"text", 'skip'::"text", 'blocked'::"text", 'delete'::"text"]))),
+    CONSTRAINT "transfer_items_pair_check" CHECK (("pair" = ANY (ARRAY['main'::"text", 'twin'::"text"]))),
+    CONSTRAINT "transfer_items_skip_reason_check" CHECK (("skip_reason" = ANY (ARRAY['unchanged'::"text", 'excluded'::"text", 'dependency'::"text", 'cancelled'::"text", 'drift'::"text"]))),
+    CONSTRAINT "transfer_items_status_check" CHECK (("status" = ANY (ARRAY['pending'::"text", 'running'::"text", 'done'::"text", 'failed'::"text", 'skipped'::"text"])))
 );
 
 
@@ -4613,7 +5370,8 @@ CREATE TABLE "public"."unbilled_charges" (
     "price_id" "uuid",
     "quantity" integer DEFAULT 1 NOT NULL,
     "entity_type" "text" DEFAULT 'adhoc'::"text" NOT NULL,
-    "rating" "jsonb"
+    "rating" "jsonb",
+    "discounted" boolean DEFAULT false NOT NULL
 );
 
 
@@ -4745,6 +5503,31 @@ CREATE TABLE "public"."usage_control_dirty" (
 
 
 --
+-- Name: usage_cost_daily; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."usage_cost_daily" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "day" "date" NOT NULL,
+    "starts_at" timestamp with time zone NOT NULL,
+    "ends_at" timestamp with time zone NOT NULL,
+    "customer_id" "uuid" NOT NULL,
+    "meter_id" "uuid" NOT NULL,
+    "group_values" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "model" "text" DEFAULT ''::"text" NOT NULL,
+    "subscription_id" "uuid",
+    "currency" character(3) NOT NULL,
+    "quantity" numeric DEFAULT 0 NOT NULL,
+    "cost_minor" bigint,
+    "cost_basis" "text" NOT NULL,
+    "computed_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "usage_cost_daily_cost_basis_check" CHECK (("cost_basis" = ANY (ARRAY['event'::"text", 'price_list'::"text", 'mixed'::"text", 'partial'::"text", 'none'::"text", 'no_rate'::"text"])))
+);
+
+
+--
 -- Name: usage_event_dedup; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4778,6 +5561,7 @@ CREATE TABLE "public"."usage_events" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 )
 PARTITION BY RANGE ("timestamp");
@@ -4803,6 +5587,7 @@ CREATE TABLE "public"."usage_events_y2026m09" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 );
 
@@ -4827,6 +5612,7 @@ CREATE TABLE "public"."usage_events_y2026m10" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 );
 
@@ -4851,6 +5637,7 @@ CREATE TABLE "public"."usage_events_y2026m11" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 );
 
@@ -4875,6 +5662,7 @@ CREATE TABLE "public"."usage_events_y2026m12" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 );
 
@@ -4899,6 +5687,7 @@ CREATE TABLE "public"."usage_events_y2027m01" (
     "matched_at" timestamp with time zone,
     "voided_at" timestamp with time zone,
     "void_reason" "text",
+    "refused_at" timestamp with time zone,
     CONSTRAINT "usage_events_key_check" CHECK ((("char_length"("key") >= 1) AND ("char_length"("key") <= 255)))
 );
 
@@ -5485,6 +6274,13 @@ ALTER TABLE ONLY "public"."invoice_line_items" ALTER COLUMN "seq" SET DEFAULT "n
 
 
 --
+-- Name: support_requests number; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_requests" ALTER COLUMN "number" SET DEFAULT "nextval"('"public"."support_request_number_seq"'::"regclass");
+
+
+--
 -- Name: api_keys api_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5522,6 +6318,86 @@ ALTER TABLE ONLY "public"."applied_coupons"
 
 ALTER TABLE ONLY "public"."applied_taxes"
     ADD CONSTRAINT "applied_taxes_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_actions assistant_actions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_actions"
+    ADD CONSTRAINT "assistant_actions_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_attachments assistant_attachments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_attachments"
+    ADD CONSTRAINT "assistant_attachments_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_conversations assistant_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_conversations"
+    ADD CONSTRAINT "assistant_conversations_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_doc_chunks assistant_doc_chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_doc_chunks"
+    ADD CONSTRAINT "assistant_doc_chunks_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_doc_index assistant_doc_index_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_doc_index"
+    ADD CONSTRAINT "assistant_doc_index_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_doc_vectors assistant_doc_vectors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_doc_vectors"
+    ADD CONSTRAINT "assistant_doc_vectors_pkey" PRIMARY KEY ("hash");
+
+
+--
+-- Name: assistant_embedding_usage assistant_embedding_usage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_embedding_usage"
+    ADD CONSTRAINT "assistant_embedding_usage_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_messages assistant_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_messages"
+    ADD CONSTRAINT "assistant_messages_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: assistant_settings assistant_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_settings"
+    ADD CONSTRAINT "assistant_settings_pkey" PRIMARY KEY ("organization_id");
+
+
+--
+-- Name: assistant_usage assistant_usage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_usage"
+    ADD CONSTRAINT "assistant_usage_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -5685,11 +6561,35 @@ ALTER TABLE ONLY "public"."credit_auto_topups"
 
 
 --
+-- Name: credit_grant_grace credit_grant_grace_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_pkey" PRIMARY KEY ("grant_id");
+
+
+--
+-- Name: credit_grant_movements credit_grant_movements_draw_source_ck; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_grant_movements"
+    ADD CONSTRAINT "credit_grant_movements_draw_source_ck" CHECK ((("kind" <> 'draw'::"text") OR ("invoice_id" IS NOT NULL) OR ("settlement_id" IS NOT NULL))) NOT VALID;
+
+
+--
 -- Name: credit_grant_movements credit_grant_movements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY "public"."credit_grant_movements"
     ADD CONSTRAINT "credit_grant_movements_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: credit_grant_void_reasons credit_grant_void_reasons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_void_reasons"
+    ADD CONSTRAINT "credit_grant_void_reasons_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -5741,11 +6641,51 @@ ALTER TABLE ONLY "public"."credit_notes"
 
 
 --
+-- Name: credit_overdraft_limits credit_overdraft_limits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: credit_unit_balances credit_unit_balances_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_balances"
+    ADD CONSTRAINT "credit_unit_balances_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: credit_unit_policies credit_unit_policies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_policies"
+    ADD CONSTRAINT "credit_unit_policies_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: credit_units credit_units_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY "public"."credit_units"
     ADD CONSTRAINT "credit_units_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: credit_usage_events credit_usage_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -6109,6 +7049,14 @@ ALTER TABLE ONLY "public"."metadata_key_rules"
 
 
 --
+-- Name: meter_credit_costs meter_credit_costs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: meters meters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6145,7 +7093,7 @@ ALTER TABLE ONLY "public"."mfa_reset_requests"
 --
 
 ALTER TABLE ONLY "public"."model_cost_overrides"
-    ADD CONSTRAINT "model_cost_overrides_no_overlap" EXCLUDE USING "gist" ("organization_id" WITH =, COALESCE("provider", ''::"text") WITH =, "model" WITH =, "token_type" WITH =, "currency" WITH =, "tstzrange"("effective_from", "effective_to", '[)'::"text") WITH &&);
+    ADD CONSTRAINT "model_cost_overrides_no_overlap" EXCLUDE USING "gist" ("organization_id" WITH =, COALESCE("provider", ''::"text") WITH =, "model" WITH =, "token_type" WITH =, "unit" WITH =, "quality" WITH =, "resolution" WITH =, "currency" WITH =, "tstzrange"("effective_from", "effective_to", '[)'::"text") WITH &&);
 
 
 --
@@ -6186,6 +7134,38 @@ ALTER TABLE ONLY "public"."model_prices"
 
 ALTER TABLE ONLY "public"."mrr_movements"
     ADD CONSTRAINT "mrr_movements_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: oauth_clients oauth_clients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_clients"
+    ADD CONSTRAINT "oauth_clients_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: oauth_grants oauth_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_grants"
+    ADD CONSTRAINT "oauth_grants_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: oauth_requests oauth_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_requests"
+    ADD CONSTRAINT "oauth_requests_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: oauth_tokens oauth_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_tokens"
+    ADD CONSTRAINT "oauth_tokens_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -6613,6 +7593,14 @@ ALTER TABLE ONLY "public"."subscription_items"
 
 
 --
+-- Name: subscription_pending_changes subscription_pending_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."subscription_pending_changes"
+    ADD CONSTRAINT "subscription_pending_changes_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: subscriptions subscriptions_commitment_amount_minor_pos; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6634,6 +7622,22 @@ ALTER TABLE "public"."subscriptions"
 
 ALTER TABLE ONLY "public"."subscriptions"
     ADD CONSTRAINT "subscriptions_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: support_messages support_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_messages"
+    ADD CONSTRAINT "support_messages_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: support_requests support_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_requests"
+    ADD CONSTRAINT "support_requests_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -6725,6 +7729,14 @@ ALTER TABLE ONLY "public"."transfer_configurations"
 
 
 --
+-- Name: transfer_items transfer_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."transfer_items"
+    ADD CONSTRAINT "transfer_items_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: trusted_browsers trusted_browsers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6786,6 +7798,14 @@ ALTER TABLE ONLY "public"."usage_control_cursors"
 
 ALTER TABLE ONLY "public"."usage_control_dirty"
     ADD CONSTRAINT "usage_control_dirty_pkey" PRIMARY KEY ("customer_id");
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -7074,6 +8094,27 @@ CREATE INDEX "applied_coupons_coupon_created_idx" ON "public"."applied_coupons" 
 
 
 --
+-- Name: applied_coupons_coupon_customer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "applied_coupons_coupon_customer_idx" ON "public"."applied_coupons" USING "btree" ("coupon_id", "customer_id");
+
+
+--
+-- Name: applied_coupons_customer_active_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "applied_coupons_customer_active_uq" ON "public"."applied_coupons" USING "btree" ("customer_id", "coupon_id") WHERE (("scope" = 'customer'::"text") AND ("status" = 'active'::"text"));
+
+
+--
+-- Name: applied_coupons_invoice_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "applied_coupons_invoice_idx" ON "public"."applied_coupons" USING "btree" ("invoice_id") WHERE ("invoice_id" IS NOT NULL);
+
+
+--
 -- Name: applied_coupons_public_id_uq; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7099,6 +8140,111 @@ CREATE INDEX "applied_taxes_invoice_idx" ON "public"."applied_taxes" USING "btre
 --
 
 CREATE INDEX "applied_taxes_line_idx" ON "public"."applied_taxes" USING "btree" ("invoice_line_item_id");
+
+
+--
+-- Name: assistant_actions_org_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_actions_org_created_idx" ON "public"."assistant_actions" USING "btree" ("organization_id", "created_at" DESC);
+
+
+--
+-- Name: assistant_actions_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "assistant_actions_public_id_uq" ON "public"."assistant_actions" USING "btree" ("public_id");
+
+
+--
+-- Name: assistant_attachments_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_attachments_created_idx" ON "public"."assistant_attachments" USING "btree" ("created_at");
+
+
+--
+-- Name: assistant_attachments_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "assistant_attachments_public_id_uq" ON "public"."assistant_attachments" USING "btree" ("public_id");
+
+
+--
+-- Name: assistant_conversations_archived_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_conversations_archived_idx" ON "public"."assistant_conversations" USING "btree" ("organization_id", "user_id", "business_id", "pinned_at" DESC NULLS LAST, "updated_at" DESC, "id" DESC) WHERE ("archived_at" IS NOT NULL);
+
+
+--
+-- Name: assistant_conversations_history_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_conversations_history_idx" ON "public"."assistant_conversations" USING "btree" ("organization_id", "user_id", "business_id", "pinned_at" DESC NULLS LAST, "updated_at" DESC, "id" DESC) WHERE ("archived_at" IS NULL);
+
+
+--
+-- Name: assistant_conversations_member_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_conversations_member_idx" ON "public"."assistant_conversations" USING "btree" ("organization_id", "user_id", "updated_at" DESC);
+
+
+--
+-- Name: assistant_conversations_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "assistant_conversations_public_id_uq" ON "public"."assistant_conversations" USING "btree" ("public_id");
+
+
+--
+-- Name: assistant_doc_chunks_search_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_doc_chunks_search_idx" ON "public"."assistant_doc_chunks" USING "gin" ("search");
+
+
+--
+-- Name: assistant_doc_chunks_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_doc_chunks_source_idx" ON "public"."assistant_doc_chunks" USING "btree" ("source");
+
+
+--
+-- Name: assistant_embedding_usage_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_embedding_usage_created_idx" ON "public"."assistant_embedding_usage" USING "btree" ("created_at");
+
+
+--
+-- Name: assistant_embedding_usage_org_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_embedding_usage_org_created_idx" ON "public"."assistant_embedding_usage" USING "btree" ("organization_id", "created_at");
+
+
+--
+-- Name: assistant_messages_conversation_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_messages_conversation_idx" ON "public"."assistant_messages" USING "btree" ("conversation_id", "created_at");
+
+
+--
+-- Name: assistant_messages_feedback_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_messages_feedback_idx" ON "public"."assistant_messages" USING "btree" ("feedback_at" DESC) WHERE ("feedback" IS NOT NULL);
+
+
+--
+-- Name: assistant_usage_org_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "assistant_usage_org_created_idx" ON "public"."assistant_usage" USING "btree" ("organization_id", "created_at");
 
 
 --
@@ -7438,6 +8584,27 @@ CREATE UNIQUE INDEX "credit_auto_topups_public_id_uq" ON "public"."credit_auto_t
 
 
 --
+-- Name: credit_grant_grace_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grant_grace_business_idx" ON "public"."credit_grant_grace" USING "btree" ("business_id");
+
+
+--
+-- Name: credit_grant_grace_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grant_grace_due_idx" ON "public"."credit_grant_grace" USING "btree" ("locks_at") WHERE ("locked_at" IS NULL);
+
+
+--
+-- Name: credit_grant_grace_open_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grant_grace_open_idx" ON "public"."credit_grant_grace" USING "btree" ("customer_id", "unit_id") WHERE ("locked_at" IS NULL);
+
+
+--
 -- Name: credit_grant_movements_customer_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7466,6 +8633,20 @@ CREATE UNIQUE INDEX "credit_grant_movements_public_id_uq" ON "public"."credit_gr
 
 
 --
+-- Name: credit_grant_movements_settlement_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grant_movements_settlement_idx" ON "public"."credit_grant_movements" USING "btree" ("settlement_id") WHERE ("settlement_id" IS NOT NULL);
+
+
+--
+-- Name: credit_grant_void_reasons_grant_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_grant_void_reasons_grant_uq" ON "public"."credit_grant_void_reasons" USING "btree" ("grant_id");
+
+
+--
 -- Name: credit_grants_customer_live_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7484,6 +8665,13 @@ CREATE INDEX "credit_grants_expiry_idx" ON "public"."credit_grants" USING "btree
 --
 
 CREATE INDEX "credit_grants_invoice_idx" ON "public"."credit_grants" USING "btree" ("invoice_id") WHERE ("invoice_id" IS NOT NULL);
+
+
+--
+-- Name: credit_grants_out_of_balance_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grants_out_of_balance_idx" ON "public"."credit_grants" USING "btree" ("customer_id", "unit_id") WHERE ("out_of_balance" AND ("status" = 'active'::"text"));
 
 
 --
@@ -7508,6 +8696,13 @@ CREATE UNIQUE INDEX "credit_grants_source_ref_uq" ON "public"."credit_grants" US
 
 
 --
+-- Name: credit_grants_unit_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_grants_unit_expiry_idx" ON "public"."credit_grants" USING "btree" ("customer_id", "unit_id", "expires_at") WHERE (("status" = 'active'::"text") AND (NOT "unit_rated") AND ("expires_at" IS NOT NULL));
+
+
+--
 -- Name: credit_holds_customer_held_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7526,6 +8721,13 @@ CREATE INDEX "credit_holds_expiry_idx" ON "public"."credit_holds" USING "btree" 
 --
 
 CREATE UNIQUE INDEX "credit_holds_public_id_uq" ON "public"."credit_holds" USING "btree" ("public_id");
+
+
+--
+-- Name: credit_holds_unit_held_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_holds_unit_held_idx" ON "public"."credit_holds" USING "btree" ("customer_id", "unit_id", "expires_at") WHERE (("status" = 'held'::"text") AND ("unit_id" IS NOT NULL));
 
 
 --
@@ -7613,10 +8815,157 @@ CREATE INDEX "credit_notes_voided_at_idx" ON "public"."credit_notes" USING "btre
 
 
 --
+-- Name: credit_overdraft_limits_customer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_overdraft_limits_customer_idx" ON "public"."credit_overdraft_limits" USING "btree" ("customer_id");
+
+
+--
+-- Name: credit_overdraft_limits_customer_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_overdraft_limits_customer_uq" ON "public"."credit_overdraft_limits" USING "btree" ("unit_id", "customer_id") WHERE ("customer_id" IS NOT NULL);
+
+
+--
+-- Name: credit_overdraft_limits_product_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_overdraft_limits_product_uq" ON "public"."credit_overdraft_limits" USING "btree" ("unit_id", "product_id") WHERE ("product_id" IS NOT NULL);
+
+
+--
+-- Name: credit_overdraft_limits_unit_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_overdraft_limits_unit_uq" ON "public"."credit_overdraft_limits" USING "btree" ("unit_id") WHERE (("product_id" IS NULL) AND ("customer_id" IS NULL));
+
+
+--
+-- Name: credit_unit_balances_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_unit_balances_business_idx" ON "public"."credit_unit_balances" USING "btree" ("business_id");
+
+
+--
+-- Name: credit_unit_balances_customer_unit_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_unit_balances_customer_unit_uq" ON "public"."credit_unit_balances" USING "btree" ("customer_id", "unit_id");
+
+
+--
+-- Name: credit_unit_balances_topup_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_unit_balances_topup_due_idx" ON "public"."credit_unit_balances" USING "btree" ("topup_due_at") WHERE ("topup_due_at" IS NOT NULL);
+
+
+--
+-- Name: credit_unit_policies_unit_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_unit_policies_unit_uq" ON "public"."credit_unit_policies" USING "btree" ("unit_id");
+
+
+--
 -- Name: credit_units_business_key_uq; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX "credit_units_business_key_uq" ON "public"."credit_units" USING "btree" ("business_id", "key");
+
+
+--
+-- Name: credit_usage_events_customer_received_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_customer_received_idx" ON "public"."credit_usage_events" USING "btree" ("customer_id", "meter_id", "received_at");
+
+
+--
+-- Name: credit_usage_events_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_due_idx" ON "public"."credit_usage_events" USING "btree" ("received_at") WHERE ("status" = 'taken'::"text");
+
+
+--
+-- Name: credit_usage_events_event_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_usage_events_event_uq" ON "public"."credit_usage_events" USING "btree" ("event_id", "meter_id", "part");
+
+
+--
+-- Name: credit_usage_events_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_key_idx" ON "public"."credit_usage_events" USING "btree" ("business_id", "event_key");
+
+
+--
+-- Name: credit_usage_events_open_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_open_idx" ON "public"."credit_usage_events" USING "btree" ("customer_id", "unit_id") WHERE ("status" = 'taken'::"text");
+
+
+--
+-- Name: credit_usage_events_overdraft_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_overdraft_idx" ON "public"."credit_usage_events" USING "btree" ("customer_id", "unit_id") WHERE (("source" = 'overdraft'::"text") AND ("status" = ANY (ARRAY['taken'::"text", 'billed'::"text"])));
+
+
+--
+-- Name: credit_usage_events_pending_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_pending_idx" ON "public"."credit_usage_events" USING "btree" ("grace_grant_id") WHERE ("status" = 'pending'::"text");
+
+
+--
+-- Name: credit_usage_events_unit_overage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_events_unit_overage_idx" ON "public"."credit_usage_events" USING "btree" ("customer_id", "received_at") WHERE (("overage_basis" = 'unit'::"text") AND ("overage_charge_id" IS NULL));
+
+
+--
+-- Name: credit_usage_settlements_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_settlements_business_idx" ON "public"."credit_usage_settlements" USING "btree" ("business_id");
+
+
+--
+-- Name: credit_usage_settlements_correction_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_usage_settlements_correction_uq" ON "public"."credit_usage_settlements" USING "btree" ("corrects_event_id", "meter_id", "corrects_settlement_id") WHERE ("kind" = 'correction'::"text");
+
+
+--
+-- Name: credit_usage_settlements_customer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "credit_usage_settlements_customer_idx" ON "public"."credit_usage_settlements" USING "btree" ("customer_id", "window_end" DESC);
+
+
+--
+-- Name: credit_usage_settlements_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_usage_settlements_public_id_uq" ON "public"."credit_usage_settlements" USING "btree" ("public_id");
+
+
+--
+-- Name: credit_usage_settlements_seq_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "credit_usage_settlements_seq_uq" ON "public"."credit_usage_settlements" USING "btree" ("customer_id", "meter_id", "seq");
 
 
 --
@@ -8397,6 +9746,13 @@ CREATE INDEX "invoices_dunning_next_reminder_idx" ON "public"."invoices" USING "
 
 
 --
+-- Name: invoices_hold_until_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "invoices_hold_until_idx" ON "public"."invoices" USING "btree" ("hold_until") WHERE (("status" = 'pending'::"text") AND ("hold_until" IS NOT NULL));
+
+
+--
 -- Name: invoices_opens_period_uq; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8586,6 +9942,34 @@ CREATE UNIQUE INDEX "metadata_key_rules_scope_uq" ON "public"."metadata_key_rule
 
 
 --
+-- Name: meter_credit_costs_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "meter_credit_costs_business_idx" ON "public"."meter_credit_costs" USING "btree" ("business_id");
+
+
+--
+-- Name: meter_credit_costs_meter_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "meter_credit_costs_meter_uq" ON "public"."meter_credit_costs" USING "btree" ("meter_id") WHERE (("product_id" IS NULL) AND ("subscription_id" IS NULL));
+
+
+--
+-- Name: meter_credit_costs_product_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "meter_credit_costs_product_uq" ON "public"."meter_credit_costs" USING "btree" ("meter_id", "product_id") WHERE ("product_id" IS NOT NULL);
+
+
+--
+-- Name: meter_credit_costs_subscription_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "meter_credit_costs_subscription_uq" ON "public"."meter_credit_costs" USING "btree" ("meter_id", "subscription_id") WHERE ("subscription_id" IS NOT NULL);
+
+
+--
 -- Name: meters_business_event_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8645,7 +10029,7 @@ CREATE UNIQUE INDEX "mfa_reset_requests_token_uq" ON "public"."mfa_reset_request
 -- Name: model_cost_overrides_lookup_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX "model_cost_overrides_lookup_idx" ON "public"."model_cost_overrides" USING "btree" ("organization_id", "model", "token_type", "effective_from" DESC);
+CREATE INDEX "model_cost_overrides_lookup_idx" ON "public"."model_cost_overrides" USING "btree" ("organization_id", "model", "token_type", "unit", "quality", "resolution", "effective_from" DESC);
 
 
 --
@@ -8687,14 +10071,14 @@ CREATE UNIQUE INDEX "model_price_notices_org_run_uq" ON "public"."model_price_no
 -- Name: model_prices_key_from_uq; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX "model_prices_key_from_uq" ON "public"."model_prices" USING "btree" ("provider", "model", "token_type", "currency", "effective_from");
+CREATE UNIQUE INDEX "model_prices_key_from_uq" ON "public"."model_prices" USING "btree" ("provider", "model", "token_type", "unit", "quality", "resolution", "currency", "effective_from");
 
 
 --
 -- Name: model_prices_model_token_from_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX "model_prices_model_token_from_idx" ON "public"."model_prices" USING "btree" ("model", "token_type", "effective_from" DESC);
+CREATE INDEX "model_prices_model_token_from_idx" ON "public"."model_prices" USING "btree" ("model", "token_type", "unit", "quality", "resolution", "effective_from" DESC);
 
 
 --
@@ -8761,6 +10145,48 @@ CREATE INDEX "mrr_movements_subscription_idx" ON "public"."mrr_movements" USING 
 
 
 --
+-- Name: oauth_clients_client_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "oauth_clients_client_id_uq" ON "public"."oauth_clients" USING "btree" ("client_id");
+
+
+--
+-- Name: oauth_grants_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "oauth_grants_org_idx" ON "public"."oauth_grants" USING "btree" ("organization_id");
+
+
+--
+-- Name: oauth_grants_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "oauth_grants_public_id_uq" ON "public"."oauth_grants" USING "btree" ("public_id");
+
+
+--
+-- Name: oauth_requests_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "oauth_requests_public_id_uq" ON "public"."oauth_requests" USING "btree" ("public_id");
+
+
+--
+-- Name: oauth_tokens_grant_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "oauth_tokens_grant_idx" ON "public"."oauth_tokens" USING "btree" ("grant_id");
+
+
+--
+-- Name: oauth_tokens_hash_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "oauth_tokens_hash_uq" ON "public"."oauth_tokens" USING "btree" ("token_hash");
+
+
+--
 -- Name: ops_http_stats_bucket_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8800,6 +10226,13 @@ CREATE UNIQUE INDEX "organizations_public_id_uq" ON "public"."organizations" USI
 --
 
 CREATE INDEX "payment_attempts_business_created_idx" ON "public"."payment_attempts" USING "btree" ("business_id", "created_at" DESC, "public_id" DESC);
+
+
+--
+-- Name: payment_attempts_gateway_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "payment_attempts_gateway_idx" ON "public"."payment_attempts" USING "btree" ("id_at_gateway") WHERE ("id_at_gateway" IS NOT NULL);
 
 
 --
@@ -9664,6 +11097,34 @@ CREATE INDEX "subscription_items_sub_idx" ON "public"."subscription_items" USING
 
 
 --
+-- Name: subscription_pending_changes_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "subscription_pending_changes_due_idx" ON "public"."subscription_pending_changes" USING "btree" ("expires_at") WHERE ("status" = 'pending'::"text");
+
+
+--
+-- Name: subscription_pending_changes_invoice_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "subscription_pending_changes_invoice_uq" ON "public"."subscription_pending_changes" USING "btree" ("invoice_id");
+
+
+--
+-- Name: subscription_pending_changes_live_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "subscription_pending_changes_live_uq" ON "public"."subscription_pending_changes" USING "btree" ("subscription_id") WHERE ("status" = 'pending'::"text");
+
+
+--
+-- Name: subscription_pending_changes_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "subscription_pending_changes_public_id_uq" ON "public"."subscription_pending_changes" USING "btree" ("public_id");
+
+
+--
 -- Name: subscriptions_biz_public_id_uq; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9731,6 +11192,55 @@ CREATE INDEX "subscriptions_due_idx" ON "public"."subscriptions" USING "btree" (
 --
 
 CREATE INDEX "subscriptions_trial_due_idx" ON "public"."subscriptions" USING "btree" ("status", "trial_end");
+
+
+--
+-- Name: support_messages_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "support_messages_public_id_uq" ON "public"."support_messages" USING "btree" ("public_id");
+
+
+--
+-- Name: support_messages_request_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "support_messages_request_idx" ON "public"."support_messages" USING "btree" ("request_id", "created_at");
+
+
+--
+-- Name: support_requests_idempotency_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "support_requests_idempotency_uq" ON "public"."support_requests" USING "btree" ("organization_id", "user_id", "idempotency_key");
+
+
+--
+-- Name: support_requests_member_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "support_requests_member_idx" ON "public"."support_requests" USING "btree" ("organization_id", "user_id", "updated_at" DESC);
+
+
+--
+-- Name: support_requests_number_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "support_requests_number_uq" ON "public"."support_requests" USING "btree" ("number");
+
+
+--
+-- Name: support_requests_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "support_requests_public_id_uq" ON "public"."support_requests" USING "btree" ("public_id");
+
+
+--
+-- Name: support_requests_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "support_requests_status_idx" ON "public"."support_requests" USING "btree" ("status", "updated_at" DESC);
 
 
 --
@@ -9986,10 +11496,38 @@ CREATE INDEX "transactions_trace_idx" ON "public"."transactions" USING "btree" (
 
 
 --
+-- Name: transfer_configurations_one_active_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "transfer_configurations_one_active_uq" ON "public"."transfer_configurations" USING "btree" ("destination_business_id") WHERE (("run_kind" = 'async'::"text") AND ("status" = ANY (ARRAY['queued'::"text", 'running'::"text"])));
+
+
+--
 -- Name: transfer_configurations_org_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX "transfer_configurations_org_idx" ON "public"."transfer_configurations" USING "btree" ("organization_id", "created_at");
+
+
+--
+-- Name: transfer_configurations_source_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "transfer_configurations_source_status_idx" ON "public"."transfer_configurations" USING "btree" ("source_business_id", "status", "created_at" DESC);
+
+
+--
+-- Name: transfer_items_key_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "transfer_items_key_uq" ON "public"."transfer_items" USING "btree" ("transfer_id", "pair", "key");
+
+
+--
+-- Name: transfer_items_run_seq_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "transfer_items_run_seq_idx" ON "public"."transfer_items" USING "btree" ("transfer_id", "seq");
 
 
 --
@@ -10102,6 +11640,27 @@ CREATE UNIQUE INDEX "usage_archives_partition_uq" ON "public"."usage_archives" U
 --
 
 CREATE INDEX "usage_control_dirty_marked_idx" ON "public"."usage_control_dirty" USING "btree" ("marked_at");
+
+
+--
+-- Name: usage_cost_daily_customer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "usage_cost_daily_customer_idx" ON "public"."usage_cost_daily" USING "btree" ("customer_id", "meter_id", "starts_at");
+
+
+--
+-- Name: usage_cost_daily_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "usage_cost_daily_key" ON "public"."usage_cost_daily" USING "btree" ("business_id", "day", "customer_id", "meter_id", "group_values", "currency");
+
+
+--
+-- Name: usage_cost_daily_read_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "usage_cost_daily_read_idx" ON "public"."usage_cost_daily" USING "btree" ("business_id", "starts_at");
 
 
 --
@@ -10763,6 +12322,20 @@ CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."credit_holds" FOR E
 
 
 --
+-- Name: credit_overdraft_limits bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."credit_overdraft_limits" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
+-- Name: credit_unit_policies bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."credit_unit_policies" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
 -- Name: credit_units bump_row_version; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10994,10 +12567,24 @@ CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."spend_limits" FOR E
 
 
 --
+-- Name: subscription_pending_changes bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."subscription_pending_changes" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
 -- Name: subscriptions bump_row_version; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."subscriptions" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
+-- Name: support_requests bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."support_requests" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
 
 
 --
@@ -11201,6 +12788,22 @@ ALTER TABLE ONLY "public"."applied_coupons"
 
 
 --
+-- Name: applied_coupons applied_coupons_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."applied_coupons"
+    ADD CONSTRAINT "applied_coupons_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: applied_coupons applied_coupons_invoice_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."applied_coupons"
+    ADD CONSTRAINT "applied_coupons_invoice_id_fkey" FOREIGN KEY ("invoice_id") REFERENCES "public"."invoices"("id") ON DELETE SET NULL;
+
+
+--
 -- Name: applied_coupons applied_coupons_organization_id_organizations_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11254,6 +12857,118 @@ ALTER TABLE ONLY "public"."applied_taxes"
 
 ALTER TABLE ONLY "public"."applied_taxes"
     ADD CONSTRAINT "applied_taxes_tax_component_id_fkey" FOREIGN KEY ("tax_component_id") REFERENCES "public"."tax_rate_components"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: assistant_actions assistant_actions_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_actions"
+    ADD CONSTRAINT "assistant_actions_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_actions assistant_actions_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_actions"
+    ADD CONSTRAINT "assistant_actions_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "public"."assistant_conversations"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: assistant_actions assistant_actions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_actions"
+    ADD CONSTRAINT "assistant_actions_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_attachments assistant_attachments_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_attachments"
+    ADD CONSTRAINT "assistant_attachments_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_attachments assistant_attachments_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_attachments"
+    ADD CONSTRAINT "assistant_attachments_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "public"."assistant_conversations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_attachments assistant_attachments_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_attachments"
+    ADD CONSTRAINT "assistant_attachments_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_conversations assistant_conversations_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_conversations"
+    ADD CONSTRAINT "assistant_conversations_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_conversations assistant_conversations_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_conversations"
+    ADD CONSTRAINT "assistant_conversations_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_embedding_usage assistant_embedding_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_embedding_usage"
+    ADD CONSTRAINT "assistant_embedding_usage_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_messages assistant_messages_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_messages"
+    ADD CONSTRAINT "assistant_messages_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "public"."assistant_conversations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_messages assistant_messages_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_messages"
+    ADD CONSTRAINT "assistant_messages_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_settings assistant_settings_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_settings"
+    ADD CONSTRAINT "assistant_settings_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: assistant_usage assistant_usage_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_usage"
+    ADD CONSTRAINT "assistant_usage_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "public"."assistant_conversations"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: assistant_usage assistant_usage_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."assistant_usage"
+    ADD CONSTRAINT "assistant_usage_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
 
 --
@@ -11649,6 +13364,14 @@ ALTER TABLE ONLY "public"."credit_auto_topups"
 
 
 --
+-- Name: credit_auto_topups credit_auto_topups_pack_price_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_auto_topups"
+    ADD CONSTRAINT "credit_auto_topups_pack_price_id_fkey" FOREIGN KEY ("pack_price_id") REFERENCES "public"."prices"("id");
+
+
+--
 -- Name: credit_auto_topups credit_auto_topups_payment_method_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11662,6 +13385,46 @@ ALTER TABLE ONLY "public"."credit_auto_topups"
 
 ALTER TABLE ONLY "public"."credit_auto_topups"
     ADD CONSTRAINT "credit_auto_topups_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
+
+
+--
+-- Name: credit_grant_grace credit_grant_grace_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_grace credit_grant_grace_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_grace credit_grant_grace_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_grant_id_fkey" FOREIGN KEY ("grant_id") REFERENCES "public"."credit_grants"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_grace credit_grant_grace_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_grace credit_grant_grace_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_grace"
+    ADD CONSTRAINT "credit_grant_grace_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
 
 
 --
@@ -11686,6 +13449,46 @@ ALTER TABLE ONLY "public"."credit_grant_movements"
 
 ALTER TABLE ONLY "public"."credit_grant_movements"
     ADD CONSTRAINT "credit_grant_movements_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_movements credit_grant_movements_settlement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_movements"
+    ADD CONSTRAINT "credit_grant_movements_settlement_id_fkey" FOREIGN KEY ("settlement_id") REFERENCES "public"."credit_usage_settlements"("id");
+
+
+--
+-- Name: credit_grant_void_reasons credit_grant_void_reasons_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_void_reasons"
+    ADD CONSTRAINT "credit_grant_void_reasons_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_void_reasons credit_grant_void_reasons_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_void_reasons"
+    ADD CONSTRAINT "credit_grant_void_reasons_created_by_user_id_fkey" FOREIGN KEY ("created_by_user_id") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_grant_void_reasons credit_grant_void_reasons_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_void_reasons"
+    ADD CONSTRAINT "credit_grant_void_reasons_grant_id_fkey" FOREIGN KEY ("grant_id") REFERENCES "public"."credit_grants"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_grant_void_reasons credit_grant_void_reasons_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_grant_void_reasons"
+    ADD CONSTRAINT "credit_grant_void_reasons_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
 
 --
@@ -11782,6 +13585,14 @@ ALTER TABLE ONLY "public"."credit_holds"
 
 ALTER TABLE ONLY "public"."credit_holds"
     ADD CONSTRAINT "credit_holds_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_holds credit_holds_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_holds"
+    ADD CONSTRAINT "credit_holds_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
 
 
 --
@@ -11905,6 +13716,102 @@ ALTER TABLE ONLY "public"."credit_notes"
 
 
 --
+-- Name: credit_overdraft_limits credit_overdraft_limits_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_overdraft_limits credit_overdraft_limits_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_overdraft_limits credit_overdraft_limits_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_overdraft_limits credit_overdraft_limits_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_overdraft_limits credit_overdraft_limits_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_overdraft_limits"
+    ADD CONSTRAINT "credit_overdraft_limits_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_balances credit_unit_balances_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_balances"
+    ADD CONSTRAINT "credit_unit_balances_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_balances credit_unit_balances_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_balances"
+    ADD CONSTRAINT "credit_unit_balances_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_balances credit_unit_balances_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_balances"
+    ADD CONSTRAINT "credit_unit_balances_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_balances credit_unit_balances_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_balances"
+    ADD CONSTRAINT "credit_unit_balances_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
+
+
+--
+-- Name: credit_unit_policies credit_unit_policies_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_policies"
+    ADD CONSTRAINT "credit_unit_policies_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_policies credit_unit_policies_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_policies"
+    ADD CONSTRAINT "credit_unit_policies_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_unit_policies credit_unit_policies_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_unit_policies"
+    ADD CONSTRAINT "credit_unit_policies_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: credit_units credit_units_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11918,6 +13825,150 @@ ALTER TABLE ONLY "public"."credit_units"
 
 ALTER TABLE ONLY "public"."credit_units"
     ADD CONSTRAINT "credit_units_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_grace_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_grace_grant_id_fkey" FOREIGN KEY ("grace_grant_id") REFERENCES "public"."credit_grants"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_meter_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_meter_id_fkey" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_overage_charge_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_overage_charge_id_fkey" FOREIGN KEY ("overage_charge_id") REFERENCES "public"."unbilled_charges"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_overage_invoice_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_overage_invoice_id_fkey" FOREIGN KEY ("overage_invoice_id") REFERENCES "public"."invoices"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_usage_events credit_usage_events_overage_price_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_overage_price_id_fkey" FOREIGN KEY ("overage_price_id") REFERENCES "public"."prices"("id");
+
+
+--
+-- Name: credit_usage_events credit_usage_events_settlement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_settlement_id_fkey" FOREIGN KEY ("settlement_id") REFERENCES "public"."credit_usage_settlements"("id");
+
+
+--
+-- Name: credit_usage_events credit_usage_events_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_events"
+    ADD CONSTRAINT "credit_usage_events_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_corrects_settlement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_corrects_settlement_id_fkey" FOREIGN KEY ("corrects_settlement_id") REFERENCES "public"."credit_usage_settlements"("id");
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_grace_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_grace_grant_id_fkey" FOREIGN KEY ("grace_grant_id") REFERENCES "public"."credit_grants"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_meter_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_meter_id_fkey" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id");
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_subscription_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: credit_usage_settlements credit_usage_settlements_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."credit_usage_settlements"
+    ADD CONSTRAINT "credit_usage_settlements_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
 
 
 --
@@ -12745,6 +14796,54 @@ ALTER TABLE ONLY "public"."metadata_key_rules"
 
 
 --
+-- Name: meter_credit_costs meter_credit_costs_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: meter_credit_costs meter_credit_costs_meter_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_meter_id_fkey" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: meter_credit_costs meter_credit_costs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: meter_credit_costs meter_credit_costs_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: meter_credit_costs meter_credit_costs_subscription_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: meter_credit_costs meter_credit_costs_unit_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."meter_credit_costs"
+    ADD CONSTRAINT "meter_credit_costs_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."credit_units"("id");
+
+
+--
 -- Name: meters meters_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12870,6 +14969,46 @@ ALTER TABLE ONLY "public"."mrr_movements"
 
 ALTER TABLE ONLY "public"."mrr_movements"
     ADD CONSTRAINT "mrr_movements_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_grants oauth_grants_api_key_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_grants"
+    ADD CONSTRAINT "oauth_grants_api_key_id_fkey" FOREIGN KEY ("api_key_id") REFERENCES "public"."api_keys"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_grants oauth_grants_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_grants"
+    ADD CONSTRAINT "oauth_grants_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_grants oauth_grants_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_grants"
+    ADD CONSTRAINT "oauth_grants_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_tokens oauth_tokens_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_tokens"
+    ADD CONSTRAINT "oauth_tokens_grant_id_fkey" FOREIGN KEY ("grant_id") REFERENCES "public"."oauth_grants"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_tokens oauth_tokens_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."oauth_tokens"
+    ADD CONSTRAINT "oauth_tokens_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
 
 --
@@ -13857,6 +15996,38 @@ ALTER TABLE ONLY "public"."subscription_items"
 
 
 --
+-- Name: subscription_pending_changes subscription_pending_changes_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."subscription_pending_changes"
+    ADD CONSTRAINT "subscription_pending_changes_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: subscription_pending_changes subscription_pending_changes_invoice_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."subscription_pending_changes"
+    ADD CONSTRAINT "subscription_pending_changes_invoice_id_fkey" FOREIGN KEY ("invoice_id") REFERENCES "public"."invoices"("id") ON DELETE RESTRICT;
+
+
+--
+-- Name: subscription_pending_changes subscription_pending_changes_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."subscription_pending_changes"
+    ADD CONSTRAINT "subscription_pending_changes_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: subscription_pending_changes subscription_pending_changes_subscription_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."subscription_pending_changes"
+    ADD CONSTRAINT "subscription_pending_changes_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: subscriptions subscriptions_business_id_businesses_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13894,6 +16065,46 @@ ALTER TABLE ONLY "public"."subscriptions"
 
 ALTER TABLE ONLY "public"."subscriptions"
     ADD CONSTRAINT "subscriptions_shipping_address_id_fkey" FOREIGN KEY ("shipping_address_id") REFERENCES "public"."customer_addresses"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: support_messages support_messages_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_messages"
+    ADD CONSTRAINT "support_messages_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: support_messages support_messages_request_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_messages"
+    ADD CONSTRAINT "support_messages_request_id_fkey" FOREIGN KEY ("request_id") REFERENCES "public"."support_requests"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: support_requests support_requests_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_requests"
+    ADD CONSTRAINT "support_requests_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: support_requests support_requests_conversation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_requests"
+    ADD CONSTRAINT "support_requests_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "public"."assistant_conversations"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: support_requests support_requests_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."support_requests"
+    ADD CONSTRAINT "support_requests_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
 
 --
@@ -14070,6 +16281,22 @@ ALTER TABLE ONLY "public"."transfer_configurations"
 
 ALTER TABLE ONLY "public"."transfer_configurations"
     ADD CONSTRAINT "transfer_configurations_twin_of_fkey" FOREIGN KEY ("twin_of") REFERENCES "public"."transfer_configurations"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: transfer_items transfer_items_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."transfer_items"
+    ADD CONSTRAINT "transfer_items_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: transfer_items transfer_items_transfer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."transfer_items"
+    ADD CONSTRAINT "transfer_items_transfer_id_fkey" FOREIGN KEY ("transfer_id") REFERENCES "public"."transfer_configurations"("id") ON DELETE CASCADE;
 
 
 --
@@ -14278,6 +16505,46 @@ ALTER TABLE ONLY "public"."usage_control_dirty"
 
 ALTER TABLE ONLY "public"."usage_control_dirty"
     ADD CONSTRAINT "usage_control_dirty_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_meter_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_meter_id_fkey" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: usage_cost_daily usage_cost_daily_subscription_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."usage_cost_daily"
+    ADD CONSTRAINT "usage_cost_daily_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE SET NULL;
 
 
 --
@@ -14553,6 +16820,48 @@ ALTER TABLE "public"."applied_coupons" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."applied_taxes" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: assistant_actions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_actions" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_attachments; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_attachments" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_conversations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_conversations" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_embedding_usage; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_embedding_usage" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_messages; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_messages" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_settings" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: assistant_usage; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."assistant_usage" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: attached_items; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -14670,10 +16979,22 @@ ALTER TABLE "public"."credit_auto_topup_runs" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."credit_auto_topups" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: credit_grant_grace; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_grant_grace" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: credit_grant_movements; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE "public"."credit_grant_movements" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: credit_grant_void_reasons; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_grant_void_reasons" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: credit_grants; Type: ROW SECURITY; Schema: public; Owner: -
@@ -14712,10 +17033,40 @@ ALTER TABLE "public"."credit_note_items" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."credit_notes" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: credit_overdraft_limits; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_overdraft_limits" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: credit_unit_balances; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_unit_balances" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: credit_unit_policies; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_unit_policies" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: credit_units; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE "public"."credit_units" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: credit_usage_events; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_usage_events" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: credit_usage_settlements; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."credit_usage_settlements" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: custom_field_definitions; Type: ROW SECURITY; Schema: public; Owner: -
@@ -14993,6 +17344,12 @@ ALTER TABLE "public"."memberships" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."metadata_key_rules" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: meter_credit_costs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."meter_credit_costs" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: meters; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -15029,6 +17386,18 @@ ALTER TABLE "public"."model_price_notices" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."mrr_movements" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: oauth_grants; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."oauth_grants" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: oauth_tokens; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."oauth_tokens" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: api_keys org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -15054,6 +17423,55 @@ CREATE POLICY "org_isolation" ON "public"."applied_coupons" USING (("organizatio
 --
 
 CREATE POLICY "org_isolation" ON "public"."applied_taxes" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_actions org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_actions" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_attachments org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_attachments" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_conversations org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_conversations" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_embedding_usage org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_embedding_usage" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_messages org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_messages" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_settings org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_settings" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: assistant_usage org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."assistant_usage" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -15162,10 +17580,24 @@ CREATE POLICY "org_isolation" ON "public"."credit_auto_topups" USING (("organiza
 
 
 --
+-- Name: credit_grant_grace org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_grant_grace" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: credit_grant_movements org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "org_isolation" ON "public"."credit_grant_movements" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: credit_grant_void_reasons org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_grant_void_reasons" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -15211,10 +17643,45 @@ CREATE POLICY "org_isolation" ON "public"."credit_notes" USING (("organization_i
 
 
 --
+-- Name: credit_overdraft_limits org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_overdraft_limits" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: credit_unit_balances org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_unit_balances" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: credit_unit_policies org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_unit_policies" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: credit_units org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "org_isolation" ON "public"."credit_units" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: credit_usage_events org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_usage_events" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: credit_usage_settlements org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."credit_usage_settlements" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -15491,6 +17958,13 @@ CREATE POLICY "org_isolation" ON "public"."metadata_key_rules" USING (("organiza
 
 
 --
+-- Name: meter_credit_costs org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."meter_credit_costs" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: meters org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -15530,6 +18004,20 @@ CREATE POLICY "org_isolation" ON "public"."model_price_notices" USING (("organiz
 --
 
 CREATE POLICY "org_isolation" ON "public"."mrr_movements" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: oauth_grants org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."oauth_grants" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: oauth_tokens org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."oauth_tokens" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -15806,10 +18294,31 @@ CREATE POLICY "org_isolation" ON "public"."subscription_items" USING (("organiza
 
 
 --
+-- Name: subscription_pending_changes org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."subscription_pending_changes" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: subscriptions org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "org_isolation" ON "public"."subscriptions" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: support_messages org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."support_messages" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: support_requests org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."support_requests" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -15869,6 +18378,13 @@ CREATE POLICY "org_isolation" ON "public"."transfer_configurations" USING (("org
 
 
 --
+-- Name: transfer_items org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."transfer_items" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: unbilled_charges org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -15908,6 +18424,13 @@ CREATE POLICY "org_isolation" ON "public"."usage_control_cursors" USING (("organ
 --
 
 CREATE POLICY "org_isolation" ON "public"."usage_control_dirty" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: usage_cost_daily org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."usage_cost_daily" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -16235,10 +18758,28 @@ ALTER TABLE "public"."subscription_entitlements" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."subscription_items" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: subscription_pending_changes; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."subscription_pending_changes" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE "public"."subscriptions" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_messages; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."support_messages" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: support_requests; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."support_requests" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: tax_profiles; Type: ROW SECURITY; Schema: public; Owner: -
@@ -16301,6 +18842,12 @@ ALTER TABLE "public"."transactions" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."transfer_configurations" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: transfer_items; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."transfer_items" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: unbilled_charges; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -16335,6 +18882,12 @@ ALTER TABLE "public"."usage_control_cursors" ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE "public"."usage_control_dirty" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: usage_cost_daily; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."usage_cost_daily" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: usage_event_dedup; Type: ROW SECURITY; Schema: public; Owner: -
@@ -16438,6 +18991,22 @@ GRANT ALL ON FUNCTION "public"."app_nudge_webhook_outbox"() TO "tmbilling_app";
 
 
 --
+-- Name: FUNCTION "app_queue_support_notice"("p_message" "uuid", "p_trace" "text"); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION "public"."app_queue_support_notice"("p_message" "uuid", "p_trace" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_queue_support_notice"("p_message" "uuid", "p_trace" "text") TO "tmbilling_app";
+
+
+--
+-- Name: FUNCTION "app_queue_transfer_run"("p_run" "uuid", "p_trace" "text"); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION "public"."app_queue_transfer_run"("p_run" "uuid", "p_trace" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_queue_transfer_run"("p_run" "uuid", "p_trace" "text") TO "tmbilling_app";
+
+
+--
 -- Name: FUNCTION "app_wipe_test_ledger"("p_business" "uuid"); Type: ACL; Schema: public; Owner: -
 --
 
@@ -16484,6 +19053,48 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."applied_coupons" TO "tmbill
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."applied_taxes" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_actions"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_actions" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_attachments"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_attachments" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_conversations"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_conversations" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_messages"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_messages" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_settings"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_settings" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "assistant_usage"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."assistant_usage" TO "tmbilling_app";
 
 
 --
@@ -16592,10 +19203,24 @@ GRANT SELECT,INSERT,UPDATE ON TABLE "public"."credit_auto_topups" TO "tmbilling_
 
 
 --
+-- Name: TABLE "credit_grant_grace"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE "public"."credit_grant_grace" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "credit_grant_movements"; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT ON TABLE "public"."credit_grant_movements" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "credit_grant_void_reasons"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT ON TABLE "public"."credit_grant_void_reasons" TO "tmbilling_app";
 
 
 --
@@ -16641,10 +19266,45 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."credit_notes" TO "tmbilling
 
 
 --
+-- Name: TABLE "credit_overdraft_limits"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."credit_overdraft_limits" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "credit_unit_balances"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE "public"."credit_unit_balances" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "credit_unit_policies"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."credit_unit_policies" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "credit_units"; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,UPDATE ON TABLE "public"."credit_units" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "credit_usage_events"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE "public"."credit_usage_events" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "credit_usage_settlements"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT ON TABLE "public"."credit_usage_settlements" TO "tmbilling_app";
 
 
 --
@@ -16942,6 +19602,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."metadata_key_rules" TO "tmb
 
 
 --
+-- Name: TABLE "meter_credit_costs"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."meter_credit_costs" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "meters"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -17023,6 +19690,20 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."subscriptions" TO "tmbillin
 --
 
 GRANT SELECT ON TABLE "public"."mrr_movement_summary" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "oauth_grants"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."oauth_grants" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "oauth_tokens"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."oauth_tokens" TO "tmbilling_app";
 
 
 --
@@ -17299,6 +19980,34 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."subscription_items" TO "tmb
 
 
 --
+-- Name: TABLE "subscription_pending_changes"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."subscription_pending_changes" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "support_messages"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."support_messages" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "support_requests"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."support_requests" TO "tmbilling_app";
+
+
+--
+-- Name: SEQUENCE "support_request_number_seq"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE "public"."support_request_number_seq" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "tax_profiles"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -17369,6 +20078,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."transfer_configurations" TO
 
 
 --
+-- Name: TABLE "transfer_items"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."transfer_items" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "unbilled_charges"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -17408,6 +20124,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."usage_control_cursors" TO "
 --
 
 GRANT SELECT,INSERT,DELETE ON TABLE "public"."usage_control_dirty" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "usage_cost_daily"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."usage_cost_daily" TO "tmbilling_app";
 
 
 --

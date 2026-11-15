@@ -60,6 +60,34 @@ export interface SubscriptionExtras {
   revenue_since?: string | null;
   /** Upcoming renewals this subscription skips (ISO instants, soonest first). */
   skipped_renewals?: string[];
+  /** A change held until its invoice is paid (`apply_when_paid`); null = none. */
+  pending_change?: PendingChange | null;
+}
+
+/** `failed_change_charge: apply_when_paid`: a change that applies when its invoice is paid. */
+export interface PendingChange {
+  object: "pending_change";
+  id: string;
+  kind: "change" | "item_add";
+  status: "pending" | "applied" | "expired" | "cancelled";
+  invoice: string | null;
+  invoice_status: string | null;
+  amount_due_minor: number | null;
+  currency: string | null;
+  request: Record<string, unknown>;
+  /** What the change does to each item, with the product name. */
+  items?: Array<{
+    action: "change" | "add" | "remove";
+    price: string | null;
+    product_name: string | null;
+    quantity: number | null;
+    from_product_name?: string | null;
+    from_quantity?: number | null;
+  }>;
+  source: "api" | "dashboard" | "checkout" | "portal";
+  requested_at: string;
+  expires_at: string;
+  end_reason: string | null;
 }
 
 export type SubscriptionDetail = Subscription & SubscriptionExtras;
@@ -144,12 +172,14 @@ export interface ChangeEstimate {
     /** Whether the change restarts the term: the request's `reset_term`, else the rule. */
     reset_term?: boolean;
     invoice_immediately: boolean;
+    /** The business rule for the documents of a change that nets to a credit. */
+    net_credit_documents?: "credit_note_and_invoice" | "one_credit_note" | null;
     /** Where a credit this change leaves goes: the request's `downgrade_credit`, else the rule. */
     credit_handling?: "credit_balance" | "refund";
     /** What the change does with coupons: the request's `coupons`, else the rule. */
     coupons?: "keep" | "drop" | "keep_if_valid";
     /** The rule for a failed charge on this change (`failed_change_charge`). */
-    on_charge_failure?: "start_dunning" | "next_renewal";
+    on_charge_failure?: "start_dunning" | "next_renewal" | "revert" | "apply_when_paid";
     /** The plan-credit rule for this direction; null when no moved plan grants credits. */
     plan_credits?: "full" | "prorated" | "next_window" | null;
     /** The allowance rule; null on a downgrade or when no meter allowance changes. */

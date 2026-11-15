@@ -48,7 +48,7 @@ export function TabRail({ items, className }: { items: TabRailItem[]; className?
               href={`#${item.id}`}
               onClick={() => setActive(item.id)}
               className={cn(
-                "flex items-center gap-2 rounded px-2.5 py-1 text-muted-foreground transition-colors hover:text-foreground",
+                "flex items-center gap-2 rounded-md px-2.5 py-1 text-muted-foreground transition-colors hover:text-foreground",
                 active === item.id && "bg-muted/30 font-bold text-foreground",
               )}
             >

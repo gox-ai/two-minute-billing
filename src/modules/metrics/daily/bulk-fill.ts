@@ -1,7 +1,7 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { withTenant } from "@/platform/db";
-import { prices, products, subscriptionItems, subscriptions } from "@db/schema";
+import { prices, subscriptionItems, subscriptions } from "@db/schema";
 import { computeMetricPeriod } from "./compute";
 import { writeMetricDay } from "./write";
 import { coarsePeriodEnds } from "./cron";
@@ -54,8 +54,7 @@ import { businessTimezone } from "@/platform/business-tz";
 /**
  * The memory ceiling, in rows — because rows are what this holds, and a row's size is
  * MEASURED rather than guessed: 1,442 B for a subscription, 2,133 B for an item joined to
- * its price, 258 B for the four-column plan read. So 600,000 rows is a ceiling of roughly
- * 0.6–1.0 GB depending on what fills it.
+ * its price. So 600,000 rows is a ceiling of roughly 0.6–1.0 GB depending on what fills it.
  *
  * The box this runs on has no swap, so "it grew a bit" is an OOM kill of whatever Postgres
  * or the billing worker happens to be holding. Past the budget nothing further is cached
@@ -113,7 +112,8 @@ export function cachingTx(
   maxCachedRows: number = DEFAULT_MAX_CACHED_ROWS,
 ): Tx {
   const cache = new Map<string, unknown>();
-  const superset: Superset = {};
+  let rerate: Map<string, unknown[]> | null = null;
+  const rerateSql = rerateReadPrefix(tx);
   /** Rows held by THIS cache. Reset with it, once per slice. */
   let held = 0;
   const real = (tx as unknown as { session: Record<string, unknown> }).session;
@@ -157,26 +157,22 @@ export function cachingTx(
     });
 
   /**
-   * Stand in for one of the two id-list reads: load the superset once, then answer every
-   * later call by cutting it with the asked-for ids. The object returned mimics the one
-   * shape drizzle uses on a prepared query — `execute()`.
+   * Stand in for the re-rating read: load the superset once, then answer every later call
+   * by cutting it with the asked-for ids. The object returned mimics the one shape drizzle
+   * uses on a prepared query — `execute()`.
    */
-  const idListReader = (shape: "plan" | "rerate", params: readonly unknown[]): object => ({
+  const rerateReader = (params: readonly unknown[]): object => ({
     // drizzle threads an auth token through the prepared query before executing it.
     setToken(): object {
       return this;
     },
     execute: async (): Promise<unknown[]> => {
-      let byId = superset[shape];
+      let byId = rerate;
       if (!byId) {
         stats.misses += 1;
-        // On the REAL handle: the superset is one of the two shapes and would otherwise
-        // be intercepted by this very reader.
-        byId =
-          shape === "plan"
-            ? await loadPlanSuperset(tx, businessId)
-            : await loadRerateSuperset(tx, businessId);
-        superset[shape] = byId;
+        // On the REAL handle, so this reader does not intercept its own superset read.
+        byId = await loadRerateSuperset(tx, businessId);
+        rerate = byId;
         for (const v of byId.values()) {
           held += v.length;
           stats.rows += v.length;
@@ -199,8 +195,7 @@ export function cachingTx(
       if (prop !== "prepareQuery" || typeof v !== "function") return v;
       const prepare = (v as (...a: unknown[]) => object).bind(target);
       return (query: { sql: string; params: unknown[] }, ...rest: unknown[]): object => {
-        const shape = idListShape(query.sql);
-        if (shape) return idListReader(shape, query.params ?? []);
+        if (isRerateRead(query.sql, rerateSql)) return rerateReader(query.params ?? []);
         const pq = prepare(query, ...rest);
         const cacheable =
           isReadOnly(query.sql) && !mentionsAnInstant(query.params ?? []) ? query.sql : null;
@@ -224,39 +219,37 @@ export function cachingTx(
 }
 
 /**
- * ── THE TWO READS A KEYED CACHE CANNOT CATCH ──────────────────────────────────────────
+ * ── THE ID-LIST READ A KEYED CACHE CANNOT CATCH ───────────────────────────────────────
  *
- * `loadReratedMrr` and `resolvePlanProductIds` both ask
- * `… from subscription_items … where subscription_id in (…)`, and the id list is a
- * DIFFERENT set every day — the rows that day counts. So the SQL text differs, the key
- * differs, and the cache never hits: they were 9 of the ~10 misses per day left after
- * everything standing had been cached once.
+ * `loadReratedMrr` asks `… from subscription_items … where subscription_id in (…)` with a
+ * DIFFERENT id list every day, so its key never repeats. It is a pure row filter folded per
+ * subscription, so the same select done once for the business and cut in memory by the
+ * asked-for ids returns exactly the rows Postgres would have.
  *
- * Both are pure row filters. `in (ids)` selects exactly the subset of the business's items
- * whose subscription is in the list, and both callers fold their result per subscription —
- * so the SAME read done once for the whole business, filtered in memory by the asked-for
- * ids, returns exactly the rows Postgres would have returned. Not an approximation of them:
- * the same rows, from the same query, cut by the same predicate.
- *
- * The superset is built here with the IDENTICAL drizzle select, so the row objects are
- * mapped identically too — a hand-written SQL string would have been a second shape to keep
- * in step. Within one subscription the item order is preserved (the plan read's `order by
- * subscription_id, id` is what makes "first item" mean the oldest); across subscriptions the
- * order follows the asked-for ids, which neither caller reads.
+ * Matched on its EXACT SQL text, never on the tables it names: a superset only answers the
+ * select it was built with. Another read of the same tables with other columns (the forward
+ * book's item read joins `products` too) must reach Postgres, or it is handed rows of the
+ * wrong shape. The superset is built with the identical drizzle select, so its rows are
+ * mapped identically.
  */
-interface Superset {
-  /** `subscription_items ⋈ prices ⋈ products`, four columns, for the plan resolution. */
-  plan?: Map<string, unknown[]>;
-  /** `subscription_items ⋈ prices`, whole rows, for the cancelled re-rating. */
-  rerate?: Map<string, unknown[]>;
+
+/** The re-rating read's SQL up to its id list, as drizzle renders it. */
+function rerateReadPrefix(tx: Tx): string {
+  const text = rerateSelect(tx)
+    .where(inArray(subscriptionItems.subscriptionId, ["00000000-0000-0000-0000-000000000000"]))
+    .toSQL().sql;
+  return text.slice(0, text.lastIndexOf(" in (") + 5);
 }
 
-/** Which of the two id-list reads this SQL is, or null when it is neither. */
-function idListShape(text: string): "plan" | "rerate" | null {
-  if (!text.includes('from "subscription_items"')) return null;
-  if (!text.includes('"subscription_id" in (')) return null;
-  if (!text.includes('inner join "prices"')) return null;
-  return text.includes('inner join "products"') ? "plan" : "rerate";
+const rerateSelect = (tx: Tx) =>
+  tx
+    .select({ item: subscriptionItems, price: prices })
+    .from(subscriptionItems)
+    .innerJoin(prices, eq(subscriptionItems.priceId, prices.id));
+
+/** True only for `rerateSelect` filtered by `subscription_id in ($1, …)` and nothing else. */
+function isRerateRead(text: string, prefix: string): boolean {
+  return text.startsWith(prefix) && /^\$\d+(, \$\d+)*\)$/.test(text.slice(prefix.length));
 }
 
 /** Group a superset read by the subscription each row belongs to. */
@@ -274,22 +267,6 @@ function groupBySubscription(
   return out;
 }
 
-async function loadPlanSuperset(tx: Tx, businessId: string): Promise<Map<string, unknown[]>> {
-  const rows = await tx
-    .select({
-      subscriptionId: subscriptionItems.subscriptionId,
-      productId: prices.productId,
-      kind: products.kind,
-      itemId: subscriptionItems.id,
-    })
-    .from(subscriptionItems)
-    .innerJoin(prices, eq(prices.id, subscriptionItems.priceId))
-    .innerJoin(products, eq(products.id, prices.productId))
-    .where(eq(subscriptionItems.businessId, businessId))
-    .orderBy(subscriptionItems.subscriptionId, subscriptionItems.id);
-  return groupBySubscription(rows, (r) => (r as { subscriptionId: string }).subscriptionId);
-}
-
 async function loadRerateSuperset(tx: Tx, businessId: string): Promise<Map<string, unknown[]>> {
   /**
    * Bounded to CANCELLED rows with no stored last-earning rate, the only population
@@ -297,10 +274,7 @@ async function loadRerateSuperset(tx: Tx, businessId: string): Promise<Map<strin
    * reaches this read. Without the second bound a 96%-cancelled book loaded nearly all of its
    * items here.
    */
-  const rows = await tx
-    .select({ item: subscriptionItems, price: prices })
-    .from(subscriptionItems)
-    .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
+  const rows = await rerateSelect(tx)
     .innerJoin(subscriptions, eq(subscriptions.id, subscriptionItems.subscriptionId))
     .where(
       and(

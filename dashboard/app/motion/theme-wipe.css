@@ -1,0 +1,25 @@
+/* Motion: theme-wipe. Owned by the matching component; tokens from globals.css only. */
+
+/* lib/theme-wipe.ts: the new theme grows as a circle from the pressed control.
+   Scoped on <html data-theme-wipe>, set only for the wipe, so it outranks the navigation
+   rules that hide and freeze the root snapshot. The old snapshot holds still underneath;
+   `normal` blending keeps the two themes from adding together inside the circle. */
+:root[data-theme-wipe]::view-transition-old(root),
+:root[data-theme-wipe]::view-transition-new(root) {
+  display: block;
+  mix-blend-mode: normal;
+}
+:root[data-theme-wipe]::view-transition-old(root) {
+  animation: none;
+}
+:root[data-theme-wipe]::view-transition-new(root) {
+  animation: m-theme-wipe var(--dur-slow) var(--ease-glide) both;
+}
+@keyframes m-theme-wipe {
+  from {
+    clip-path: circle(0 at var(--wipe-x) var(--wipe-y));
+  }
+  to {
+    clip-path: circle(var(--wipe-r) at var(--wipe-x) var(--wipe-y));
+  }
+}

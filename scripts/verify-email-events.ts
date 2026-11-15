@@ -28,6 +28,7 @@ import {
   pauseSubscription,
   resumeSubscription,
   cancelSubscription,
+  reactivateSubscription,
   editTrialEnd,
 } from "@/modules/subscriptions/service";
 import { runRemindersPass } from "@/modules/subscriptions/reminders";
@@ -42,7 +43,7 @@ import { DEFAULT_TEMPLATES, TEMPLATE_VARS, renderEmail } from "@/modules/emails/
 import type { EmailType } from "@/modules/emails/config";
 import { formatDateInTz } from "@/modules/invoicing/document";
 import { setMailer, type OutboundEmail } from "@/providers/mailer";
-import { businesses, emailMessages, paymentMethods } from "@db/schema";
+import { businesses, emailMessages, paymentMethods, subscriptions } from "@db/schema";
 import { loadGeoReference } from "@/platform/geo";
 import { matchTemplate, stripTemplateTail } from "./lib/template-match";
 import { resolveFooter } from "@/modules/emails/templates";
@@ -253,8 +254,11 @@ await issueAdjustmentCreditNote({
   reason: "goodwill",
 });
 
-// invoice_payment_due — emitted here with the payload the dunning/settlement paths use,
-// so the mapping is proven without driving a card decline.
+// invoice_payment_due — emitted here with the payload the due-date pass uses. "Past due"
+// is mailed only for an invoice the customer pays themselves, so Ben pays his by hand.
+await withTenant(orgId, (tx) =>
+  tx.update(subscriptions).set({ autoCollection: "off" }).where(eq(subscriptions.id, subB.id)),
+);
 await withTenant(orgId, (tx) =>
   emitEvent(tx, {
     organizationId: orgId,
@@ -420,6 +424,15 @@ await markPaymentMethodInvalid(orgId, annCard.id);
 // Twice, because a dunning run that hard-declines on every retry must not mail per attempt.
 await markPaymentMethodInvalid(orgId, annCard.id);
 
+// subscription_reactivated is opt-in: this business enabled email but never switched it on,
+// so restarting Ann's cancelled subscription must send no welcome-back mail (unset = today).
+await reactivateSubscription({
+  organizationId: orgId,
+  businessId: bizId,
+  subscriptionId: subD.id,
+  now,
+});
+
 // ── assertions ────────────────────────────────────────────────────────────────
 const rows = await rowsFor(orgId, bizId);
 const of = (t: EmailType) => rows.filter((r) => r.type === t);
@@ -431,10 +444,18 @@ ok(
   of("renewal_reminder")[0]?.bodyText.slice(0, 200),
 );
 ok(
-  "subscription_renewed states what the renewal cost",
-  // In the details card, which drops the row when there is no amount.
-  of("subscription_renewed").some((r) => /Amount: \S*\d/.test(r.bodyText)),
+  // This event has no renewal invoice behind it. The amount of a real renewal is checked in
+  // verify:usage-grace; an older invoice of the subscription must never stand in for it.
+  "subscription_renewed with no invoice of its own states no amount",
+  of("subscription_renewed").length > 0 &&
+    of("subscription_renewed").every((r) => !/Amount:/.test(r.bodyText)),
   of("subscription_renewed")[0]?.bodyText.slice(0, 200),
+);
+
+ok(
+  "subscription_reactivated: off until the business switches it on",
+  of("subscription_reactivated").length === 0,
+  of("subscription_reactivated").map((r) => r.subject),
 );
 
 // Every newly mapped event enqueued a row of the right type…
@@ -618,6 +639,15 @@ ok(
   of("payment_method_invalid").map((r) => r.subject),
 );
 ok(
+  "payment_method_invalid: a customer with a live subscription is asked to keep it active",
+  of("payment_method_invalid").every(
+    (r) =>
+      r.bodyText.includes("To keep your subscription active") &&
+      !r.bodyText.includes("is not active"),
+  ),
+  of("payment_method_invalid")[0]?.bodyText.slice(0, 300),
+);
+ok(
   "payment_method_invalid offers Change payment method",
   of("payment_method_invalid").every((r) => r.bodyText.includes("Change payment method: ")),
 );
@@ -782,6 +812,111 @@ if (lifecycle)
     "disabled: no emails enqueued for any of the new events",
     offRows.length === 0,
     offRows.map((r) => r.type),
+  );
+}
+
+// ── Case: a card refused for a customer with nothing live (a refused restart) ───
+{
+  const ended = await setupBiz(true, "Ended Card Co");
+  const dee = await createCustomer({
+    organizationId: ended.orgId,
+    businessId: ended.bizId,
+    email: "dee@ended.example",
+    firstName: "Dee",
+    lastName: "Ended",
+  });
+  const { subscription: deeSub } = await createSubscription({
+    organizationId: ended.orgId,
+    businessId: ended.bizId,
+    customerId: dee.id,
+    now,
+    items: [{ price: ended.price, quantity: 1 }],
+  });
+  await cancelSubscription({
+    organizationId: ended.orgId,
+    businessId: ended.bizId,
+    subscriptionId: deeSub.id,
+    atPeriodEnd: false,
+    now,
+  });
+  const deeCard = await vaultPaymentMethod({
+    organizationId: ended.orgId,
+    businessId: ended.bizId,
+    customer: dee,
+    token: "tok_4242",
+  });
+  await markPaymentMethodInvalid(ended.orgId, deeCard.id);
+  const invalid = (await rowsFor(ended.orgId, ended.bizId)).filter(
+    (r) => r.type === "payment_method_invalid",
+  );
+  ok(
+    "payment_method_invalid: with no live subscription it says so, not 'keep it active'",
+    invalid.length === 1 &&
+      invalid[0]!.bodyText.includes("Your subscription is not active. If you want to restart it") &&
+      !invalid[0]!.bodyText.includes("To keep your subscription active"),
+    invalid[0]?.bodyText.slice(0, 300),
+  );
+}
+
+// ── Case: subscription_reactivated switched on ─────────────────────────────────
+{
+  const on = await setupBiz(true, "Welcome Back Co");
+  await withTenant(on.orgId, (tx) =>
+    tx
+      .update(businesses)
+      .set({ emailConfig: { enabled: true, types: { subscription_reactivated: true } } })
+      .where(eq(businesses.id, on.bizId)),
+  );
+  const cara = await createCustomer({
+    organizationId: on.orgId,
+    businessId: on.bizId,
+    email: "cara@returning.example",
+    firstName: "Cara",
+    lastName: "Return",
+  });
+  const { subscription: sub } = await createSubscription({
+    organizationId: on.orgId,
+    businessId: on.bizId,
+    customerId: cara.id,
+    now,
+    items: [{ price: on.price, quantity: 1 }],
+  });
+  await cancelSubscription({
+    organizationId: on.orgId,
+    businessId: on.bizId,
+    subscriptionId: sub.id,
+    atPeriodEnd: false,
+    now,
+  });
+  await reactivateSubscription({
+    organizationId: on.orgId,
+    businessId: on.bizId,
+    subscriptionId: sub.id,
+    now,
+  });
+  const back = (await rowsFor(on.orgId, on.bizId)).filter(
+    (r) => r.type === "subscription_reactivated",
+  );
+  ok("subscription_reactivated: one email when switched on", back.length === 1, back.length);
+  ok(
+    "subscription_reactivated: addressed to the customer",
+    back[0]?.toAddress === "cara@returning.example",
+    back[0]?.toAddress,
+  );
+  ok(
+    "subscription_reactivated: says active again and names the plan",
+    !!back[0] &&
+      back[0].subject.startsWith("Welcome back to Welcome Back Co") &&
+      back[0].bodyText.includes(
+        "We are glad to have you back. Your Pro Plan subscription is active again from",
+      ) &&
+      back[0].bodyText.includes("Active again from:"),
+    back[0]?.bodyText.slice(0, 300),
+  );
+  ok(
+    "subscription_reactivated: no always-variable rendered empty",
+    !!back[0] && emptyAlwaysVars(back[0]).length === 0,
+    back[0] ? emptyAlwaysVars(back[0]) : null,
   );
 }
 

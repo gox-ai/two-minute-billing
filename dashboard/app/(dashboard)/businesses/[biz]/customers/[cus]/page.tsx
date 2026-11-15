@@ -1,8 +1,12 @@
+import { isApiNotFound, businessLabel } from "@/lib/api";
+import { notFound } from "next/navigation";
 import { billingRules } from "@/lib/billing-rules";
+import { AssistantRecordLabel } from "@/components/assistant/assistant-context";
 import * as React from "react";
 import { RecordVisit } from "@/components/record-visit";
 import { CustomerUsageCard } from "@/components/customers/customer-usage-card";
 import { CustomerUsageKeysCard } from "@/components/customers/customer-usage-keys-card";
+import { CustomerDiscountsCard } from "@/components/customers/customer-discounts-card";
 import { CustomerCreditsCard } from "@/components/credits/customer-credits-card";
 import { CustomerUsageControlsCard } from "@/components/usage-controls/customer-usage-controls-card";
 import Link from "next/link";
@@ -44,6 +48,8 @@ import { ActionButton } from "@/components/action-button";
 import { requirePermission, allows } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { StatusChip, IdChip, Chip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
+import { brandLabel, enumLabel, plural } from "@/lib/labels";
 import { CopyButton } from "@/components/patterns/copy-button";
 import { RailLink } from "@/components/patterns/action-rail";
 import {
@@ -68,7 +74,6 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import {
   CustomerActions,
   ValidateVatButton,
@@ -167,18 +172,22 @@ export default async function CustomerDetail({
       listProductGroups(biz, { includeArchived: true }).catch(() => ({ data: [] })),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader
           title="Customer"
           breadcrumbs={[
             { label: "Businesses", href: "/" },
-            { label: biz, href: `/businesses/${biz}` },
+            { label: await businessLabel(biz), href: `/businesses/${biz}` },
             { label: "Customer" },
           ]}
         />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="customer"
+          back={{ label: "View customers", href: `/businesses/${biz}/customers` }}
+          retry
         />
       </>
     );
@@ -375,7 +384,7 @@ export default async function CustomerDetail({
   const summary = [
     {
       label: "ID",
-      value: <span className="font-mono text-xs">{customer.id}</span>,
+      value: <MiddleEllipsis value={customer.id} className="text-xs" />,
       copy: customer.id,
     },
     { label: "Email", value: customer.email ?? "—", copy: customer.email ?? undefined },
@@ -402,7 +411,7 @@ export default async function CustomerDetail({
     if (!pm) return <span className="font-mono text-xs">{id}</span>;
     return (
       <span>
-        <span className="capitalize">{pm.brand ?? pm.type}</span>
+        <span>{pm.brand ? brandLabel(pm.brand) : enumLabel(pm.type)}</span>
         {pm.last4 ? ` ending ${pm.last4}` : ""}
       </span>
     );
@@ -495,14 +504,7 @@ export default async function CustomerDetail({
       value: customer.vat_number ? (
         <span className="inline-flex items-center gap-2">
           <span className="font-mono text-xs">{customer.vat_number}</span>
-          {customer.vat_number_status ? (
-            <Badge
-              variant={customer.vat_number_status === "valid" ? "default" : "secondary"}
-              className="text-xs"
-            >
-              {customer.vat_number_status}
-            </Badge>
-          ) : null}
+          {customer.vat_number_status ? <StatusChip status={customer.vat_number_status} /> : null}
           <ValidateVatButton biz={biz} cus={cus} />
         </span>
       ) : (
@@ -746,7 +748,7 @@ export default async function CustomerDetail({
               emails.
             </p>
           ) : (
-            <Table>
+            <Table phone="stack" className="[--phone-row-x:0]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
@@ -825,7 +827,7 @@ export default async function CustomerDetail({
                       ...cfOrphans.map(([k, v]) => ({
                         label: (
                           <span className="flex flex-wrap items-center gap-1.5">
-                            <span className="font-mono text-xs">cf_{k}</span>
+                            <span className="text-sm">{k}</span>
                             <Chip tone="tan">no definition</Chip>
                           </span>
                         ),
@@ -837,7 +839,7 @@ export default async function CustomerDetail({
                 {cfUnset.length ? (
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     <span className="font-medium">
-                      {cfUnset.length} field{cfUnset.length === 1 ? "" : "s"} defined and not set
+                      {plural(cfUnset.length, "field")} defined and not set
                     </span>
                     {": "}
                     {cfUnset.map(({ def }, i) => (
@@ -964,7 +966,13 @@ export default async function CustomerDetail({
           ]}
           actions={
             <>
-              <Button asChild>
+              <AssistantRecordLabel
+                id={customer.id}
+                label={customer.name ?? customer.email ?? customer.id}
+                state={unpaidInvoices(invoices.data).length ? "unpaid" : undefined}
+              />
+              {/* Outline: editing is not the money action. */}
+              <Button variant="outline" asChild>
                 <Link href={`/businesses/${biz}/customers/${cus}/edit`}>Edit customer</Link>
               </Button>
               <MoreMenu>
@@ -1018,7 +1026,7 @@ export default async function CustomerDetail({
                     customer={customer}
                     countries={countries}
                     rail
-                    label="Edit billing info"
+                    label="Edit billing address"
                   />
                   {addContact("rail")}
                   <CustomerActions biz={biz} customer={customer} showEdit={false} />
@@ -1084,14 +1092,13 @@ export default async function CustomerDetail({
                     <TableRow key={c.id}>
                       <TableCell className="pl-5 wrap-anywhere whitespace-normal">
                         {c.description}
-                        <div className="font-mono text-xs text-muted-foreground">{c.id}</div>
                       </TableCell>
                       <TableCell>
                         <Link
                           href={`/businesses/${biz}/subscriptions/${c.subscription}?from=customer#unbilled`}
-                          className="font-mono text-xs wrap-anywhere text-primary hover:underline"
+                          className="flex min-w-0 text-primary hover:underline"
                         >
-                          {c.subscription}
+                          <MiddleEllipsis value={c.subscription} className="text-xs" />
                         </Link>
                       </TableCell>
                       <TableCell>
@@ -1103,13 +1110,15 @@ export default async function CustomerDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table>
+                  <Table phone="stack">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Description</TableHead>
                         <TableHead>Subscription</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead className="pr-5 text-right">Amount</TableHead>
+                        <TableHead phone="aside" className="pr-5 text-right">
+                          Amount
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1140,6 +1149,15 @@ export default async function CustomerDetail({
               <CustomerUsageControlsCard biz={biz} cus={cus} />
             </React.Suspense>
           ) : null}
+          <React.Suspense fallback={null}>
+            <CustomerDiscountsCard
+              biz={biz}
+              cus={cus}
+              discounts={customer.discounts ?? []}
+              tz={tz}
+              canManage={allows(me, "customers:manage", "ops")}
+            />
+          </React.Suspense>
           <React.Suspense fallback={null}>
             <CustomerUsageKeysCard
               biz={biz}

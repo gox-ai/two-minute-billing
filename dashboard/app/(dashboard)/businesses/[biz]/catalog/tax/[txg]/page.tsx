@@ -13,6 +13,7 @@ import {
   type AttentionItem,
 } from "@/components/patterns/record-page";
 import { StatusChip, Chip } from "@/components/patterns/chip";
+import { regionName } from "@/lib/countries";
 import { PageRefresh } from "@/components/patterns/page-refresh";
 import { ErrorState } from "@/components/states";
 import { TaxRegionSettings } from "@/components/tax/tax-region-settings";
@@ -54,13 +55,13 @@ export default async function TaxRegionPage({
             key: "archived",
             tone: "warning" as const,
             title: "This region is archived",
-            detail: `We do not apply tax to new invoices for ${region.country}. Restore it from the Taxes list.`,
+            detail: `We do not apply tax to new invoices for ${regionName(region.country)}. Restore it from the Taxes list.`,
             actions: (
               <Link
                 href={`/businesses/${biz}/catalog/tax`}
                 className="text-sm text-primary hover:underline"
               >
-                Open Taxes
+                Open taxes
               </Link>
             ),
           }
@@ -86,15 +87,15 @@ export default async function TaxRegionPage({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: "Taxes", href: `/businesses/${biz}/catalog/tax` },
-          { label: region.country },
+          { label: regionName(region.country) },
         ]}
         right={<PageRefresh />}
       />
 
       <RecordHeader
-        title={region.country}
+        title={regionName(region.country)}
         chips={
           <>
             <StatusChip status={region.enabled ? "enabled" : "archived"} />

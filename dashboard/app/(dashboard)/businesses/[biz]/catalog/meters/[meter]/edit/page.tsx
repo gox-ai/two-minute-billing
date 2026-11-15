@@ -53,7 +53,7 @@ export default async function EditMeterPage({
       returnTo={detailHref}
       crumbs={[
         { label: name, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: "Meters", href: listHref },
         { label: m.name, href: detailHref },
         { label: "Edit" },

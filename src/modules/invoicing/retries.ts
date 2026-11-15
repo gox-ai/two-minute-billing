@@ -11,9 +11,10 @@ import {
   type ListFilter,
   type ListPage,
 } from "@/platform/list-query";
-import { invoices, customers, transactions, paymentMethods } from "@db/schema";
+import { invoices, customers, subscriptions, transactions, paymentMethods } from "@db/schema";
 import { accountHolderName } from "@/modules/customers/names";
 import { accountHolderNameSql } from "@/modules/customers/name-sql";
+import { autoCollectionOffSql } from "./service";
 
 /**
  * "Invoices under retry" — the Retries screen.
@@ -145,8 +146,17 @@ const RETRY_SORTS = {
 export type RetrySortField = keyof typeof RETRY_SORTS;
 export const RETRY_SORT_FIELDS = Object.keys(RETRY_SORTS) as RetrySortField[];
 
+/**
+ * What the row's next step is. `reminder`: auto-collection is off (subscription, else
+ * customer), so dunning sends payment reminders and never charges — `attempt_count`
+ * stays 0 and `next_attempt_at` is the next reminder. `charge`: a retried payment.
+ * Same fact the clock decides on (`autoCollectionOffSql`, `due.ts`).
+ */
+export type RetryCollection = "charge" | "reminder";
+
 export interface RetryRow {
   invoice: typeof invoices.$inferSelect;
+  collection: RetryCollection;
   customerPublicId: string | null;
   customerName: string | null;
   customerEmail: string | null;
@@ -311,9 +321,12 @@ export async function listRetriesPage(
         cusLastName: customers.lastName,
         cusCompany: customers.company,
         cusEmail: customers.email,
+        autoOff: sql<boolean>`${autoCollectionOffSql()}`,
       })
       .from(invoices)
       .leftJoin(customers, eq(invoices.customerId, customers.id))
+      // For `autoCollectionOffSql`; the subscription's setting wins over the customer's.
+      .leftJoin(subscriptions, eq(invoices.subscriptionId, subscriptions.id))
       .where(and(...pageConds))
       .orderBy(...pageOrder(RETRY_SORTS[sortField], invoices.publicId, descending, keyset))
       .limit(limit + 1)
@@ -333,6 +346,7 @@ export async function listRetriesPage(
       ...page,
       data: page.data.map((r) => ({
         invoice: r.inv,
+        collection: r.autoOff ? ("reminder" as const) : ("charge" as const),
         customerPublicId: r.cusPid ?? null,
         customerName: accountHolderName({
           firstName: r.cusFirstName,
@@ -358,6 +372,8 @@ export function serializeRetry(r: RetryRow) {
     dunning_status: inv.dunningStatus,
     currency: inv.currency,
     amount_due_minor: Number(inv.amountDueMinor ?? inv.totalMinor),
+    /** charge | reminder — see {@link RetryCollection}. */
+    collection: r.collection,
     attempt_count: inv.attemptCount,
     next_attempt_at: inv.nextAttemptAt,
     /** "Retry Started On" — when dunning first touched this invoice. */

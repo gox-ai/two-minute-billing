@@ -52,7 +52,7 @@ export default async function CouponsPage({
           title: "Coupons",
           breadcrumbs: [
             { label: name, href: `/businesses/${biz}` },
-            { label: "Product Catalog" },
+            { label: "Product catalog" },
             { label: "Coupons" },
           ],
           notice: (

@@ -49,7 +49,8 @@ export const RUN_STATUS_LABEL: Record<string, string> = {
 };
 
 export const DISABLED_REASON_LABEL: Record<string, string> = {
-  payment_declined: "The last payment was declined.",
+  payment_declined: "The payment was declined. We do not try again.",
+  retries_exhausted: "The payment was declined on each try.",
   operator: "Turned off by you.",
   customer: "Turned off by the customer.",
 };
@@ -78,9 +79,19 @@ export function thresholdLabel(t: AlertThreshold, currency: string | null): stri
   }
 }
 
-export function runwayLabel(days: number | null): string {
+/**
+ * The runway as the API words it (`runwayMessage`). `runway`: its balance and the top-up
+ * headroom decide "Used up", because whole days make 0 also mean "less than a day".
+ */
+export function runwayLabel(
+  days: number | null,
+  runway?: { balance_minor: number; auto_topup_minor: number } | null,
+): string {
   if (days == null) return "Not enough usage to estimate";
-  if (days < 1) return "Runs out in less than a day";
+  if (days < 1)
+    return runway && runway.balance_minor + runway.auto_topup_minor <= 0
+      ? "Used up"
+      : "Runs out in less than a day";
   return days === 1 ? "Runs out in about 1 day" : `Runs out in about ${days} days`;
 }
 

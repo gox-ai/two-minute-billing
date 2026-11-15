@@ -70,6 +70,12 @@ export const meters = pgTable(
       model_key?: string;
       token_type?: string;
       token_type_key?: string;
+      /** 0524: list unit and price tier. */
+      unit?: string;
+      quality?: string;
+      quality_key?: string;
+      resolution?: string;
+      resolution_key?: string;
     }>(),
     /** 0457: currency of event cost for events that name none. NULL = the price's currency. */
     costCurrency: char("cost_currency", { length: 3 }),

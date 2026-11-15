@@ -1953,6 +1953,109 @@ const jCheck = (ok: boolean, label: string, got: unknown, want: unknown) => {
 }
 console.log(`quantity-cut order: ${cutOrderPass ? "PASS" : "FAIL"}`);
 
+// ── § K · a taxed downgrade's credit note states its tax ONCE ────────────────────
+// The change path writes the reversed tax as an item AND the note's ladder derives the
+// same tax from `total − subtotal + Σ discounts`. The item must be marked `kind = 'tax'`
+// and the document (and the detail read the page uses) must print it in the tax rows
+// only. The fingerprint line is for a before/after comparison of the money.
+let taxOncePass = false;
+{
+  const { creditNotes, creditNoteDiscounts } = await import("@db/schema");
+  const { assembleCreditNoteDocument } = await import("@/modules/credit-notes/document");
+  const { getCreditNoteDetail } = await import("@/modules/credit-notes/service");
+  const { serializeCreditNote } = await import("@/modules/credit-notes/serialize");
+  const downTax = await changeSubscription({
+    organizationId: orgId,
+    businessId: biz2.id,
+    subscriptionId: sub2.subscription.id,
+    now: mid2,
+    changes: [{ itemId: sub2.items[0]!.publicId, newQuantity: 1 }],
+    invoiceImmediately: true,
+  });
+  const cn = downTax.creditNote;
+  const k = cn
+    ? await withTenant(orgId, async (tx) => ({
+        items: await tx
+          .select()
+          .from(creditNoteItems)
+          .where(eq(creditNoteItems.creditNoteId, cn.id)),
+        discounts: await tx
+          .select()
+          .from(creditNoteDiscounts)
+          .where(eq(creditNoteDiscounts.creditNoteId, cn.id)),
+        row: (await tx.select().from(creditNotes).where(eq(creditNotes.id, cn.id)))[0]!,
+        ledger: await tx
+          .select()
+          .from(ledgerEntries)
+          .where(eq(ledgerEntries.sourceId, cn.publicId)),
+      }))
+    : null;
+  const sum = (xs: bigint[]) => xs.reduce((s, x) => s + x, 0n);
+  const ladderTax =
+    k && k.row.subtotalMinor !== null
+      ? k.row.totalMinor - k.row.subtotalMinor + sum(k.discounts.map((d) => d.amountMinor))
+      : 0n;
+  const taxItems = k?.items.filter((i) => i.kind === "tax") ?? [];
+  const doc = cn ? await assembleCreditNoteDocument(orgId, biz2.id, cn.publicId) : null;
+  const printed = doc ? sum(doc.chargeLines.map((l) => l.amountMinor)) : -1n;
+  const printedTax = doc ? sum(doc.taxLines.map((l) => l.amountMinor)) : -1n;
+  const detail = cn ? await getCreditNoteDetail(orgId, biz2.id, cn.publicId) : null;
+  const apiItems = detail ? serializeCreditNote(detail.view).items : [];
+  const stated = (i: (typeof apiItems)[number]) =>
+    (i as { stated_in_taxes?: boolean }).stated_in_taxes === true;
+  const apiLines = apiItems.filter((i) => !stated(i));
+  const apiTax = apiItems.filter(stated);
+  const kChecks: Array<[string, boolean]> = [
+    ["§K the taxed downgrade issued a note that records its gross and its tax", ladderTax > 0n],
+    [
+      "§K its tax-reversal item carries kind 'tax' and equals the ladder's tax",
+      taxItems.length === 1 && taxItems[0]!.amountMinor === ladderTax,
+    ],
+    [
+      "§K the document leaves the tax item out of its lines",
+      !!doc && !doc.chargeLines.some((l) => /^Tax reversal/.test(l.description)),
+    ],
+    [
+      "§K the document's lines sum to its subtotal less discounts",
+      !!doc && printed === doc.totals.subtotalMinor - doc.totals.discountTotalMinor,
+    ],
+    [
+      "§K the document states the tax once, in its tax rows",
+      !!doc && printedTax === ladderTax && doc.totals.taxTotalMinor === ladderTax,
+    ],
+    [
+      "§K the ladder still adds up to the stored total",
+      !!doc &&
+        doc.totals.subtotalMinor - doc.totals.discountTotalMinor + doc.totals.taxTotalMinor ===
+          k!.row.totalMinor,
+    ],
+    [
+      "§K the detail read marks the same item, and its other items are the printed lines",
+      apiItems.length === (k?.items.length ?? -1) &&
+        apiTax.length === 1 &&
+        BigInt(apiTax[0]!.amount_minor) === ladderTax &&
+        apiLines.length === (doc?.chargeLines.length ?? -1) &&
+        BigInt(apiLines.reduce((s, i) => s + i.amount_minor, 0)) === printed,
+    ],
+  ];
+  for (const [name, ok] of kChecks) console.log(`${ok ? "✅" : "❌"} ${name}`);
+  // Amounts only (ids differ per run): compare this line before and after an engine change.
+  console.log(
+    `  §K fingerprint: subtotal=${k?.row.subtotalMinor} total=${k?.row.totalMinor} ` +
+      `items=[${k?.items
+        .map((i) => i.amountMinor)
+        .sort((a, b) => (a < b ? -1 : 1))
+        .join(",")}] ` +
+      `discounts=[${k?.discounts.map((d) => `${d.type}:${d.amountMinor}`).join(",")}] ` +
+      `ledger=[${k?.ledger
+        .map((e) => `${e.account}:${e.direction}:${e.amountMinor}`)
+        .sort()
+        .join(",")}]`,
+  );
+  taxOncePass = kChecks.every(([, ok]) => ok);
+}
+console.log(`credit note tax once: ${taxOncePass ? "PASS" : "FAIL"}`);
+
 // Allow ±2 minor units for integer-division rounding at the midpoint.
 const near = (a: number | null, b: number) => a != null && Math.abs(a - b) <= 2;
 const pass =
@@ -1978,7 +2081,8 @@ const pass =
   addDiffPass &&
   qtyCutPass &&
   offCollectPass &&
-  cutOrderPass;
+  cutOrderPass &&
+  taxOncePass;
 
 console.log("");
 console.log(pass ? "✅ PRORATION: PASS" : "❌ PRORATION: FAIL");

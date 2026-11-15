@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Check, ChevronsUpDown, LogOut, MailOpen, Sparkles, UserRound } from "lucide-react";
-import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -17,31 +16,52 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { initials } from "@/components/patterns/record-page";
 import { NavBadge } from "@/components/SideNav";
+import { NAV_FOCUS, RailTip } from "@/components/rail-tip";
 import { logoutAction, switchOrganizationAction } from "@/app/auth-actions";
 import { setThemeAction } from "@/app/(dashboard)/account/actions";
+import { useThemeWipe, wipeOrigin } from "@/lib/theme-wipe";
+
+/**
+ * The rail's two menus open as wide as the rail's own row, so nothing hangs over the page.
+ * Beside a collapsed rail (a 40px trigger) they open to its right instead, at 288px.
+ */
+export function useRailMenu(side: "top" | "bottom", align: "start" | "end") {
+  const ref = React.useRef<HTMLButtonElement>(null);
+  const [beside, setBeside] = React.useState(false);
+  const onOpenChange = (open: boolean) => {
+    if (open) setBeside((ref.current?.offsetWidth ?? 0) < 160);
+  };
+  const content = beside
+    ? { side: "right" as const, align, sideOffset: 12, className: "w-72" }
+    : { side, align: "start" as const, className: "w-(--radix-dropdown-menu-trigger-width)" };
+  return { triggerRef: ref, onOpenChange, content };
+}
 
 /** Release notes, pinned above the person: product news, not a place you work. */
 export function WhatsNewRow({ unread }: { unread: number }) {
   const path = usePathname();
   const active = path === "/whats-new";
   return (
-    <Link
-      href="/whats-new"
-      title="What's new"
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "nav-row relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
-        active
-          ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-      )}
-    >
-      <Sparkles
-        className={cn("size-4.5 shrink-0", active ? "text-sidebar-primary" : "opacity-80")}
-      />
-      <span className="nav-label">What&apos;s new</span>
-      {unread ? <NavBadge count={unread} /> : null}
-    </Link>
+    <RailTip label="What's new">
+      <Link
+        href="/whats-new"
+        data-nav-label="What's new"
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          NAV_FOCUS,
+          "nav-row relative flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors",
+          active
+            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+        )}
+      >
+        <Sparkles
+          className={cn("size-4 shrink-0", active ? "text-sidebar-primary" : "opacity-80")}
+        />
+        <span className="nav-label">What&apos;s new</span>
+        {unread ? <NavBadge count={unread} /> : null}
+      </Link>
+    </RailTip>
   );
 }
 
@@ -51,6 +71,9 @@ export interface OrgOption {
   role: string;
   current: boolean;
 }
+
+/** "owner" → "Owner". Only the role word: an organization's name is shown as typed. */
+const roleLabel = (role: string) => role.charAt(0).toUpperCase() + role.slice(1);
 
 const THEMES = [
   { value: "light", label: "Light" },
@@ -79,21 +102,23 @@ export function AccountMenu({
   /** Invites to other organizations that wait for this person (0498). */
   pendingInvites?: number;
 }) {
-  const { theme, setTheme } = useTheme();
+  const { theme, switchTheme } = useThemeWipe();
   const [mounted, setMounted] = React.useState(false);
   // The theme is only known in the browser; until then no segment claims to be current.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   React.useEffect(() => setMounted(true), []);
   const current = orgs.find((o) => o.current);
+  const { triggerRef, onOpenChange, content } = useRailMenu("top", "end");
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Account menu"
           title={email}
-          className="nav-row flex h-12 w-full items-center gap-2.5 rounded-lg px-1.5 text-left transition-colors hover:bg-sidebar-accent/60 data-[state=open]:bg-sidebar-accent"
+          className="nav-row flex h-12 w-full items-center gap-2.5 rounded-md px-1.5 text-left transition-colors hover:bg-sidebar-accent/60 data-[state=open]:bg-sidebar-accent"
         >
           <Avatar className="size-8">
             {avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
@@ -105,8 +130,8 @@ export function AccountMenu({
             <span className="block truncate text-sm font-semibold text-sidebar-foreground">
               {name || email}
             </span>
-            <span className="block truncate text-xs text-sidebar-foreground/60 capitalize">
-              {role}
+            <span className="block truncate text-xs text-sidebar-foreground/60">
+              {roleLabel(role)}
               {current ? ` · ${current.name}` : ""}
             </span>
           </span>
@@ -116,7 +141,7 @@ export function AccountMenu({
           />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="w-72">
+      <DropdownMenuContent {...content}>
         <DropdownMenuLabel className="font-normal">
           {name ? <div className="truncate text-sm font-medium">{name}</div> : null}
           <div
@@ -127,8 +152,8 @@ export function AccountMenu({
           >
             {email}
           </div>
-          <div className="text-xs text-muted-foreground capitalize">
-            {role}
+          <div className="text-xs text-muted-foreground">
+            {roleLabel(role)}
             {current ? ` in ${current.name}` : ""}
           </div>
         </DropdownMenuLabel>
@@ -160,8 +185,10 @@ export function AccountMenu({
                 <input type="hidden" name="organization" value={o.id} />
                 <DropdownMenuItem asChild>
                   <button type="submit" className="w-full">
-                    <span className="min-w-0 flex-1 truncate text-left">{o.name}</span>
-                    <span className="text-xs text-muted-foreground capitalize">{o.role}</span>
+                    <span className="min-w-0 flex-1 truncate text-left" title={o.name}>
+                      {o.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{roleLabel(o.role)}</span>
                     <Check className={cn("size-4", !o.current && "invisible")} />
                   </button>
                 </DropdownMenuItem>
@@ -178,13 +205,13 @@ export function AccountMenu({
                 key={t.value}
                 type="button"
                 aria-pressed={mounted && theme === t.value}
-                onClick={() => {
-                  setTheme(t.value);
+                onClick={(e) => {
+                  switchTheme(t.value, wipeOrigin(e.currentTarget.getBoundingClientRect(), e));
                   // Saved on the account too, or the next page load's ThemeSync would undo it.
                   void setThemeAction(t.value);
                 }}
                 className={cn(
-                  "rounded px-2 py-0.5 text-xs font-medium transition-colors",
+                  "rounded-md px-2 py-0.5 text-xs font-medium transition-colors",
                   mounted && theme === t.value
                     ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-foreground",

@@ -3,7 +3,7 @@
  * scan catches a stored day that no longer matches a recompute.
  */
 import { and, eq, inArray } from "drizzle-orm";
-import { closeDb, withTenant } from "@/platform/db";
+import { closeDb, systemDb, withTenant } from "@/platform/db";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
@@ -24,7 +24,7 @@ import {
 } from "@/modules/metrics/daily/maintenance";
 import { recordTransaction } from "@/modules/transactions/service";
 import { businessesWithSubscriptions } from "@/modules/metrics/daily/cron";
-import { metricDaily, mrrMovements } from "@db/schema";
+import { events, metricDaily, mrrMovements } from "@db/schema";
 
 let pass = 0;
 let fail = 0;
@@ -261,6 +261,62 @@ const activeOn = async (day: string) => {
 // The first subscription started 50 days ago, so 60 days back only this one could count.
 ok("…so it is not active inside the gap", (await activeOn(shift(today, -60))) === 0);
 ok("…and is active before it", (await activeOn(shift(today, -100))) === 1);
+
+// ── 2c. a trial cancel books no churn, so its stretch comes from the events ────────────
+const { subscription: trialSub } = await createSubscription({
+  organizationId: orgId,
+  businessId: biz.id,
+  customerId: customer.id,
+  now: ago(120),
+  trialDays: 14,
+  items: [{ price, quantity: 1 }],
+});
+await cancelSubscription({
+  organizationId: orgId,
+  businessId: biz.id,
+  subscriptionId: trialSub.id,
+  atPeriodEnd: false,
+  now: ago(110),
+});
+await reactivateSubscriptionWithOptions({
+  organizationId: orgId,
+  businessId: biz.id,
+  subscriptionId: trialSub.id,
+  now: ago(70),
+  items: [{ price: price.publicId, quantity: 1 }],
+});
+// Events are stamped by the database clock; date them as the clock would have.
+for (const [type, at] of [
+  ["subscription_canceled", ago(110)],
+  ["subscription_reactivated", ago(70)],
+] as const) {
+  await systemDb
+    .update(events)
+    .set({ createdAt: at })
+    .where(and(eq(events.resourceId, trialSub.publicId), eq(events.type, type)));
+}
+const trialMoves = await withTenant(orgId, (tx) =>
+  tx
+    .select({ reason: mrrMovements.reason, delta: mrrMovements.deltaMinor })
+    .from(mrrMovements)
+    .where(eq(mrrMovements.subscriptionId, trialSub.id)),
+);
+ok(
+  "the trial cancel booked no churn",
+  !trialMoves.some((m) => m.reason === "churn" && m.delta < 0n),
+  trialMoves,
+);
+const trialGap = (await withTenant(orgId, (tx) => loadLapses(tx, biz.id))).get(trialSub.id) ?? [];
+ok(
+  "its cancelled stretch is a lapse, from the cancel to the reactivation",
+  trialGap.length === 1 &&
+    Math.abs(trialGap[0]!.from.getTime() - ago(110).getTime()) < 86_400_000 &&
+    Math.abs(trialGap[0]!.to.getTime() - ago(70).getTime()) < 86_400_000,
+  trialGap,
+);
+// 90 back: the 2b subscription is lapsed too and the first one has not started.
+ok("…so it is not active inside the gap", (await activeOn(shift(today, -90))) === 0);
+ok("…and is active again after it", (await activeOn(shift(today, -60))) === 1);
 
 // ── 3. a backdated row older than the trailing window restates its own day ────────────
 // An offline refund recorded today but dated 80 days back: the trailing pass never reaches

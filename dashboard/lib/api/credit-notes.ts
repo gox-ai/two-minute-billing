@@ -204,6 +204,8 @@ export interface CreateCreditNoteInput {
   reason?: string;
   /** `invoice_line_item` names the credited line; the engine caps the item at its maximum. */
   items: Array<{ description: string; amount_minor: number; invoice_line_item?: string }>;
+  /** A credit pack line: `full` credits used credits too. Omitted = the unused part only. */
+  pack_refund?: "unused" | "full";
 }
 
 export interface CreatedCreditNote {

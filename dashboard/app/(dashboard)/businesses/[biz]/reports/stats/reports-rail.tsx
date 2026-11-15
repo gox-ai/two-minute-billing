@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSelectedLayoutSegment } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { sentenceCase } from "@/lib/labels";
 import type { ReportSummary } from "@/lib/api";
 
 /**
@@ -64,8 +65,8 @@ export function ReportsRail({ biz, reports }: { biz: string; reports: ReportSumm
                 onClick={() => toggle(g.id)}
                 className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-muted/60"
               >
-                <span className="min-w-0 flex-1 truncate text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                  {g.label}
+                <span className="min-w-0 flex-1 text-xs font-medium text-muted-foreground">
+                  {sentenceCase(g.label)}
                 </span>
                 <span className="text-xs text-muted-foreground tabular-nums">{g.items.length}</span>
                 <ChevronDown
@@ -85,15 +86,15 @@ export function ReportsRail({ biz, reports }: { biz: string; reports: ReportSumm
                         <Link
                           href={`/businesses/${biz}/reports/stats/${r.key}`}
                           aria-current={isActive ? "page" : undefined}
-                          title={r.name}
+                          title={sentenceCase(r.name)}
                           className={cn(
-                            "block truncate rounded-md px-2.5 py-1.5 text-sm",
+                            "block rounded-md px-2.5 py-1.5 text-sm",
                             isActive
                               ? "bg-muted font-semibold text-foreground"
                               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                           )}
                         >
-                          {r.name}
+                          {sentenceCase(r.name)}
                         </Link>
                       </li>
                     );

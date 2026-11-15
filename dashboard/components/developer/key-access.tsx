@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { SelectField } from "@/components/ui/select-field";
+import { Field } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
 import { ActionForm } from "@/components/form/action-form";
 import {
@@ -27,7 +28,9 @@ export function KeyAccessFields({
   grant,
   defaultAccess,
   defaultMap,
+  inline,
 }: {
+  inline?: boolean;
   grant: KeyGrantOptions;
   defaultAccess?: "full" | "read" | "custom";
   defaultMap?: Record<string, "read" | "write"> | null;
@@ -42,29 +45,37 @@ export function KeyAccessFields({
     [grant],
   );
   return (
-    <div className="flex w-full flex-col gap-3">
-      <SelectField
+    <div className={inline ? "contents" : "flex w-full flex-col gap-3"}>
+      <Field
         name="access"
-        value={access}
-        onValueChange={setAccess}
-        ariaLabel="Key access"
-        className="w-64"
-        options={[
-          {
-            value: "full",
-            label: grant.full ? "Full access" : `Full access (${NOT_HELD.toLowerCase()})`,
-            disabled: !grant.full,
-          },
-          {
-            value: "read",
-            label: grant.readOnly ? "Read only" : `Read only (${NOT_HELD.toLowerCase()})`,
-            disabled: !grant.readOnly,
-          },
-          { value: "custom", label: "Custom: select access per resource" },
-        ]}
-      />
+        label="Access"
+        help={access === "custom" ? "Set it for each resource below." : undefined}
+      >
+        <SelectField
+          name="access"
+          value={access}
+          onValueChange={setAccess}
+          ariaLabel="Access"
+          className={inline ? "w-full" : "w-64"}
+          options={[
+            {
+              value: "full",
+              label: grant.full ? "Full access" : `Full access (${NOT_HELD.toLowerCase()})`,
+              disabled: !grant.full,
+            },
+            {
+              value: "read",
+              label: grant.readOnly ? "Read only" : `Read only (${NOT_HELD.toLowerCase()})`,
+              disabled: !grant.readOnly,
+            },
+            { value: "custom", label: "Custom" },
+          ]}
+        />
+      </Field>
       {access === "custom" ? (
-        <div className="grid gap-x-6 gap-y-4 rounded-md bg-muted/50 p-3 sm:grid-cols-2">
+        <div
+          className={`grid gap-x-6 gap-y-4 rounded-md bg-muted/50 p-3 sm:grid-cols-2${inline ? " order-last col-span-full" : ""}`}
+        >
           {areas.map((a) => (
             <div key={a.area} className="flex flex-col gap-2">
               <div className="text-xs font-medium text-muted-foreground">{a.area}</div>

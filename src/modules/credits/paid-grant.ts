@@ -95,6 +95,8 @@ export async function createManualPaidGrant(
     currency,
     applyTax: true,
     collect: false,
+    // The operator set the price; the grant's cost basis is that price.
+    customerCoupons: false,
     lines: [
       {
         description: `Credit: ${what}`,
@@ -113,7 +115,8 @@ export async function createManualPaidGrant(
         currency,
         unit,
         amount: input.amount,
-        costBasisMinor: input.priceMinor,
+        // No coupon here: the operator types the price. Inclusive tax still comes off.
+        costBasisMinor: line.costBasisMinor,
         category: "paid",
         priority: input.priority,
         effectiveAt: created.invoice.createdAt,
@@ -129,25 +132,31 @@ export async function createManualPaidGrant(
         createdByUserId: input.createdByUserId ?? null,
       });
       // The sale moves into pending credit until the invoice is paid (as a pack does).
-      await postEntries(
-        {
-          organizationId: input.organizationId,
-          businessId: input.businessId,
-          customerId: customer.id,
-          sourceType: "invoice",
-          sourceId: created.invoice.publicId,
-          lines: [
-            { account: "revenue", direction: "debit", amountMinor: input.priceMinor, currency },
-            {
-              account: CREDIT_LEDGER_ACCOUNTS.pending,
-              direction: "credit",
-              amountMinor: input.priceMinor,
-              currency,
-            },
-          ],
-        },
-        tx,
-      );
+      if (line.costBasisMinor > 0n)
+        await postEntries(
+          {
+            organizationId: input.organizationId,
+            businessId: input.businessId,
+            customerId: customer.id,
+            sourceType: "invoice",
+            sourceId: created.invoice.publicId,
+            lines: [
+              {
+                account: "revenue",
+                direction: "debit",
+                amountMinor: line.costBasisMinor,
+                currency,
+              },
+              {
+                account: CREDIT_LEDGER_ACCOUNTS.pending,
+                direction: "credit",
+                amountMinor: line.costBasisMinor,
+                currency,
+              },
+            ],
+          },
+          tx,
+        );
       if (input.markPaid && created.invoice.status !== "paid") {
         const paidAt = input.markPaid.paidAt;
         await recordOfflinePaymentInTx(

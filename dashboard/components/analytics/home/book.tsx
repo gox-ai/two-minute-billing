@@ -10,9 +10,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { measureValue } from "@/components/analytics/format";
+import { axisLabel } from "@/components/analytics/series-format";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { InfoTip } from "@/components/analytics/info-tip";
+import { EMPTY_FIGURE, EmptyFigure } from "@/components/patterns/record-page";
 import type { CardInfo } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
 import type { AnalyticsResult, BatchEntry } from "@/lib/analytics-api";
@@ -27,6 +29,7 @@ import {
   pick,
   readMovement,
   scheduledRows,
+  signedMoney,
   slices,
   countryName,
   exploreHref,
@@ -170,7 +173,9 @@ export function recurringZones({
 
   /* --------------------------------------------------------- performance */
 
-  const pct = (bps: number | null) => (bps == null ? "—" : pctFromBps(bps, 1));
+  // A typographic minus, as every other signed figure on Home.
+  const pct = (bps: number | null) =>
+    bps == null ? EMPTY_FIGURE : pctFromBps(bps, 1).replace(/^-/, "−");
   const rates: Array<{ label: string; value: string; warn?: boolean; info: CardInfo }> = [
     { label: "Gross revenue retention", value: pct(move.grossBps), info: G.grr },
     { label: "Net revenue retention", value: pct(move.netBps), info: G.nrr },
@@ -178,7 +183,7 @@ export function recurringZones({
     {
       label: "Quick ratio",
       info: G.quickRatio,
-      value: move.quickRatio == null ? "—" : `${move.quickRatio.toFixed(2)}×`,
+      value: move.quickRatio == null ? EMPTY_FIGURE : `${move.quickRatio.toFixed(2)}×`,
       warn: move.quickRatio != null && move.quickRatio < 1,
     },
     { label: "Net MRR growth", value: pct(move.netGrowthBps), info: G.netMrrGrowth },
@@ -260,7 +265,7 @@ export function recurringZones({
 
   const performance = (
     <Stack>
-      <Grid>
+      <Grid even>
         <Block
           span={8}
           title="MRR movement"
@@ -298,7 +303,7 @@ export function recurringZones({
                 <span
                   className={cn("text-2xl font-semibold tabular-nums", r.warn && "text-warning")}
                 >
-                  {r.value}
+                  {r.value === EMPTY_FIGURE ? <EmptyFigure /> : r.value}
                 </span>
               </div>
             ))}
@@ -316,7 +321,7 @@ export function recurringZones({
                 { label: "Churn + contraction", fill: "bg-chart-5" },
               ].map((l) => (
                 <span key={l.label} className="flex items-center gap-1.5">
-                  <span className={cn("size-2 rounded-sm", l.fill)} aria-hidden />
+                  <span className={cn("size-2 rounded-xs", l.fill)} aria-hidden />
                   {l.label}
                 </span>
               ))}
@@ -327,7 +332,7 @@ export function recurringZones({
             </div>
             <div className="mt-2">
               <MovementBars
-                labels={labels}
+                labels={labels.map(axisLabel)}
                 newMrr={labels.map((l) => flows.newMrr.get(l) ?? null)}
                 expansion={labels.map((l) => add(flows.expansion, flows.reactivation, l))}
                 losses={labels.map((l) => add(flows.churn, flows.contraction, l))}
@@ -339,18 +344,20 @@ export function recurringZones({
         </Grid>
       ) : null}
 
-      <Grid>
+      <Grid even>
         <Block span={6} title="Movement by plan" info={G.movementByPlan} chip="largest net first">
           {planMovement.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing moved in this period.</p>
           ) : (
-            <Table>
+            <Table phone="stack" className="[--phone-row-x:0]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="pl-0">Plan</TableHead>
                   <TableHead className="text-right">Gained</TableHead>
                   <TableHead className="text-right">Lost</TableHead>
-                  <TableHead className="pr-0 text-right">Net</TableHead>
+                  <TableHead phone="aside" className="pr-0 text-right">
+                    Net
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -376,8 +383,7 @@ export function recurringZones({
                         )}
                         title={money(r.net, cur)}
                       >
-                        {r.net < 0 ? "−" : r.net > 0 ? "+" : ""}
-                        {moneyCompact(Math.abs(r.net), cur)}
+                        {signedMoney(r.net, cur)}
                       </TableCell>
                     </TableRow>
                   );

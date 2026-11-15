@@ -1,12 +1,16 @@
+import { accountHolderName } from "@/modules/customers/names";
 import {
   and,
   desc,
   eq,
   getTableColumns,
+  gte,
   inArray,
   isNotNull,
   isNull,
+  lt,
   ne,
+  notInArray,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -45,7 +49,8 @@ import {
   type ListPage,
 } from "@/platform/list-query";
 import { slugify, validateSlug, insertOrSlugConflict } from "@/modules/catalog/service";
-import { recomputeSubscriptionMrr } from "@/modules/subscriptions/service";
+import { customerCouponMode, recomputeSubscriptionMrr } from "@/modules/subscriptions/service";
+import type { CustomerCoupons } from "@/modules/subscriptions/billing-rules-config";
 import type { StoredSubscriptionStatus } from "@/modules/subscriptions/serialize";
 import { createLogger } from "@/platform/logger";
 import { auditRowChange, writeAuditLog } from "@/modules/audit/service";
@@ -137,6 +142,147 @@ export interface CouponConstraint {
   productIds?: string[] | null; // product slug ids (for 'specific')
   /** Price slug ids (for 'specific'); a line matches on its product OR its price. */
   priceIds?: string[] | null;
+  /** 0516: the line's price must also bill on one of these. null/empty = any period. */
+  billingPeriods?: BillingPeriod[] | null;
+  /**
+   * The line prices that bill on one of `billingPeriods`, filled by `resolvePeriodScope`
+   * before matching. Unresolved = no line matches, so a missed loader under-discounts.
+   */
+  periodPriceIds?: string[];
+}
+
+export type PeriodInterval = "day" | "week" | "month" | "year";
+export interface BillingPeriod {
+  interval: PeriodInterval;
+  intervalCount: number;
+}
+
+/** One constraint row as the engine reads it. */
+function toConstraint(r: typeof couponItemConstraints.$inferSelect): CouponConstraint {
+  const periods = r.billingPeriods as Array<{
+    interval: PeriodInterval;
+    interval_count: number;
+  }> | null;
+  return {
+    itemKind: r.itemKind,
+    constraintType: r.constraintType,
+    productIds: (r.productIds as string[] | null) ?? null,
+    priceIds: (r.priceIds as string[] | null) ?? null,
+    billingPeriods: periods?.length
+      ? periods.map((p) => ({ interval: p.interval, intervalCount: p.interval_count }))
+      : null,
+  };
+}
+
+type ScopeLike = Array<{
+  itemKind: string;
+  constraintType: string;
+  productIds?: string[] | null;
+  priceIds?: string[] | null;
+  billingPeriods?: BillingPeriod[] | null;
+}>;
+
+/** A constraint set in one canonical shape. A `none` row and a missing row are the same rule. */
+function normalScope(list: ScopeLike) {
+  const sorted = (xs: string[] | null | undefined) => [...(xs ?? [])].sort();
+  return list
+    .filter((k) => k.constraintType !== "none")
+    .map((k) => ({
+      item_kind: k.itemKind,
+      constraint_type: k.constraintType,
+      product_ids: k.constraintType === "specific" ? sorted(k.productIds) : [],
+      price_ids: k.constraintType === "specific" ? sorted(k.priceIds) : [],
+      billing_periods: sorted(
+        (k.billingPeriods ?? []).map((x) => `${x.interval}/${x.intervalCount}`),
+      ),
+    }))
+    .sort((a, b) => a.item_kind.localeCompare(b.item_kind));
+}
+
+const constraintKey = (list: ScopeLike): string => JSON.stringify(normalScope(list));
+
+/**
+ * What `next` drops from `prev`, as labels; empty when `next` covers every line `prev` did.
+ * A price named in `prev` is still covered when `next` names its product.
+ */
+async function scopeRemovals(
+  tx: Tx,
+  businessId: string,
+  prev: CouponConstraint[],
+  next: ItemConstraintInput[],
+): Promise<string[]> {
+  const out: string[] = [];
+  const live = (k: { constraintType: string }) => k.constraintType !== "none";
+  const periodKey = (b?: BillingPeriod[] | null) =>
+    (b ?? []).map((x) => `${x.interval}/${x.intervalCount}`);
+  for (const old of prev.filter(live)) {
+    const neu = next.filter(live).find((k) => k.itemKind === old.itemKind);
+    const kind = old.itemKind === "addon" ? "add-ons" : `${old.itemKind}s`;
+    if (!neu) {
+      out.push(old.constraintType === "all" ? `all ${kind}` : `the selected ${kind}`);
+      continue;
+    }
+    const oldPeriods = periodKey(old.billingPeriods);
+    const newPeriods = periodKey(neu.billingPeriods);
+    if (
+      newPeriods.length > 0 &&
+      (oldPeriods.length === 0 || oldPeriods.some((p) => !newPeriods.includes(p)))
+    )
+      out.push(`billing periods for ${kind}`);
+    if (neu.constraintType === "all") continue;
+    if (old.constraintType === "all") {
+      out.push(`all ${kind}`);
+      continue;
+    }
+    const keptProducts = new Set(neu.productIds ?? []);
+    const keptPrices = new Set(neu.priceIds ?? []);
+    for (const p of old.productIds ?? []) if (!keptProducts.has(p)) out.push(p);
+    const lostPrices = (old.priceIds ?? []).filter((p) => !keptPrices.has(p));
+    if (lostPrices.length > 0) {
+      const rows = await tx
+        .select({ price: prices.publicId, product: products.publicId })
+        .from(prices)
+        .innerJoin(products, eq(prices.productId, products.id))
+        .where(and(eq(prices.businessId, businessId), inArray(prices.publicId, lostPrices)));
+      const productOf = new Map(rows.map((r) => [r.price, r.product]));
+      for (const p of lostPrices) if (!keptProducts.has(productOf.get(p) ?? "")) out.push(p);
+    }
+  }
+  return out;
+}
+
+/** Stored shape of `billing_periods`: snake_case, like every other jsonb column we serialize. */
+function periodsForStore(k: ItemConstraintInput) {
+  if (k.constraintType === "none" || !k.billingPeriods?.length) return null;
+  return k.billingPeriods.map((p) => ({ interval: p.interval, interval_count: p.intervalCount }));
+}
+
+/**
+ * Fill `periodPriceIds` on every period-limited constraint in `stack`: the prices among
+ * `lines` whose (interval, interval_count) is one of the constraint's periods.
+ */
+async function resolvePeriodScope(
+  tx: Tx,
+  businessId: string,
+  stack: StackCoupon[],
+  lines: DiscountLine[],
+): Promise<void> {
+  const limited = stack.flatMap((c) => c.constraints ?? []).filter((k) => k.billingPeriods?.length);
+  if (limited.length === 0) return;
+  const ids = [...new Set(lines.map((l) => l.pricePublicId).filter((v): v is string => !!v))];
+  const rows = ids.length
+    ? await tx
+        .select({ id: prices.publicId, interval: prices.interval, count: prices.intervalCount })
+        .from(prices)
+        .where(and(eq(prices.businessId, businessId), inArray(prices.publicId, ids)))
+    : [];
+  for (const k of limited) {
+    k.periodPriceIds = rows
+      .filter((r) =>
+        k.billingPeriods!.some((p) => p.interval === r.interval && p.intervalCount === r.count),
+      )
+      .map((r) => r.id);
+  }
 }
 
 /** A coupon in a stack, with the fields the ordering + math need. */
@@ -158,7 +304,14 @@ export interface StackCoupon {
 /** One invoice line, for discount matching + per-line attribution. */
 export interface DiscountLine {
   index: number;
-  amountMinor: bigint; // positive line subtotal contribution
+  /** Line amount. Negative on a credit line ("Unused time on X"). */
+  amountMinor: bigint;
+  /**
+   * A credit line already stated at what the customer paid for that time
+   * (`creditPaidBasis`). Coupons do not net against it: its discount was taken when it
+   * was billed.
+   */
+  settled?: boolean;
   productKind?: string | null; // plan | addon | charge
   productPublicId?: string | null; // product slug id
   pricePublicId?: string | null; // price slug id, for price-scoped constraints
@@ -237,6 +390,11 @@ function couponMatchesLine(c: StackCoupon, line: DiscountLine): boolean {
   if (!kind) return false;
   const con = (c.constraints ?? []).find((k) => k.itemKind === kind);
   if (!con) return false; // no rule for this kind → not eligible (implicit 'none')
+  if (con.billingPeriods?.length && con.constraintType !== "none") {
+    const inPeriod =
+      line.pricePublicId != null && !!con.periodPriceIds?.includes(line.pricePublicId);
+    if (!inPeriod) return false;
+  }
   if (con.constraintType === "all") return true;
   if (con.constraintType === "specific") {
     const ids = Array.isArray(con.productIds) ? con.productIds : [];
@@ -301,12 +459,127 @@ function distributeProportional(amount: bigint, weights: bigint[]): bigint[] {
  * None of this moves money: `totalMinor` is unchanged, and the total, tax and every
  * ledger posting derive from it.
  */
+/**
+ * What the customer actually paid for the time a credit line hands back.
+ *
+ * A credit for unused time ("Unused time on X") is stated at the price's list rate. When
+ * it is netted on a change invoice, it must hand back only what was paid: the evidence is
+ * this term's billed charge lines for the same price, on invoices that are not voided or
+ * pending, and the discount they booked. A credit for list 1000 against a term billed
+ * 1000 less 100 of coupon is worth 900.
+ *
+ * `paidByIndex` has an entry only where such evidence exists; a credit without it (a term
+ * never billed) stays unsettled, and the coupons that apply now net against it.
+ * `releasedByCoupon` is each coupon's share of the handed-back discount, which returns to
+ * that coupon's period allowance. All shares round half-up.
+ */
+export async function creditPaidBasis(
+  tx: Tx,
+  input: {
+    subscriptionId: string;
+    periodStart: Date | null;
+    periodEnd: Date | null;
+    credits: Array<{ index: number; priceId?: string | null; amountMinor: bigint }>;
+  },
+): Promise<{ paidByIndex: Map<number, bigint>; releasedByCoupon: Map<string, bigint> }> {
+  const paidByIndex = new Map<number, bigint>();
+  const releasedByCoupon = new Map<string, bigint>();
+  const priceIds = [
+    ...new Set(
+      input.credits.filter((c) => c.amountMinor < 0n && c.priceId).map((c) => c.priceId as string),
+    ),
+  ];
+  if (priceIds.length === 0 || input.periodStart == null) return { paidByIndex, releasedByCoupon };
+  const evidence = await tx
+    .select({
+      id: invoiceLineItems.id,
+      priceId: invoiceLineItems.priceId,
+      amountMinor: invoiceLineItems.amountMinor,
+      discountMinor: invoiceLineItems.discountMinor,
+    })
+    .from(invoiceLineItems)
+    .innerJoin(invoices, eq(invoiceLineItems.invoiceId, invoices.id))
+    .where(
+      and(
+        eq(invoices.subscriptionId, input.subscriptionId),
+        notInArray(invoices.status, ["voided", "pending"]),
+        inArray(invoiceLineItems.priceId, priceIds),
+        sql`${invoiceLineItems.amountMinor} > 0`,
+        notInArray(invoiceLineItems.kind, ["tax", "discount", "rounding"]),
+        gte(invoiceLineItems.periodStart, input.periodStart),
+        input.periodEnd ? lt(invoiceLineItems.periodStart, input.periodEnd) : undefined,
+      ),
+    );
+  if (evidence.length === 0) return { paidByIndex, releasedByCoupon };
+  const shares = await tx
+    .select({
+      lineId: invoiceLineDiscounts.invoiceLineItemId,
+      appliedCouponId: invoiceLineDiscounts.appliedCouponId,
+      amountMinor: invoiceLineDiscounts.amountMinor,
+    })
+    .from(invoiceLineDiscounts)
+    .where(
+      inArray(
+        invoiceLineDiscounts.invoiceLineItemId,
+        evidence.map((e) => e.id),
+      ),
+    );
+  const byPrice = new Map<
+    string,
+    { billed: bigint; discount: bigint; byCoupon: Map<string, bigint> }
+  >();
+  const priceOfLine = new Map<string, string>();
+  for (const e of evidence) {
+    const p = byPrice.get(e.priceId!) ?? { billed: 0n, discount: 0n, byCoupon: new Map() };
+    p.billed += e.amountMinor;
+    p.discount += e.discountMinor ?? 0n;
+    byPrice.set(e.priceId!, p);
+    priceOfLine.set(e.id, e.priceId!);
+  }
+  for (const sh of shares) {
+    if (!sh.appliedCouponId) continue;
+    const p = byPrice.get(priceOfLine.get(sh.lineId)!);
+    if (p)
+      p.byCoupon.set(
+        sh.appliedCouponId,
+        (p.byCoupon.get(sh.appliedCouponId) ?? 0n) + sh.amountMinor,
+      );
+  }
+  const share = (a: bigint, part: bigint, whole: bigint) => (a * part + whole / 2n) / whole;
+  for (const c of input.credits) {
+    if (c.amountMinor >= 0n || !c.priceId) continue;
+    const p = byPrice.get(c.priceId);
+    if (!p || p.billed <= 0n) continue;
+    const listed = -c.amountMinor;
+    const off = p.discount > 0n ? share(listed, p.discount, p.billed) : 0n;
+    paidByIndex.set(c.index, listed - (off > listed ? listed : off));
+    for (const [id, amt] of p.byCoupon)
+      releasedByCoupon.set(id, (releasedByCoupon.get(id) ?? 0n) + share(listed, amt, p.billed));
+  }
+  return { paidByIndex, releasedByCoupon };
+}
+
 export function computeStackedDiscounts(
   coupons: StackCoupon[],
   lines: DiscountLine[],
   invoiceCurrency?: string,
 ): DiscountStack {
   const running = lines.map((l) => (l.amountMinor > 0n ? l.amountMinor : 0n));
+  // Credit lines. A coupon takes its cut of the NET of the lines it applies to (charge
+  // minus unsettled credit), and its discount is attributed to the charge lines only.
+  // Every discount together never exceeds the invoice's net, so the total stays >= 0.
+  const creditOf = lines.map((l) => (l.amountMinor < 0n && !l.settled ? -l.amountMinor : 0n));
+  const hasCredits = lines.some((l) => l.amountMinor < 0n);
+  const netMinor = lines.reduce((s, l) => s + l.amountMinor, 0n);
+  let capLeft = hasCredits ? (netMinor > 0n ? netMinor : 0n) : null;
+  /** Clamp one coupon's per-line discounts to what is left of the net. */
+  const capped = (perLine: bigint[]): bigint[] => {
+    if (capLeft == null) return perLine;
+    const sum = perLine.reduce((s, d) => s + d, 0n);
+    const out = sum > capLeft ? distributeProportional(capLeft, perLine) : perLine;
+    capLeft -= out.reduce((s, d) => s + d, 0n);
+    return out;
+  };
   const lineDisc = lines.map(() => 0n); // line-level (each_specified_item) attribution only
   const invoiceLevelDisc = lines.map(() => 0n); // invoice-level, spread proportionally
   const shares: DiscountShare[] = [];
@@ -344,21 +617,31 @@ export function computeStackedDiscounts(
       const matched = lines
         .map((l, i) => i)
         .filter((i) => running[i]! > 0n && couponMatchesLine(c, lines[i]!));
-      if (c.kind === "percentage") {
-        for (const i of matched) {
-          const d = computeDiscount(c, running[i]!, invoiceCurrency);
+      const matchedCredit = lines.reduce(
+        (s, l, i) => (creditOf[i]! > 0n && couponMatchesLine(c, l) ? s + creditOf[i]! : s),
+        0n,
+      );
+      const weights = matched.map((i) => running[i]!);
+      const matchedTotal = weights.reduce((s, w) => s + w, 0n);
+      if (c.kind === "percentage" && matchedCredit === 0n) {
+        const perLine = capped(
+          matched.map((i) => computeDiscount(c, running[i]!, invoiceCurrency)),
+        );
+        matched.forEach((i, k) => {
+          const d = perLine[k]!;
           running[i]! -= d;
           lineDisc[i]! += d;
           couponDiscount += d;
           addShare(i, c, "item_level", d);
-        }
+        });
       } else {
-        // Fixed line-level: apply to the matched subset total, distributed per line.
-        const weights = matched.map((i) => running[i]!);
-        const matchedTotal = weights.reduce((s, w) => s + w, 0n);
-        const perLine = distributeProportional(
-          computeDiscount(c, matchedTotal, invoiceCurrency),
-          weights,
+        // Fixed line-level, or any line-level coupon that matches a credit line: apply to
+        // the matched subset's net, distributed over its charge lines.
+        const perLine = capped(
+          distributeProportional(
+            computeDiscount(c, matchedTotal - matchedCredit, invoiceCurrency),
+            weights,
+          ),
         );
         matched.forEach((i, k) => {
           running[i]! -= perLine[k]!;
@@ -370,9 +653,15 @@ export function computeStackedDiscounts(
     } else {
       // Invoice-level: discount the whole remaining invoice, spread proportionally.
       const weights = running.slice();
-      const invoiceRunning = weights.reduce((s, w) => s + w, 0n);
-      const d = invoiceRunning > 0n ? computeDiscount(c, invoiceRunning, invoiceCurrency) : 0n;
-      const perLine = distributeProportional(d, weights);
+      const invoiceRunning =
+        weights.reduce((s, w) => s + w, 0n) - creditOf.reduce((s, w) => s + w, 0n);
+      const perLine = capped(
+        distributeProportional(
+          invoiceRunning > 0n ? computeDiscount(c, invoiceRunning, invoiceCurrency) : 0n,
+          weights,
+        ),
+      );
+      const d = perLine.reduce((s, x) => s + x, 0n);
       for (let i = 0; i < running.length; i++) {
         running[i]! -= perLine[i]!;
         // Attributed to the line, but NOT into `lineDisc` — this stage applies to the
@@ -426,8 +715,10 @@ export async function createCoupon(input: {
   durationType?: "once" | "forever" | "repeating";
   durationInPeriods?: number;
   maxRedemptions?: number;
-  /** Redemptions allowed per customer, across their subscriptions. */
+  /** Redemptions allowed per customer, across their subscriptions and invoices. */
   maxRedemptionsPerCustomer?: number;
+  /** Count that cap by customer row (default) or by the customer's email. */
+  perCustomerLimitBy?: "customer" | "email";
   redeemBy?: Date;
   validFrom?: Date;
   invoiceName?: string;
@@ -466,6 +757,7 @@ export async function createCoupon(input: {
             durationInPeriods: input.durationInPeriods ?? null,
             maxRedemptions: input.maxRedemptions ?? null,
             maxRedemptionsPerCustomer: input.maxRedemptionsPerCustomer ?? null,
+            perCustomerLimitBy: input.perCustomerLimitBy ?? "customer",
             redeemBy: input.redeemBy ?? null,
             validFrom: input.validFrom ?? null,
             invoiceName: input.invoiceName ?? null,
@@ -486,6 +778,7 @@ export async function createCoupon(input: {
           constraintType: k.constraintType,
           productIds: k.constraintType === "specific" ? (k.productIds ?? []) : null,
           priceIds: k.constraintType === "specific" && k.priceIds?.length ? k.priceIds : null,
+          billingPeriods: periodsForStore(k),
         })),
       );
     }
@@ -515,11 +808,13 @@ export interface ItemConstraintInput {
   constraintType: "all" | "specific" | "none";
   productIds?: string[];
   priceIds?: string[];
+  billingPeriods?: BillingPeriod[];
 }
 
 /**
  * `price_ids` must name prices of this business whose product is of the row's item kind —
- * a matching line needs both, so any other id could never match.
+ * a matching line needs both, so any other id could never match. `billing_periods` limits
+ * recurring prices, so it is refused on one-time charges and on a `none` row.
  */
 async function validatePriceScope(
   tx: Tx,
@@ -527,6 +822,16 @@ async function validatePriceScope(
   constraints?: ItemConstraintInput[],
 ): Promise<void> {
   for (const k of constraints ?? []) {
+    if (k.billingPeriods?.length) {
+      if (k.itemKind === "charge")
+        throw new CouponError(
+          "billing_periods apply to plans and addons only. A charge bills one time.",
+        );
+      if (k.constraintType === "none")
+        throw new CouponError(
+          `billing_periods require constraint_type 'all' or 'specific'. The item_kind is ${k.itemKind}.`,
+        );
+    }
     if (!k.priceIds?.length) continue;
     if (k.constraintType !== "specific")
       throw new CouponError(
@@ -968,23 +1273,81 @@ export function couponUsableRefusal(
 }
 
 /**
+ * The email form the per-customer limit counts on: trimmed, then lower-cased. A `+tag` is
+ * kept: a plus address is a separate mailbox, and whether a provider folds it is not ours
+ * to guess.
+ */
+export function normalizeCouponEmail(email: string | null | undefined): string | null {
+  const e = email?.trim().toLowerCase();
+  return e ? e : null;
+}
+
+/**
+ * Who a per-customer limit counts. A customer id wins; `email` is for a guest pre-check
+ * with no customer row yet.
+ */
+export type CouponPayer = string | { customerId?: string | null; email?: string | null };
+
+type LimitCoupon = Pick<
+  typeof coupons.$inferSelect,
+  "id" | "code" | "maxRedemptionsPerCustomer" | "perCustomerLimitBy"
+>;
+
+/**
+ * The key a per-customer limit counts on: the customer id, or the normalized email when
+ * the coupon counts by email. With a customer id, the email is the customer's stored one,
+ * read in `tx`. A customer with no email counts by id.
+ */
+async function limitKey(
+  tx: Tx,
+  coupon: LimitCoupon,
+  payer: CouponPayer,
+): Promise<{ by: "customer"; customerId: string } | { by: "email"; email: string } | null> {
+  const p = typeof payer === "string" ? { customerId: payer } : payer;
+  let email = normalizeCouponEmail(p.email);
+  if (coupon.perCustomerLimitBy === "email" && p.customerId) {
+    const [row] = await tx
+      .select({ email: customers.email })
+      .from(customers)
+      .where(eq(customers.id, p.customerId))
+      .limit(1);
+    email = normalizeCouponEmail(row?.email) ?? null;
+  }
+  if (coupon.perCustomerLimitBy === "email" && email) return { by: "email", email };
+  return p.customerId ? { by: "customer", customerId: p.customerId } : null;
+}
+
+/**
  * Why this customer may not redeem `coupon` again, or null when they may. Every
- * `applied_coupons` row counts, removed or exhausted included: a redemption that happened
- * stays spent, as it does for `times_redeemed`. Shared by apply and every estimate, so
- * the preview and the booking cannot disagree.
+ * redemption counts, subscription and invoice alike, removed or exhausted included: a
+ * redemption that happened stays spent, as it does for `times_redeemed`. A `released`
+ * one (its invoice was voided) does not count. Shared by apply and every estimate, so the
+ * preview and the booking cannot disagree.
  */
 export async function customerLimitRefusal(
   tx: Tx,
-  coupon: Pick<typeof coupons.$inferSelect, "id" | "code" | "maxRedemptionsPerCustomer">,
-  customerId: string,
+  coupon: LimitCoupon,
+  payer: CouponPayer,
 ): Promise<string | null> {
   const cap = coupon.maxRedemptionsPerCustomer;
   if (cap == null) return null;
-  const [row] = await tx
-    .select({ n: sql<number>`count(*)::int` })
-    .from(appliedCoupons)
-    .innerJoin(subscriptions, eq(subscriptions.id, appliedCoupons.subscriptionId))
-    .where(and(eq(appliedCoupons.couponId, coupon.id), eq(subscriptions.customerId, customerId)));
+  const key = await limitKey(tx, coupon, payer);
+  if (!key) return null;
+  const counted = and(
+    eq(appliedCoupons.couponId, coupon.id),
+    ne(appliedCoupons.status, "released"),
+  );
+  const [row] =
+    key.by === "customer"
+      ? await tx
+          .select({ n: sql<number>`count(*)::int` })
+          .from(appliedCoupons)
+          .where(and(counted, eq(appliedCoupons.customerId, key.customerId)))
+      : await tx
+          .select({ n: sql<number>`count(*)::int` })
+          .from(appliedCoupons)
+          .innerJoin(customers, eq(customers.id, appliedCoupons.customerId))
+          .where(and(counted, sql`lower(trim(${customers.email})) = ${key.email}`));
   const used = Number(row?.n ?? 0);
   return used >= cap
     ? `Coupon ${coupon.code} allows ${cap} redemption(s) per customer, and this customer has used it ${used} time(s)`
@@ -1005,6 +1368,8 @@ export async function refusePendingCouponCodes(
     /** The business clock; defaults to `businessWallClock` (time-travel aware). */
     now?: Date;
     customerId?: string | null;
+    /** A guest's email when no customer exists yet; counts for an email-limited coupon. */
+    email?: string | null;
     /** Codes already attached to the subscription: priced as invoicing prices them, unchecked. */
     attached?: string[];
   },
@@ -1025,7 +1390,9 @@ export async function refusePendingCouponCodes(
     now ??= await businessWallClock(input.businessId);
     const refusal =
       couponUsableRefusal(c, now) ??
-      (input.customerId ? await customerLimitRefusal(tx, c, input.customerId) : null);
+      (input.customerId || input.email
+        ? await customerLimitRefusal(tx, c, { customerId: input.customerId, email: input.email })
+        : null);
     if (refusal) throw new CouponError(refusal);
     out.push(c);
   }
@@ -1034,69 +1401,940 @@ export async function refusePendingCouponCodes(
 
 /**
  * Refuse a redemption that would take one customer past the coupon's per-customer cap.
- * The advisory lock serialises two applies for the same (coupon, customer) so they cannot
- * both see the last free slot.
+ * The advisory lock serialises two redemptions on the same key, (coupon, customer) or
+ * (coupon, normalized email), so they cannot both see the last free slot.
  */
 async function assertUnderCustomerLimit(
   tx: Tx,
   coupon: typeof coupons.$inferSelect,
-  subscriptionId: string,
+  customerId: string,
 ): Promise<void> {
-  const [sub] = await tx
-    .select({ customerId: subscriptions.customerId })
-    .from(subscriptions)
-    .where(eq(subscriptions.id, subscriptionId))
-    .limit(1);
-  if (!sub) return;
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${`${coupon.id}:${sub.customerId}`}::text, 7404))`,
-  );
-  const refusal = await customerLimitRefusal(tx, coupon, sub.customerId);
+  const key = await limitKey(tx, coupon, customerId);
+  if (!key) return;
+  const lockKey =
+    key.by === "customer" ? `${coupon.id}:${key.customerId}` : `${coupon.id}:email:${key.email}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}::text, 7404))`);
+  const refusal = await customerLimitRefusal(tx, coupon, customerId);
   if (refusal) throw new CouponError(refusal);
 }
 
-/** Apply a coupon (by code) to a subscription, with validity checks. */
-/** An item-scoped coupon must match at least one current item, by the rule billing uses. */
-async function assertCouponMatchesAnItem(
+/**
+ * The items a coupon is checked against: a subscription's current items, or the prices it
+ * will hold once a change lands (internal or public price ids).
+ */
+export type CouponItemSet =
+  | { subscriptionId: string }
+  /**
+   * `addonsMayFollow`: a signup's requested prices, before create adds the plan's mandatory
+   * add-ons. A coupon that can match an add-on passes; the apply checks it on the real items.
+   */
+  | { priceIds: string[]; addonsMayFollow?: boolean }
+  | { pricePublicIds: string[] }
+  /** The lines of an invoice about to be raised. */
+  | { lines: DiscountLine[] };
+
+/** An item-scoped coupon must match at least one item, by the rule billing uses. */
+export async function assertCouponMatchesAnItem(
   tx: Tx,
   coupon: typeof coupons.$inferSelect,
-  subscriptionId: string,
+  set: CouponItemSet,
 ): Promise<void> {
+  if (coupon.applyOn !== "each_specified_item") return;
   const cons = await tx
     .select()
     .from(couponItemConstraints)
     .where(eq(couponItemConstraints.couponId, coupon.id));
-  const items = await tx
-    .select({
-      productKind: products.kind,
-      productPublicId: products.publicId,
-      pricePublicId: prices.publicId,
-    })
-    .from(subscriptionItems)
-    .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
-    .innerJoin(products, eq(prices.productId, products.id))
-    .where(eq(subscriptionItems.subscriptionId, subscriptionId));
+  if (
+    "priceIds" in set &&
+    set.addonsMayFollow &&
+    cons.some((k) => k.itemKind === "addon" && k.constraintType !== "none")
+  )
+    return;
+  const cols = {
+    productKind: products.kind,
+    productPublicId: products.publicId,
+    pricePublicId: prices.publicId,
+  };
+  const items =
+    "lines" in set
+      ? set.lines.map((l) => ({
+          productKind: l.productKind ?? null,
+          productPublicId: l.productPublicId ?? null,
+          pricePublicId: l.pricePublicId ?? null,
+        }))
+      : "subscriptionId" in set
+        ? await tx
+            .select(cols)
+            .from(subscriptionItems)
+            .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
+            .innerJoin(products, eq(prices.productId, products.id))
+            .where(eq(subscriptionItems.subscriptionId, set.subscriptionId))
+        : "priceIds" in set
+          ? set.priceIds.length === 0
+            ? []
+            : await tx
+                .select(cols)
+                .from(prices)
+                .innerJoin(products, eq(prices.productId, products.id))
+                .where(inArray(prices.id, set.priceIds))
+          : set.pricePublicIds.length === 0
+            ? []
+            : await tx
+                .select(cols)
+                .from(prices)
+                .innerJoin(products, eq(prices.productId, products.id))
+                .where(
+                  and(
+                    eq(prices.businessId, coupon.businessId),
+                    inArray(prices.publicId, set.pricePublicIds),
+                  ),
+                );
   const probe: StackCoupon = {
     appliedCouponId: "",
     couponPublicId: coupon.code,
     kind: coupon.kind,
     applyOn: coupon.applyOn,
-    constraints: cons.map((c) => ({
-      itemKind: c.itemKind,
-      constraintType: c.constraintType,
-      productIds: (c.productIds as string[] | null) ?? null,
-      priceIds: (c.priceIds as string[] | null) ?? null,
-    })),
+    constraints: cons.map(toConstraint),
     createdAt: new Date(0),
   };
-  const matches = items.some((it, index) =>
-    couponMatchesLine(probe, { index, amountMinor: 0n, ...it }),
-  );
+  const lines = items.map((it, index) => ({ index, amountMinor: 0n, ...it }));
+  await resolvePeriodScope(tx, coupon.businessId, [probe], lines);
+  const matches = lines.some((l) => couponMatchesLine(probe, l));
   if (!matches)
     throw new CouponError(
-      `We could not apply the coupon. Coupon ${coupon.code} applies to none of the items on ` +
-        `this subscription. Select a coupon for its plan, an add-on or a charge.`,
+      "lines" in set
+        ? `We could not apply the coupon. Coupon ${coupon.code} applies to none of the items on ` +
+            `this invoice. Select a coupon for one of its items.`
+        : `We could not apply the coupon. Coupon ${coupon.code} applies to none of the items on ` +
+            `this subscription. Select a coupon for its plan, an add-on or a charge.`,
     );
+}
+
+/**
+ * For each item-scoped coupon, the indexes of `items` it discounts — the rule billing
+ * uses, so MRR nets a coupon only against the items an invoice would discount.
+ */
+export async function couponItemIndexes(
+  tx: Tx,
+  businessId: string,
+  couponIds: string[],
+  items: Array<{
+    productKind: string | null;
+    productPublicId: string | null;
+    pricePublicId: string | null;
+  }>,
+): Promise<Map<string, number[]>> {
+  const out = new Map<string, number[]>();
+  if (couponIds.length === 0) return out;
+  const rows = await tx
+    .select()
+    .from(couponItemConstraints)
+    .where(inArray(couponItemConstraints.couponId, couponIds));
+  const stack: StackCoupon[] = couponIds.map((id) => ({
+    appliedCouponId: id,
+    couponPublicId: id,
+    kind: "percentage",
+    applyOn: "each_specified_item",
+    constraints: rows.filter((r) => r.couponId === id).map(toConstraint),
+    createdAt: new Date(0),
+  }));
+  const lines = items.map((it, index) => ({ index, amountMinor: 0n, ...it }));
+  await resolvePeriodScope(tx, businessId, stack, lines);
+  for (const c of stack)
+    out.set(
+      c.appliedCouponId,
+      lines.filter((l) => couponMatchesLine(c, l)).map((l) => l.index),
+    );
+  return out;
+}
+
+/** `assertCouponMatchesAnItem` by code, read-only (claims no set code). Unknown codes pass. */
+export async function assertCouponCodeMatchesAnItem(input: {
+  organizationId: string;
+  businessId: string;
+  code: string;
+  items: CouponItemSet;
+}): Promise<void> {
+  const coupon = await findCouponByCode(input);
+  if (!coupon) return;
+  await withTenant(input.organizationId, (tx) =>
+    assertCouponMatchesAnItem(tx, coupon, input.items),
+  );
+}
+
+/** `assertCouponMatchesAnItem` for a coupon already applied in this transaction. */
+export async function assertAppliedCouponMatchesAnItem(
+  tx: Tx,
+  appliedCouponId: string,
+  subscriptionId: string,
+): Promise<void> {
+  const [row] = await tx
+    .select({ coupon: coupons })
+    .from(appliedCoupons)
+    .innerJoin(coupons, eq(coupons.id, appliedCoupons.couponId))
+    .where(eq(appliedCoupons.id, appliedCouponId))
+    .limit(1);
+  if (row) await assertCouponMatchesAnItem(tx, row.coupon, { subscriptionId });
+}
+
+const CUSTOMER_DUPLICATE =
+  "We could not apply the coupon. The coupon is already applied to this customer.";
+
+/** Who redeems, in which currency, at which instant. */
+interface RedeemContext {
+  organizationId: string;
+  businessId: string;
+  customerId: string;
+  currency: string;
+  now: Date;
+  enteredByCustomer?: boolean;
+  deferEventsTo?: DeferredEvents;
+}
+
+/** Where a redemption lands. */
+type RedeemTarget =
+  | { scope: "subscription"; subscriptionId: string; skipItemMatch?: boolean }
+  | { scope: "invoice"; lines: DiscountLine[] }
+  /** Attached to the customer; it discounts their invoices (`customerCouponStack`). */
+  | { scope: "customer" };
+
+/**
+ * Resolve a code to its coupon. A coupon-set code (single-use) resolves to its parent's
+ * rules; `claim` marks it redeemed with a guarded update, so it cannot be redeemed twice.
+ * Without `claim` an already redeemed or archived set code is refused all the same.
+ */
+async function resolveCode(
+  tx: Tx,
+  businessId: string,
+  code: string,
+  opts: { claim: boolean; now: Date },
+): Promise<{ coupon: typeof coupons.$inferSelect; setCodeId: string | null }> {
+  const [setCode] = await tx
+    .select()
+    .from(couponSetCodes)
+    .where(and(eq(couponSetCodes.businessId, businessId), eq(couponSetCodes.code, code)))
+    .limit(1);
+  if (setCode) {
+    if (opts.claim) {
+      const claimed = await tx
+        .update(couponSetCodes)
+        .set({ status: "redeemed", redeemedAt: opts.now })
+        .where(and(eq(couponSetCodes.id, setCode.id), eq(couponSetCodes.status, "not_redeemed")))
+        .returning({ id: couponSetCodes.id });
+      if (claimed.length === 0) throw new CouponError("The coupon code is already redeemed");
+    } else if (setCode.status !== "not_redeemed") {
+      throw new CouponError("The coupon code is already redeemed");
+    }
+    const [set] = await tx
+      .select()
+      .from(couponSets)
+      .where(eq(couponSets.id, setCode.couponSetId))
+      .limit(1);
+    const [parent] = set
+      ? await tx.select().from(coupons).where(eq(coupons.id, set.couponId)).limit(1)
+      : [];
+    if (!parent) throw new CouponError(`No active coupon: ${code}`);
+    return { coupon: parent, setCodeId: setCode.id };
+  }
+  const [c] = await tx
+    .select()
+    .from(coupons)
+    .where(and(eq(coupons.businessId, businessId), eq(coupons.code, code)))
+    .limit(1);
+  if (!c) throw new CouponError(`No active coupon: ${code}`);
+  return { coupon: c, setCodeId: null };
+}
+
+/**
+ * Every check a redemption passes, in order: usable now, the per-customer cap (locked
+ * when `lock`), currency for a fixed amount, and the item match.
+ */
+async function assertRedeemable(
+  tx: Tx,
+  coupon: typeof coupons.$inferSelect,
+  ctx: RedeemContext,
+  target: RedeemTarget,
+  opts: { lock: boolean },
+): Promise<void> {
+  const unusable = couponUsableRefusal(coupon, ctx.now);
+  if (unusable) throw new CouponError(unusable);
+  if (coupon.maxRedemptionsPerCustomer != null) {
+    if (opts.lock) await assertUnderCustomerLimit(tx, coupon, ctx.customerId);
+    else {
+      const refusal = await customerLimitRefusal(tx, coupon, ctx.customerId);
+      if (refusal) throw new CouponError(refusal);
+    }
+  }
+  // A customer coupon has no single currency: a fixed amount in another currency simply
+  // does not discount that invoice.
+  if (
+    target.scope !== "customer" &&
+    coupon.kind === "fixed_amount" &&
+    coupon.currency &&
+    coupon.currency.toUpperCase() !== ctx.currency.toUpperCase()
+  ) {
+    throw new CouponError(
+      target.scope === "subscription"
+        ? `Coupon currency ${coupon.currency} does not match subscription currency ${ctx.currency}`
+        : `We could not apply the coupon. Coupon ${coupon.code} is in ${coupon.currency.toUpperCase()} ` +
+            `and this invoice is in ${ctx.currency.toUpperCase()}. Select a coupon in ` +
+            `${ctx.currency.toUpperCase()} or a percentage coupon.`,
+    );
+  }
+  if (target.scope === "subscription") {
+    if (!target.skipItemMatch)
+      await assertCouponMatchesAnItem(tx, coupon, { subscriptionId: target.subscriptionId });
+  } else if (target.scope === "invoice") {
+    await assertCouponMatchesAnItem(tx, coupon, { lines: target.lines });
+  }
+}
+
+/**
+ * The ONE redeem step, shared by the subscription and invoice paths: claim a set code,
+ * check, count the redemption (`times_redeemed`, guarded on `max_redemptions`), insert the
+ * `applied_coupons` row, link the set code, emit `coupon_applied`. A refusal throws
+ * `CouponError` and the caller's transaction rolls the claim back.
+ */
+async function redeemCode(
+  tx: Tx,
+  ctx: RedeemContext,
+  target: RedeemTarget,
+  code: string,
+): Promise<{ coupon: typeof coupons.$inferSelect; applied: typeof appliedCoupons.$inferSelect }> {
+  const { coupon, setCodeId } = await resolveCode(tx, ctx.businessId, code, {
+    claim: true,
+    now: ctx.now,
+  });
+  await assertRedeemable(tx, coupon, ctx, target, { lock: true });
+  if (target.scope === "subscription") {
+    // CAT-1: coupons STACK — a subscription may carry many active coupons. Guard
+    // only against applying the SAME coupon twice concurrently.
+    const [dup] = await tx
+      .select({ id: appliedCoupons.id })
+      .from(appliedCoupons)
+      .where(
+        and(
+          eq(appliedCoupons.subscriptionId, target.subscriptionId),
+          eq(appliedCoupons.couponId, coupon.id),
+          eq(appliedCoupons.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (dup) throw new CouponError("The coupon is already applied to this subscription");
+  }
+  if (target.scope === "customer") {
+    const [dup] = await tx
+      .select({ id: appliedCoupons.id })
+      .from(appliedCoupons)
+      .where(
+        and(
+          eq(appliedCoupons.customerId, ctx.customerId),
+          eq(appliedCoupons.couponId, coupon.id),
+          eq(appliedCoupons.scope, "customer"),
+          eq(appliedCoupons.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (dup) throw new CouponError(CUSTOMER_DUPLICATE);
+  }
+  // On an invoice every duration applies once: the row is born spent.
+  const remaining =
+    target.scope === "invoice"
+      ? 0
+      : coupon.durationType === "forever"
+        ? null
+        : coupon.durationType === "repeating"
+          ? coupon.durationInPeriods!
+          : 1; // once
+  // Atomic redemption-limit bump (G backlog: read-modify-write raced the cap).
+  // Guarded on max_redemptions so concurrent applies can't exceed it; a losing
+  // apply throws and its whole tx (insert + set-code claim) rolls back.
+  const bumped = await tx
+    .update(coupons)
+    .set({ timesRedeemed: sql`${coupons.timesRedeemed} + 1` })
+    .where(
+      coupon.maxRedemptions != null
+        ? and(eq(coupons.id, coupon.id), sql`${coupons.timesRedeemed} < ${coupon.maxRedemptions}`)
+        : eq(coupons.id, coupon.id),
+    )
+    .returning({ id: coupons.id });
+  if (bumped.length === 0)
+    throw new CouponError(`Coupon ${coupon.code} has reached its redemption limit`);
+  let applied: typeof appliedCoupons.$inferSelect;
+  try {
+    const [row] = await tx
+      .insert(appliedCoupons)
+      .values({
+        organizationId: ctx.organizationId,
+        businessId: ctx.businessId,
+        couponId: coupon.id,
+        subscriptionId: target.scope === "subscription" ? target.subscriptionId : null,
+        customerId: ctx.customerId,
+        scope: target.scope,
+        publicId: publicId("disc"),
+        status: target.scope === "invoice" ? "exhausted" : "active",
+        remainingPeriods: remaining,
+        // At apply time the span and what remains of it are the same number;
+        // only `remainingPeriods` counts down from here.
+        totalPeriods: target.scope === "invoice" ? 1 : remaining,
+        enteredByCustomer: ctx.enteredByCustomer === true,
+      })
+      .returning();
+    applied = row!;
+  } catch (e: any) {
+    // The applied_coupons_active_uq partial index is the concurrency backstop for
+    // the dup check above (two applies of the same coupon racing the SELECT).
+    if (
+      e?.code === "23505" &&
+      String(e?.constraint ?? "").includes("applied_coupons_customer_active_uq")
+    )
+      throw new CouponError(CUSTOMER_DUPLICATE);
+    if (e?.code === "23505" && String(e?.constraint ?? "").includes("applied_coupons_active_uq")) {
+      log.debug("duplicate coupon apply stopped by the unique index", {
+        subscription: target.scope === "subscription" ? target.subscriptionId : null,
+        coupon: coupon.code,
+      });
+      throw new CouponError("The coupon is already applied to this subscription");
+    }
+    throw e;
+  }
+  if (setCodeId) {
+    await tx
+      .update(couponSetCodes)
+      .set({ appliedCouponId: applied.id })
+      .where(eq(couponSetCodes.id, setCodeId));
+  }
+  await emitOrDefer(
+    tx,
+    {
+      organizationId: ctx.organizationId,
+      businessId: ctx.businessId,
+      type: "coupon_applied",
+      data: buildEventData("coupon_applied", { id: coupon.code }, coupon.resourceVersion, {
+        applied_coupon: applied.publicId,
+      }),
+    },
+    ctx.deferEventsTo,
+  );
+  return { coupon, applied };
+}
+
+/** The pricing projection of a coupon, with its item constraints and period scope filled. */
+async function stackCouponFor(
+  tx: Tx,
+  coupon: typeof coupons.$inferSelect,
+  appliedCouponId: string,
+  createdAt: Date,
+): Promise<StackCoupon> {
+  return {
+    appliedCouponId,
+    couponPublicId: coupon.code,
+    kind: coupon.kind,
+    percentOffBps: coupon.percentOffBps,
+    amountOffMinor: coupon.amountOffMinor,
+    currency: coupon.currency,
+    applyOn: coupon.applyOn,
+    constraints:
+      coupon.applyOn === "each_specified_item"
+        ? (
+            await tx
+              .select()
+              .from(couponItemConstraints)
+              .where(eq(couponItemConstraints.couponId, coupon.id))
+          ).map(toConstraint)
+        : [],
+    invoiceName: coupon.invoiceName,
+    createdAt,
+  };
+}
+
+/** Input shared by `redeemCouponsForInvoice` and `priceCouponCodesForInvoice`. */
+export interface InvoiceCouponInput {
+  organizationId: string;
+  businessId: string;
+  /** The payer: per-customer limits count on them (or their email). */
+  customerId: string;
+  /** The invoice currency: a fixed-amount coupon in another currency is refused. */
+  currency: string;
+  /** Codes or coupon-set codes. A code given twice is redeemed once. */
+  codes: string[];
+  /** The invoice lines, for the item match of an item-scoped coupon. */
+  lines: DiscountLine[];
+  /** The business clock; defaults to `businessWallClock` (time-travel aware). */
+  now?: Date;
+  /** The customer entered the codes (portal or checkout), not an operator. */
+  enteredByCustomer?: boolean;
+}
+
+/**
+ * Redeem coupon codes on ONE invoice, with or without a subscription, inside the caller's
+ * invoice transaction. Every duration applies once: each row is inserted `scope='invoice'`,
+ * `exhausted`, remaining 0, total_periods 1. The caller prices the returned stack (with
+ * `computeStackedDiscounts`), then stamps `invoice_id` on the rows once the invoice exists.
+ * A refusal throws `CouponError`.
+ */
+export async function redeemCouponsForInvoice(
+  tx: Tx,
+  input: InvoiceCouponInput,
+): Promise<StackCoupon[]> {
+  const now = input.now ?? (await businessWallClock(input.businessId));
+  const ctx: RedeemContext = { ...input, now };
+  const out: StackCoupon[] = [];
+  const seen = new Set<string>();
+  for (const code of [...new Set(input.codes)]) {
+    const { coupon, applied } = await redeemCode(
+      tx,
+      ctx,
+      { scope: "invoice", lines: input.lines },
+      code,
+    );
+    if (seen.has(coupon.id))
+      throw new CouponError(`The coupon ${coupon.code} is already applied to this invoice`);
+    seen.add(coupon.id);
+    out.push(await stackCouponFor(tx, coupon, applied.id, applied.createdAt));
+  }
+  await resolvePeriodScope(tx, input.businessId, out, input.lines);
+  return out;
+}
+
+/**
+ * `redeemCouponsForInvoice` without writes, for a preview: every check runs (a used set
+ * code, the per-customer cap, currency, item match) but nothing is claimed, counted or
+ * inserted. `appliedCouponId` is `preview:<coupon id>`.
+ */
+export async function priceCouponCodesForInvoice(
+  tx: Tx,
+  input: InvoiceCouponInput,
+): Promise<StackCoupon[]> {
+  const now = input.now ?? (await businessWallClock(input.businessId));
+  const ctx: RedeemContext = { ...input, now };
+  const out: StackCoupon[] = [];
+  const seen = new Set<string>();
+  for (const code of [...new Set(input.codes)]) {
+    const { coupon } = await resolveCode(tx, input.businessId, code, { claim: false, now });
+    await assertRedeemable(
+      tx,
+      coupon,
+      ctx,
+      { scope: "invoice", lines: input.lines },
+      {
+        lock: false,
+      },
+    );
+    if (seen.has(coupon.id))
+      throw new CouponError(`The coupon ${coupon.code} is already applied to this invoice`);
+    seen.add(coupon.id);
+    out.push(await stackCouponFor(tx, coupon, `preview:${coupon.id}`, new Date(8640000000000000)));
+  }
+  await resolvePeriodScope(tx, input.businessId, out, input.lines);
+  return out;
+}
+
+/**
+ * Give back the invoice-scope redemptions of a voided invoice: each row becomes
+ * `released` (counted by no limit), `times_redeemed` goes down by one (never below 0) and
+ * a claimed set code is redeemable again. Only rows carrying this invoice's id are
+ * touched, so subscription coupons are never affected. Returns how many were released.
+ */
+export async function releaseInvoiceRedemptions(tx: Tx, invoiceId: string): Promise<number> {
+  const released = await tx
+    .update(appliedCoupons)
+    .set({ status: "released" })
+    .where(
+      and(
+        eq(appliedCoupons.invoiceId, invoiceId),
+        eq(appliedCoupons.scope, "invoice"),
+        ne(appliedCoupons.status, "released"),
+      ),
+    )
+    .returning({ id: appliedCoupons.id, couponId: appliedCoupons.couponId });
+  await giveBackRedemptions(tx, released);
+  return released.length;
+}
+
+/** `times_redeemed` down by one per released row, and its set code redeemable again. */
+async function giveBackRedemptions(
+  tx: Tx,
+  released: Array<{ id: string; couponId: string | null }>,
+): Promise<void> {
+  if (released.length === 0) return;
+  for (const r of released) {
+    if (!r.couponId) continue;
+    await tx
+      .update(coupons)
+      .set({ timesRedeemed: sql`greatest(${coupons.timesRedeemed} - 1, 0)` })
+      .where(eq(coupons.id, r.couponId));
+  }
+  await tx
+    .update(couponSetCodes)
+    .set({ status: "not_redeemed", redeemedAt: null, appliedCouponId: null })
+    .where(
+      and(
+        inArray(
+          couponSetCodes.appliedCouponId,
+          released.map((r) => r.id),
+        ),
+        eq(couponSetCodes.status, "redeemed"),
+      ),
+    );
+}
+
+/**
+ * Undo a coupon edit made for a change that was then reverted (`failed_change_charge:
+ * revert`): the coupons applied since are released, their redemption given back, and the
+ * ones removed since are active again. `before` is the subscription's active applied-coupon
+ * ids before the edit.
+ */
+export async function undoSubscriptionCouponEdit(
+  tx: Tx,
+  input: { organizationId: string; subscriptionId: string; before: string[] },
+): Promise<{ released: number; restored: number }> {
+  const rows = await tx
+    .select({
+      id: appliedCoupons.id,
+      couponId: appliedCoupons.couponId,
+      businessId: appliedCoupons.businessId,
+      status: appliedCoupons.status,
+    })
+    .from(appliedCoupons)
+    .where(
+      and(
+        eq(appliedCoupons.subscriptionId, input.subscriptionId),
+        eq(appliedCoupons.scope, "subscription"),
+      ),
+    )
+    .for("update");
+  const before = new Set(input.before);
+  const added = rows.filter((r) => r.status === "active" && !before.has(r.id));
+  const removed = rows.filter((r) => r.status === "removed" && before.has(r.id));
+  if (added.length) {
+    await tx
+      .update(appliedCoupons)
+      .set({ status: "released" })
+      .where(
+        inArray(
+          appliedCoupons.id,
+          added.map((r) => r.id),
+        ),
+      );
+    await giveBackRedemptions(tx, added);
+    for (const r of added) {
+      const [c] = r.couponId
+        ? await tx
+            .select({ code: coupons.code })
+            .from(coupons)
+            .where(eq(coupons.id, r.couponId))
+            .limit(1)
+        : [];
+      await emitEvent(tx, {
+        organizationId: input.organizationId,
+        businessId: r.businessId,
+        type: "coupon_removed",
+        data: buildEventData("coupon_removed", {
+          id: c?.code ?? null,
+          subscription: input.subscriptionId,
+        }),
+      });
+    }
+  }
+  if (removed.length)
+    await tx
+      .update(appliedCoupons)
+      .set({ status: "active" })
+      .where(
+        inArray(
+          appliedCoupons.id,
+          removed.map((r) => r.id),
+        ),
+      );
+  if (added.length || removed.length) await recomputeSubscriptionMrr(tx, input.subscriptionId);
+  return { released: added.length, restored: removed.length };
+}
+
+// ── Customer coupons (0520) ──────────────────────────────────────────────────
+
+/** One active coupon attached to a customer. */
+export interface CustomerDiscount {
+  id: string;
+  couponId: string;
+  couponCode: string;
+  couponName: string | null;
+  kind: string;
+  percentOffBps: number | null;
+  amountOffMinor: bigint | null;
+  currency: string | null;
+  applyOn: string;
+  durationType: string;
+  /** Invoices it still discounts; null = every invoice until removed. */
+  remainingInvoices: number | null;
+  totalInvoices: number | null;
+  createdAt: Date;
+}
+
+/** The customer's active coupons, oldest first. */
+export async function listCustomerDiscounts(
+  tx: Tx,
+  customerId: string,
+): Promise<CustomerDiscount[]> {
+  const rows = await tx
+    .select({ ac: appliedCoupons, c: coupons })
+    .from(appliedCoupons)
+    .innerJoin(coupons, eq(appliedCoupons.couponId, coupons.id))
+    .where(
+      and(
+        eq(appliedCoupons.customerId, customerId),
+        eq(appliedCoupons.scope, "customer"),
+        eq(appliedCoupons.status, "active"),
+      ),
+    )
+    .orderBy(appliedCoupons.createdAt, appliedCoupons.id);
+  return rows.map(({ ac, c }) => ({
+    id: ac.publicId,
+    couponId: c.id,
+    couponCode: c.code,
+    couponName: c.name,
+    kind: c.kind,
+    percentOffBps: c.percentOffBps,
+    amountOffMinor: c.amountOffMinor,
+    currency: c.currency,
+    applyOn: c.applyOn,
+    durationType: c.durationType,
+    remainingInvoices: ac.remainingPeriods,
+    totalInvoices: ac.totalPeriods,
+    createdAt: ac.createdAt,
+  }));
+}
+
+/** Restate the MRR of every live subscription of a customer (a customer coupon nets into each). */
+async function recomputeCustomerMrr(tx: Tx, customerId: string, at?: Date): Promise<void> {
+  const subs = await tx
+    .select({ id: subscriptions.id })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.customerId, customerId), ne(subscriptions.status, "cancelled")));
+  for (const s of subs) await recomputeSubscriptionMrr(tx, s.id, at);
+}
+
+/**
+ * Restate MRR for a business's customers holding a coupon that nets into it, after the
+ * `customer_coupons` rule changed. One transaction per customer. Returns how many it did.
+ */
+export async function recomputeCustomerCouponMrr(input: {
+  organizationId: string;
+  businessId: string;
+  at?: Date;
+}): Promise<number> {
+  const at = input.at ?? (await businessWallClock(input.businessId));
+  const held = await withTenant(input.organizationId, (tx) =>
+    tx
+      .selectDistinct({ customerId: appliedCoupons.customerId })
+      .from(appliedCoupons)
+      .where(
+        and(
+          eq(appliedCoupons.businessId, input.businessId),
+          eq(appliedCoupons.scope, "customer"),
+          eq(appliedCoupons.status, "active"),
+          // A `once` coupon reduces one invoice and never nets into MRR.
+          sql`(${appliedCoupons.totalPeriods} is null or ${appliedCoupons.totalPeriods} > 1)`,
+        ),
+      ),
+  );
+  for (const h of held)
+    await withTenant(input.organizationId, (tx) => recomputeCustomerMrr(tx, h.customerId, at));
+  return held.length;
+}
+
+/**
+ * Attach a coupon to a customer. It discounts the customer's invoices, each one it
+ * discounts counting toward its duration (once = 1 invoice, repeating N = N, forever =
+ * until removed). The same checks as every redemption run (`redeemCode`), except currency
+ * and the item match: those are decided per invoice. One active row per coupon.
+ */
+export async function applyCouponToCustomer(input: {
+  organizationId: string;
+  businessId: string;
+  customerId: string;
+  code: string;
+  now?: Date;
+}): Promise<CustomerDiscount> {
+  const now = input.now ?? (await businessWallClock(input.businessId));
+  return withTenant(input.organizationId, async (tx) => {
+    const [cust] = await tx
+      .select({ currency: customers.currency })
+      .from(customers)
+      .where(and(eq(customers.id, input.customerId), eq(customers.businessId, input.businessId)))
+      .limit(1);
+    if (!cust) throw new CouponError("Customer not found");
+    const { coupon, applied } = await redeemCode(
+      tx,
+      {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        customerId: input.customerId,
+        currency: cust.currency ?? "",
+        now,
+      },
+      { scope: "customer" },
+      input.code,
+    );
+    if (coupon.durationType !== "once") await recomputeCustomerMrr(tx, input.customerId, now);
+    const list = await listCustomerDiscounts(tx, input.customerId);
+    return list.find((d) => d.id === applied.publicId)!;
+  });
+}
+
+/**
+ * Remove one active coupon from a customer. Invoices already raised keep their discount.
+ * Returns false when the customer has no active coupon with that id.
+ */
+export async function removeCustomerDiscount(input: {
+  organizationId: string;
+  businessId: string;
+  customerId: string;
+  discountId: string;
+  now?: Date;
+}): Promise<boolean> {
+  return withTenant(input.organizationId, async (tx) => {
+    const [row] = await tx
+      .update(appliedCoupons)
+      .set({ status: "removed" })
+      .where(
+        and(
+          eq(appliedCoupons.customerId, input.customerId),
+          eq(appliedCoupons.publicId, input.discountId),
+          eq(appliedCoupons.scope, "customer"),
+          eq(appliedCoupons.status, "active"),
+        ),
+      )
+      .returning({ couponId: appliedCoupons.couponId, totalPeriods: appliedCoupons.totalPeriods });
+    if (!row) return false;
+    const [c] = row.couponId
+      ? await tx
+          .select({ code: coupons.code })
+          .from(coupons)
+          .where(eq(coupons.id, row.couponId))
+          .limit(1)
+      : [];
+    const [cus] = await tx
+      .select({ publicId: customers.publicId })
+      .from(customers)
+      .where(eq(customers.id, input.customerId))
+      .limit(1);
+    await emitEvent(tx, {
+      organizationId: input.organizationId,
+      businessId: input.businessId,
+      type: "coupon_removed",
+      data: buildEventData("coupon_removed", {
+        id: c?.code ?? null,
+        customer: cus?.publicId ?? null,
+        discount: input.discountId,
+      }),
+    });
+    if (row.totalPeriods == null || row.totalPeriods > 1)
+      await recomputeCustomerMrr(tx, input.customerId, input.now);
+    return true;
+  });
+}
+
+/**
+ * The customer's active coupons as stack entries for one invoice. A fixed amount in
+ * another currency is left out: it does not discount that invoice and counts no use.
+ * Item-scoped entries still need `resolvePeriodScope` before pricing.
+ */
+export async function customerCouponStack(
+  tx: Tx,
+  customerId: string,
+  currency: string | undefined,
+): Promise<StackCoupon[]> {
+  const rows = await tx
+    .select({ ac: appliedCoupons, c: coupons })
+    .from(appliedCoupons)
+    .innerJoin(coupons, eq(appliedCoupons.couponId, coupons.id))
+    .where(
+      and(
+        eq(appliedCoupons.customerId, customerId),
+        eq(appliedCoupons.scope, "customer"),
+        eq(appliedCoupons.status, "active"),
+      ),
+    )
+    .orderBy(appliedCoupons.createdAt, appliedCoupons.id);
+  const out: StackCoupon[] = [];
+  for (const { ac, c } of rows) {
+    if (
+      c.kind === "fixed_amount" &&
+      currency &&
+      c.currency &&
+      c.currency.toUpperCase() !== currency.toUpperCase()
+    )
+      continue;
+    out.push(await stackCouponFor(tx, c, ac.id, ac.createdAt));
+  }
+  return out;
+}
+
+/**
+ * Price `others` (subscription and invoice coupons) with the customer's coupons by the
+ * business's `customer_coupons` rule: `stack` prices all of them in one pass; `fallback`
+ * adds the customer's only when the others discount nothing on these lines.
+ */
+export function stackWithCustomerCoupons(
+  mode: CustomerCoupons,
+  others: StackCoupon[],
+  customer: StackCoupon[],
+  lines: DiscountLine[],
+  currency?: string,
+): DiscountStack {
+  if (customer.length === 0) return computeStackedDiscounts(others, lines, currency);
+  if (mode === "fallback") {
+    const alone = computeStackedDiscounts(others, lines, currency);
+    if (alone.totalMinor > 0n) return alone;
+  }
+  return computeStackedDiscounts([...others, ...customer], lines, currency);
+}
+
+/**
+ * Customer coupons that discounted this invoice, from its line attribution: an item-level
+ * one leaves no discount line, so a void reads them here to give the use back.
+ */
+export async function customerCouponsOnInvoice(tx: Tx, invoiceId: string): Promise<string[]> {
+  const rows = await tx
+    .selectDistinct({ id: appliedCoupons.id })
+    .from(invoiceLineDiscounts)
+    .innerJoin(appliedCoupons, eq(appliedCoupons.id, invoiceLineDiscounts.appliedCouponId))
+    .where(
+      and(eq(invoiceLineDiscounts.invoiceId, invoiceId), eq(appliedCoupons.scope, "customer")),
+    );
+  return rows.map((r) => r.id);
+}
+
+/**
+ * The discount stack of an invoice with no subscription coupons: `invoiceCoupons` (codes
+ * redeemed on it) plus, when `withCustomer`, the customer's coupons by the business rule.
+ * Null when nothing could discount it.
+ */
+export async function priceInvoiceDiscounts(
+  tx: Tx,
+  input: {
+    businessId: string;
+    customerId: string;
+    currency: string;
+    lines: DiscountLine[];
+    invoiceCoupons: StackCoupon[];
+    withCustomer: boolean;
+  },
+): Promise<DiscountStack | null> {
+  const customer = input.withCustomer
+    ? await customerCouponStack(tx, input.customerId, input.currency)
+    : [];
+  if (customer.length === 0 && input.invoiceCoupons.length === 0) return null;
+  if (customer.length > 0) await resolvePeriodScope(tx, input.businessId, customer, input.lines);
+  const mode = customer.length > 0 ? await customerCouponMode(tx, input.businessId) : "stack";
+  return stackWithCustomerCoupons(
+    mode,
+    input.invoiceCoupons,
+    customer,
+    input.lines,
+    input.currency,
+  );
 }
 
 export async function applyCouponToSubscription(input: {
@@ -1142,159 +2380,36 @@ export async function applyCouponToSubscription(input: {
   /** The customer entered this code (portal or checkout): it counts toward the business's cap. */
   enteredByCustomer?: boolean;
   /**
-   * Refuse an item-scoped coupon that matches none of the subscription's current items.
-   * Off for a plan change: there the coupon is applied before the items move.
+   * Skip the refusal of an item-scoped coupon that matches none of the subscription's
+   * current items. Only for a caller that applies the coupon BEFORE the items move and
+   * checks the resulting items itself (plan change: `assertAppliedCouponMatchesAnItem`).
    */
-  requireItemMatch?: boolean;
+  skipItemMatch?: boolean;
 }): Promise<typeof appliedCoupons.$inferSelect> {
   return withTenantTx(input.organizationId, input.tx, async (tx) => {
-    // Resolve the code: a coupon-set code (single-use) resolves to its parent
-    // coupon's rules; otherwise a plain coupon by code. Set codes are CLAIMED
-    // atomically (guarded update) so the same code can't be redeemed twice.
-    let coupon: typeof coupons.$inferSelect | undefined;
-    let claimedSetCodeId: string | null = null;
-    const [setCode] = await tx
-      .select()
-      .from(couponSetCodes)
-      .where(
-        and(eq(couponSetCodes.businessId, input.businessId), eq(couponSetCodes.code, input.code)),
-      )
+    const [sub] = await tx
+      .select({ customerId: subscriptions.customerId, currency: subscriptions.currency })
+      .from(subscriptions)
+      .where(eq(subscriptions.id, input.subscriptionId))
       .limit(1);
-    if (setCode) {
-      const claimed = await tx
-        .update(couponSetCodes)
-        .set({ status: "redeemed", redeemedAt: input.now })
-        .where(and(eq(couponSetCodes.id, setCode.id), eq(couponSetCodes.status, "not_redeemed")))
-        .returning({ id: couponSetCodes.id });
-      if (claimed.length === 0) throw new CouponError("The coupon code is already redeemed");
-      claimedSetCodeId = setCode.id;
-      const [set] = await tx
-        .select()
-        .from(couponSets)
-        .where(eq(couponSets.id, setCode.couponSetId))
-        .limit(1);
-      const [parent] = set
-        ? await tx.select().from(coupons).where(eq(coupons.id, set.couponId)).limit(1)
-        : [];
-      coupon = parent;
-    } else {
-      const [c] = await tx
-        .select()
-        .from(coupons)
-        .where(and(eq(coupons.businessId, input.businessId), eq(coupons.code, input.code)))
-        .limit(1);
-      coupon = c;
-    }
-    if (!coupon) throw new CouponError(`No active coupon: ${input.code}`);
-    const unusable = couponUsableRefusal(coupon, input.now);
-    if (unusable) throw new CouponError(unusable);
-    if (coupon.maxRedemptionsPerCustomer != null) {
-      await assertUnderCustomerLimit(tx, coupon, input.subscriptionId);
-    }
-    // Fixed-amount coupon currency must match the subscription's currency.
-    if (coupon.kind === "fixed_amount") {
-      const [sub] = await tx
-        .select({ currency: subscriptions.currency })
-        .from(subscriptions)
-        .where(eq(subscriptions.id, input.subscriptionId))
-        .limit(1);
-      if (sub && coupon.currency && coupon.currency.toUpperCase() !== sub.currency.toUpperCase()) {
-        throw new CouponError(
-          `Coupon currency ${coupon.currency} does not match subscription currency ${sub.currency}`,
-        );
-      }
-    }
-    if (input.requireItemMatch && coupon.applyOn === "each_specified_item") {
-      await assertCouponMatchesAnItem(tx, coupon, input.subscriptionId);
-    }
-    // CAT-1: coupons STACK — a subscription may carry many active coupons. Guard
-    // only against applying the SAME coupon twice concurrently.
-    const [dup] = await tx
-      .select({ id: appliedCoupons.id })
-      .from(appliedCoupons)
-      .where(
-        and(
-          eq(appliedCoupons.subscriptionId, input.subscriptionId),
-          eq(appliedCoupons.couponId, coupon.id),
-          eq(appliedCoupons.status, "active"),
-        ),
-      )
-      .limit(1);
-    if (dup) throw new CouponError("The coupon is already applied to this subscription");
-
-    const remaining =
-      coupon.durationType === "forever"
-        ? null
-        : coupon.durationType === "repeating"
-          ? coupon.durationInPeriods!
-          : 1; // once
-    // Atomic redemption-limit bump (G backlog: read-modify-write raced the cap).
-    // Guarded on max_redemptions so concurrent applies can't exceed it; a losing
-    // apply throws and its whole tx (insert + set-code claim) rolls back.
-    const bumped = await tx
-      .update(coupons)
-      .set({ timesRedeemed: sql`${coupons.timesRedeemed} + 1` })
-      .where(
-        coupon.maxRedemptions != null
-          ? and(eq(coupons.id, coupon.id), sql`${coupons.timesRedeemed} < ${coupon.maxRedemptions}`)
-          : eq(coupons.id, coupon.id),
-      )
-      .returning({ id: coupons.id });
-    if (bumped.length === 0)
-      throw new CouponError(`Coupon ${coupon.code} has reached its redemption limit`);
-    let applied: typeof appliedCoupons.$inferSelect;
-    try {
-      const [row] = await tx
-        .insert(appliedCoupons)
-        .values({
-          organizationId: input.organizationId,
-          businessId: input.businessId,
-          couponId: coupon.id,
-          subscriptionId: input.subscriptionId,
-          publicId: publicId("disc"),
-          status: "active",
-          remainingPeriods: remaining,
-          // At apply time the span and what remains of it are the same number;
-          // only `remainingPeriods` counts down from here.
-          totalPeriods: remaining,
-          enteredByCustomer: input.enteredByCustomer === true,
-        })
-        .returning();
-      applied = row!;
-    } catch (e: any) {
-      // The applied_coupons_active_uq partial index is the concurrency backstop for
-      // the dup check above (two applies of the same coupon racing the SELECT).
-      if (
-        e?.code === "23505" &&
-        String(e?.constraint ?? "").includes("applied_coupons_active_uq")
-      ) {
-        // The unique index caught a race the SELECT above could not — worth a line,
-        // because it means two applies arrived for the same subscription at once.
-        log.debug("duplicate coupon apply stopped by the unique index", {
-          subscription: input.subscriptionId,
-          coupon: coupon.code,
-        });
-        throw new CouponError("The coupon is already applied to this subscription");
-      }
-      throw e;
-    }
-    if (claimedSetCodeId) {
-      await tx
-        .update(couponSetCodes)
-        .set({ appliedCouponId: applied!.id })
-        .where(eq(couponSetCodes.id, claimedSetCodeId));
-    }
-    await emitOrDefer(
+    if (!sub) throw new CouponError("Subscription not found");
+    const { coupon, applied } = await redeemCode(
       tx,
       {
         organizationId: input.organizationId,
         businessId: input.businessId,
-        type: "coupon_applied",
-        data: buildEventData("coupon_applied", { id: coupon.code }, coupon.resourceVersion, {
-          applied_coupon: applied!.publicId,
-        }),
+        customerId: sub.customerId,
+        currency: sub.currency,
+        now: input.now,
+        enteredByCustomer: input.enteredByCustomer,
+        deferEventsTo: input.deferEventsTo,
       },
-      input.deferEventsTo,
+      {
+        scope: "subscription",
+        subscriptionId: input.subscriptionId,
+        skipItemMatch: input.skipItemMatch,
+      },
+      input.code,
     );
     // The coupon list is part of the subscription, so a post-signup apply also fires
     // subscription_changed (signup-time coupons are folded into subscription_created
@@ -1333,7 +2448,7 @@ export async function applyCouponToSubscription(input: {
     if (coupon.durationType !== "once") {
       await recomputeSubscriptionMrr(tx, input.subscriptionId, input.now);
     }
-    return applied!;
+    return applied;
   });
 }
 
@@ -1400,7 +2515,11 @@ export async function applyManualDiscount(input: {
   }
   return withTenantTx(input.organizationId, input.tx, async (tx) => {
     const [sub] = await tx
-      .select({ status: subscriptions.status, currency: subscriptions.currency })
+      .select({
+        status: subscriptions.status,
+        currency: subscriptions.currency,
+        customerId: subscriptions.customerId,
+      })
       .from(subscriptions)
       .where(eq(subscriptions.id, input.subscriptionId))
       .limit(1);
@@ -1438,6 +2557,7 @@ export async function applyManualDiscount(input: {
           businessId: input.businessId,
           couponId: null,
           subscriptionId: input.subscriptionId,
+          customerId: sub.customerId,
           publicId: publicId("disc"),
           status: "active",
           remainingPeriods: remaining,
@@ -1528,6 +2648,16 @@ export async function peekDiscounts(
     removeActive?: boolean;
     /** Coupon codes a plan change removes before it bills (`plan_change_coupons`). */
     dropCodes?: string[];
+    /**
+     * Coupons already redeemed in this transaction for this invoice alone
+     * (`redeemCouponsForInvoice`), priced in the same pass as the stored ones.
+     */
+    redeemed?: StackCoupon[];
+    /**
+     * Per applied coupon: the discount a credit line on this invoice hands back
+     * (`creditPaidBasis`). It returns to that coupon's period allowance.
+     */
+    released?: Map<string, bigint>;
   },
   /**
    * The START of the billing period this invoice belongs to (0247). When given, a
@@ -1576,12 +2706,7 @@ export async function peekDiscounts(
       .where(inArray(couponItemConstraints.couponId, constrainedIds));
     for (const con of cons) {
       const list = byCoupon.get(con.couponId) ?? [];
-      list.push({
-        itemKind: con.itemKind,
-        constraintType: con.constraintType,
-        productIds: (con.productIds as string[] | null) ?? null,
-        priceIds: (con.priceIds as string[] | null) ?? null,
-      });
+      list.push(toConstraint(con));
       byCoupon.set(con.couponId, list);
     }
   }
@@ -1601,8 +2726,8 @@ export async function peekDiscounts(
     const anchor = row.ac.periodAnchor;
     const samePeriod = anchor != null && anchor.getTime() === periodStart.getTime();
     if (!samePeriod) return face;
-    const left = face - (row.ac.periodUsedMinor ?? 0n);
-    return left > 0n ? left : 0n;
+    const left = face - (row.ac.periodUsedMinor ?? 0n) + (pending?.released?.get(row.ac.id) ?? 0n);
+    return left > 0n ? (left > face ? face : left) : 0n;
   };
 
   const stack: StackCoupon[] = active.map((r) =>
@@ -1635,13 +2760,13 @@ export async function peekDiscounts(
   // The pending discount joins the stack BEFORE it is priced, ordered last so an
   // existing coupon keeps its precedence — the same order the apply produces, since
   // `applyCouponToSubscription` appends and the stack sorts by `createdAt`.
-  const pendingStack: StackCoupon[] = [];
+  const pendingStack: StackCoupon[] = [...(pending?.redeemed ?? [])];
+  const [owner] = await tx
+    .select({ customerId: subscriptions.customerId, businessId: subscriptions.businessId })
+    .from(subscriptions)
+    .where(eq(subscriptions.id, subscriptionId))
+    .limit(1);
   if (pending?.codes?.length) {
-    const [owner] = await tx
-      .select({ customerId: subscriptions.customerId })
-      .from(subscriptions)
-      .where(eq(subscriptions.id, subscriptionId))
-      .limit(1);
     const usable = await refusePendingCouponCodes(tx, {
       organizationId: pending.organizationId,
       businessId: pending.businessId,
@@ -1665,12 +2790,7 @@ export async function peekDiscounts(
                   .select()
                   .from(couponItemConstraints)
                   .where(eq(couponItemConstraints.couponId, c.id))
-              ).map((con) => ({
-                itemKind: con.itemKind,
-                constraintType: con.constraintType,
-                productIds: (con.productIds as string[] | null) ?? null,
-                priceIds: (con.priceIds as string[] | null) ?? null,
-              }))
+              ).map(toConstraint)
             : [],
         invoiceName: c.invoiceName,
         createdAt: new Date(8640000000000000),
@@ -1691,10 +2811,27 @@ export async function peekDiscounts(
       createdAt: new Date(8640000000000000),
     } as StackCoupon);
   }
-  const res = computeStackedDiscounts([...stack, ...pendingStack], lines, invoiceCurrency);
+  // The customer's coupons (0520), combined by the business's `customer_coupons` rule.
+  const customerStack = owner
+    ? await customerCouponStack(tx, owner.customerId, invoiceCurrency)
+    : [];
+  const mode: CustomerCoupons =
+    owner && customerStack.length > 0 ? await customerCouponMode(tx, owner.businessId) : "stack";
+  const bizId = owner?.businessId ?? active.find((r) => r.c)?.c?.businessId ?? pending?.businessId;
+  if (bizId)
+    await resolvePeriodScope(tx, bizId, [...stack, ...pendingStack, ...customerStack], lines);
+  const res = stackWithCustomerCoupons(
+    mode,
+    [...stack, ...pendingStack],
+    customerStack,
+    lines,
+    invoiceCurrency,
+  );
   // What the pending slice alone is worth = the whole stack less the stored stack.
   const stored =
-    pendingStack.length > 0 ? computeStackedDiscounts(stack, lines, invoiceCurrency) : res;
+    pendingStack.length > 0
+      ? stackWithCustomerCoupons(mode, stack, customerStack, lines, invoiceCurrency)
+      : res;
   return {
     ...res,
     appliedCouponIds: active.map((r) => r.ac.id),
@@ -1763,12 +2900,7 @@ export async function peekCouponCodes(
       .where(inArray(couponItemConstraints.couponId, constrainedIds));
     for (const con of cons) {
       const list = byCoupon.get(con.couponId) ?? [];
-      list.push({
-        itemKind: con.itemKind,
-        constraintType: con.constraintType,
-        productIds: (con.productIds as string[] | null) ?? null,
-        priceIds: (con.priceIds as string[] | null) ?? null,
-      });
+      list.push(toConstraint(con));
       byCoupon.set(con.couponId, list);
     }
   }
@@ -1802,6 +2934,7 @@ export async function peekCouponCodes(
       createdAt: new Date(0),
     });
   }
+  await resolvePeriodScope(tx, businessId, stack, lines);
   return computeStackedDiscounts(stack, lines, invoiceCurrency);
 }
 
@@ -1844,12 +2977,7 @@ export async function listCouponConstraints(
   );
   for (const r of rows) {
     const list = byCoupon.get(r.couponId) ?? [];
-    list.push({
-      itemKind: r.itemKind,
-      constraintType: r.constraintType,
-      productIds: (r.productIds as string[] | null) ?? null,
-      priceIds: (r.priceIds as string[] | null) ?? null,
-    });
+    list.push(toConstraint(r));
     byCoupon.set(r.couponId, list);
   }
   return byCoupon;
@@ -1902,6 +3030,8 @@ export async function updateCoupon(input: {
   maxRedemptions?: number | null;
   /** A cap, not a rule: editable after redemption, like `maxRedemptions`. */
   maxRedemptionsPerCustomer?: number | null;
+  /** How that cap counts; editable after redemption, like the cap. */
+  perCustomerLimitBy?: "customer" | "email";
   validFrom?: Date | null;
   invoiceName?: string | null;
   /** Replaced wholesale, not merged — same contract as `updateProduct`. */
@@ -1936,10 +3066,10 @@ export async function updateCoupon(input: {
    * convention as `createCoupon`, which is what lets the dashboard post only the kinds an
    * operator left switched on.
    *
-   * Editable even though the discount MATH is not: narrowing which line items a coupon
-   * reaches changes future invoices only, and already-issued ones are immutable documents.
-   * Rejected outright on an `invoice_amount` coupon, where the rows would be stored and
-   * then ignored by the matcher.
+   * Once redeemed it may only GROW (`scopeRemovals`): the matcher re-reads it on every
+   * invoice, so removing an item would take the discount away from current holders. A
+   * value equal to the stored scope is not a change. Rejected outright on an
+   * `invoice_amount` coupon, where the rows would be stored and then ignored by the matcher.
    */
   itemConstraints?: ItemConstraintInput[];
 }): Promise<typeof coupons.$inferSelect | null> {
@@ -1949,6 +3079,7 @@ export async function updateCoupon(input: {
   if (input.maxRedemptions !== undefined) set.maxRedemptions = input.maxRedemptions;
   if (input.maxRedemptionsPerCustomer !== undefined)
     set.maxRedemptionsPerCustomer = input.maxRedemptionsPerCustomer;
+  if (input.perCustomerLimitBy !== undefined) set.perCustomerLimitBy = input.perCustomerLimitBy;
   if (input.validFrom !== undefined) set.validFrom = input.validFrom;
   if (input.invoiceName !== undefined) set.invoiceName = input.invoiceName;
   if (input.metadata !== undefined) set.metadata = input.metadata;
@@ -1978,12 +3109,36 @@ export async function updateCoupon(input: {
     // silently re-price live subscriptions. `times_redeemed` never decreases (removing a
     // discount does not decrement it), which is why the gate asks "has this ever been
     // used", not "is it in use now".
-    const touchesRules =
-      RULE_FIELDS.some((k) => set[k] !== undefined) || input.itemConstraints !== undefined;
-    if (touchesRules && existing.timesRedeemed > 0)
+    // A value equal to the stored one is not a change: a form that resends the whole coupon
+    // must still save a rename.
+    const ruleChanged = RULE_FIELDS.some((k) => set[k] !== undefined && set[k] !== existing[k]);
+    const storedScope = (
+      await tx
+        .select()
+        .from(couponItemConstraints)
+        .where(eq(couponItemConstraints.couponId, existing.id))
+    ).map(toConstraint);
+    const scopeChanged =
+      input.itemConstraints !== undefined &&
+      constraintKey(input.itemConstraints) !== constraintKey(storedScope);
+    if (ruleChanged && existing.timesRedeemed > 0)
       throw new CouponError(
         `Coupon ${existing.code} has ${existing.timesRedeemed} redemption(s), so its discount is fixed. You can change only name, invoice_name, redeem_by and max_redemptions. Clone it to change the discount.`,
       );
+    // A redeemed coupon's scope may only grow: a wider scope reaches only subscriptions that
+    // already carry the coupon, and removing an item would take a discount away from them.
+    if (scopeChanged && existing.timesRedeemed > 0) {
+      const removed = await scopeRemovals(
+        tx,
+        input.businessId,
+        storedScope,
+        input.itemConstraints!,
+      );
+      if (removed.length > 0)
+        throw new CouponError(
+          `We could not save coupon ${existing.code}. It has ${existing.timesRedeemed} redemption(s), so you can add items to its scope but you cannot remove them. Add back: ${removed.join(", ")}.`,
+        );
+    }
 
     const next = { ...existing, ...set };
     if (next.kind === "percentage" && next.percentOffBps == null)
@@ -2013,9 +3168,10 @@ export async function updateCoupon(input: {
         throw new CouponError(
           "item_constraints require apply_on='each_specified_item'. An invoice-amount coupon discounts the whole invoice.",
         );
-      await tx.delete(couponItemConstraints).where(eq(couponItemConstraints.couponId, c.id));
       const keep = input.itemConstraints.filter((k) => k.constraintType !== "none");
-      if (keep.length > 0)
+      if (scopeChanged)
+        await tx.delete(couponItemConstraints).where(eq(couponItemConstraints.couponId, c.id));
+      if (scopeChanged && keep.length > 0)
         await tx.insert(couponItemConstraints).values(
           keep.map((k) => ({
             organizationId: input.organizationId,
@@ -2025,8 +3181,18 @@ export async function updateCoupon(input: {
             constraintType: k.constraintType,
             productIds: k.constraintType === "specific" ? (k.productIds ?? []) : null,
             priceIds: k.constraintType === "specific" && k.priceIds?.length ? k.priceIds : null,
+            billingPeriods: periodsForStore(k),
           })),
         );
+    }
+    // A new scope changes what each subscription with this coupon earns.
+    if (c && scopeChanged) {
+      const holders = await tx
+        .select({ subscriptionId: appliedCoupons.subscriptionId })
+        .from(appliedCoupons)
+        .where(and(eq(appliedCoupons.couponId, c.id), eq(appliedCoupons.status, "active")));
+      for (const h of holders)
+        if (h.subscriptionId) await recomputeSubscriptionMrr(tx, h.subscriptionId);
     }
     if (c && c.applyOn !== "each_specified_item" && input.itemConstraints === undefined) {
       // Switched to invoice_amount: the scoping rows can never be consulted again, so
@@ -2046,8 +3212,12 @@ export async function updateCoupon(input: {
         action: "coupon.update",
         resourceType: "coupon",
         resourceId: c.code,
-        before: existing,
-        after: c,
+        // The scope lives in its own table; without it here a scope change leaves no trace.
+        before: { ...existing, item_constraints: normalScope(storedScope) },
+        after: {
+          ...c,
+          item_constraints: normalScope(scopeChanged ? input.itemConstraints! : storedScope),
+        },
         extra: { id: c.code },
       });
     }
@@ -2293,22 +3463,30 @@ export async function settlePeriodDiscount(
     .select({
       periodAnchor: appliedCoupons.periodAnchor,
       periodUsedMinor: appliedCoupons.periodUsedMinor,
+      scope: appliedCoupons.scope,
     })
     .from(appliedCoupons)
     .where(and(eq(appliedCoupons.id, appliedCouponId), eq(appliedCoupons.status, "active")))
     .limit(1);
   // Already exhausted or gone: nothing to record, and nothing to spend.
   if (!row) return;
+  // A customer coupon counts invoices, not periods: every invoice it discounted spends one.
+  if (row.scope === "customer") {
+    await consumeDiscount(tx, appliedCouponId, opts.periodStart);
+    return;
+  }
 
   const samePeriod =
     row.periodAnchor != null && row.periodAnchor.getTime() === opts.periodStart.getTime();
-  const used = opts.appliedMinor > 0n ? opts.appliedMinor : 0n;
+  // Negative when a credit line handed back more of this period's discount than the
+  // invoice took (`creditPaidBasis`): the allowance is returned, never below zero used.
+  const used = (samePeriod ? (row.periodUsedMinor ?? 0n) : 0n) + opts.appliedMinor;
 
   await tx
     .update(appliedCoupons)
     .set({
       periodAnchor: opts.periodStart,
-      periodUsedMinor: samePeriod ? (row.periodUsedMinor ?? 0n) + used : used,
+      periodUsedMinor: used > 0n ? used : 0n,
     })
     .where(eq(appliedCoupons.id, appliedCouponId));
 
@@ -2339,12 +3517,15 @@ export async function consumeDiscount(
     .returning({
       status: appliedCoupons.status,
       subscriptionId: appliedCoupons.subscriptionId,
+      customerId: appliedCoupons.customerId,
+      scope: appliedCoupons.scope,
       totalPeriods: appliedCoupons.totalPeriods,
     });
   // Only the active → exhausted edge changes the rate, and only for a discount
   // that was being netted in the first place.
-  if (row && row.status === "exhausted" && (row.totalPeriods == null || row.totalPeriods > 1)) {
-    await recomputeSubscriptionMrr(tx, row.subscriptionId, occurredAt);
+  if (row?.status === "exhausted" && (row.totalPeriods == null || row.totalPeriods > 1)) {
+    if (row.subscriptionId) await recomputeSubscriptionMrr(tx, row.subscriptionId, occurredAt);
+    else if (row.scope === "customer") await recomputeCustomerMrr(tx, row.customerId, occurredAt);
   }
 }
 
@@ -2376,17 +3557,27 @@ export async function restoreDiscountPeriod(
       remainingPeriods: sql`${appliedCoupons.remainingPeriods} + 1`,
       status: sql`CASE WHEN ${appliedCoupons.status} = 'exhausted' THEN 'active' ELSE ${appliedCoupons.status} END`,
     })
-    .where(and(eq(appliedCoupons.id, appliedCouponId), isNotNull(appliedCoupons.remainingPeriods)))
+    .where(
+      and(
+        eq(appliedCoupons.id, appliedCouponId),
+        isNotNull(appliedCoupons.remainingPeriods),
+        // An invoice-scope redemption is given back by `releaseInvoiceRedemptions`.
+        ne(appliedCoupons.scope, "invoice"),
+      ),
+    )
     .returning({
       status: appliedCoupons.status,
       subscriptionId: appliedCoupons.subscriptionId,
+      customerId: appliedCoupons.customerId,
+      scope: appliedCoupons.scope,
       totalPeriods: appliedCoupons.totalPeriods,
     });
   // The mirror of `consumeDiscount`: a resurrected netting discount is back in the
   // active set, so the cached rate has to pick it up again. (An already-active row
   // getting a period back never left the set — recomputing is a harmless no-op.)
-  if (row && row.status === "active" && (row.totalPeriods == null || row.totalPeriods > 1)) {
-    await recomputeSubscriptionMrr(tx, row.subscriptionId, occurredAt);
+  if (row?.status === "active" && (row.totalPeriods == null || row.totalPeriods > 1)) {
+    if (row.subscriptionId) await recomputeSubscriptionMrr(tx, row.subscriptionId, occurredAt);
+    else if (row.scope === "customer") await recomputeCustomerMrr(tx, row.customerId, occurredAt);
   }
 }
 
@@ -2917,9 +4108,13 @@ export interface CouponRedemption {
   status: string;
   remainingPeriods: number | null;
   customerPublicId: string;
-  subscriptionPublicId: string;
+  /** The account holder's resolved name, so a screen shows a name and not an id. */
+  customerName: string | null;
+  /** Null for a redemption on an invoice with no subscription. */
+  subscriptionPublicId: string | null;
   /** The first non-voided invoice this redemption discounted; null until one has. */
   invoicePublicId: string | null;
+  invoiceNumber: string | null;
   redeemedAt: Date;
   /** Total taken off non-voided invoices by this redemption. */
   discountMinor: bigint;
@@ -2983,12 +4178,17 @@ export async function listCouponRedemptionsPage(
         remainingPeriods: appliedCoupons.remainingPeriods,
         createdAt: appliedCoupons.createdAt,
         subscriptionPublicId: subscriptions.publicId,
-        currency: subscriptions.currency,
+        currency: sql<string>`coalesce(${subscriptions.currency}, ${invoices.currency}, '')`,
         customerPublicId: customers.publicId,
+        cusFirstName: customers.firstName,
+        cusLastName: customers.lastName,
+        cusCompany: customers.company,
+        cusEmail: customers.email,
       })
       .from(appliedCoupons)
-      .innerJoin(subscriptions, eq(subscriptions.id, appliedCoupons.subscriptionId))
-      .innerJoin(customers, eq(customers.id, subscriptions.customerId))
+      .leftJoin(subscriptions, eq(subscriptions.id, appliedCoupons.subscriptionId))
+      .leftJoin(invoices, eq(invoices.id, appliedCoupons.invoiceId))
+      .innerJoin(customers, eq(customers.id, appliedCoupons.customerId))
       .where(and(...conds))
       .orderBy(desc(appliedCoupons.createdAt), desc(appliedCoupons.publicId))
       .limit(limit + 1);
@@ -2999,7 +4199,10 @@ export async function listCouponRedemptionsPage(
       total,
     });
     const ids = page.data.map((r) => r.id);
-    const byRedemption = new Map<string, { amount: bigint; invoice: string | null }>();
+    const byRedemption = new Map<
+      string,
+      { amount: bigint; invoice: string | null; number: string | null }
+    >();
     if (ids.length > 0) {
       const shares = await tx
         .select({
@@ -3008,6 +4211,9 @@ export async function listCouponRedemptionsPage(
           firstInvoice: sql<
             string | null
           >`(array_agg(${invoices.publicId} order by ${invoices.createdAt}, ${invoices.publicId}))[1]`,
+          firstNumber: sql<
+            string | null
+          >`(array_agg(${invoices.number} order by ${invoices.createdAt}, ${invoices.publicId}))[1]`,
         })
         .from(invoiceLineDiscounts)
         .innerJoin(invoices, eq(invoices.id, invoiceLineDiscounts.invoiceId))
@@ -3020,6 +4226,7 @@ export async function listCouponRedemptionsPage(
           byRedemption.set(s.appliedCouponId, {
             amount: BigInt(s.amount ?? "0"),
             invoice: s.firstInvoice,
+            number: s.firstNumber,
           });
     }
     return {
@@ -3029,8 +4236,15 @@ export async function listCouponRedemptionsPage(
         status: r.status,
         remainingPeriods: r.remainingPeriods,
         customerPublicId: r.customerPublicId,
+        customerName: accountHolderName({
+          firstName: r.cusFirstName,
+          lastName: r.cusLastName,
+          company: r.cusCompany,
+          email: r.cusEmail,
+        }),
         subscriptionPublicId: r.subscriptionPublicId,
         invoicePublicId: byRedemption.get(r.id)?.invoice ?? null,
+        invoiceNumber: byRedemption.get(r.id)?.number ?? null,
         redeemedAt: r.createdAt,
         discountMinor: byRedemption.get(r.id)?.amount ?? 0n,
         currency: r.currency.toUpperCase(),

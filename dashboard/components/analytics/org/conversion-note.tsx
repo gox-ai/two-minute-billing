@@ -55,7 +55,7 @@ export function ConversionNote({
                 anyone to: an organization's rates are refreshed from the FX provider, and the
                 only operator control over this roll-up is the reporting currency. So the link
                 names what it actually opens. */}
-            <Link href="/settings" className="text-primary hover:underline">
+            <Link href="/settings/reporting" className="text-primary hover:underline">
               Reporting settings
             </Link>
           </>

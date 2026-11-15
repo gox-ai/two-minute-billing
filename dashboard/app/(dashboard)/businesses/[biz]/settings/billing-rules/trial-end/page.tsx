@@ -8,9 +8,10 @@ import {
 } from "@/components/settings/settings-layout";
 import { TRIAL_END_LABELS, billingRules } from "@/lib/billing-rules";
 import { saveBillingRulesAction } from "../../actions";
-import { ChoiceRow, type Choice } from "../_parts/rows";
+import type { Choice } from "../_parts/rows";
 import { FormIds, TimeTravelNote, ruleCrumbs } from "../_parts/shared";
 import { loadRuleBusiness } from "../_parts/load";
+import { TrialEndRow } from "./trial-end-row";
 
 export const dynamic = "force-dynamic";
 
@@ -63,14 +64,7 @@ export default async function TrialEndSettings({ params }: { params: Promise<{ b
           save={{ note: "Applies to the next trial that ends." }}
         >
           <SettingsCard title="Trial end" meta="Trials that end on their own">
-            <ChoiceRow
-              name="trial_end_action"
-              label="When a trial ends"
-              help="A plan price can set its own trial-end action. That action wins."
-              defaultValue={action}
-              options={ACTIONS}
-              more="When you end a trial from the subscription page, we always activate the subscription."
-            />
+            <TrialEndRow defaultValue={action} options={ACTIONS} />
           </SettingsCard>
         </SettingsColumns>
       </ActionForm>

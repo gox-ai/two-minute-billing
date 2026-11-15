@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { withTenant, type Tx } from "@/platform/db";
 import { stampNow } from "@/platform/clock";
@@ -9,11 +9,12 @@ import {
   tryParseFixed12,
   withinMaxMagnitude,
 } from "@/platform/fixed";
-import { meters } from "@db/schema";
+import { creditUnits, meterCreditCosts, meters } from "@db/schema";
 import { JsonNumber, parseJsonExact, propertiesJson, propertyText } from "./json-source";
 import { resolveUsageKeys } from "./meters";
 import { ensureUsageMonth, monthStart } from "./partitions";
 import {
+  countsAsUsage,
   bucketOf,
   countsTowardJoined,
   groupValuesOf,
@@ -64,6 +65,8 @@ export const usageEventInput = z.object({
     .string()
     .regex(/^[A-Za-z]{3}$/, "Send a 3-letter ISO currency code")
     .optional(),
+  // A meter with a credit cost: record the usage and spend no credits.
+  backfill: z.boolean().optional(),
 });
 export type UsageEventInput = z.infer<typeof usageEventInput>;
 
@@ -75,7 +78,9 @@ export type EventErrorCode =
   | "invalid_request"
   | "timestamp_too_old"
   | "timestamp_in_future"
-  | "invalid_value";
+  | "invalid_value"
+  // A meter with a credit cost under `block`: the event is stored and is not billed.
+  | "insufficient_credit";
 
 export interface EventError {
   code: EventErrorCode;
@@ -87,6 +92,8 @@ export interface IngestResult {
   key: string | null;
   status: "created" | "duplicate" | "error";
   error?: EventError;
+  /** A meter with a credit cost counts events of this name: the event may carry `credit`. */
+  gated?: true;
 }
 
 /** A validated event, ready to store. */
@@ -102,6 +109,8 @@ interface ReadyEvent {
   amount: string | null;
   cost: string | null;
   currency: string | null;
+  properties: Record<string, unknown>;
+  backfill: boolean;
 }
 
 const err = (code: EventErrorCode, message: string): EventError => ({ code, message });
@@ -120,8 +129,17 @@ const decimalText = (v: string | JsonNumber | undefined): string | undefined =>
 
 type ActiveMeter = Pick<
   typeof meters.$inferSelect,
-  "key" | "eventName" | "aggregation" | "valueProperty" | "recurring" | "filters"
->;
+  "id" | "key" | "eventName" | "aggregation" | "valueProperty" | "recurring" | "filters"
+> & {
+  /** Set when the meter has a credit cost (0526): its events spend credits at ingest. */
+  credit: {
+    unitId: string;
+    unitKey: string;
+    decimals: number;
+    cost: string;
+    overrides: boolean;
+  } | null;
+};
 
 const passesFilters = (m: ActiveMeter, props: Record<string, unknown>) =>
   Object.entries(m.filters ?? {}).every(([p, values]) => {
@@ -230,6 +248,8 @@ function prepare(
       amount: decimalText(e.amount) ?? null,
       cost: decimalText(e.cost) ?? null,
       currency: e.currency?.toUpperCase() ?? null,
+      properties: props,
+      backfill: e.backfill === true,
     },
   };
 }
@@ -266,16 +286,35 @@ async function activeMetersFor(
     ),
   ];
   if (!names.length) return [];
-  return tx
+  // The credit cost rides on this read: a meter with none costs one index probe, no query.
+  const rows = await tx
     .select({
+      id: meters.id,
       key: meters.key,
       eventName: meters.eventName,
       aggregation: meters.aggregation,
       valueProperty: meters.valueProperty,
       recurring: meters.recurring,
       filters: meters.filters,
+      ccUnitId: meterCreditCosts.unitId,
+      ccCost: meterCreditCosts.creditsPerUnit,
+      ccUnitKey: creditUnits.key,
+      ccDecimals: creditUnits.decimals,
+      ccOverrides: sql<boolean>`case when ${meterCreditCosts.id} is null then false else exists (
+        select 1 from meter_credit_costs o where o.meter_id = ${meters.id} and o.active
+          and (o.product_id is not null or o.subscription_id is not null)) end`,
     })
     .from(meters)
+    .leftJoin(
+      meterCreditCosts,
+      and(
+        eq(meterCreditCosts.meterId, meters.id),
+        eq(meterCreditCosts.active, true),
+        isNull(meterCreditCosts.productId),
+        isNull(meterCreditCosts.subscriptionId),
+      ),
+    )
+    .leftJoin(creditUnits, eq(creditUnits.id, meterCreditCosts.unitId))
     .where(
       and(
         eq(meters.businessId, businessId),
@@ -283,6 +322,19 @@ async function activeMetersFor(
         inArray(meters.eventName, names),
       ),
     );
+  return rows.map(({ ccUnitId, ccCost, ccUnitKey, ccDecimals, ccOverrides, ...m }) => ({
+    ...m,
+    credit:
+      ccUnitId && ccCost
+        ? {
+            unitId: ccUnitId,
+            unitKey: ccUnitKey ?? "",
+            decimals: ccDecimals ?? 0,
+            cost: ccCost,
+            overrides: ccOverrides === true,
+          }
+        : null,
+  }));
 }
 
 function prepareAll(
@@ -303,9 +355,17 @@ function prepareAll(
 /** Store validated events in the caller's transaction. Their partitions must exist. */
 async function storeReady(
   tx: Tx,
-  input: { organizationId: string; businessId: string },
+  input: {
+    organizationId: string;
+    businessId: string;
+    now: Date;
+    coveredUnitId?: string | null;
+    coveredPinSteps?: bigint;
+    coveredCapSteps?: bigint | null;
+  },
   ready: ReadyEvent[],
   results: IngestResult[],
+  meterList: ActiveMeter[],
 ): Promise<IngestResult[]> {
   // The first of a key in this request is stored; later ones are duplicates of it.
   const first = new Map<string, ReadyEvent>();
@@ -364,11 +424,57 @@ async function storeReady(
     });
   }
   const created = new Set(rows.map((r) => r.key));
+  // Meters with a credit cost: take the credits in this transaction. A refused event stays
+  // stored, and a repeat of its key is refused again.
+  const refused = new Map<string, EventError>();
+  const creditMeters = meterList.filter((m) => m.credit !== null);
+  const names = new Set(creditMeters.map((m) => m.eventName));
+  if (creditMeters.length) {
+    const gate = await import("@/modules/credits/usage-gate");
+    if (rows.length)
+      for (const [key, e] of await gate.gateCreditUsage(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        now: input.now,
+        coveredUnitId: input.coveredUnitId,
+        coveredPinSteps: input.coveredPinSteps,
+        coveredCapSteps: input.coveredCapSteps,
+        meters: creditMeters.map((m) => ({ ...m, credit: m.credit! })),
+        events: rows
+          .filter((r) => names.has(r.eventName))
+          .map((r) => ({
+            eventId: idOf.get(r.key)!,
+            key: r.key,
+            customerId: customerIds.get(r.customerKey) ?? null,
+            eventName: r.eventName,
+            properties: r.properties,
+            timestamp: r.timestamp,
+            at: r.at,
+            backfill: r.backfill,
+          })),
+      }))
+        refused.set(key, e);
+    const repeats = unique.filter((r) => !created.has(r.key) && names.has(r.eventName));
+    for (const key of await gate.refusedEventKeys(
+      tx,
+      input.businessId,
+      repeats.map((r) => r.key),
+    ))
+      refused.set(key, err("insufficient_credit", gate.INSUFFICIENT_CREDIT_MESSAGE));
+  }
   const claimed = new Set<string>();
   for (const r of ready) {
     const isNew = created.has(r.key) && !claimed.has(r.key);
     if (isNew) claimed.add(r.key);
-    results[r.index] = { index: r.index, key: r.key, status: isNew ? "created" : "duplicate" };
+    const refusal = refused.get(r.key);
+    results[r.index] = refusal
+      ? { index: r.index, key: r.key, status: "error", error: refusal }
+      : {
+          index: r.index,
+          key: r.key,
+          status: isNew ? "created" : "duplicate",
+          ...(names.has(r.eventName) ? { gated: true as const } : {}),
+        };
   }
   return results;
 }
@@ -392,7 +498,9 @@ export async function ingestUsageEvents(input: {
   // Partitions follow the business clock, so a month may not exist yet.
   for (const m of new Set(ready.map((r) => monthStart(r.at).getTime())))
     await ensureUsageMonth(new Date(m));
-  return withTenant(input.organizationId, (tx) => storeReady(tx, input, ready, results));
+  return withTenant(input.organizationId, (tx) =>
+    storeReady(tx, { ...input, now }, ready, results, meterList),
+  );
 }
 
 /**
@@ -401,13 +509,23 @@ export async function ingestUsageEvents(input: {
  */
 export async function ingestUsageEventsTx(
   tx: Tx,
-  input: { organizationId: string; businessId: string; events: unknown[] },
+  input: {
+    organizationId: string;
+    businessId: string;
+    events: unknown[];
+    /** The events settle a hold in this credit unit: a meter paid in it never refuses them. */
+    coveredUnitId?: string | null;
+    /** With `coveredUnitId`: units the hold may take from closed grants that it pins. */
+    coveredPinSteps?: bigint;
+    /** With `coveredUnitId`: the most the events take in that unit (`capture_over_hold`). */
+    coveredCapSteps?: bigint | null;
+  },
 ): Promise<IngestResult[]> {
   const now = stampNow(input.businessId);
   const meterList = await activeMetersFor(tx, input.businessId, input.events);
   const { results, ready } = prepareAll(input.events, now, meterList);
   if (!ready.length) return results;
-  return storeReady(tx, input, ready, results);
+  return storeReady(tx, { ...input, now }, ready, results, meterList);
 }
 
 /** The partitions `ingestUsageEventsTx` writes to, made before its transaction opens. */
@@ -436,16 +554,17 @@ export interface StoredEventRow {
   matched_at: Date | null;
   voided_at: Date | null;
   void_reason: string | null;
+  refused_at?: Date | null;
 }
 
 export const storedEventColumns = sql`e.id, e.key, e.customer_key, c.public_id as customer_public_id,
   e.event_name, e.properties::text as properties_text, e."timestamp", e.amount::text as amount,
-  e.cost::text as cost, e.currency, e.matched_at, e.voided_at, e.void_reason`;
+  e.cost::text as cost, e.currency, e.matched_at, e.voided_at, e.void_reason, e.refused_at`;
 
 /** A usage event as the API shows it. `id` is the event's key: events have no other public id. */
 export function serializeUsageEvent(
   r: StoredEventRow,
-  extra: { meters?: string[]; flags?: string[] } = {},
+  extra: { meters?: string[]; flags?: string[]; credit?: unknown[] } = {},
 ) {
   return {
     object: "usage_event" as const,
@@ -465,7 +584,18 @@ export function serializeUsageEvent(
     flags: extra.flags ?? [],
     voided_at: r.voided_at ? new Date(r.voided_at).toISOString() : null,
     void_reason: r.void_reason,
+    // Refused for credit: stored and listed, counted as cost and not as usage.
+    refused_at: r.refused_at ? new Date(r.refused_at).toISOString() : null,
+    // Only on an event that a meter with a credit cost counted (0526).
+    ...(extra.credit?.length ? { credit: extra.credit } : {}),
   };
+}
+
+/** `serializeUsageEvent` with what the credit gate recorded for the event. */
+export async function serializeUsageEventWithCredit(tx: Tx, businessId: string, r: StoredEventRow) {
+  const { creditUsageOfEvents } = await import("@/modules/credits/usage-gate");
+  const credit = (await creditUsageOfEvents(tx, businessId, [r.id])).get(r.id);
+  return serializeUsageEvent(r, { credit });
 }
 
 /** The stored event for a key: through its dedup row, or by timestamp once that is purged. */
@@ -507,9 +637,10 @@ export class UsageEventNotFoundError extends Error {
 }
 
 export class UsageEventBilledError extends Error {
-  constructor() {
+  constructor(message?: string) {
     super(
-      "We could not void the event. An invoice already bills its period. Issue a credit note instead.",
+      message ??
+        "We could not void the event. An invoice already bills its period. Issue a credit note instead.",
     );
     this.name = "UsageEventBilledError";
   }
@@ -573,6 +704,20 @@ export async function voidUsageEvent(input: {
           )
         : [];
 
+    // Credits the event took and no settlement drew yet go back (0526). No row = no cost.
+    const [spent] = rowsOf<{ x: number }>(
+      await tx.execute(sql`select 1 as x from credit_usage_events
+        where business_id = ${input.businessId} and event_id = ${ev.id} limit 1`),
+    );
+    if (spent) {
+      const gate = await import("@/modules/credits/usage-gate");
+      try {
+        await gate.releaseCreditUsage(tx, { businessId: input.businessId, eventId: ev.id });
+      } catch (e) {
+        if (e instanceof gate.CreditUsageSettledError) throw new UsageEventBilledError(e.message);
+        throw e;
+      }
+    }
     await tx.execute(sql`
       update usage_events e set voided_at = ${stampNow(input.businessId).toISOString()}::timestamptz,
         void_reason = ${input.reason ?? null}
@@ -596,7 +741,7 @@ export async function voidUsageEvent(input: {
             ${valueOf("e", sql`m.value_property`)} as val, e.amount, e.cost
           from usage_events e join meters m on m.id = ${a.meter_id}
           where e.business_id = ${input.businessId} and e.customer_id = ${a.customer_id}
-            and e.event_name = m.event_name and e.voided_at is null
+            and e.event_name = m.event_name and ${countsAsUsage("e")}
             and e."timestamp" >= ${bucket}::timestamptz
             and e."timestamp" < ${bucket}::timestamptz + interval '15 minutes'
             and e.id >= ${uuidFloorSql(sql`m.folded_from`)} and e.id < ${watermarkUuid}::uuid

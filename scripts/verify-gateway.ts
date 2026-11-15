@@ -67,6 +67,7 @@ import type {
   CreateIntentInput,
   InitiateVaultSetupInput,
   IntentRef,
+  NormalizedProviderEvent,
   RefundInput,
   PaymentProvider,
   ProviderCustomerRef,
@@ -127,6 +128,9 @@ import { mandateMissingRefusal } from "@/modules/invoicing/collection";
 import { recordOfflinePayment } from "@/modules/invoicing/ops";
 import { runDunningPass } from "@/modules/subscriptions/dunning";
 import { handleProviderEvent } from "@/modules/webhooks/inbound";
+import { spanForProviderEvent } from "@/modules/webhooks/event-span";
+import { listGatewayRequestLogsPage } from "@/modules/gateway/activity";
+import { flushGatewayRequestLogs, logGatewayRequest } from "@/providers/http";
 import { listGatewayWebhooks, listGatewayWebhooksPage } from "@/modules/gateway/inbound";
 import { publicId } from "@/platform/ids";
 import { beginVaultSetup, completeVaultFromIntent } from "@/api/vault-setup";
@@ -811,6 +815,32 @@ ok("C1: get after delete → 404", gone.status === 404);
             attempts[0]!.status === "failed" &&
             attempts[0]!.errorCode === "gateway_request_rejected",
           `${after.length - before} intents, ${attempts[0]?.status}/${attempts[0]?.errorCode}`,
+        );
+        // The list and the retrieve both carry the failed attempt's code and message.
+        type LastError = { code: string | null; message: string | null } | null | undefined;
+        const want = { code: attempts[0]?.errorCode, message: attempts[0]?.errorText };
+        const listed = await api(
+          "GET",
+          `/v1/businesses/${vfBiz.publicId}/payment_intents?limit=100`,
+        );
+        const listedRow = (listed.json.data as Array<Record<string, unknown>> | undefined)?.find(
+          (r) => r.id === row?.publicId,
+        );
+        const listedErr = listedRow?.last_error as LastError;
+        ok(
+          "PI last_error: the list carries a failed setup attempt's code and message",
+          !!want.message && listedErr?.code === want.code && listedErr?.message === want.message,
+          JSON.stringify(listedErr),
+        );
+        const got = await api(
+          "GET",
+          `/v1/businesses/${vfBiz.publicId}/payment_intents/${row?.publicId}`,
+        );
+        const gotErr = got.json.last_error as LastError;
+        ok(
+          "PI last_error: the retrieve carries the same error",
+          gotErr?.code === want.code && gotErr?.message === want.message,
+          JSON.stringify(gotErr),
         );
       } else {
         ok("C63+: a vault-step timeout answers 502", res.status === 502, `${res.status}`);
@@ -2976,6 +3006,15 @@ ok("C1: get after delete → 404", gone.status === 404);
    * predicate requires `authorized_at IS NOT NULL`. Migration 0217 documents the contract
    * this now asserts.
    */
+  {
+    const page = await listPaymentIntentsPage(orgId, piBiz.id, { limit: 50 });
+    const row = page.data.find((r) => r.intent.publicId === intent.publicId);
+    ok(
+      "PI last_error: an authorized intent has last_error null",
+      !!row && serializePaymentIntentRow(row).last_error === null,
+      JSON.stringify(row?.lastError),
+    );
+  }
   ok(
     "C7: authorize stamps authorized_at",
     authorized?.authorizedAt != null &&
@@ -5013,6 +5052,218 @@ ok("C1: get after delete → 404", gone.status === 404);
         new Set(refundSpans).size === 2 &&
         refundSpans.every((sp) => !!sp && refundLogs.some((l) => l.spanId === sp)),
       JSON.stringify({ refundSpans, logs: refundLogs.map((l) => [l.operation, l.spanId]) }),
+    );
+  }
+
+  // ── (5c) an attempt's span covers its customer lookup and its webhooks ───────
+  // The attempt's "Request/response logs" filter on its span. The customer lookup made for
+  // it, and a webhook's reads of its object (made before the event names the attempt), must
+  // land there too. Gateway-neutral: the same path for every gateway key.
+  {
+    const preCus = await createCustomer({
+      organizationId: orgId,
+      businessId: biz.id,
+      email: "span-precall@gw.test",
+    });
+    const pre = await createPaymentIntent({
+      organizationId: orgId,
+      businessId: biz.id,
+      purpose: "setup",
+      customerPublicId: preCus.publicId,
+      currency: "USD",
+      // Earlier sections add accounts beside the tmtest one.
+      gatewayAccountId: acctRow.publicId,
+    });
+    const preLogs = await logsForSpan(pre.attempt.spanId!, 2);
+    ok(
+      "span-hook: the customer lookup made for an attempt is under the attempt's span",
+      preLogs.some((l) => l.operation === "ensure_customer") &&
+        preLogs.some((l) => l.operation === "create_setup_intent"),
+      JSON.stringify(preLogs.map((l) => l.operation)),
+    );
+
+    /** A webhook delivery: the adapter's own read first (span-less), then the event. */
+    const deliver = async (
+      gatewayKey: string,
+      ev: Omit<NormalizedProviderEvent, "providerEventId" | "occurredAt" | "raw">,
+      opts: { sole?: boolean; strayKey?: string } = {},
+    ) => {
+      const traceId = newTraceId("hook");
+      const result = await withTraceContext({ traceId, businessId: biz.id }, async () => {
+        logGatewayRequest({
+          gatewayKey,
+          operation: "read_event_object",
+          method: "GET",
+          url: `https://gateway.test/objects/${ev.providerIntentId ?? ev.providerChargeId}`,
+          status: 200,
+          durationMs: 1,
+          businessId: biz.id,
+        });
+        if (opts.strayKey)
+          logGatewayRequest({
+            gatewayKey: opts.strayKey,
+            operation: "health_check",
+            method: "GET",
+            url: "https://gateway.test/health",
+            status: 200,
+            durationMs: 1,
+            businessId: biz.id,
+          });
+        return handleProviderEvent(
+          gatewayKey,
+          {
+            ...ev,
+            providerEventId: `evt_span_${randomUUID().slice(0, 12)}`,
+            occurredAt: new Date(),
+            raw: { data: {} },
+          } as NormalizedProviderEvent,
+          { businessId: biz.id, soleEventOfDelivery: opts.sole ?? true },
+        );
+      });
+      await flushGatewayRequestLogs();
+      const rows = await systemDb
+        .select()
+        .from(gatewayRequestLogs)
+        .where(eq(gatewayRequestLogs.traceId, traceId));
+      return { result, rows };
+    };
+
+    // tmtest, end to end: the buyer's refusal arrives by webhook.
+    const tmFail = await deliver("tmtest", {
+      type: "intent.setup_failed",
+      providerIntentId: pre.attempt.idAtGateway!,
+      failureCode: "card_declined",
+      failureMessage: "Your card was declined.",
+    });
+    const tmAttempt = (
+      await withTenant(orgId, (tx) =>
+        tx.select().from(paymentAttempts).where(eq(paymentAttempts.id, pre.attempt.id)),
+      )
+    )[0]!;
+    ok(
+      "span-hook [tmtest]: an outcome by webhook books the attempt",
+      tmFail.result === "processed" && tmAttempt.status === "failed",
+      `${tmFail.result}/${tmAttempt.status}`,
+    );
+    ok(
+      "span-hook [tmtest]: the webhook's read of the object joins the attempt's span",
+      tmFail.rows.length >= 1 && tmFail.rows.every((l) => l.spanId === pre.attempt.spanId),
+      JSON.stringify(tmFail.rows.map((l) => [l.operation, l.spanId])),
+    );
+    ok(
+      "span-hook [tmtest]: the attempt's span filter now shows the webhook's call",
+      (await logsForSpan(pre.attempt.spanId!, 3)).some((l) => l.operation === "read_event_object"),
+    );
+    // The dashboard's link is the list route filtered on `span_id`.
+    const spanPage = await listGatewayRequestLogsPage(orgId, biz.id, {
+      filters: [{ field: "span_id", op: "is", value: pre.attempt.spanId! }],
+    });
+    const spanOps = spanPage.data.map((l) => l.operation);
+    ok(
+      "span-hook: the request list filtered on the span holds lookup, create and webhook read",
+      ["ensure_customer", "create_setup_intent", "read_event_object"].every((op) =>
+        spanOps.includes(op),
+      ) && spanPage.data.every((l) => l.spanId === pre.attempt.spanId),
+      JSON.stringify(spanOps),
+    );
+
+    // Other gateways: the same common path, no adapter code. Seeded attempts, as a recorded
+    // flow would leave them.
+    const seedAttempt = async (gatewayKey: string, idAtGateway: string) => {
+      const spanId = newTraceId("pi");
+      const [intent] = await withTenant(orgId, (tx) =>
+        tx
+          .insert(paymentIntents)
+          .values({
+            organizationId: orgId,
+            businessId: biz.id,
+            publicId: publicId("pi"),
+            status: "in_progress",
+            purpose: "setup",
+            amountMinor: 0n,
+            currency: "USD",
+            intentAtGateway: idAtGateway,
+            attemptCount: 1,
+          })
+          .returning(),
+      );
+      await withTenant(orgId, (tx) =>
+        tx.insert(paymentAttempts).values({
+          organizationId: orgId,
+          businessId: biz.id,
+          paymentIntentId: intent!.id,
+          publicId: publicId("pia"),
+          attemptNumber: 1,
+          status: "requires_action",
+          idAtGateway,
+          traceId: newTraceId("api"),
+          spanId,
+        }),
+      );
+      return { gatewayKey, idAtGateway, spanId };
+    };
+    const sfx = randomUUID().replace(/-/g, "").slice(0, 14);
+    const seeded = [
+      await seedAttempt("stripe", `seti_${sfx}01`),
+      await seedAttempt("razorpay", `order_${sfx}02`),
+    ];
+    for (const s of seeded) {
+      const got = await deliver(
+        s.gatewayKey,
+        {
+          type: "intent.setup_failed",
+          providerIntentId: s.idAtGateway,
+          failureCode: "card_declined",
+        },
+        { strayKey: "paypal" },
+      );
+      const own = got.rows.filter((l) => l.gatewayKey === s.gatewayKey);
+      const stray = got.rows.filter((l) => l.gatewayKey === "paypal");
+      ok(
+        `span-hook [${s.gatewayKey}]: the webhook's read joins the attempt's span, trace kept`,
+        own.length >= 1 &&
+          own.every((l) => l.spanId === s.spanId && l.traceId?.startsWith("hook-")),
+        JSON.stringify(own.map((l) => [l.operation, l.spanId])),
+      );
+      ok(
+        `span-hook [${s.gatewayKey}]: another gateway's call in the same trace stays span-less`,
+        stray.length === 1 && stray[0]!.spanId === null,
+      );
+    }
+    ok(
+      "span-hook: spans resolve by the charge id too (razorpay payment → order attempt)",
+      (await spanForProviderEvent({ providerChargeId: seeded[1]!.idAtGateway }, biz.id)) ===
+        seeded[1]!.spanId,
+    );
+
+    // Unrelated: an event that names no attempt, and a delivery of several events.
+    const unknown = await deliver("stripe", {
+      type: "intent.setup_failed",
+      providerIntentId: `seti_${sfx}99`,
+    });
+    ok(
+      "span-hook: a webhook for an object we do not hold leaves its call span-less",
+      unknown.rows.length === 1 && unknown.rows[0]!.spanId === null,
+    );
+    const batch = await deliver(
+      "razorpay",
+      { type: "intent.setup_failed", providerIntentId: seeded[1]!.idAtGateway },
+      { sole: false },
+    );
+    ok(
+      "span-hook: a delivery of several events does not hand its reads to one attempt",
+      batch.rows.length === 1 && batch.rows[0]!.spanId === null,
+    );
+    ok(
+      "span-hook: another business's attempt is not matched",
+      (await spanForProviderEvent({ providerIntentId: seeded[0]!.idAtGateway }, randomUUID())) ===
+        null,
+    );
+    // Two attempts holding one id with different spans: no guess.
+    await seedAttempt("stripe", `seti_${sfx}01`);
+    ok(
+      "span-hook: an id shared by two attempts resolves to no span",
+      (await spanForProviderEvent({ providerIntentId: `seti_${sfx}01` }, biz.id)) === null,
     );
   }
 

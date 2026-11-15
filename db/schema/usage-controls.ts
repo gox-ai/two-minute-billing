@@ -6,6 +6,7 @@ import {
   char,
   bigint,
   smallint,
+  integer,
   boolean,
   jsonb,
   numeric,
@@ -15,7 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organizations, businesses } from "./tenancy";
 import { customers } from "./customers";
-import { products } from "./catalog";
+import { prices, products } from "./catalog";
 import { subscriptions } from "./subscriptions";
 import { meters } from "./meters";
 import { creditUnits } from "./credits";
@@ -25,6 +26,11 @@ import { paymentMethods } from "./payment-methods";
 import { preDebitNotices } from "./pre-debit-notices";
 
 /** Usage controls (Tier 3 PR 3, 0470–0477): spend limits, alerts, auto top-up, threshold invoicing. */
+
+/** The most an automatic top-up may buy in a window. Unset = no limit for that window. */
+export type AutoTopupPurchaseLimits = Partial<
+  Record<"hour" | "day" | "week" | "month", { count?: number; amount_minor?: number }>
+>;
 
 export type UsageControlInterval = "day" | "week" | "month" | "period";
 export type SpendLimitScope = "customer" | "subscription" | "property";
@@ -61,8 +67,8 @@ export const AUTO_TOPUP_OPEN_RUN_STATUSES = [
 /** `usage_invoice_thresholds.steps`: exactly one recurring entry today (CHECK). */
 export type UsageInvoiceThresholdSteps = [{ amount_minor: number; recurring: true }];
 
-/** `invoices.purpose` (0474). NULL = an ordinary invoice. */
-export type InvoicePurpose = "usage_interim" | "credit_purchase";
+/** `invoices.purpose` (0474, 0521). NULL = an ordinary invoice. */
+export type InvoicePurpose = "usage_interim" | "credit_purchase" | "late_usage";
 
 /**
  * A spend limit (0470). Subscription scope ⇔ `subscription_id`; property scope ⇔
@@ -385,6 +391,13 @@ export const creditAutoTopups = pgTable(
     unitId: uuid("unit_id").references(() => creditUnits.id),
     trigger: text("trigger").$type<AutoTopupTrigger>().notNull(),
     thresholdMinor: bigint("threshold_minor", { mode: "bigint" }),
+    /** A unit with no rate (0527): the threshold in steps, and the pack a run buys. */
+    thresholdUnits: bigint("threshold_units", { mode: "bigint" }),
+    packPriceId: uuid("pack_price_id").references(() => prices.id),
+    packQuantity: integer("pack_quantity"),
+    /** "Recharge to N units", in steps: whole packs to reach at least this. */
+    targetUnits: bigint("target_units", { mode: "bigint" }),
+    purchaseLimits: jsonb("purchase_limits").$type<AutoTopupPurchaseLimits>(),
     schedule: jsonb("schedule").$type<AutoTopupSchedule>(),
     method: text("method").$type<AutoTopupMethod>().notNull(),
     amountMinor: bigint("amount_minor", { mode: "bigint" }),
@@ -456,6 +469,8 @@ export const creditAutoTopupRuns = pgTable(
     /** Schedule: `sch:<YYYY-MM-DD>`. */
     triggerKey: text("trigger_key"),
     amountMinor: bigint("amount_minor", { mode: "bigint" }).notNull(),
+    /** Charge tries that failed. A soft decline is tried again (unit with no rate). */
+    attempts: integer("attempts").notNull().default(0),
     currency: char("currency", { length: 3 }).notNull(),
     status: text("status").$type<AutoTopupRunStatus>().notNull().default("created"),
     /** The purchase invoice (`origin_token` `atu:<run public id>`). */

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { money } from "@/lib/format";
 import type { Customer, CustomerBalance } from "@/lib/api";
 
@@ -45,9 +46,11 @@ export function CustomerBalancesPanel({
 
   return (
     <div className="space-y-4">
+      {/* Below 640px each currency is a block: the code, then each bucket as a 12px label
+          and its figure (the shape of `<Table phone="stack">`). */}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
+        <table className="w-full text-sm max-sm:block">
+          <thead className="max-sm:hidden">
             <tr className="border-b text-xs text-muted-foreground">
               <th className="pr-4 pb-2 text-left font-medium">Currency</th>
               <th className="pr-4 pb-2 text-right font-medium">Promotional credits</th>
@@ -55,11 +58,21 @@ export function CustomerBalancesPanel({
               <th className="pb-2 text-right font-medium">Excess payments</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {rows.map((b) => (
-              <tr key={b.currency_code} className="border-b last:border-0">
-                <td className="py-2 pr-4 font-mono text-xs font-semibold">{b.currency_code}</td>
-                <Amount value={b.promotional_credits} currency={b.currency_code} className="pr-4" />
+              <tr
+                key={b.currency_code}
+                className="border-b last:border-0 max-sm:grid max-sm:grid-cols-[fit-content(40%)_minmax(0,1fr)] max-sm:items-baseline max-sm:gap-x-3 max-sm:gap-y-1 max-sm:py-3"
+              >
+                <td className="py-2 pr-4 font-mono text-xs font-semibold max-sm:col-span-full max-sm:p-0">
+                  {b.currency_code}
+                </td>
+                <Amount
+                  label="Promotional credits"
+                  value={b.promotional_credits}
+                  currency={b.currency_code}
+                  className="pr-4"
+                />
                 {/* Deep-links to the credit notes backing this figure, filtered to
                     customer + type + status. Refundable credit is only ever issued by a
                     credit note, so the balance always has documents behind it; without
@@ -67,12 +80,17 @@ export function CustomerBalancesPanel({
                     customer filter in its UI and the customer page's History tab lists
                     ALL kinds. */}
                 <Amount
+                  label="Refundable credits"
                   value={b.refundable_credits}
                   currency={b.currency_code}
                   className="pr-4"
                   href={`/businesses/${biz}/credit_notes?customer=${customer.id}&kind=refundable&status=refund_due`}
                 />
-                <Amount value={b.excess_payments} currency={b.currency_code} />
+                <Amount
+                  label="Excess payments"
+                  value={b.excess_payments}
+                  currency={b.currency_code}
+                />
               </tr>
             ))}
           </tbody>
@@ -93,11 +111,14 @@ export function CustomerBalancesPanel({
 
 /** Right-aligned tabular money; zero renders as an em dash, not ₹0.00. */
 function Amount({
+  label,
   value,
   currency,
   className,
   href,
 }: {
+  /** Its column head, shown beside the figure below 640px. */
+  label: string;
   value: number;
   currency: string;
   className?: string;
@@ -105,18 +126,21 @@ function Amount({
   href?: string;
 }) {
   return (
-    <td className={`py-2 text-right tabular-nums ${className ?? ""}`}>
-      {value > 0 ? (
-        href ? (
-          <a href={href} className="figure-link font-medium">
-            {money(value, currency)}
-          </a>
+    <td className={`py-2 text-right tabular-nums max-sm:contents ${className ?? ""}`}>
+      <span className="text-xs text-muted-foreground max-sm:col-start-1 sm:hidden">{label}</span>
+      <span className="max-sm:col-start-2 max-sm:min-w-0">
+        {value > 0 ? (
+          href ? (
+            <Link href={href} className="figure-link font-medium">
+              {money(value, currency)}
+            </Link>
+          ) : (
+            <span className="font-medium text-foreground">{money(value, currency)}</span>
+          )
         ) : (
-          <span className="font-medium text-foreground">{money(value, currency)}</span>
-        )
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      )}
+          <span className="text-muted-foreground">—</span>
+        )}
+      </span>
     </td>
   );
 }

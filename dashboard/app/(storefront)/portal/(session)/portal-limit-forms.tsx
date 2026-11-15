@@ -7,7 +7,13 @@ import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { EditDrawer } from "@/components/edit-drawer";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioField } from "@/components/ui/radio-group";
@@ -19,6 +25,40 @@ import {
   portalUpdateLimitAction,
 } from "./usage-controls-actions";
 
+/**
+ * The edit drawer's shape with the merchant's brand: Radix portals a dialog outside the
+ * storefront's brand wrapper, so `data-brand` puts it back (as the shipping dialog does).
+ */
+function LimitDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        size="md"
+        data-brand
+        className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0"
+      >
+        <DialogHeader className="border-b px-6 py-4 pr-12 text-left">
+          <DialogTitle>{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">{children}</div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 const INTERVALS = [
   { value: "day", label: "Per day" },
   { value: "week", label: "Per week (Monday to Sunday)" },
@@ -26,20 +66,21 @@ const INTERVALS = [
   { value: "period", label: "Per billing period" },
 ];
 
-/** The buyer adds its own hard limit. It cannot be more than the provider's limit. */
+/** The buyer adds its own hard limit. It cannot be more than a limit the business set. */
 export function AddLimitButton({ currency }: { currency: string }) {
   const [open, setOpen] = React.useState(false);
-  const [scope, setScope] = React.useState("");
+  // Preselected so the first option shows as selected, not only focused.
+  const [scope, setScope] = React.useState("customer");
   return (
     <>
       <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
         Add limit
       </Button>
-      <EditDrawer
+      <LimitDialog
         open={open}
         onOpenChange={setOpen}
         title="Add a spend limit"
-        description="When your usage reaches the limit, new requests stop until the limit resets. Usage that was already sent is billed."
+        description="When your usage reaches the limit, we stop it until the limit resets. We bill the usage that we recorded before then."
       >
         <ActionForm
           action={portalCreateLimitAction}
@@ -58,7 +99,7 @@ export function AddLimitButton({ currency }: { currency: string }) {
                 {
                   value: "property",
                   label: "Each user, team or key",
-                  hint: "A property of your usage, for example user_id.",
+                  hint: "Your usage can carry a property, such as a user or a key.",
                 },
               ]}
             />
@@ -75,22 +116,25 @@ export function AddLimitButton({ currency }: { currency: string }) {
           ) : null}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field name="interval" label="Interval">
-              <SelectField name="interval" options={INTERVALS} placeholder="Select" />
+              <SelectField name="interval" options={INTERVALS} placeholder="Select an interval" />
             </Field>
             <Field name="amount" label={`Amount (${currency})`}>
               <Input name="amount" inputMode="decimal" className="tabular-nums" />
             </Field>
           </div>
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
             <SubmitButton>Save limit</SubmitButton>
           </div>
         </ActionForm>
-      </EditDrawer>
+      </LimitDialog>
     </>
   );
 }
 
-/** Lower (or change) the buyer's own limit, or delete it. */
+/** Change the buyer's own limit, or delete it. */
 export function OwnLimitActions({
   id,
   amountMinor,
@@ -108,10 +152,21 @@ export function OwnLimitActions({
       <Button type="button" variant="ghost" size="sm" onClick={() => setEdit(true)}>
         Edit
       </Button>
-      <Button type="button" variant="ghost" size="sm" onClick={() => setDel(true)}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="text-destructive hover:text-destructive"
+        onClick={() => setDel(true)}
+      >
         Delete
       </Button>
-      <EditDrawer open={edit} onOpenChange={setEdit} title="Change your limit">
+      <LimitDialog
+        open={edit}
+        onOpenChange={setEdit}
+        title="Change your limit"
+        description="Your limit cannot be more than a limit that the business set for the same usage and interval."
+      >
         <ActionForm
           action={portalUpdateLimitAction}
           onSuccess={() => setEdit(false)}
@@ -127,18 +182,21 @@ export function OwnLimitActions({
               className="tabular-nums"
             />
           </Field>
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" onClick={() => setEdit(false)}>
+              Cancel
+            </Button>
             <SubmitButton>Save limit</SubmitButton>
           </div>
         </ActionForm>
-      </EditDrawer>
+      </LimitDialog>
       <ConfirmDialog
         open={del}
         onOpenChange={setDel}
         brand
         destructive
         title="Delete your limit?"
-        description="Your usage is no longer stopped at this limit. Limits from your provider still apply."
+        description="We no longer stop your usage at this limit. Limits that the business set still apply."
         confirmLabel="Delete"
         onConfirm={async () => {
           const fd = new FormData();

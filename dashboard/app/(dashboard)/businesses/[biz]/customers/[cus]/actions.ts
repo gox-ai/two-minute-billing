@@ -3,10 +3,11 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiPatch, apiPost } from "@/lib/api";
 import { requirePermission } from "@/lib/session";
 import { actionOk, actionError, parseForm } from "@/lib/action-result";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { businessTz } from "@/lib/business-tz-server";
 import type { ActionResult } from "@/lib/action-result";
 import type { SecretLinkResult } from "@/lib/secret-link";
@@ -667,4 +668,54 @@ export async function removeUsageKeyAction(
       requestId: res.requestId,
     });
   return actionOk("Usage key removed.");
+}
+
+const customerCouponSchema = z.object({
+  biz: z.string().min(1),
+  cus: z.string().min(1),
+  coupon: z.string().trim().min(1, "Select a coupon.").max(100),
+});
+
+/** Apply a coupon to the customer. It discounts the customer's later invoices. */
+export async function addCustomerCouponAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("customers:manage", "ops");
+  const parsed = parseForm(customerCouponSchema, fd);
+  if (parsed.error) return parsed.error;
+  const { biz, cus, coupon } = parsed.data;
+  const res = await apiPost(`/v1/businesses/${biz}/customers/${cus}/discounts`, { coupon });
+  revalidatePath(cusUrl(biz, cus));
+  if (!res.ok)
+    return actionError(res.error ?? "We could not apply the coupon.", {
+      requestId: res.requestId,
+    });
+  return actionOk("Coupon applied.");
+}
+
+const removeCustomerCouponSchema = z.object({
+  biz: z.string().min(1),
+  cus: z.string().min(1),
+  discount: z.string().min(1).max(100),
+});
+
+/** Remove a coupon from the customer. Invoices already raised keep their discount. */
+export async function removeCustomerCouponAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("customers:manage", "ops");
+  const parsed = parseForm(removeCustomerCouponSchema, fd);
+  if (parsed.error) return parsed.error;
+  const { biz, cus, discount } = parsed.data;
+  const res = await apiDelete(
+    `/v1/businesses/${biz}/customers/${cus}/discounts/${encodeURIComponent(discount)}`,
+  );
+  revalidatePath(cusUrl(biz, cus));
+  if (!res.ok)
+    return actionError(res.error ?? "We could not remove the coupon.", {
+      requestId: res.requestId,
+    });
+  return actionOk("Coupon removed.");
 }

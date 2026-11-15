@@ -20,6 +20,7 @@ import {
   type TaxRegionDetail,
 } from "@/modules/tax/service";
 import type { taxProfiles, taxRateComponents, taxStateRegistrations } from "@db/schema";
+import { subdivisionName } from "@/platform/geo";
 import { resolveBusiness, badRequest, notFound, requirePerm } from "./helpers";
 import { parseRequest } from "./strict-params";
 
@@ -46,12 +47,16 @@ function serializeComponent(c: typeof taxRateComponents.$inferSelect) {
   };
 }
 
-function serializeStateRegistration(s: typeof taxStateRegistrations.$inferSelect) {
+/** `country` names a row stored without a name (one saved before the default existed). */
+function serializeStateRegistration(
+  s: typeof taxStateRegistrations.$inferSelect,
+  country?: string,
+) {
   return {
     object: "tax_state_registration",
     id: s.publicId,
     state_code: s.stateCode,
-    state_name: s.stateName,
+    state_name: s.stateName ?? (country ? subdivisionName(country, s.stateCode) : null),
     registration_number: s.registrationNumber,
   };
 }
@@ -88,7 +93,7 @@ function serializeRegion(d: TaxRegionDetail) {
      */
     allowed_tax_treatments: allowedTreatments(r),
     components: d.components.map(serializeComponent),
-    state_registrations: d.stateRegistrations.map(serializeStateRegistration),
+    state_registrations: d.stateRegistrations.map((s) => serializeStateRegistration(s, r.country)),
     created_at: r.createdAt,
   };
 }

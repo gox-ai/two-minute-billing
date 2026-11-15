@@ -12,7 +12,6 @@ import { SubmitButton } from "@/components/form/submit-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { fieldClass } from "@/lib/utils";
 import type { ActionResult } from "@/lib/action-result";
 import {
   startTimeTravelAction,
@@ -48,16 +47,16 @@ export function StartForm({ biz }: { biz: string }) {
         name="genesis"
         label="Genesis date"
         required
-        help="The clock stays at this date. Nothing is charged at genesis, because a new test business is empty. Travel forward from this date to run billing."
+        help="The clock stays at this date. Time travel does not charge or delete anything when it starts. Travel forward from this date to run billing."
       >
         <DateTimeField
           granularity="date"
           name="genesis"
           defaultValue={dateOnlyToUtcISO(today, tz)}
-          className={fieldClass}
+          className="w-72 max-w-full"
         />
       </Field>
-      <SubmitButton>Start Time Travel</SubmitButton>
+      <SubmitButton>Start time travel</SubmitButton>
     </ActionForm>
   );
 }
@@ -90,7 +89,7 @@ export function TravelForm({ biz, simulatedNow }: { biz: string; simulatedNow: s
           min={now}
           defaultValue={dateOnlyToUtcISO(dest, tz)}
           onUtcChange={(utc) => setDest(utcToDateValue(utc, tz) || dest)}
-          className={fieldClass}
+          className="w-72 max-w-full"
         />
       </Field>
       <div className="flex flex-wrap items-center gap-2">
@@ -131,7 +130,7 @@ export function TravelForm({ biz, simulatedNow }: { biz: string; simulatedNow: s
           min={1}
           max={366}
           placeholder="1"
-          className={fieldClass}
+          className="w-30 tabular-nums"
         />
       </Field>
       <SubmitButton>Travel forward</SubmitButton>
@@ -147,14 +146,14 @@ export function StopButton({ biz }: { biz: string }) {
   return (
     <>
       <Button variant="destructive" onClick={() => setOpen(true)}>
-        Stop &amp; delete
+        Stop and delete
       </Button>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
-        title="Stop Time Travel?"
+        title="Stop time travel?"
         destructive
-        confirmLabel="Stop &amp; delete simulated data"
+        confirmLabel="Stop and delete simulated data"
         description={
           <span className="block space-y-2">
             <span className="block">
@@ -166,7 +165,7 @@ export function StopButton({ biz }: { biz: string }) {
               entries, usage records, events and webhook deliveries.
             </span>
             <span className="block">
-              Kept: catalog (products &amp; prices), coupons, tax rates, business settings, payment
+              Kept: catalog (products and prices), coupons, tax rates, business settings, payment
               gateways, API keys and webhook endpoints.
             </span>
           </span>
@@ -177,7 +176,7 @@ export function StopButton({ biz }: { biz: string }) {
             toast.success(res.message ?? "Stopped");
             router.refresh(); // status card flips to "off"
           } else {
-            toast.error(res.message ?? "We could not stop Time Travel.");
+            toast.error(res.message ?? "We could not stop time travel.");
           }
         }}
       />

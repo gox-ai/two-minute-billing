@@ -10,7 +10,10 @@ import {
 } from "@/components/ui/table";
 import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { money, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
+import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import type { RetryRow } from "@/lib/api/retries";
 import { RotateCcw } from "lucide-react";
 
@@ -111,7 +114,7 @@ export function ActiveRecoveries({
   return (
     // Frameless: the page's card carries the title, the link out and this table's note.
     // Below md the attempt and refusal columns step aside; the rest scrolls inside the card.
-    // Below 2xl the attempt bar gives way to its "N of M" text so all seven fit at xl.
+    // Under a 72.875rem column the attempt bar gives way to its "N of M" text, so all seven fit.
     <Table>
       <TableHeader>
         <TableRow>
@@ -178,10 +181,11 @@ export function ActiveRecoveries({
               </TableCell>
               <TableCell className="hidden whitespace-nowrap md:table-cell">
                 <div className="flex items-center gap-2">
-                  <div className="hidden h-1.5 w-16 overflow-hidden rounded-md bg-muted 2xl:block">
+                  <div className="hidden h-1.5 w-16 overflow-hidden rounded-md bg-muted @min-[72.875rem]/main:block">
                     <div
-                      className="anim-grow h-full rounded-md bg-primary"
-                      style={{ width: `${(frac * 100).toFixed(0)}%` }}
+                      key={drawKey([frac])}
+                      className={cn(BAR_GROW, "h-full rounded-md bg-primary")}
+                      style={barStyle(`${(frac * 100).toFixed(0)}%`)}
                     />
                   </div>
                   <span className="text-xs text-muted-foreground tabular-nums">
@@ -190,7 +194,7 @@ export function ActiveRecoveries({
                 </div>
               </TableCell>
               <TableCell className="text-sm">{nextStep(r, ladder, tz)}</TableCell>
-              <TableCell className="hidden max-w-60 truncate text-sm md:table-cell 2xl:max-w-72">
+              <TableCell className="hidden max-w-60 truncate text-sm md:table-cell @min-[72.875rem]/main:max-w-72">
                 {r.last_error_code || r.last_error_text ? (
                   <>
                     {r.last_error_code ? (

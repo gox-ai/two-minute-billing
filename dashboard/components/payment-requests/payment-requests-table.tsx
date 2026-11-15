@@ -13,7 +13,7 @@ import { makeListSource } from "@/lib/list-source";
 import { IdCell, MoneyCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { useBusinessTz } from "@/components/business-tz";
 import type { PaymentRequest } from "@/lib/api/payment-requests";
 
@@ -102,7 +102,7 @@ export function PaymentRequestsTable({
         id: "amount_minor",
         header: "Due now",
         enableSorting: false,
-        meta: { align: "right" },
+        meta: { align: "right", phone: "aside" },
         accessorFn: (r) => r.amount_minor,
         cell: ({ row }) => (
           <MoneyCell minor={row.original.amount_minor} currency={row.original.currency} />
@@ -114,7 +114,7 @@ export function PaymentRequestsTable({
         // The proxy forwards no sort: the engine returns newest first.
         enableSorting: false,
         accessorFn: (r) => r.created_at,
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
     ],
     [biz, tz],

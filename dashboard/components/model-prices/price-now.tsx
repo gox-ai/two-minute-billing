@@ -10,7 +10,7 @@ import { formatListPrice } from "@/lib/model-prices";
 export function rowListKey(
   map: MeterPriceList | null | undefined,
   match: Record<string, string>,
-): { provider: string | null; model: string; token_type: string } | null {
+): ListKey | null {
   if (!map) return null;
   const model = match[map.model_key || "model"]?.trim();
   const tokenType = (
@@ -18,7 +18,15 @@ export function rowListKey(
   )?.trim();
   const provider = map.provider ?? (map.provider_key ? match[map.provider_key]?.trim() : null);
   if (!model || !tokenType) return null;
-  return { provider: provider || null, model, token_type: tokenType };
+  return { provider: provider || null, model, token_type: tokenType, unit: map.unit ?? null };
+}
+
+/** A list key as Price now looks it up. `unit` null: tokens, else requests. */
+export interface ListKey {
+  provider: string | null;
+  model: string;
+  token_type: string;
+  unit?: string | null;
 }
 
 /** base × (1 + markup ÷ 100), as a decimal string for display only. */
@@ -40,7 +48,7 @@ export function PriceNow({
   base,
   currency,
 }: {
-  listKey: { provider: string | null; model: string; token_type: string } | null;
+  listKey: ListKey | null;
   /** A fixed rate in minor units per its own divisor; set → no lookup. */
   fixedMinor?: { minor: string; divisor: string } | null;
   markup: string;
@@ -51,16 +59,18 @@ export function PriceNow({
     key: "",
     row: null,
   });
-  const k = listKey ? `${listKey.provider ?? ""}|${listKey.model}|${listKey.token_type}` : "";
+  const k = listKey
+    ? `${listKey.provider ?? ""}|${listKey.model}|${listKey.token_type}|${listKey.unit ?? ""}`
+    : "";
   const hasFixed = !!fixedMinor;
   const row = loaded.key === k ? loaded.row : "loading";
 
   React.useEffect(() => {
     if (!k || hasFixed) return;
-    const [provider, model, token_type] = k.split("|");
+    const [provider, model, token_type, unit] = k.split("|");
     let live = true;
     const t = setTimeout(() => {
-      priceNowAction({ provider: provider || null, model, token_type }).then(
+      priceNowAction({ provider: provider || null, model, token_type, unit: unit || null }).then(
         (r) => live && setLoaded({ key: k, row: r }),
       );
     }, 300);
@@ -82,7 +92,12 @@ export function PriceNow({
   if (!b) return <span className="text-muted-foreground">Default rate</span>;
   return (
     <span title={b === cost ? "Your cost plus the markup" : "List price plus the markup"}>
-      {formatListPrice(marked(b.unit_amount_decimal, markup), currency, b.quantity_divisor)}
+      {formatListPrice(
+        marked(b.unit_amount_decimal, markup),
+        currency,
+        b.quantity_divisor,
+        b.unit ?? null,
+      )}
     </span>
   );
 }

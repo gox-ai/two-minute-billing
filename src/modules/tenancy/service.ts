@@ -2,7 +2,8 @@
 // runtime cycle. A type import is erased at compile time and cannot.
 import type { Role } from "@/modules/auth/service";
 import type { KeyPermissionMap } from "@/modules/auth/permissions";
-import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { isDeepStrictEqual } from "node:util";
+import { and, desc, eq, gt, isNull, lt, notExists, or, sql } from "drizzle-orm";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { recordExchangeRateObservations } from "@/platform/fx/history";
 import { publicId } from "@/platform/ids";
@@ -15,7 +16,13 @@ import {
   type ApiKeyScope,
   type GeneratedApiKey,
 } from "@/platform/api-key";
-import { apiKeys, businesses, organizations, type BusinessCreditConfig } from "@db/schema";
+import {
+  apiKeys,
+  businesses,
+  oauthGrants,
+  organizations,
+  type BusinessCreditConfig,
+} from "@db/schema";
 import type { AnchorGranularity, ProrationGranularity } from "@db/schema/tenancy";
 import { VersionConflictError } from "@/api/helpers";
 import { InvalidTimezoneError, normalizeTimezone } from "@/platform/timezones";
@@ -157,12 +164,34 @@ type TenantTx = Parameters<Parameters<typeof withTenant>[1]>[0];
  * either: they mail real staff, and a twin would send a second, unmarked set.
  */
 async function insertTestTwin(tx: TenantTx, live: BusinessRow): Promise<BusinessRow> {
+  const [row] = await tx
+    .insert(businesses)
+    .values({
+      ...twinSettings(live),
+      testCustomerLimit: live.testCustomerLimit,
+      testSubscriptionLimit: live.testSubscriptionLimit,
+      publicId: publicId("biz"),
+      livemode: "test",
+      liveBusinessId: live.id,
+    })
+    .returning();
+  return row!;
+}
+
+/**
+ * What a test twin copies from its live business. Not identity, numbering, the default
+ * gateway, team alerts, or the staff test limits (a property of the test row itself).
+ * `resetTestBusiness` writes the same set back, so a reset twin matches a new one.
+ */
+export function twinSettings(live: BusinessRow) {
   const {
-    id,
+    id: _id,
     publicId: _publicId,
     livemode: _livemode,
     liveBusinessId: _liveBusinessId,
     liveBusinessMode: _liveBusinessMode,
+    testCustomerLimit: _testCustomerLimit,
+    testSubscriptionLimit: _testSubscriptionLimit,
     defaultGatewayAccountId: _defaultGateway,
     invoiceNextNumber: _invoiceNext,
     creditNoteNextNumber: _creditNoteNext,
@@ -173,16 +202,15 @@ async function insertTestTwin(tx: TenantTx, live: BusinessRow): Promise<Business
     teamAlertsConfig: _teamAlerts,
     ...settings
   } = live;
-  const [row] = await tx
-    .insert(businesses)
-    .values({ ...settings, publicId: publicId("biz"), livemode: "test", liveBusinessId: id })
-    .returning();
-  return row!;
+  return settings;
 }
 
 // TL-5: a test business is created with an enabled TM Test Gateway. Runs after the
 // business row commits so the gateway service can see it.
-async function provisionTestGateway(organizationId: string, businessId: string): Promise<void> {
+export async function provisionTestGateway(
+  organizationId: string,
+  businessId: string,
+): Promise<void> {
   const { createGatewayAccount } = await import("@/modules/gateway/service");
   await createGatewayAccount({
     organizationId,
@@ -215,6 +243,10 @@ export async function createBusiness(input: {
   reminderConfig?: Record<string, unknown>;
   /** Initial `storefront_config` (both twins). Absent = the resolver's defaults. */
   storefrontConfig?: Record<string, unknown>;
+  /** Starting `email_config` (only the opt-in switches a person-created business gets). */
+  emailConfig?: Record<string, unknown>;
+  /** Starting `credit_config` (both twins); absent = the engine defaults. */
+  creditConfig?: BusinessCreditConfig;
 }): Promise<BusinessRow> {
   const { live, test } = await withTenant(input.organizationId, async (tx) => {
     const [live] = await tx
@@ -232,6 +264,8 @@ export async function createBusiness(input: {
         ...(input.billingRulesConfig ? { billingRulesConfig: input.billingRulesConfig } : {}),
         ...(input.reminderConfig ? { reminderConfig: input.reminderConfig } : {}),
         ...(input.storefrontConfig ? { storefrontConfig: input.storefrontConfig } : {}),
+        ...(input.emailConfig ? { emailConfig: input.emailConfig } : {}),
+        ...(input.creditConfig ? { creditConfig: input.creditConfig } : {}),
       })
       .returning();
     return { live: live!, test: await insertTestTwin(tx, live!) };
@@ -495,6 +529,22 @@ async function queueMetricDailyRecompute(
   }
 }
 
+/**
+ * Whether a patch value equals the stored one. jsonb comes back in its own key order and
+ * without `undefined` keys, so objects compare by value after a JSON round trip.
+ */
+export function sameStoredValue(stored: unknown, next: unknown): boolean {
+  const norm = (v: unknown): unknown =>
+    v === undefined || v === null
+      ? null
+      : typeof v === "bigint"
+        ? v.toString()
+        : v instanceof Date
+          ? v.toISOString()
+          : JSON.parse(JSON.stringify(v));
+  return isDeepStrictEqual(norm(stored), norm(next));
+}
+
 /** Update a business's settings (name, default currency, provider config). */
 export async function updateBusiness(
   organizationId: string,
@@ -752,14 +802,21 @@ export async function updateBusiness(
     // ignored — the documented way back to the pre-0239 rendering.
     if (patch.invoiceCustomization !== undefined)
       set.invoiceCustomization = patch.invoiceCustomization;
-    if (Object.keys(set).length === 0) {
-      const [b] = await tx
-        .select()
-        .from(businesses)
-        .where(eq(businesses.publicId, businessPublicId))
-        .limit(1);
-      return b ?? null;
+    // A settings form posts every field it owns. A field equal to the stored value is not a
+    // change: dropped, so an unchanged Save writes nothing, keeps `resource_version` and
+    // records no audit row, and a real change audits only what moved.
+    const [current] = await tx
+      .select()
+      .from(businesses)
+      .where(eq(businesses.publicId, businessPublicId))
+      .limit(1);
+    if (!current) return null;
+    const stored = current as Record<string, unknown>;
+    const draft = set as Record<string, unknown>;
+    for (const k of Object.keys(draft)) {
+      if (sameStoredValue(stored[k], draft[k])) delete draft[k];
     }
+    if (Object.keys(set).length === 0) return current;
     /**
      * Read the zone BEFORE the write, so "did the reporting calendar actually move" is
      * answerable afterwards. Re-saving the same zone is the common case (the settings form
@@ -1101,6 +1158,9 @@ async function auditApiKey(
  * `system` keys are excluded: this list is the org's own API credentials, and the
  * dashboard's bootstrap key is not one of them — showing it would invite an
  * operator to revoke the credential their dashboard is talking to.
+ *
+ * A connected app's key is excluded too. It belongs to an OAuth grant, is listed with
+ * the connected apps, and ends when the app is disconnected.
  */
 export async function listApiKeys(
   organizationId: string,
@@ -1108,7 +1168,18 @@ export async function listApiKeys(
   return systemDb
     .select()
     .from(apiKeys)
-    .where(and(eq(apiKeys.organizationId, organizationId), eq(apiKeys.kind, "api")))
+    .where(
+      and(
+        eq(apiKeys.organizationId, organizationId),
+        eq(apiKeys.kind, "api"),
+        notExists(
+          systemDb
+            .select({ one: sql`1` })
+            .from(oauthGrants)
+            .where(eq(oauthGrants.apiKeyId, apiKeys.id)),
+        ),
+      ),
+    )
     .orderBy(desc(apiKeys.createdAt));
 }
 

@@ -6,10 +6,9 @@ import { cn } from "@/lib/utils";
 import { useDefaultState } from "@/lib/use-default-state";
 import { Input } from "@/components/ui/input";
 import { useFieldError } from "@/components/form/action-form";
-import { SelectField } from "@/components/ui/select-field";
 import { CheckboxField } from "@/components/ui/checkbox";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { SettingRow, SettingsCard } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
 import { RichBodyEditor } from "@/components/emails/rich-body-editor";
 
 export interface HostedPagesDefaults {
@@ -23,6 +22,12 @@ export interface HostedPagesDefaults {
   cancelTiming: "end_of_term" | "immediately";
   pauseResume: boolean;
   reactivate: boolean;
+  /** Restart an ended subscription through a checkout. */
+  restart: boolean;
+  restartPrice: "current" | "keep";
+  /** Days after the end; null = any time. */
+  restartWindowDays: number | null;
+  restartOpenInvoices: "pay_first" | "allow";
   skipRenewal: boolean;
   /** 1–12 renewals per 12 months. */
   skipRenewalLimit: number;
@@ -92,6 +97,7 @@ function LinkErrorMessage({ saved }: { saved: string }) {
   return (
     <SettingRow
       label="Message when a portal link cannot be used"
+      placement="below"
       help="Shows each time we refuse a customer: for an expired, used, revoked or unknown link, or for a session that ended. Sign-out has its own message."
       control={
         <div className="w-full">
@@ -155,7 +161,7 @@ function SwitchRow({
       help={help}
       placement="end"
       control={
-        <SettingSwitch name={name} label={label} checked={checked} onCheckedChange={onChange} />
+        <ToggleAnswer name={name} label={label} checked={checked} onCheckedChange={onChange} />
       }
       consequence={checked ? on : off}
       more={more}
@@ -188,6 +194,12 @@ export function HostedPagesFields({
   const [oneTimeSave, setOneTimeSave] = useDefaultState<string>(d.oneTimeSave);
   const [pause, setPause] = useDefaultState(d.pauseResume);
   const [reactivate, setReactivate] = useDefaultState(d.reactivate);
+  const [restart, setRestart] = useDefaultState(d.restart);
+  const [restartPrice, setRestartPrice] = useDefaultState<string>(d.restartPrice);
+  const [restartWindow, setRestartWindow] = useDefaultState<string>(
+    d.restartWindowDays == null ? "" : String(d.restartWindowDays),
+  );
+  const [restartInvoices, setRestartInvoices] = useDefaultState<string>(d.restartOpenInvoices);
   const [skip, setSkip] = useDefaultState(d.skipRenewal);
   const [skipLimit, setSkipLimit] = useDefaultState(String(d.skipRenewalLimit));
   const [hideZero, setHideZero] = useDefaultState(d.hideZeroLines);
@@ -235,10 +247,11 @@ export function HostedPagesFields({
       {d.walletsFirst ? <input type="hidden" name="wallets_first" value="on" /> : null}
       <SettingsCard title="Checkout layout" meta="Hosted checkout">
         <SettingRow
+          placement="end"
           label="Layout"
           help="How the hosted checkout shows the customer's details and the payment. Plan changes always show a review step."
           control={
-            <SelectField
+            <SelectAnswer
               name="checkout_layout"
               value={layout}
               onValueChange={setLayout}
@@ -259,10 +272,11 @@ export function HostedPagesFields({
 
       <SettingsCard title="Payment protection" meta="Hosted checkout">
         <SettingRow
+          placement="end"
           label="Check for bots after failed payments"
           help="After this many failed payments from one IP address in 24 hours, the checkout asks the customer to complete a Cloudflare Turnstile check before the next payment."
           control={
-            <SelectField
+            <SelectAnswer
               name="bot_check_after_failures"
               value={botCheck}
               onValueChange={setBotCheck}
@@ -309,6 +323,7 @@ export function HostedPagesFields({
         {/* Hidden, not unmounted, while terms are off: the URLs keep their saved values. */}
         <div className={cn(!requireTerms && "hidden")}>
           <SettingRow
+            placement="end"
             label="Terms URL"
             htmlFor="terms_url"
             errorFor="terms_url"
@@ -326,6 +341,7 @@ export function HostedPagesFields({
             }
           />
           <SettingRow
+            placement="end"
             label="Privacy policy URL"
             help="Optional. Shows beside the terms link."
             control={
@@ -369,10 +385,11 @@ export function HostedPagesFields({
         {/* Hidden, not unmounted, while plan changes are off: the rows keep their saved values. */}
         <div className={cn(!planChanges && "hidden")}>
           <SettingRow
+            placement="end"
             label="Seat changes"
             help="Seats are the quantity of a per-seat plan."
             control={
-              <SelectField
+              <SelectAnswer
                 name="seat_changes"
                 value={seatChanges}
                 onValueChange={setSeatChanges}
@@ -387,6 +404,7 @@ export function HostedPagesFields({
           />
           <div className={cn(seatChanges === "off" && "hidden")}>
             <SettingRow
+              placement="end"
               label="Seat limits"
               errorFor="seat_max"
               help="Empty means no limit, or at least 1."
@@ -398,7 +416,7 @@ export function HostedPagesFields({
                     min={1}
                     defaultValue={d.seatMin ?? ""}
                     placeholder="Min"
-                    className="w-24"
+                    className="w-20"
                     aria-label="Minimum seats"
                   />
                   <ErrorLinkedInput
@@ -407,7 +425,7 @@ export function HostedPagesFields({
                     min={1}
                     defaultValue={d.seatMax ?? ""}
                     placeholder="Max"
-                    className="w-24"
+                    className="w-20"
                     aria-label="Maximum seats"
                   />
                 </div>
@@ -424,10 +442,11 @@ export function HostedPagesFields({
             off="Add-ons stay as they are."
           />
           <SettingRow
+            placement="end"
             label="Move to a shorter billing period"
             help="For example, from yearly to monthly. A move to a longer period is always allowed."
             control={
-              <SelectField
+              <SelectAnswer
                 name="shorter_period"
                 value={shorter}
                 onValueChange={setShorter}
@@ -441,10 +460,11 @@ export function HostedPagesFields({
             }
           />
           <SettingRow
+            placement="end"
             label="Charge for an upgrade"
             help="When the price of an upgrade is invoiced."
             control={
-              <SelectField
+              <SelectAnswer
                 name="charge_upgrade"
                 value={chargeUpgrade}
                 onValueChange={setChargeUpgrade}
@@ -458,6 +478,7 @@ export function HostedPagesFields({
             }
           />
           <SettingRow
+            placement="end"
             label="Subscriptions that can change"
             help="By status."
             control={
@@ -502,6 +523,7 @@ export function HostedPagesFields({
         />
         <div className={cn(!coupons && "hidden")}>
           <SettingRow
+            placement="end"
             label="Coupon codes a customer can enter"
             htmlFor="max_customer_coupon_codes"
             errorFor="max_customer_coupon_codes"
@@ -606,11 +628,12 @@ export function HostedPagesFields({
         />
         <div className={cn(!cancel && "hidden")}>
           <SettingRow
+            placement="end"
             label="When a customer's cancellation takes effect"
             htmlFor="cancel_timing"
             help="Your choice, not the customer's."
             control={
-              <SelectField
+              <SelectAnswer
                 name="cancel_timing"
                 value={timing}
                 onValueChange={setTiming}
@@ -619,7 +642,6 @@ export function HostedPagesFields({
                   { value: "end_of_term", label: "At the end of the current term" },
                   { value: "immediately", label: "Immediately" },
                 ]}
-                className="w-full sm:w-72"
               />
             }
             consequence={
@@ -634,6 +656,7 @@ export function HostedPagesFields({
             }
           />
           <SettingRow
+            placement="end"
             label="Ask for a reason when a customer cancels in the portal"
             help={
               <>
@@ -642,7 +665,7 @@ export function HostedPagesFields({
               </>
             }
             control={
-              <SelectField
+              <SelectAnswer
                 name="cancel_reason"
                 value={cancelReason}
                 onValueChange={setCancelReason}
@@ -666,9 +689,10 @@ export function HostedPagesFields({
           />
           <div className={cn(!retPause && "hidden")}>
             <SettingRow
+              placement="end"
               label="Pause length"
               control={
-                <SelectField
+                <SelectAnswer
                   name="retention_pause_months"
                   value={retMonths}
                   onValueChange={setRetMonths}
@@ -685,23 +709,25 @@ export function HostedPagesFields({
             />
             <div className={cn(retMonths === "none" && "hidden")}>
               <SettingRow
+                placement="end"
                 label="The customer selects the length"
                 help="From 1 month to the pause length above."
                 control={
-                  <CheckboxField
+                  <ToggleAnswer
                     name="retention_pause_choice"
                     defaultChecked={d.retentionPauseChoice}
-                    label="Let the customer select"
+                    label="The customer selects the length"
                   />
                 }
               />
             </div>
           </div>
           <SettingRow
+            placement="end"
             label="Offer a cheaper plan before the customer cancels"
             help="The plan change starts at the next renewal (now, during a trial)."
             control={
-              <SelectField
+              <SelectAnswer
                 name="retention_downgrade_price"
                 value={retDowngrade}
                 onValueChange={setRetDowngrade}
@@ -711,6 +737,7 @@ export function HostedPagesFields({
             }
           />
           <SettingRow
+            placement="end"
             label="Offer a coupon before the customer cancels"
             help="The code of an existing coupon. Customers can get it only from this offer, not from a coupon box. Empty means no discount offer."
             control={
@@ -718,12 +745,13 @@ export function HostedPagesFields({
                 name="retention_coupon"
                 defaultValue={d.retentionCoupon}
                 placeholder="Coupon code"
-                className="w-56"
+                className="w-72"
                 aria-label="Coupon code to offer"
               />
             }
           />
           <SettingRow
+            placement="end"
             label="Offer “Contact us” before the customer cancels"
             help="A link to your help or contact page. Empty means no contact offer."
             control={
@@ -773,6 +801,7 @@ export function HostedPagesFields({
         {/* Hidden, not unmounted, while skipping is off: the limit keeps its saved value. */}
         <div className={cn(!skip && "hidden")}>
           <SettingRow
+            placement="end"
             label="Most renewals a customer can skip in 12 months"
             htmlFor="skip_renewal_limit"
             errorFor="skip_renewal_limit"
@@ -805,18 +834,103 @@ export function HostedPagesFields({
           help="This keeps a subscription that is scheduled to cancel. We charge nothing."
           checked={reactivate}
           onChange={setReactivate}
-          on="This works only while the subscription is active. After it ends, a restart bills a new period, so the portal tells the customer to contact you."
+          on="This works only while the subscription is active. To let customers restart a subscription after it ends, use the next setting."
           off="A scheduled cancellation goes ahead unless you undo it."
         />
+        <SwitchRow
+          name="allow_restart"
+          label="Let customers restart an ended subscription"
+          help="A Restart subscription action in the portal. It opens a checkout where the customer pays for a new term."
+          checked={restart}
+          onChange={setRestart}
+          on="The subscription starts again only after the payment succeeds. If the payment fails, the subscription stays cancelled."
+          off="After a subscription ends, the portal tells the customer to contact you."
+        />
+        {/* Hidden, not unmounted, while restart is off: the three keep their saved values. */}
+        <div className={cn(!restart && "hidden")}>
+          <SettingRow
+            placement="end"
+            label="Price of the new term"
+            htmlFor="restart_price"
+            control={
+              <SelectAnswer
+                name="restart_price"
+                value={restartPrice}
+                onValueChange={setRestartPrice}
+                ariaLabel="Price of the new term"
+                options={[
+                  { value: "current", label: "Current price of the plan" },
+                  { value: "keep", label: "Price the subscription had" },
+                ]}
+              />
+            }
+            consequence={
+              restartPrice === "keep"
+                ? "The customer pays the same price as before the subscription ended."
+                : "The customer pays the plan's price today. A custom price that you set on the subscription stays."
+            }
+          />
+          <SettingRow
+            placement="end"
+            label="Days after the end that a customer can restart"
+            htmlFor="restart_window_days"
+            errorFor="restart_window_days"
+            help="From 1 to 3650. Leave empty for no limit."
+            control={
+              <ErrorLinkedInput
+                id="restart_window_days"
+                name="restart_window_days"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={3650}
+                step={1}
+                defaultValue={d.restartWindowDays ?? ""}
+                onChange={(e) => setRestartWindow(e.target.value)}
+                className="w-30 tabular-nums"
+              />
+            }
+            consequence={
+              restartWindow.trim() === ""
+                ? "Customers can restart at any time after the subscription ends."
+                : /^[1-9]\d{0,3}$/.test(restartWindow.trim()) && Number(restartWindow) <= 3650
+                  ? `Customers can restart for ${restartWindow.trim()} day${restartWindow.trim() === "1" ? "" : "s"} after the subscription ends. After that, the portal tells them to contact you.`
+                  : "Enter a whole number from 1 to 3650, or leave the field empty."
+            }
+          />
+          <SettingRow
+            placement="end"
+            label="Unpaid invoices of the subscription"
+            htmlFor="restart_open_invoices"
+            control={
+              <SelectAnswer
+                name="restart_open_invoices"
+                value={restartInvoices}
+                onValueChange={setRestartInvoices}
+                ariaLabel="Unpaid invoices of the subscription"
+                options={[
+                  { value: "pay_first", label: "Customer pays them first" },
+                  { value: "allow", label: "They do not stop a restart" },
+                ]}
+              />
+            }
+            consequence={
+              restartInvoices === "allow"
+                ? "The unpaid invoices stay open. Dunning and your write-off rules still apply to them."
+                : "The portal shows the unpaid invoices first. The customer can restart after they pay them."
+            }
+          />
+        </div>
       </SettingsCard>
 
       <SettingsCard title="One-time purchases" meta="Checkout">
         <SettingRow
+          placement="end"
           label="Save the customer's payment method"
           htmlFor="one_time_save_payment_method"
           help="When a customer buys a one-time product from a checkout link."
           control={
-            <SelectField
+            <SelectAnswer
               name="one_time_save_payment_method"
               value={oneTimeSave}
               onValueChange={setOneTimeSave}
@@ -826,7 +940,6 @@ export function HostedPagesFields({
                 { value: "always", label: "Always" },
                 { value: "never", label: "Never" },
               ]}
-              className="w-full sm:w-72"
             />
           }
           consequence={
@@ -851,6 +964,7 @@ export function HostedPagesFields({
           off="Customers who need to sign in have to ask you for a new link."
         />
         <SettingRow
+          placement="end"
           label="How long an API portal link works"
           help="In hours, from 1 to 24. Empty means 1 hour. This applies to links your systems get from the API."
           control={
@@ -861,12 +975,13 @@ export function HostedPagesFields({
               max={24}
               defaultValue={d.portalLinkHours ?? ""}
               placeholder="1"
-              className="w-24 tabular-nums"
+              className="w-20 tabular-nums"
               aria-label="API portal link hours"
             />
           }
         />
         <SettingRow
+          placement="end"
           label="How long a portal link in an email works"
           help="In days, from 1 to 14. Empty means 5 days."
           control={
@@ -877,12 +992,13 @@ export function HostedPagesFields({
               max={14}
               defaultValue={d.portalEmailLinkDays ?? ""}
               placeholder="5"
-              className="w-24 tabular-nums"
+              className="w-20 tabular-nums"
               aria-label="Email portal link days"
             />
           }
         />
         <SettingRow
+          placement="end"
           label="How long a customer stays signed in"
           help="In hours, from 1 to 168. Empty means 72 hours."
           control={
@@ -893,7 +1009,7 @@ export function HostedPagesFields({
               max={168}
               defaultValue={d.portalSessionHours ?? ""}
               placeholder="72"
-              className="w-24 tabular-nums"
+              className="w-20 tabular-nums"
               aria-label="Portal session hours"
             />
           }
@@ -944,6 +1060,7 @@ export function HostedPagesFields({
           off="The link opens the portal home."
         />
         <SettingRow
+          placement="end"
           label="Back link in the portal"
           htmlFor="portal_return_url"
           errorFor="portal_return_url"
@@ -1022,9 +1139,10 @@ export function HostedPagesFields({
           more="In both cases, if the API sends a PO number when a checkout completes, we save it on the subscription."
         />
         <SettingRow
+          placement="end"
           label="Default return URL"
           htmlFor="default_return_url"
-          help="Used for return_url on the checkout's add-card step when a call sends none. A value on the call always wins."
+          help="Where we send the customer after the add-card step of the checkout, when your request does not include a link. A link in the request always wins."
           control={
             <Input
               id="default_return_url"
@@ -1033,14 +1151,15 @@ export function HostedPagesFields({
               defaultValue={d.returnUrl}
               maxLength={2000}
               placeholder="https://…"
-              className="w-full sm:max-w-md"
+              className="w-full sm:w-72"
             />
           }
         />
         <SettingRow
+          placement="end"
           label="Default cancel URL"
           htmlFor="default_cancel_url"
-          help="The same, for cancel_url. If the call has no value and there is no default here, we refuse the add-card step."
+          help="Where we send the customer who cancels the add-card step, when your request does not include a link. If neither has a link, we refuse the add-card step."
           control={
             <Input
               id="default_cancel_url"
@@ -1049,7 +1168,7 @@ export function HostedPagesFields({
               defaultValue={d.cancelUrl}
               maxLength={2000}
               placeholder="https://…"
-              className="w-full sm:max-w-md"
+              className="w-full sm:w-72"
             />
           }
         />

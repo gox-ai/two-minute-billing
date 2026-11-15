@@ -14,7 +14,7 @@ import { exploreHref, PERIOD_ROWS, type Offer } from "./query";
 import type { Grain } from "@/lib/analytics-api";
 
 /**
- * The control panel: measures, rows, period, filters — the body of the page's Query card.
+ * The control panel: measures, rows, period, currency — the body of the page's Query card.
  *
  * Every control writes the URL — `navigate` inside the page's transition — so the view stays a
  * shareable link and Back undoes exactly one change. Nothing is held in client state except
@@ -249,13 +249,11 @@ export function ControlPanel(props: PanelProps) {
         ) : null}
       </Section>
 
-      <Section title="Filters" pending={busy("filters")}>
-        {/* The ONE restriction `/v1/analytics` accepts on the rows it reads. There is no
-            `filter[<dimension>]=<value>` parameter — the query schema in
-            `src/api/analytics-routes.ts` takes measure, grain, range, start/end, split,
-            split_limit, currency, compare and business, and nothing else — so no "add filter"
-            control ships. It needs that parameter on the engine first. */}
-        {props.moneyInPlay && props.currencies.length > 1 ? (
+      {/* The reporting currency, when there is a choice. `/v1/analytics` takes no row filter
+          (no `filter[<dimension>]` parameter in `src/api/analytics-routes.ts`), so no filter
+          section ships until the engine has one. */}
+      {props.moneyInPlay && props.currencies.length > 1 ? (
+        <Section title="Currency" pending={busy("filters")}>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="explore-currency" className="text-xs text-muted-foreground">
               Reported in
@@ -275,12 +273,8 @@ export function ControlPanel(props: PanelProps) {
               ]}
             />
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            The query reads every row in the window. Row filters are not available yet.
-          </p>
-        )}
-      </Section>
+        </Section>
+      ) : null}
     </div>
   );
 }

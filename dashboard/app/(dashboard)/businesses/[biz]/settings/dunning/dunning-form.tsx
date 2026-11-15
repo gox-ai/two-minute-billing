@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Lock, Pause, Plus, RotateCw, Ban, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Alert } from "@/components/ui/alert";
 import { useDefaultState } from "@/lib/use-default-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,14 +11,8 @@ import { RadioField } from "@/components/ui/radio-group";
 import { SelectField } from "@/components/ui/select-field";
 import { NETWORK_RETRY_CAP, STRICTEST_NETWORK_RETRY_CAP } from "@/lib/dunning-caps";
 import { majorStep, toMajorInput } from "@/lib/money";
-import {
-  Consequence,
-  FieldLabel,
-  More,
-  SettingRow,
-  SettingsCard,
-} from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { More, SettingRow, SettingsCard } from "@/components/settings/settings-layout";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { SettingError } from "@/components/settings/setting-error";
 import {
   BANK_DEBIT_MAX_RETRIES,
@@ -95,6 +90,8 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
   const [offline, setOffline] = useDefaultState(d.dunOffline);
   const [collect, setCollect] = useDefaultState(d.collectOnPm);
   const [cancelNoPm, setCancelNoPm] = useDefaultState(d.cancelNoPmAtRenewal);
+  const [gapText, setGapText] = useDefaultState(String(d.cadence.fundsGapDays ?? 3));
+  const [maxText, setMaxText] = useDefaultState(String(d.cadence.fundsMaxRetries));
 
   // Retry rows keep stable keys across removals so inputs keep their own values.
   const nextKey = React.useRef(d.days.length);
@@ -126,26 +123,26 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
       {/* One state, two switches (Smart's group header, Fixed's row): post it once. */}
       {hold ? <input type="hidden" name="park_hard_declines" value="on" /> : null}
 
-      <SettingsCard
-        title="Dunning"
-        actions={
-          <SettingSwitch
-            name="dunning_enabled"
-            label="Dunning"
-            checked={enabled}
-            onCheckedChange={setEnabled}
-          />
-        }
-      >
-        <div className="flex flex-col gap-2.5 px-5 py-4">
-          <p className="m-0 text-sm text-muted-foreground">
-            Automatic retries recover failed payments.
-          </p>
-          <Consequence>
-            {enabled ? "When off" : "Off"}: a failed charge marks the invoice <b>not paid</b>, and
-            we retry nothing. The debt stays, and you can collect it manually.
-          </Consequence>
-        </div>
+      <SettingsCard title="Dunning">
+        <SettingRow
+          label="Retry failed payments"
+          help="Automatic retries recover failed payments."
+          placement="end"
+          control={
+            <ToggleAnswer
+              name="dunning_enabled"
+              label="Retry failed payments"
+              checked={enabled}
+              onCheckedChange={setEnabled}
+            />
+          }
+          consequence={
+            <>
+              {enabled ? "When off" : "Off"}: a failed charge marks the invoice <b>not paid</b>, and
+              we retry nothing. The debt stays, and you can collect it manually.
+            </>
+          }
+        />
       </SettingsCard>
 
       <SettingsCard
@@ -154,33 +151,24 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           smart ? "What happens to a declined payment" : "Every decline follows the retry schedule"
         }
       >
-        <div className="px-5 py-4">
-          <RadioField
-            name="dunning_mode"
-            ariaLabel="Decline handling"
-            value={mode}
-            onValueChange={setMode}
-            className={cn(
-              "grid-cols-1 sm:grid-cols-2",
-              "*:relative *:rounded-xl *:border *:px-4 *:py-3.5",
-              "*:has-[[data-state=checked]]:border-primary *:has-[[data-state=checked]]:bg-primary/5",
-              // The whole card is the label's hit area.
-              "[&_label]:after:absolute [&_label]:after:inset-0 [&_label]:after:content-['']",
-            )}
-            options={[
-              {
-                value: "smart",
-                label: "Smart",
-                hint: "Reads the reason that the bank gave and acts on it. We retry some declines, hold some and stop some.",
-              },
-              {
-                value: "fixed",
-                label: "Fixed",
-                hint: "Treats every decline the same way: the retry schedule runs, with one switch for hard declines.",
-              },
-            ]}
-          />
-        </div>
+        <SettingRow
+          label="Decline handling"
+          htmlFor="dunning_mode"
+          help="Smart reads the reason that the bank gave and acts on it: we retry some declines, hold some and stop some. Fixed treats every decline the same way: the retry schedule runs, with one switch for hard declines."
+          placement="end"
+          control={
+            <SelectAnswer
+              name="dunning_mode"
+              ariaLabel="Decline handling"
+              value={mode}
+              onValueChange={setMode}
+              options={[
+                { value: "smart", label: "Smart" },
+                { value: "fixed", label: "Fixed" },
+              ]}
+            />
+          }
+        />
 
         {/* Smart: the decline table. Hidden in Fixed, but its switch state lives above. */}
         <div className={cn(!smart && "hidden")}>
@@ -203,7 +191,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             help="We do not retry a decline that the gateway marks as hard, for example a stolen or expired card. Nothing changes until the customer acts."
             placement="end"
             control={
-              <SettingSwitch
+              <ToggleAnswer
                 name="skip_retries_for_hard_failures"
                 label="Skip retries for hard failures"
                 checked={skip}
@@ -224,7 +212,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
               help="This covers: a mandate that is over its limit, lapsed, used up or missing. Bank authentication that is not complete. A limit or setting on our gateway account, or a request that it rejected. No payment method on file, or one that the gateway no longer has. A card network answer of “do not retry”."
               placement="end"
               control={
-                <SettingSwitch
+                <ToggleAnswer
                   label="Hold refusals that are not the card's fault"
                   checked={hold}
                   onCheckedChange={setHold}
@@ -240,7 +228,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             />
           </div>
           {!skip ? (
-            <p className="m-0 px-5 py-3 text-sm text-muted-foreground">
+            <p className="m-0 px-5 py-3 text-xs text-muted-foreground">
               &ldquo;Hold refusals that are not the card&rsquo;s fault&rdquo; applies only while
               &ldquo;Skip retries for hard failures&rdquo; is enabled.
             </p>
@@ -253,72 +241,77 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
         meta={rows.length ? `${rows.length} of ${MAX_RETRIES} retries` : "Default schedule"}
       >
         <div className="flex flex-col gap-4 px-5 py-4">
-          <p className="m-0 text-sm text-muted-foreground">
+          <p className="m-0 text-xs leading-normal text-muted-foreground">
             Each retry counts from the invoice&rsquo;s due date. An invoice with no due date counts
-            from the first failure.
+            from the first failure. Remove every retry to use the default: days{" "}
+            {listDays(DEFAULT_RETRY_DAYS)}.
           </p>
-          {rows.length === 0 ? (
-            <p className="m-0 rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-              No custom schedule. The default applies: days {listDays(DEFAULT_RETRY_DAYS)}.
-            </p>
-          ) : (
-            <ol className="m-0 grid list-none grid-cols-1 gap-x-8 gap-y-2 p-0 md:grid-cols-2">
-              {rows.map((row, i) => (
-                <li key={row.key} className="flex items-center gap-2.5">
-                  <span className="w-14 shrink-0 text-xs text-muted-foreground tabular-nums">
-                    Retry {i + 1}
-                  </span>
-                  <Input
-                    name="retry_days"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={90}
-                    required
-                    value={row.value}
-                    onChange={(e) =>
-                      setRows((r) =>
-                        r.map((x) => (x.key === row.key ? { ...x, value: e.target.value } : x)),
-                      )
-                    }
-                    className="w-20 tabular-nums"
-                    aria-label={`Retry ${i + 1}: days after due date`}
-                  />
-                  <span className="text-sm text-muted-foreground">days after due date</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="ml-auto"
-                    onClick={() => setRows((r) => r.filter((x) => x.key !== row.key))}
-                    aria-label={`Remove retry ${i + 1}`}
-                  >
-                    <X className="size-4" aria-hidden />
-                  </Button>
-                </li>
-              ))}
-            </ol>
-          )}
-          <SettingError name="retry_days" />
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex flex-col gap-2">
+            {rows.length === 0 ? (
+              <p className="m-0 rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+                No custom schedule. The default applies: days {listDays(DEFAULT_RETRY_DAYS)}.
+              </p>
+            ) : (
+              <>
+                {/* One header for the columns: a label on every row would repeat it. */}
+                <div className="flex gap-2.5 text-sm font-medium" aria-hidden="true">
+                  <span className="w-12 shrink-0">Retry</span>
+                  <span>After the due date</span>
+                </div>
+                <ol className="m-0 flex list-none flex-col gap-2 p-0">
+                  {rows.map((row, i) => (
+                    <li key={row.key} className="flex items-center gap-2.5">
+                      <span className="w-12 shrink-0 text-sm text-muted-foreground tabular-nums">
+                        {i + 1}
+                      </span>
+                      <Input
+                        name="retry_days"
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={90}
+                        required
+                        value={row.value}
+                        onChange={(e) =>
+                          setRows((r) =>
+                            r.map((x) => (x.key === row.key ? { ...x, value: e.target.value } : x)),
+                          )
+                        }
+                        className="w-20 tabular-nums"
+                        aria-label={`Retry ${i + 1}, days after the due date`}
+                      />
+                      <span className="text-sm whitespace-nowrap text-muted-foreground">days</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setRows((r) => r.filter((x) => x.key !== row.key))}
+                        aria-label={`Remove retry ${i + 1}`}
+                      >
+                        <X className="size-4" aria-hidden />
+                      </Button>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+            <SettingError name="retry_days" />
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="-ml-2 self-start text-primary"
               onClick={addRow}
               disabled={rows.length >= MAX_RETRIES}
             >
               <Plus className="size-4" aria-hidden /> Add retry
               {rows.length >= MAX_RETRIES ? ` (max ${MAX_RETRIES})` : ""}
             </Button>
-            <span className="text-xs text-muted-foreground">
-              Remove every retry to use the default: days {listDays(DEFAULT_RETRY_DAYS)}.
-            </span>
           </div>
 
           <Timeline days={days} period={period} />
 
-          <MethodSchedules d={d} />
+          <MethodSchedules d={d} days={days} />
 
           {days.length > STRICTEST_NETWORK_RETRY_CAP ? <RailCapNote days={days} /> : null}
         </div>
@@ -331,7 +324,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             help="Time each retry by why the payment failed, instead of the days above."
             placement="end"
             control={
-              <SettingSwitch
+              <ToggleAnswer
                 name="adaptive_timing"
                 label="Adaptive retry timing"
                 checked={adaptive}
@@ -344,22 +337,32 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
                 : "Off: every retry uses the days above."
             }
           >
+            {/* While the switch is off the inputs are disabled; a disabled input does not
+                post, so each one mirrors its value in a hidden input and the stored value
+                survives the save. */}
             <div className="flex flex-col gap-3 text-sm">
               <CadenceInput
                 name="cadence_transient_hours"
                 label="Gateway or network fault"
-                unit="hours after each failure · 1 to 168"
+                unit="Hours after each failure, 1 to 168"
                 value={d.cadence.transientHours}
+                disabled={!adaptive}
               />
               <CadenceInput
                 name="cadence_generic_days"
                 label="Generic decline"
-                unit="days after each failure · 1 to 14"
+                unit="Days after each failure, 1 to 14"
                 value={d.cadence.genericDays}
+                disabled={!adaptive}
               />
-              <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 border-t pt-3 sm:grid-cols-[13rem_minmax(0,1fr)]">
-                <span className="font-medium">Insufficient funds</span>
-                <div className="flex min-w-0 flex-col gap-2.5">
+              <div className={CADENCE_ROW}>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className={cn("font-medium", !adaptive && "text-muted-foreground")}>
+                    Insufficient funds
+                  </span>
+                  <span className="text-xs text-muted-foreground">When to retry the card</span>
+                </div>
+                <div className="flex w-full min-w-0 shrink-0 flex-col gap-2.5 sm:w-72">
                   <RadioField
                     name="cadence_funds_mode"
                     ariaLabel="Insufficient funds timing"
@@ -370,43 +373,71 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
                         value: "paydays",
                         label: "Next likely payday",
                         hint: "The 1st, 15th or last day of the month.",
+                        disabled: !adaptive,
                       },
-                      { value: "days", label: "A fixed number of days after each failure" },
+                      {
+                        value: "days",
+                        label: "A fixed number of days",
+                        disabled: !adaptive,
+                      },
                     ]}
                   />
+                  {/* Belongs to the "fixed number of days" option: indented under its label. */}
                   <div
                     className={cn(
-                      "flex flex-wrap items-center gap-2.5",
+                      "flex items-center gap-2.5 pl-7",
                       fundsMode !== "days" && "hidden",
                     )}
                   >
                     <Input
                       name="cadence_funds_gap_days"
-                      disabled={fundsMode !== "days"}
+                      disabled={!adaptive || fundsMode !== "days"}
                       type="number"
                       inputMode="numeric"
                       min={1}
                       max={14}
-                      defaultValue={d.cadence.fundsGapDays ?? 3}
+                      value={gapText}
+                      onChange={(e) => setGapText(e.target.value)}
                       className="w-20 tabular-nums"
                       aria-label="Days after each insufficient-funds failure"
                     />
-                    <span className="text-muted-foreground">days · 1 to 14</span>
+                    <span className="whitespace-nowrap text-muted-foreground">
+                      days after each failure
+                    </span>
+                    {!adaptive && fundsMode === "days" ? (
+                      <input type="hidden" name="cadence_funds_gap_days" value={gapText} />
+                    ) : null}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <Input
-                      name="cadence_funds_max_retries"
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={6}
-                      required
-                      defaultValue={d.cadence.fundsMaxRetries}
-                      className="w-20 tabular-nums"
-                      aria-label="Most insufficient-funds retries"
-                    />
-                    <span className="text-muted-foreground">retries at most · 1 to 6</span>
-                  </div>
+                </div>
+              </div>
+              <div className={CADENCE_ROW}>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <label
+                    htmlFor="cadence_funds_max_retries"
+                    className={cn("font-medium", !adaptive && "text-muted-foreground")}
+                  >
+                    Most retries for insufficient funds
+                  </label>
+                  <span className="text-xs text-muted-foreground">1 to 6, with either timing</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-2.5 sm:w-72">
+                  <Input
+                    id="cadence_funds_max_retries"
+                    name="cadence_funds_max_retries"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={6}
+                    required
+                    disabled={!adaptive}
+                    value={maxText}
+                    onChange={(e) => setMaxText(e.target.value)}
+                    className="w-20 tabular-nums"
+                  />
+                  <span className="text-muted-foreground">retries</span>
+                  {!adaptive ? (
+                    <input type="hidden" name="cadence_funds_max_retries" value={maxText} />
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -419,7 +450,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           </SettingRow>
         </div>
         {!smart ? (
-          <p className="m-0 border-t px-5 py-3 text-sm text-muted-foreground">
+          <p className="m-0 border-t px-5 py-3 text-xs text-muted-foreground">
             Adaptive retry timing is a Smart setting.
           </p>
         ) : null}
@@ -430,9 +461,10 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           label="Dunning period"
           htmlFor="dunning_period_days"
           errorFor="dunning_period_days"
-          help="The final actions apply at the end of the period, after one last try on its final day."
+          help="1 to 365 days. Leave it blank for no deadline. The final actions apply at the end of the period, after one last try on its final day."
+          placement="end"
           control={
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-2.5">
               <Input
                 id="dunning_period_days"
                 name="dunning_period_days"
@@ -442,18 +474,18 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
                 max={365}
                 value={periodText}
                 onChange={(e) => setPeriodText(e.target.value)}
-                placeholder="No deadline"
-                className="w-36 tabular-nums"
+                className="w-20 tabular-nums"
               />
-              <span className="text-sm text-muted-foreground">
-                days after the due date · 1 to 365
+              <span className="text-sm whitespace-nowrap text-muted-foreground">
+                days after the due date
               </span>
             </div>
           }
           consequence={
             period == null ? (
               <>
-                Blank: dunning ends when the last retry fails (day {lastDay}).
+                Blank: dunning ends when the last retry fails
+                {lastDay == null ? "." : ` (day ${lastDay}).`}
                 {smart || skip
                   ? ` Held invoices, and declines that we would hold, still close after ${HELD_GRACE_DAYS} days.`
                   : null}
@@ -469,34 +501,41 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             )
           }
         />
-        <div className="flex flex-col gap-3 px-5 py-4">
-          <p className="m-0 text-sm font-semibold">Final actions</p>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <FieldLabel htmlFor="final_invoice_action">Invoice</FieldLabel>
-              <SelectField
-                name="final_invoice_action"
-                ariaLabel="Final invoice action"
-                value={inv}
-                onValueChange={setInv}
-                options={INVOICE_OPTIONS}
-              />
-            </div>
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <FieldLabel htmlFor="final_subscription_action">Subscription</FieldLabel>
-              <SelectField
-                name="final_subscription_action"
-                ariaLabel="Final subscription action"
-                value={sub}
-                onValueChange={setSub}
-                options={SUBSCRIPTION_OPTIONS}
-              />
-            </div>
-          </div>
-          <Consequence>
-            Unpaid at the end: {finalLine}. {SUBSCRIPTION_HELP[sub as FinalSubscription]}
-          </Consequence>
-        </div>
+        <SettingRow
+          label="Final action for the invoice"
+          htmlFor="final_invoice_action"
+          help="What happens to an invoice that is still unpaid when dunning ends."
+          placement="end"
+          control={
+            <SelectAnswer
+              name="final_invoice_action"
+              ariaLabel="Final action for the invoice"
+              value={inv}
+              onValueChange={setInv}
+              options={INVOICE_OPTIONS}
+            />
+          }
+        />
+        <SettingRow
+          label="Final action for the subscription"
+          htmlFor="final_subscription_action"
+          help="What happens to the subscription of that invoice."
+          placement="end"
+          control={
+            <SelectAnswer
+              name="final_subscription_action"
+              ariaLabel="Final action for the subscription"
+              value={sub}
+              onValueChange={setSub}
+              options={SUBSCRIPTION_OPTIONS}
+            />
+          }
+          consequence={
+            <>
+              Unpaid at the end: {finalLine}. {SUBSCRIPTION_HELP[sub as FinalSubscription]}
+            </>
+          }
+        />
       </SettingsCard>
 
       <SettingsCard title="Which invoices get dunning">
@@ -505,7 +544,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           help="A failed activation charge on a subscription that is still scheduled or in trial."
           placement="end"
           control={
-            <SettingSwitch
+            <ToggleAnswer
               name="dun_trial_and_future_subscriptions"
               label="Dunning for future and trial subscriptions"
               checked={trialFuture}
@@ -523,7 +562,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           help="Invoices with no subscription behind them."
           placement="end"
           control={
-            <SettingSwitch
+            <ToggleAnswer
               name="dun_one_time_invoices"
               label="Dunning for one-time invoices"
               checked={oneTime}
@@ -542,7 +581,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
           help="Invoices with auto-collection off. We never charge them. We remind the customer on each retry day, and the customer can pay in their portal."
           placement="end"
           control={
-            <SettingSwitch
+            <ToggleAnswer
               name="dun_offline_invoices"
               label="Dunning for send-invoice (offline) invoices"
               checked={offline}
@@ -566,7 +605,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             help="When a customer adds or updates a card, charge their open payment-due invoices at once, oldest first. We do not charge offline invoices."
             placement="end"
             control={
-              <SettingSwitch
+              <ToggleAnswer
                 name="collect_on_payment_method_update"
                 label="Collect open invoices when a payment method is added"
                 checked={collect}
@@ -584,7 +623,7 @@ export function DunningFields({ d, policy = false }: { d: DunningDefaults; polic
             help="A subscription that auto-collects but whose customer has no payment method at all. We still retry an expired or declined card as usual."
             placement="end"
             control={
-              <SettingSwitch
+              <ToggleAnswer
                 name="no_payment_method_at_renewal_cancel"
                 label="Cancel at renewal when there is no payment method"
                 checked={cancelNoPm}
@@ -623,58 +662,64 @@ function MinimumAmounts({ d }: { d: DunningDefaults }) {
     setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
 
   const editor = (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2">
       {rows.length ? (
-        <ul className="m-0 flex list-none flex-col gap-2 p-0">
-          {rows.map((row) => (
-            <li key={row.key} className="flex flex-wrap items-center gap-2.5">
-              <SelectField
-                id={`min_currency_${row.key}`}
-                name="min_currency"
-                ariaLabel="Currency"
-                value={row.currency}
-                onValueChange={(currency) => update(row.key, { currency })}
-                options={[row.currency, ...free].map((c) => ({ value: c, label: c }))}
-                className="w-28"
-              />
-              <Input
-                name="min_amount"
-                type="number"
-                inputMode="decimal"
-                min={0}
-                step={majorStep(row.currency)}
-                required
-                value={row.amount}
-                onChange={(e) => update(row.key, { amount: e.target.value })}
-                className="w-36 tabular-nums"
-                aria-label={`Minimum amount due in ${row.currency}`}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setRows((r) => r.filter((x) => x.key !== row.key))}
-                aria-label={`Remove the minimum for ${row.currency}`}
-              >
-                <X className="size-4" aria-hidden />
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <>
+          {/* One header for the columns: a label on every row would repeat it. */}
+          <div className="flex gap-2.5 text-sm font-medium" aria-hidden="true">
+            <span className="w-30">Currency</span>
+            <span className="w-30">Amount</span>
+          </div>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {rows.map((row, i) => (
+              <li key={row.key} className="flex items-center gap-2.5">
+                <SelectField
+                  id={`min_currency_${row.key}`}
+                  name="min_currency"
+                  ariaLabel={`Minimum ${i + 1} currency`}
+                  value={row.currency}
+                  onValueChange={(currency) => update(row.key, { currency })}
+                  options={[row.currency, ...free].map((c) => ({ value: c, label: c }))}
+                  className="w-30"
+                />
+                <Input
+                  name="min_amount"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step={majorStep(row.currency)}
+                  required
+                  value={row.amount}
+                  onChange={(e) => update(row.key, { amount: e.target.value })}
+                  className="w-30 tabular-nums"
+                  aria-label={`Minimum amount due in ${row.currency}`}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setRows((r) => r.filter((x) => x.key !== row.key))}
+                  aria-label={`Remove the minimum for ${row.currency}`}
+                >
+                  <X className="size-4" aria-hidden />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
-      <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={free.length === 0}
-          onClick={() =>
-            setRows((r) => [...r, { key: nextKey.current++, currency: free[0]!, amount: "" }])
-          }
-        >
-          <Plus className="size-4" aria-hidden /> Add minimum
-        </Button>
-      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="-ml-2 self-start text-primary"
+        disabled={free.length === 0}
+        onClick={() =>
+          setRows((r) => [...r, { key: nextKey.current++, currency: free[0]!, amount: "" }])
+        }
+      >
+        <Plus className="size-4" aria-hidden /> Add minimum
+      </Button>
     </div>
   );
 
@@ -754,13 +799,14 @@ function SmartTable({
       />
 
       <GroupHeader title="Your choice">
-        <SettingSwitch
-          className="ml-auto"
-          label="Hold hard declines for the customer"
-          text="Hold hard declines for the customer"
-          checked={hold}
-          onCheckedChange={onHold}
-        />
+        <span className="ml-auto inline-flex items-center gap-2 text-sm font-medium">
+          <span aria-hidden>Hold hard declines for the customer</span>
+          <ToggleAnswer
+            label="Hold hard declines for the customer"
+            checked={hold}
+            onCheckedChange={onHold}
+          />
+        </span>
       </GroupHeader>
       <DeclineRow
         name="Generic decline"
@@ -825,9 +871,7 @@ function SmartTable({
 function GroupHeader({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-3 border-b bg-muted/30 px-5 py-3">
-      <span className="text-xs font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-        {title}
-      </span>
+      <span className="text-xs font-medium text-muted-foreground">{title}</span>
       {children}
     </div>
   );
@@ -856,9 +900,7 @@ function DeclineRow({
         <p className="m-0 mt-1 text-xs leading-normal text-muted-foreground">{codes}</p>
       </div>
       <div className="flex min-w-0 flex-col gap-1.5 text-sm leading-normal">
-        <span className="text-xs font-medium tracking-[0.06em] text-muted-foreground uppercase sm:hidden">
-          What we do
-        </span>
+        <span className="text-xs font-medium text-muted-foreground sm:hidden">What we do</span>
         <span className="inline-flex items-center gap-1.5 self-start rounded-full border bg-muted px-2.5 py-0.5 text-xs font-medium">
           <V.icon aria-hidden className="size-3" />
           {label ?? V.text}
@@ -907,39 +949,49 @@ function Timeline({ days, period }: { days: number[]; period: number | null }) {
   );
 }
 
+/** Label and help on the left, the field on the card's right edge. */
+const CADENCE_ROW =
+  "flex flex-col gap-1.5 border-t pt-3 first:border-t-0 first:pt-0 sm:flex-row sm:items-start sm:justify-between sm:gap-8";
+
 /** One adaptive cadence as a comma-separated list (posted as text, parsed on the server). */
 function CadenceInput({
   name,
   label,
   unit,
   value,
+  disabled,
 }: {
   name: string;
   label: string;
   unit: string;
   value: number[];
+  disabled: boolean;
 }) {
+  const [text, setText] = useDefaultState(value.join(", "));
   return (
-    <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 border-t pt-3 first:border-t-0 first:pt-0 sm:grid-cols-[13rem_minmax(0,1fr)]">
-      <label htmlFor={name} className="font-medium">
-        {label}
-      </label>
-      <div className="flex flex-wrap items-center gap-2.5">
-        <Input
-          id={name}
-          name={name}
-          required
-          defaultValue={value.join(", ")}
-          className="w-40 tabular-nums"
-        />
-        <span className="text-muted-foreground">{unit}</span>
+    <div className={CADENCE_ROW}>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <label htmlFor={name} className={cn("font-medium", disabled && "text-muted-foreground")}>
+          {label}
+        </label>
+        <span className="text-xs text-muted-foreground">{unit}</span>
       </div>
+      <Input
+        id={name}
+        name={name}
+        required
+        disabled={disabled}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        className="w-full shrink-0 tabular-nums sm:w-72"
+      />
+      {disabled ? <input type="hidden" name={name} value={text} /> : null}
     </div>
   );
 }
 
 /** Per payment method schedules (2.48). Blank = the main schedule above. */
-function MethodSchedules({ d }: { d: DunningDefaults }) {
+function MethodSchedules({ d, days }: { d: DunningDefaults; days: number[] }) {
   const rows = [
     {
       kind: "card",
@@ -961,7 +1013,7 @@ function MethodSchedules({ d }: { d: DunningDefaults }) {
     <div className="flex flex-col gap-3 border-t pt-4">
       <div>
         <p className="m-0 text-sm font-semibold">By payment method</p>
-        <p className="m-0 mt-1 text-sm text-muted-foreground">
+        <p className="m-0 mt-1 text-xs text-muted-foreground">
           Days after the due date, with commas between them. Leave a row blank to use the schedule
           above. Other methods (UPI, wallets, PayPal) use the schedule above.
         </p>
@@ -969,20 +1021,28 @@ function MethodSchedules({ d }: { d: DunningDefaults }) {
       {rows.map((r) => (
         <div
           key={r.kind}
-          className="grid grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-[10rem_minmax(0,1fr)]"
+          className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-8"
         >
-          <label htmlFor={`method_days_${r.kind}`} className="text-sm font-medium">
-            {r.label}
-          </label>
-          <div className="flex min-w-0 flex-col gap-1">
-            <Input
-              id={`method_days_${r.kind}`}
-              name={`method_days_${r.kind}`}
-              defaultValue={d.methodDays[r.kind].join(", ")}
-              placeholder="Schedule above"
-              className="w-56 tabular-nums"
-            />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <label htmlFor={`method_days_${r.kind}`} className="text-sm font-medium">
+              {r.label}
+            </label>
             <span className="text-xs text-muted-foreground">{r.hint}</span>
+          </div>
+          <div className="flex shrink-0 flex-col gap-1">
+            <div className="flex items-center gap-2.5">
+              <Input
+                id={`method_days_${r.kind}`}
+                name={`method_days_${r.kind}`}
+                defaultValue={d.methodDays[r.kind].join(", ")}
+                aria-describedby={`method_days_${r.kind}_blank`}
+                className="w-full tabular-nums sm:w-72"
+              />
+              <span className="text-sm whitespace-nowrap text-muted-foreground">days</span>
+            </div>
+            <span id={`method_days_${r.kind}_blank`} className="text-xs text-muted-foreground">
+              {days.length ? `Blank: days ${listDays(days)}` : "Blank: the schedule above"}
+            </span>
           </div>
         </div>
       ))}
@@ -996,8 +1056,7 @@ function RailCapNote({ days }: { days: number[] }) {
   const emandate = days.slice(0, NETWORK_RETRY_CAP.emandate);
   const upiCut = days.length > NETWORK_RETRY_CAP.upi;
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border px-3.5 py-3 text-sm leading-normal">
-      <RotateCw aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+    <Alert tone="neutral">
       <div className="min-w-0">
         <b className="font-semibold">Indian mandate debits retry fewer times.</b> The network caps
         re-presentations: UPI Autopay gets{" "}
@@ -1011,6 +1070,6 @@ function RailCapNote({ days }: { days: number[] }) {
           actions apply.
         </More>
       </div>
-    </div>
+    </Alert>
   );
 }

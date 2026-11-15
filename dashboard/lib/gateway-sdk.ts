@@ -5,6 +5,7 @@
  * and never branch on the provider. RazorPay's `mode: 'checkout'` sheet is not routed
  * through this (see `razorpay-checkout.ts`).
  */
+import { contactBusiness } from "./gateway-errors";
 
 /** `next_action.sdk` / `vault_setup.sdk`: the provider and the params its browser SDK takes. */
 export interface GatewaySdkDescriptor {
@@ -22,10 +23,29 @@ export interface GatewaySdkContext {
   businessName: string;
   /** A vault setup (save a method) or a charge (authorize this payment). */
   purpose: "setup" | "payment";
-  prefill?: { name?: string | null; email?: string | null; contact?: string | null };
+  prefill?: {
+    name?: string | null;
+    email?: string | null;
+    contact?: string | null;
+    /** The billing address the page already took; a dialog collapses its own copy. */
+    address?: {
+      line1: string | null;
+      city: string | null;
+      state: string | null;
+      state_code: string | null;
+      postal_code: string | null;
+      country: string | null;
+    };
+  };
+  /** What the dialog's commit button says, so it matches the page ("Subscribe and pay $X"). */
+  confirmLabel?: string;
 }
 
-/** `clientResult` goes back to the engine as `client_result` on leg 2. */
+/**
+ * `clientResult` goes back to the engine as `client_result` on leg 2. `dismissed` is only a
+ * buyer who closed or cancelled the form. Every gateway error is `failed`, with a message
+ * the caller shows, even when the gateway's form showed it too.
+ */
 export type GatewaySdkResult =
   | { status: "completed"; clientResult?: Record<string, string> }
   | { status: "dismissed" }
@@ -73,16 +93,19 @@ export async function openGatewaySdk(
   if (!loader) {
     return {
       status: "failed",
-      message:
-        "We could not open the payment form. This page does not support this payment provider. Contact the business.",
+      message: `We could not open the payment form. This page does not support this payment provider. ${contactBusiness(context.businessName)}`,
     };
   }
   try {
     return await loader(sdk.params ?? {}, context);
-  } catch {
+  } catch (e) {
+    // A loader's own sentence ("We could not load the payment form. …") is the better one.
+    const said = e instanceof Error ? e.message : "";
     return {
       status: "failed",
-      message: "We could not open the payment form. Check your connection. Then try again.",
+      message: said.startsWith("We could not")
+        ? said
+        : "We could not load the payment form. Reload the page. Then try again.",
     };
   }
 }

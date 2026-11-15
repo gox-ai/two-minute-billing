@@ -1,5 +1,6 @@
 "use client";
 
+import { observeSettledResize } from "@/lib/settled-resize";
 import * as React from "react";
 import * as echarts from "echarts/core";
 import { LineChart, PieChart } from "echarts/charts";
@@ -32,10 +33,9 @@ export function EChart({
     if (!ref.current) return;
     const chart = echarts.init(ref.current, undefined, { renderer: "svg" });
     chartRef.current = chart;
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(ref.current);
+    const stop = observeSettledResize(ref.current, () => chart.resize());
     return () => {
-      ro.disconnect();
+      stop();
       chart.dispose();
       chartRef.current = null;
     };

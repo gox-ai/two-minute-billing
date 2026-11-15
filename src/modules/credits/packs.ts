@@ -6,7 +6,7 @@
  */
 import { missingMeters } from "./scope";
 import { normalizeReset, resetRefusal, type Reset } from "./reset-windows";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { createLogger } from "@/platform/logger";
@@ -25,6 +25,7 @@ import {
   type PriceGrantsCredit,
 } from "@db/schema";
 import {
+  activatePendingPlanGrants,
   CreditRuleError,
   grantViews,
   insertCreditGrant,
@@ -96,6 +97,10 @@ export const priceGrantsCreditSchema = z.discriminatedUnion("kind", [
         .optional(),
       reset: z.unknown().optional(),
       first_window: z.enum(["full", "prorated", "next_full_window"]).nullable().optional(),
+      unit_cost_basis: z
+        .string()
+        .regex(/^\d{1,12}(\.\d{1,12})?$/, "a decimal amount of money per credit")
+        .optional(),
     })
     .strict(),
 ]);
@@ -135,6 +140,10 @@ export async function validatePriceGrantsCredit(
     throw new CreditRuleError(
       "We could not save the price. Credits per cycle need a recurring price.",
     );
+  if (v.kind === "per_cycle" && v.unit_cost_basis !== undefined && !v.unit)
+    throw new CreditRuleError(
+      "We could not save the price. A cost basis per credit needs a credit unit with no money rate.",
+    );
   if (v.unit) {
     const [u] = await tx
       .select()
@@ -150,6 +159,10 @@ export async function validatePriceGrantsCredit(
     if (u.currency !== input.currency.toUpperCase())
       throw new CreditRuleError(
         `We could not save the price. The credit unit ${v.unit} is priced in ${u.currency}, not ${input.currency.toUpperCase()}.`,
+      );
+    if (v.kind === "per_cycle" && v.unit_cost_basis !== undefined && u.minorPerUnitE12 != null)
+      throw new CreditRuleError(
+        "We could not save the price. A cost basis per credit needs a credit unit with no money rate.",
       );
   }
   if (v.applicability?.kind === "prices") {
@@ -241,6 +254,7 @@ export async function validatePriceGrantsCredit(
         : { mode: "none" },
     ...(reset && reset.every !== "term" ? { reset } : {}),
     ...(v.first_window != null ? { first_window: v.first_window } : {}),
+    ...(v.unit_cost_basis !== undefined ? { unit_cost_basis: v.unit_cost_basis } : {}),
   };
 }
 
@@ -269,19 +283,42 @@ export async function packPricesFor(
   return out;
 }
 
-/** Money of the pack lines in a line set (they take no promotional credit and no grants). */
+/**
+ * Money of the pack lines in a line set (they take no promotional credit and no grants).
+ * With `discountsByIndex`, each pack line counts after its discount shares.
+ */
 export async function packLinesMinor(
   tx: Tx,
   lines: ReadonlyArray<{ priceId?: string | null; amountMinor: bigint; creditPack?: string }>,
+  discountsByIndex?: ReadonlyArray<bigint>,
 ): Promise<bigint> {
   const packs = await packPricesFor(
     tx,
     lines.map((l) => l.priceId),
   );
   return lines.reduce(
-    (s, l) => s + (l.creditPack || (l.priceId && packs.has(l.priceId)) ? l.amountMinor : 0n),
+    (s, l, i) =>
+      s +
+      (l.creditPack || (l.priceId && packs.has(l.priceId))
+        ? l.amountMinor - (discountsByIndex?.[i] ?? 0n)
+        : 0n),
     0n,
   );
+}
+
+/**
+ * The cost basis of paid credit sold on one invoice line: what the buyer pays for it, excl.
+ * tax. The line's amount less every discount share on it (item-level and its part of the
+ * document-level discount) and less any inclusive tax. Never below 0; a 100% coupon gives 0.
+ * Every paid grant made from an invoice line takes its cost basis from here.
+ */
+export function paidCreditCostBasisMinor(line: {
+  amountMinor: bigint;
+  discountMinor?: bigint;
+  inclusiveTaxMinor?: bigint;
+}): bigint {
+  const net = line.amountMinor - (line.discountMinor ?? 0n) - (line.inclusiveTaxMinor ?? 0n);
+  return net > 0n ? net : 0n;
 }
 
 /**
@@ -306,9 +343,8 @@ export async function createPendingPackGrants(
       id: string;
       priceId?: string | null;
       quantity?: number | null;
-      amountMinor: bigint;
-      discountMinor?: bigint;
-      inclusiveTaxMinor?: bigint;
+      /** `paidCreditCostBasisMinor` of the line. */
+      costBasisMinor: bigint;
     }>;
   },
 ): Promise<CreditGrant[]> {
@@ -328,7 +364,6 @@ export async function createPendingPackGrants(
       throw new CreditRuleError(
         `We could not create the invoice. No such credit unit: ${p.pack.unit}.`,
       );
-    const cost = line.amountMinor - (line.discountMinor ?? 0n) - (line.inclusiveTaxMinor ?? 0n);
     // Effective now; the pair moves to the paid time at activation, keeping the lifetime.
     const effectiveAt = input.invoice.createdAt;
     const days = p.pack.expires_after?.days ?? null;
@@ -339,7 +374,7 @@ export async function createPendingPackGrants(
       currency: input.invoice.currency,
       unit,
       amount: BigInt(p.pack.amount) * qty,
-      costBasisMinor: cost > 0n ? cost : 0n,
+      costBasisMinor: line.costBasisMinor > 0n ? line.costBasisMinor : 0n,
       category: "paid",
       priority: p.pack.priority ?? 50,
       effectiveAt,
@@ -410,6 +445,9 @@ export async function activatePaidCreditGrants(
     .where(eq(invoices.id, input.invoiceId))
     .limit(1);
   if (!inv || inv.status !== "paid") return 0;
+  // Every path that pays an invoice reaches here: a change held for it applies after commit.
+  const { onInvoicePaid } = await import("@/modules/subscriptions/pending-change");
+  await onInvoicePaid(tx, input.organizationId, input.invoiceId);
   const paidAt = inv.paidAt ?? new Date();
   const flipped = await tx
     .update(creditGrants)
@@ -419,8 +457,16 @@ export async function activatePaidCreditGrants(
       expiresAt: sql`case when ${creditGrants.expiresAt} is null then null
         else ${paidAt.toISOString()}::timestamptz + (${creditGrants.expiresAt} - ${creditGrants.effectiveAt}) end`,
     })
-    .where(and(eq(creditGrants.invoiceId, input.invoiceId), eq(creditGrants.status, "pending")))
+    .where(
+      and(
+        eq(creditGrants.invoiceId, input.invoiceId),
+        eq(creditGrants.status, "pending"),
+        ne(creditGrants.source, "plan_cycle"),
+      ),
+    )
     .returning();
+  // Plan credits held for this invoice keep their window.
+  const plan = await activatePendingPlanGrants(tx, { invoiceId: input.invoiceId, paidAt });
   for (const g of flipped) {
     let ledgerTx: string | null = null;
     if (g.costBasisMinor > 0n) {
@@ -471,7 +517,7 @@ export async function activatePaidCreditGrants(
       ),
     });
   }
-  return flipped.length;
+  return flipped.length + plan;
 }
 
 /**

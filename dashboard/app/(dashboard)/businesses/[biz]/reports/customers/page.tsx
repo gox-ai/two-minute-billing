@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/api";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import {
   listSegmentAttributes,
   listSegments,
@@ -11,7 +12,7 @@ import { Alert } from "@/components/ui/alert";
 import { ErrorState } from "@/components/states";
 import { SegmentRail } from "@/components/reports/customers/segment-rail";
 import { SegmentFilterBar } from "@/components/reports/customers/filter-bar";
-import { SegmentCustomerTable } from "@/components/reports/customers/segment-table";
+import { SegmentCustomerList } from "@/components/reports/customers/segment-list";
 import {
   SegmentBodySkeleton,
   SegmentTitleSkeleton,
@@ -23,6 +24,7 @@ import { KPI_LABEL } from "@/components/analytics/layout";
 
 export const dynamic = "force-dynamic";
 
+/** Keep in step with `SEGMENT_PAGE` in ./actions. */
 const PAGE = 50;
 
 /**
@@ -114,7 +116,7 @@ export default async function CustomerSegmentsPage({
       <PageHeader
         title="Customers"
         description="A segment is a saved filter over customer attributes. Reports can compare a metric across segments."
-        breadcrumbs={[{ label: "Reports", href: `/businesses/${biz}/reports` }]}
+        breadcrumbs={reportCrumbs(biz, business?.name, title)}
       />
 
       <div className="flex flex-col gap-5">
@@ -148,20 +150,9 @@ export default async function CustomerSegmentsPage({
             meta={
               total == null
                 ? undefined
-                : population!.has_more
-                  ? `first ${PAGE.toLocaleString("en")} of ${total.toLocaleString("en")}`
-                  : `${total.toLocaleString("en")} ${total === 1 ? "customer" : "customers"}`
+                : `${total.toLocaleString("en")} ${total === 1 ? "customer" : "customers"}`
             }
             flush
-            footer={
-              population?.has_more ? (
-                <span className="text-xs text-muted-foreground">
-                  Showing the first {PAGE.toLocaleString("en")} of{" "}
-                  {(total ?? 0).toLocaleString("en")}. The count and the MRR above are for all the
-                  customers in the segment, not only this page.
-                </span>
-              ) : undefined
-            }
           >
             <PendingContent skeleton={<SegmentBodySkeleton />}>
               {refusal ? (
@@ -171,9 +162,14 @@ export default async function CustomerSegmentsPage({
                   </Alert>
                 </div>
               ) : (
-                <SegmentCustomerTable
+                <SegmentCustomerList
+                  // A new predicate starts again from its first page.
+                  key={JSON.stringify(filters)}
                   biz={biz}
-                  customers={population!.data}
+                  filters={filters}
+                  initialRows={population!.data}
+                  initialCursor={population!.has_more ? population!.next_cursor : null}
+                  total={total}
                   fallbackCurrency={currency}
                   tz={business?.timezone ?? null}
                 />
@@ -181,8 +177,8 @@ export default async function CustomerSegmentsPage({
             </PendingContent>
           </RecordCard>
 
-          {/* Below xl the rail stacks above the table, so the segment picker comes first. */}
-          <div className="order-first min-w-0 self-start xl:order-0">
+          {/* Until the column splits the rail stacks above the table, so the segment picker comes first. */}
+          <div className="order-first min-w-0 self-start @min-[59.5rem]/main:order-0">
             <SegmentRail
               biz={biz}
               segments={segments.data}

@@ -2,7 +2,8 @@
 /**
  * Solution: billing for AI products — model prices with a markup on list or on cost, margin
  * after model cost, prepaid credits with a check before each call, spend controls and the
- * usage widget. The example business is MuseLane AI, an app that writes text and makes images.
+ * usage widget, and credits that count actions (1 image = 1 credit) with a 402 at zero or
+ * overage past it. The example business is MuseLane AI, an app that writes text and makes images.
  */
 import MkIllustration from "~/components/marketing/MkIllustration.vue";
 import MkCta from "~/components/marketing/MkCta.vue";
@@ -27,7 +28,7 @@ const why = [
   },
   {
     label: "Stop usage nobody will pay for",
-    body: "Prepaid credits collect the money first. A check before each call stops usage that nobody will pay for.",
+    body: "Prepaid credits collect the money first. Check credit before each call, and select what happens when it runs out: refuse the usage, or bill it in money.",
   },
 ];
 
@@ -35,7 +36,7 @@ const pricingPoints = [
   {
     icon: "i-lucide-list",
     title: "A dated model price list",
-    body: "Updated two times a day. Large or odd changes wait for review.",
+    body: "Checked every hour, with prices per token, image, character, and second of audio or video. Large or odd changes wait for review.",
   },
   {
     icon: "i-lucide-percent",
@@ -86,8 +87,8 @@ const marginRows = [
 const creditPoints = [
   {
     icon: "i-lucide-badge-cent",
-    title: "Your own credit unit",
-    body: 'Show "1,000 credits" instead of a money amount.',
+    title: "Credits in your own unit",
+    body: "Count actions, such as 1 image = 1 credit, and sell packs at different prices. Credits can also have a money value.",
   },
   {
     icon: "i-lucide-repeat",
@@ -96,13 +97,13 @@ const creditPoints = [
   },
   {
     icon: "i-lucide-hourglass",
-    title: "Holds for calls in progress",
-    body: "Calls that run at the same time cannot overspend the balance.",
+    title: "Holds for calls and multi-step jobs",
+    body: "Reserve credits before a job, take what each step used, and release the rest. Calls at the same time cannot overspend.",
   },
   {
-    icon: "i-lucide-gift",
-    title: "Free credit comes off before tax",
-    body: "Promotional credit applies before tax is calculated.",
+    icon: "i-lucide-octagon-x",
+    title: "Overage or a hard stop",
+    body: "When the credits run out, refuse the usage or bill it as overage at a price you set. An overdraft limit lets the balance go below zero first.",
   },
 ];
 
@@ -125,7 +126,7 @@ const spendPoints = [
   {
     icon: "i-lucide-refresh-cw",
     title: "Automatic top-up",
-    body: "Buys credit at a balance or on a date. Credit arrives only after the payment succeeds.",
+    body: "Buys credit when the balance falls below a level, or on a date. Credit arrives only after the payment succeeds. A declined card is tried again on your schedule.",
   },
   {
     icon: "i-lucide-file-clock",
@@ -155,7 +156,7 @@ const steps = [
   {
     icon: "i-lucide-credit-card",
     title: "Credits pay, the rest bills",
-    body: "Credits pay first. Usage they do not cover goes on the invoice, with tax.",
+    body: "Credits pay first. You choose what happens past them: refuse the usage, or bill it on the invoice, with tax.",
   },
 ];
 
@@ -184,13 +185,19 @@ const related = [
     label: "Prepaid AI credits",
     description: "Packs, plan credits and holds.",
   },
+  {
+    to: "/help/developers/recipes/credits-in-your-own-unit",
+    icon: "i-lucide-image",
+    label: "Credits in your own unit",
+    description: "A credit cost on each meter, and a 402 at zero.",
+  },
 ];
 
 const faq = [
   {
     label: "What is AI billing?",
     content:
-      "AI billing is billing for products that call AI models. Each call has a cost that changes with the model and the number of tokens. So the bill prices usage per model, often sells prepaid credits and keeps spend inside limits. It is not AI that writes invoices for you.",
+      "AI billing is usage-based billing for products that call AI models. Each call has a cost that changes with the model and the number of tokens. So the bill prices usage per model, often sells prepaid credits and keeps spend inside limits. It is not AI that writes invoices for you.",
   },
   {
     label: "Can I charge the model's list price plus a markup?",
@@ -210,7 +217,17 @@ const faq = [
   {
     label: "Is tax charged on credits?",
     content:
-      "Promotional credit applies before tax is calculated. For paid credit packs you select when tax is charged: when the customer buys the pack, or when the credit is used.",
+      "Promotional credit applies before tax is calculated. For paid credit packs you select when tax is charged: when the customer buys the pack, or when the credit is used. Credits in your own unit are always taxed at purchase.",
+  },
+  {
+    label: "Can credits count actions, such as images, instead of money?",
+    content:
+      "Yes. In Two Minute Billing, a credit unit can have no money value, such as 1 image = 1 credit. Each meter has a credit cost, and each usage event takes its credits from the balance when it arrives. You can sell packs of the same credit at different prices. We book the revenue as the credits are used, at the price that the customer paid for them.",
+  },
+  {
+    label: "What happens when a customer runs out of credit?",
+    content:
+      "Two Minute Billing refuses the extra usage or bills it in money, as you select. For credits in your own unit, a refused usage event gets an HTTP 402 error and a webhook, and it is never billed. With the bill policy, the missing credits go on the next invoice at a price that you set. An optional overdraft limit lets the balance go below zero first. During a free trial, extra usage is always refused. Credit with a money value pays the invoice first, and the rest of the usage bills on it, with tax. To stop that usage, set a hard spend limit.",
   },
   {
     label: "Which payment gateways does it work with?",
@@ -264,7 +281,7 @@ useMarketingSeo({
       kicker="Model pricing"
       title="A price for each model and token type"
       accent="and token type"
-      description="Quote rates the way model providers do, such as $3.00 per 1M input tokens. Set them by hand, or bill from a model price list that we keep current for you."
+      description="Quote rates the way model providers do, such as $3.00 per 1M input tokens. Set them by hand, or bill from a model price list that we keep current for you. Images, audio, video and characters can have their own prices too."
       :points="pricingPoints"
       :links="[
         { label: 'Bill AI tokens', to: '/help/developers/recipes/bill-ai-tokens' },
@@ -354,7 +371,7 @@ useMarketingSeo({
       kicker="Prepaid credits"
       title="Sell prepaid AI credits, then check them before each call"
       accent="then check them before each call"
-      description="Prepaid AI credits are units a customer buys before using your AI features. Each model call spends credits. Customers buy packs in the portal or get credits with their plan. Your app checks the balance before each call: 95% of checks answer in under 100 ms."
+      description="Prepaid AI credits are units a customer buys before using your AI features. Each model call spends credits. Customers buy packs in the portal or get credits with their plan. Your app checks the balance before each call. Credits can also count actions, such as 1 image = 1 credit. Then each usage event takes its credits as it arrives. When the balance is too small, the event is refused with an HTTP 402 error, or billed in money if you select that."
       :points="creditPoints"
       :links="[
         { label: 'Prepaid AI credits', to: '/help/developers/recipes/prepaid-ai-credits' },
@@ -489,7 +506,7 @@ useMarketingSeo({
     <MkPageFlow
       kicker="How it works"
       title="From a model call to a paid invoice"
-      description="To bill for AI tokens, set a price per 1M tokens for each model and token type, such as the list price plus 20%. Check the customer's credit before each call, and report the tokens from each response. Credits pay first. The rest goes on the invoice, with tax."
+      description="To bill for AI tokens, set a price per 1M tokens for each model and token type, such as the list price plus 20%. Check the customer's credit before each call, and report the tokens from each response. Credits pay first. Past them, you choose: stop the usage or bill it, with tax."
       :steps="steps"
     />
 

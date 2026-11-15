@@ -595,13 +595,29 @@ const TOPUP_PATHS = {
         "run is at most ₹15,000. Credit is granted only when the purchase invoice is paid. A " +
         "decline voids the invoice and turns automatic top-up off. On a payment method that " +
         "needs an advance notice, a threshold below the notice lead's usage at the current rate " +
-        "is refused. Needs `usage_controls:manage`.",
+        "is refused. " +
+        "A credit unit with no money rate: send `pack_price` (an active credit pack that grants " +
+        "the unit) and, for a threshold top-up, `threshold_units`; do not send `amount_minor`, " +
+        "`threshold_minor` or `grant`. With `method: fixed` a run buys `pack_quantity` packs " +
+        "(or a multiple, so the balance lands above the threshold). With `method: target` a run " +
+        "buys the whole packs that take the balance to `target_units` or more. A run starts " +
+        "when the credits that a usage event can spend are at or below `threshold_units`; the " +
+        "check is part of each usage event. Only one top-up runs at a time for a customer and " +
+        "unit. The limits stay in money and never split a pack; `purchase_limits` adds a " +
+        "count and an amount for each hour, day, week and month. The credits arrive when the " +
+        "invoice is paid, with the pack's own expiry: until then a usage event that the " +
+        "balance does not cover is refused. A decline that can change is tried again, 3 tries " +
+        "in 24 hours at most (`credit_auto_topup_retry_scheduled`). A decline that cannot " +
+        "change, or the third failed try, turns automatic top-up off " +
+        "(`credit_auto_topup_hard_declined`, `credit_auto_topup_retries_exhausted`, each with " +
+        "`credit_auto_topup_failed`). The notice lead rule is not checked for a threshold in " +
+        "credits. Needs `usage_controls:manage`.",
       parameters: [biz, cus],
       requestBody: body("AutoTopupInput"),
       responses: {
         "200": json("AutoTopup", "The automatic top-up."),
         "400": err("The body is not correct, or a rule refused it."),
-        "404": err("No such customer, credit unit or payment method."),
+        "404": err("No such customer, credit unit, price or payment method."),
       },
     },
   },
@@ -740,6 +756,25 @@ const schedule = nullable({
     "past the month's end runs on its last day.",
 });
 
+const purchaseLimit = {
+  type: "object",
+  properties: {
+    count: int("The most purchases in the window."),
+    amount_minor: int("The most money in the window, before tax."),
+  },
+};
+const purchaseLimits = {
+  type: "object",
+  description:
+    "The most that automatic top-up can buy in the last hour, this day, the last 7 days and this month. Day and month follow the business's time zone. A purchase that would pass a limit is skipped (`credit_auto_topup_skipped`, reason `purchase_limit`). Unset = no limit for that window.",
+  properties: {
+    hour: purchaseLimit,
+    day: purchaseLimit,
+    week: purchaseLimit,
+    month: purchaseLimit,
+  },
+};
+
 const TOPUP_SCHEMAS = {
   AutoTopupInput: {
     type: "object",
@@ -748,16 +783,39 @@ const TOPUP_SCHEMAS = {
       unit: nullable(str("The credit unit's id. Null or absent = money credit.")),
       trigger: { type: "string", enum: ["threshold", "schedule"] },
       threshold_minor: nullable(int("Buy when the live balance is at or below this.")),
+      threshold_units: nullable(
+        str(
+          "A unit with no money rate: buy when the credits a usage event can spend are at or below this. A decimal, in credits.",
+        ),
+      ),
+      pack_price: nullable(
+        str("A unit with no money rate: the credit pack a run buys (the price's id)."),
+      ),
+      pack_quantity: nullable(
+        int("`fixed` with `pack_price`: packs in one purchase, 1 to 1000. Default 1."),
+      ),
+      target_units: nullable(
+        str(
+          "`target` with `pack_price`: buy whole packs to reach this many credits or more. A decimal.",
+        ),
+      ),
+      purchase_limits: nullable(purchaseLimits),
       schedule,
       method: { type: "string", enum: ["fixed", "target"] },
-      amount_minor: nullable(int("`fixed`: the amount to buy.")),
+      amount_minor: nullable(
+        int("`fixed`: the amount to buy. Not with `pack_price`: the pack sets it."),
+      ),
       target_minor: nullable(int("`target`: buy up to this balance.")),
       monthly_cap_minor: int("Most that runs can buy per calendar month."),
       max_runs_per_day: int("1 to 10. Default 3."),
       payment_method: nullable(str("The `pm_…` to charge. Null = the customer's charge order.")),
-      grant: grantSettings,
+      grant: {
+        ...grantSettings,
+        description:
+          "Required, except with `pack_price`: the pack carries the settings of its credit.",
+      },
     },
-    required: ["trigger", "method", "monthly_cap_minor", "grant"],
+    required: ["trigger", "method", "monthly_cap_minor"],
   },
   AutoTopup: {
     type: "object",
@@ -769,16 +827,28 @@ const TOPUP_SCHEMAS = {
       unit: nullable(str("The credit unit's id.")),
       trigger: { type: "string", enum: ["threshold", "schedule"] },
       threshold_minor: nullable(int("The threshold.")),
+      threshold_units: nullable(str("The threshold in credits, for a unit with no money rate.")),
+      pack_price: nullable(str("The credit pack a run buys, for a unit with no money rate.")),
+      pack_quantity: nullable(int("Packs in one purchase.")),
+      target_units: nullable(str("The balance in credits that a run buys up to.")),
+      purchase_limits: nullable(purchaseLimits),
       schedule,
       method: { type: "string", enum: ["fixed", "target"] },
-      amount_minor: nullable(int("The fixed amount.")),
+      amount_minor: nullable(
+        int("The fixed amount. With `pack_price`: the price of one purchase when it was saved."),
+      ),
       target_minor: nullable(int("The target balance.")),
       monthly_cap_minor: int("The monthly cap."),
       max_runs_per_day: int("Runs per day."),
       payment_method: nullable(str("pm_…")),
+      has_payment_method: {
+        type: "boolean",
+        description:
+          "False when a run has no payment method to charge: the named method, or every method in the charge order, is invalid. Enable is then refused.",
+      },
       grant: grantSettings,
       status: { type: "string", enum: ["active", "disabled"] },
-      disabled_reason: nullable(str("payment_declined, operator or customer.")),
+      disabled_reason: nullable(str("payment_declined, retries_exhausted, operator or customer.")),
       disabled_at: nullable(str("ISO 8601.")),
       threshold_low_at: nullable(str("Last `credit_auto_topup_threshold_low`, ISO 8601.")),
       lead_time: {
@@ -817,6 +887,7 @@ const TOPUP_SCHEMAS = {
       payment: nullable(str("pay_…")),
       charge_after: nullable(str("Planned charge time, ISO 8601.")),
       decline_code: nullable(str("Why the charge failed.")),
+      attempts: int("Charge tries that failed."),
       failure_message: nullable(str("The gateway's message.")),
       created_at: str("ISO 8601."),
       updated_at: str("ISO 8601."),

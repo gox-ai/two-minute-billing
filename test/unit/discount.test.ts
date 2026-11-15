@@ -176,3 +176,57 @@ describe("computeStackedDiscounts — the two-stage waterfall", () => {
     }
   });
 });
+
+describe("computeStackedDiscounts — billing-period limits", () => {
+  const LINES = [
+    {
+      index: 0,
+      amountMinor: 12000n,
+      productKind: "plan",
+      productPublicId: "pro",
+      pricePublicId: "pro_y",
+    },
+    {
+      index: 1,
+      amountMinor: 1000n,
+      productKind: "plan",
+      productPublicId: "lite",
+      pricePublicId: "lite_m",
+    },
+  ];
+  const coupon = (constraint: Record<string, unknown>) => ({
+    appliedCouponId: "ac_y",
+    couponPublicId: "YEARLY50",
+    kind: "percentage",
+    percentOffBps: 5000,
+    amountOffMinor: null,
+    currency: null,
+    invoiceName: null,
+    applyOn: "each_specified_item",
+    createdAt: new Date("2026-01-01"),
+    constraints: [{ itemKind: "plan", productIds: null, priceIds: null, ...constraint }],
+  });
+  const yearly = [{ interval: "year", intervalCount: 1 }];
+  const run = (c: unknown) => computeStackedDiscounts([c] as never, LINES as never, "USD");
+
+  it("discounts only the lines whose price bills on the period", () => {
+    const r = run(
+      coupon({ constraintType: "all", billingPeriods: yearly, periodPriceIds: ["pro_y"] }),
+    );
+    expect(r.lineDiscountByIndex).toEqual([6000n, 0n]);
+  });
+
+  it("needs the plan AND the period on a specific constraint", () => {
+    const c = coupon({
+      constraintType: "specific",
+      productIds: ["lite"],
+      billingPeriods: yearly,
+      periodPriceIds: ["pro_y"],
+    });
+    expect(run(c).totalMinor).toBe(0n);
+  });
+
+  it("an unresolved period limit discounts nothing", () => {
+    expect(run(coupon({ constraintType: "all", billingPeriods: yearly })).totalMinor).toBe(0n);
+  });
+});

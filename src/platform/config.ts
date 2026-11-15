@@ -224,15 +224,32 @@ const schema = z
       z.string().email().optional(),
     ),
     /**
-     * Google Chat incoming-webhook URL that each access request is also posted to. The URL is
-     * the credential: keep it in `.env` only. Unset = OPS_ALERT_WEBHOOK_URL; both unset = no post.
+     * Cloud: the Google Chat incoming-webhook URL our team watches for website access requests
+     * and support requests. The URL is the credential: keep it in `.env` only. Unset =
+     * OPS_ALERT_WEBHOOK_URL (access requests try LEAD_CHAT_WEBHOOK_URL between the two).
+     */
+    SUPPORT_CHAT_WEBHOOK_URL: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().url().optional(),
+    ),
+    /**
+     * DEPRECATED: use SUPPORT_CHAT_WEBHOOK_URL. Still read for access requests, after
+     * SUPPORT_CHAT_WEBHOOK_URL, so a deployment keeps posting until the setting is renamed.
      */
     LEAD_CHAT_WEBHOOK_URL: z.preprocess(
       (v) => (v === "" ? undefined : v),
       z.string().url().optional(),
     ),
-    /** The back-office alert channel (backoffice/config.ts). Read here only as the lead fallback. */
+    /** The back-office alert channel (backoffice/config.ts). Read here only as the chat fallback. */
     OPS_ALERT_WEBHOOK_URL: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().url().optional(),
+    ),
+    /**
+     * Cloud: the back-office's own address (backoffice/config.ts). Read here only for the link
+     * in a support notice; unset = the notice has no link.
+     */
+    BACKOFFICE_PUBLIC_URL: z.preprocess(
       (v) => (v === "" ? undefined : v),
       z.string().url().optional(),
     ),
@@ -285,6 +302,17 @@ const schema = z
     CLOUD_PROVIDER: z.string().optional(),
 
     DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+    /**
+     * Direct (non-pooled) URL for the job queue's runner. Its pool holds a `LISTEN` connection,
+     * which a transaction-mode PgBouncer cannot carry. Unset = `DATABASE_URL`. Enqueue stays on
+     * `DATABASE_URL`: `add_job` is one statement. See deploy/README.md § PgBouncer.
+     */
+    QUEUE_DATABASE_URL: z.string().min(1).optional(),
+    /**
+     * Read replica for reports and analytics (`readDb`, `withTenantRead` in platform/db.ts).
+     * Unset = the primary, so nothing changes until it is set.
+     */
+    DATABASE_REPLICA_URL: z.string().min(1).optional(),
     API_KEY_SECRET: z.string().min(16, "API_KEY_SECRET must be at least 16 chars"),
 
     /**
@@ -340,6 +368,40 @@ const schema = z
     // real gateway traffic — in local dev this is a tunnel (`stripe listen` / ngrok)
     // origin.
     WEBHOOK_BASE_URL: z.string().optional(),
+    /**
+     * Public origin of the MCP server and its OAuth (e.g. a dedicated `mcp.` host behind the
+     * same API). The connector URL is `{MCP_PUBLIC_URL}/mcp`. Unset: `WEBHOOK_BASE_URL`, else
+     * the request's origin.
+     */
+    MCP_PUBLIC_URL: z.string().url().optional(),
+    /**
+     * The API base URL we tell developers to call: OpenAPI `servers` and the docs. Distinct
+     * from `WEBHOOK_BASE_URL`, which gateways already have registered and must keep. Unset:
+     * `WEBHOOK_BASE_URL`.
+     */
+    ADVERTISED_API_URL: z.string().url().optional(),
+
+    /**
+     * The in-app assistant's model. Unset provider = the assistant is off (no launcher), unless
+     * an organization sets its own key. `ASSISTANT_BASE_URL` points the openai provider at any
+     * OpenAI-compatible server (a local model on a self-hosted install).
+     */
+    ASSISTANT_PROVIDER: z.enum(["openai", "anthropic", "google"]).optional(),
+    ASSISTANT_MODEL: z.string().optional(),
+    ASSISTANT_API_KEY: z.string().optional(),
+    ASSISTANT_BASE_URL: z.string().optional(),
+    /** `off`: docs search stays keyword-only even with an OpenAI key (no embedding calls). Unset: on. */
+    ASSISTANT_DOCS_VECTORS: z.enum(["on", "off"]).optional(),
+    /** OpenAI reasoning effort for the platform model. Unset: low (measured faster, same answers). */
+    ASSISTANT_REASONING_EFFORT: z.enum(["none", "minimal", "low", "medium", "high"]).optional(),
+    /** Platform-billed tokens per organization per calendar month. Unset: 2M on Cloud, none self-hosted. 0 = none. */
+    ASSISTANT_ORG_MONTHLY_TOKENS: z.coerce.number().int().min(0).optional(),
+    /**
+     * Cloud: the monthly allowance per plan (`organizations.assistant_allowance_usd_cents`).
+     * `record` measures and shows it; `enforce` also stops questions on our model at 100% and
+     * emails owners and admins at 80%. An organization with an allowance has no token cap.
+     */
+    ASSISTANT_ALLOWANCE_MODE: z.enum(["record", "enforce"]).default("record"),
 
     /**
      * Let outbound requests to operator-typed URLs (webhook endpoints, the invoice logo)
@@ -748,7 +810,16 @@ const schema = z
       .default(
         "https://raw.githubusercontent.com/pydantic/genai-prices/main/prices/new_data/v2/data_slim.json",
       ),
-    /** `off` stops the twice-daily price sync (air-gapped installs); the stored list still bills. */
+    /**
+     * The second price feed, for media prices only (LiteLLM's price file, MIT). A mirror works;
+     * `off` reads the first feed alone.
+     */
+    MODEL_PRICES_MEDIA_SOURCE_URL: z
+      .union([z.literal("off"), z.string().url()])
+      .default(
+        "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      ),
+    /** `off` stops the hourly price sync of both feeds (air-gapped installs); the stored list still bills. */
     MODEL_PRICES_SYNC: z.enum(["on", "off"]).default("on"),
 
     /**
@@ -950,6 +1021,12 @@ const schema = z
      * rather than generously.
      */
     DB_POOL_MAX: z.coerce.number().int().positive().max(200).default(10),
+    /**
+     * Seconds an idle pooled connection stays open; 0 keeps it forever (the driver's default).
+     * Without it every process held its peak pool for life, and a reload's old and new
+     * processes together reached 74 of 97 usable connections on production (2026-11-07).
+     */
+    DB_IDLE_TIMEOUT_S: z.coerce.number().int().min(0).max(3600).default(60),
 
     /**
      * Whether the egress scan's per-business share is DERIVED from how many businesses have

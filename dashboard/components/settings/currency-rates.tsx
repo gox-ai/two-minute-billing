@@ -24,6 +24,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -35,6 +36,7 @@ import {
   saveBaseCurrencyAction,
   removeCurrencyAction,
 } from "@/app/(dashboard)/businesses/[biz]/settings/actions";
+import { fmtDate } from "@/lib/format-date";
 
 /**
  * Settings → Currencies: the BASE currency card, then the additional currencies as rows
@@ -89,9 +91,9 @@ export function CurrencyScreen({
       <SettingsCard
         id="currencies"
         title="Currencies"
-        meta={`${enabledCount} enabled, including the base`}
+        meta={countLine(rates.length, enabledCount, baseCurrency)}
         actions={
-          <Button type="button" size="sm" onClick={() => setAdding(true)}>
+          <Button type="button" size="sm" variant="outline" onClick={() => setAdding(true)}>
             <Plus aria-hidden className="size-4" />
             Add currency
           </Button>
@@ -99,7 +101,7 @@ export function CurrencyScreen({
       >
         {rates.length === 0 ? (
           <p className="m-0 px-5 py-4 text-sm text-muted-foreground">
-            None yet. Add a currency to sell in it. Its rate against{" "}
+            No additional currencies. Add a currency to sell in it. Its rate against{" "}
             {baseCurrency ?? "the base currency"} converts reporting roll-ups, and we record it on
             new invoices.
           </p>
@@ -224,11 +226,9 @@ function currencyName(code: string): string {
   }
 }
 
-/** `2026-09-02T00:00:00Z` → `2 Sept 2026`, as the dialog prints it. */
+/** `2026-09-02T00:00:00Z` → `2 Sep 2026`, as the dialog prints it. */
 function formatDay(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return fmtDate(iso, "UTC");
 }
 
 /** The two radios, shared by Add and Manage — one wording, one place to fix it. */
@@ -278,21 +278,27 @@ function RateInput({
   return (
     <Field
       name="rate"
-      label={`1 ${baseCurrency ?? "base"} =`}
-      help={currency || undefined}
+      label="Exchange rate"
+      help={`The amount of ${currency || "the new currency"} that equals 1 ${baseCurrency ?? "unit of the base currency"}.`}
       required
     >
-      <Input
-        name="rate"
-        // `text`, not `number`: the rate is a decimal string all the way into a
-        // `numeric(20,10)` column, and a number input hands back a float whose trailing
-        // digits are not the ones that were typed.
-        type="text"
-        inputMode="decimal"
-        defaultValue={defaultValue ?? ""}
-        placeholder="94.9537410000"
-        className="w-48 tabular-nums"
-      />
+      {/* The units sit beside the number, so the label stays a name. */}
+      <div className="flex items-center gap-2 text-sm tabular-nums">
+        {baseCurrency ? <span className="text-muted-foreground">1 {baseCurrency} =</span> : null}
+        <Input
+          id="rate"
+          name="rate"
+          // `text`, not `number`: the rate is a decimal string all the way into a
+          // `numeric(20,10)` column, and a number input hands back a float whose trailing
+          // digits are not the ones that were typed.
+          type="text"
+          inputMode="decimal"
+          defaultValue={defaultValue ?? ""}
+          placeholder="94.9537410000"
+          className="w-48 tabular-nums"
+        />
+        {currency ? <span className="text-muted-foreground">{currency}</span> : null}
+      </div>
     </Field>
   );
 }
@@ -333,9 +339,7 @@ function ManageCurrencyDialog({
               exists here, and it does not — managing a currency cannot change which
               currency it is. */}
           <div className="space-y-1">
-            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Currency
-            </p>
+            <p className="text-xs font-medium text-muted-foreground">Currency</p>
             <CurrencyName code={rate.currency} />
           </div>
           <RateSourceRadios source={source} onChange={setSource} />
@@ -428,6 +432,7 @@ function AddCurrencyDialog({
               value={currency}
               onValueChange={setCurrency}
               exclude={taken}
+              placeholder="Select a currency"
               className="w-64"
             />
           </Field>
@@ -534,11 +539,17 @@ function RemoveCurrencyDialog({
 
 function DialogActions({ onClose, submitLabel }: { onClose: () => void; submitLabel: string }) {
   return (
-    <div className="flex justify-end gap-2">
-      <Button type="button" variant="ghost" onClick={onClose}>
+    <DialogFooter>
+      <Button type="button" variant="outline" onClick={onClose}>
         Cancel
       </Button>
       <SubmitButton>{submitLabel}</SubmitButton>
-    </div>
+    </DialogFooter>
   );
+}
+
+/** The Currencies card's count, in the same terms as its body: the base plus the rest. */
+function countLine(additional: number, enabled: number, base: string | null): string {
+  if (additional > 0) return `${enabled} enabled, including the base`;
+  return base ? "Only the base currency is enabled" : "None enabled";
 }

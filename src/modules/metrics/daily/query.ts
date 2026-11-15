@@ -488,9 +488,8 @@ export async function readMetricSeries(input: {
   /** The business's calendar — where a stored coarse row is keyed. Additive reads ignore it. */
   calendar?: BusinessCalendar;
   /**
-   * The last day every business has reached (`scopeToday`). No day row after it is read: a
-   * business that has not reached a day has no row for it, and a stock summed without that
-   * business is a fraction of the total. A period past it is reported missing instead.
+   * The businesses' own today, which they all share (`dayGroups`). No day row after it is
+   * read, so a period past it is reported missing rather than summed from some businesses.
    */
   through?: string;
   /**

@@ -30,6 +30,22 @@ export function registerEventSink(fn: EventSink): void {
   if (!sinks.includes(fn)) sinks.push(fn);
 }
 
+const refreshers: EventSink[] = [];
+
+/** Register a subscriber that rebuilds what it derived from an event. Idempotent per fn. */
+export function registerEventRefresher(fn: EventSink): void {
+  if (!refreshers.includes(fn)) refreshers.push(fn);
+}
+
+/**
+ * The facts behind `event` changed later in ITS OWN transaction (a renewal's invoice is written
+ * after its event). Subscribers that copied those facts rebuild them; nothing is re-emitted.
+ */
+export async function refreshEvent(tx: Tx, event: EventRow): Promise<void> {
+  if (!event.id) return; // a suppressed event has no row and no derived work
+  for (const fn of refreshers) await fn(tx, event);
+}
+
 /**
  * Best-effort extraction of a resource's public id from an event's `data` payload
  * so the enriched envelope carries `resource.id` even for legacy simple payloads

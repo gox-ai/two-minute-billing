@@ -11,10 +11,12 @@ import { Input } from "@/components/ui/input";
 import { SelectField, type SelectOption } from "@/components/ui/select-field";
 import { SwitchField } from "@/components/ui/switch";
 import { CheckboxField } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -54,6 +56,7 @@ export function PaymentLinkDialog({
   meta,
   initialPrice,
   trigger = "Create payment link",
+  variant = "default",
 }: {
   biz: string;
   options: SelectOption[];
@@ -61,14 +64,18 @@ export function PaymentLinkDialog({
   /** Preselect this price on the first row (the product page passes its own). */
   initialPrice?: string;
   trigger?: string;
+  /** `outline` when the dialog sits in a card beside the page's own primary action. */
+  variant?: "default" | "outline";
 }) {
   const [open, setOpen] = React.useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm">{trigger}</Button>
+        <Button size="sm" variant={variant}>
+          {trigger}
+        </Button>
       </DialogTrigger>
-      <DialogContent size="lg">
+      <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Create a payment link</DialogTitle>
           <DialogDescription>
@@ -118,119 +125,138 @@ function LinkForm({
   }));
 
   return (
-    <ActionForm action={createPaymentLinkAction} onSuccess={onDone} className="flex flex-col gap-4">
+    <ActionForm
+      action={createPaymentLinkAction}
+      onSuccess={onDone}
+      className="flex min-h-0 flex-1 flex-col gap-4"
+    >
       <input type="hidden" name="biz" value={biz} />
       <input type="hidden" name="items" value={JSON.stringify(items)} />
-      <Field name="name" label="Name" required help="For you only. Buyers see the product names.">
-        <Input name="name" required maxLength={200} placeholder="For example, Spring offer" />
-      </Field>
+      <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-1">
+        <Field name="name" label="Name" required help="For you only. Buyers see the product names.">
+          <Input name="name" required maxLength={200} placeholder="For example, Spring offer" />
+        </Field>
 
-      <div className="flex flex-col gap-3">
-        <span className="text-sm font-medium">Items</span>
-        {rows.map((r) => (
-          <div key={r.key} className="flex flex-col gap-3 rounded-md bg-muted/50 p-3">
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <SelectField
-                  ariaLabel="Price"
-                  placeholder="Select a price…"
-                  options={options}
-                  value={r.price}
-                  onValueChange={(v) => update(r.key, { price: v })}
-                />
-              </div>
-              <Input
-                aria-label="Quantity"
-                type="number"
-                min={0}
-                value={r.quantity}
-                onChange={(e) => update(r.key, { quantity: e.target.value })}
-                className="w-20 tabular-nums"
-              />
-              {rows.length > 1 ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Remove item"
-                  onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}
-                >
-                  <X className="size-4" />
-                </Button>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex flex-col gap-2">
+          {/* One header for the columns: a label on every row would repeat it. */}
+          <div className="flex gap-2 px-3 text-sm font-medium" aria-hidden="true">
+            <span className="flex-1">Item</span>
+            <span className="w-20">Quantity</span>
+            {rows.length > 1 ? <span className="w-8" /> : null}
+          </div>
+          {rows.map((r, i) => (
+            <div key={r.key} className="flex flex-col gap-3 rounded-md bg-muted/50 p-3">
               <div className="flex items-center gap-2">
-                <SwitchField
-                  checked={r.adjustable}
-                  onCheckedChange={(v) => update(r.key, { adjustable: v })}
-                  ariaLabel="Buyer can change the quantity"
-                />
-                <span className="text-sm">Buyer can change the quantity</span>
-              </div>
-              <CheckboxField
-                checked={r.optional}
-                onCheckedChange={(v) => update(r.key, { optional: v })}
-                label="Optional"
-                hint="The buyer can remove it"
-              />
-            </div>
-            {r.adjustable ? (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">From</span>
+                <div className="min-w-0 flex-1">
+                  <SelectField
+                    ariaLabel={`Item ${i + 1} price`}
+                    placeholder="Select a price…"
+                    options={options}
+                    value={r.price}
+                    onValueChange={(v) => update(r.key, { price: v })}
+                  />
+                </div>
                 <Input
-                  aria-label="Minimum quantity"
+                  aria-label={`Item ${i + 1} quantity`}
                   type="number"
                   min={0}
-                  value={r.min}
-                  onChange={(e) => update(r.key, { min: e.target.value })}
+                  value={r.quantity}
+                  onChange={(e) => update(r.key, { quantity: e.target.value })}
                   className="w-20 tabular-nums"
                 />
-                <span className="text-muted-foreground">to</span>
-                <Input
-                  aria-label="Maximum quantity"
-                  type="number"
-                  min={1}
-                  value={r.max}
-                  onChange={(e) => update(r.key, { max: e.target.value })}
-                  className="w-20 tabular-nums"
+                {rows.length > 1 ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove item ${i + 1}`}
+                    onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2">
+                <CheckboxField
+                  checked={r.adjustable}
+                  onCheckedChange={(v) => update(r.key, { adjustable: v })}
+                  label="Buyer can change the quantity"
+                />
+                <CheckboxField
+                  checked={r.optional}
+                  onCheckedChange={(v) => update(r.key, { optional: v })}
+                  label="Buyer can remove the item"
                 />
               </div>
-            ) : null}
-          </div>
-        ))}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => setRows((rs) => [...rs, newRow(nextKey.current++)])}
-        >
-          <Plus className="size-4" /> Add item
-        </Button>
-        {chosen.length > 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {subscribes
-              ? plans === 1
-                ? "Buyers subscribe to the plan. One-time items go on the first invoice."
-                : "A link with a recurring price needs exactly one plan."
-              : "Buyers pay once. We do not create a subscription."}
-          </p>
-        ) : null}
-      </div>
+              {r.adjustable ? (
+                <div className="flex gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor={`pl-${r.key}-min`} className="text-sm font-medium">
+                      Minimum quantity
+                    </Label>
+                    <Input
+                      id={`pl-${r.key}-min`}
+                      type="number"
+                      min={0}
+                      value={r.min}
+                      onChange={(e) => update(r.key, { min: e.target.value })}
+                      className="w-30 tabular-nums"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor={`pl-${r.key}-max`} className="text-sm font-medium">
+                      Maximum quantity
+                    </Label>
+                    <Input
+                      id={`pl-${r.key}-max`}
+                      type="number"
+                      min={1}
+                      value={r.max}
+                      onChange={(e) => update(r.key, { max: e.target.value })}
+                      className="w-30 tabular-nums"
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="-ml-2 self-start text-primary"
+            onClick={() => setRows((rs) => [...rs, newRow(nextKey.current++)])}
+          >
+            <Plus className="size-4" />
+            Add item
+          </Button>
+          {chosen.length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {subscribes
+                ? plans === 1
+                  ? "Buyers subscribe to the plan. One-time items go on the first invoice."
+                  : "A link with a recurring price needs exactly one plan."
+                : "Buyers pay once. We do not create a subscription."}
+            </p>
+          ) : null}
+        </div>
 
-      <div className="flex items-start gap-2.5">
-        <SwitchField name="show_on_pricing_page" ariaLabel="Show on your pricing page" />
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium">Show on your pricing page</span>
-          <span className="text-xs text-muted-foreground">
-            Your public pricing page lists each link that has this on.
-          </span>
+        <div className="flex items-start gap-2.5 border-t pt-4">
+          <SwitchField name="show_on_pricing_page" ariaLabel="Show on your pricing page" />
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">Show on your pricing page</span>
+            <span className="text-xs text-muted-foreground">
+              Your public pricing page lists each link that has this on.
+            </span>
+          </div>
         </div>
       </div>
-      <div className="flex justify-end">
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onDone}>
+          Cancel
+        </Button>
         <SubmitButton>Create payment link</SubmitButton>
-      </div>
+      </DialogFooter>
     </ActionForm>
   );
 }

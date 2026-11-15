@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, X } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -57,11 +58,57 @@ export function couponDurationLabel(c: Coupon): string {
   }
 }
 
+/**
+ * The inline coupon-code and manual-discount editors under the line items, on create and
+ * change. One frame for both: a titled block, its fields in one labelled row, and the
+ * × that closes it in the corner.
+ */
+export function InlineEditorPanel({
+  title,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  title: string;
+  /** The ×'s accessible name — what closing does ("Remove manual discount"). */
+  closeLabel: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-label={title} className="space-y-3 border-t bg-muted/10 px-5 py-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={closeLabel}
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The manual-discount choices, in the words of the "Add manual discount" dialog. */
+export const DISCOUNT_TYPE_OPTIONS = [
+  { value: "percent", label: "Percent off" },
+  { value: "amount", label: "Fixed amount off" },
+];
+export const DISCOUNT_DURATION_OPTIONS = [
+  { value: "one_time", label: "Next invoice only" },
+  { value: "forever", label: "Forever (until removed)" },
+];
+
 export function CouponPickerModal({
   coupons,
   currency,
   onSelect,
-  label = "Add Coupon",
+  label = "Add coupon",
 }: {
   coupons: Coupon[];
   /** The subscription's currency — a fixed-amount coupon in another one cannot apply. */
@@ -101,34 +148,32 @@ export function CouponPickerModal({
         <Plus className="size-4" /> {label}
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        {/* `size="sm"` (28rem), not a bare `max-w-md`: that class was silently outranked by
-            the base `sm:max-w-lg`, so this dialog has been rendering 512px while asking for
-            448px. Measured — so this DOES narrow it, by design. */}
-        <DialogContent size="sm" className="z-50 overflow-hidden p-0">
-          <DialogHeader className="border-b px-6 pt-6 pb-4">
-            <DialogTitle className="text-xl font-bold">{label}</DialogTitle>
+        {/* Same frame as the catalog picker (`CatalogAddModal`): one width, one padding. */}
+        <DialogContent className="gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4 pr-12">
+            <DialogTitle>{label}</DialogTitle>
             <DialogDescription>
               Select a coupon from the catalog. One coupon applies per subscription.
             </DialogDescription>
           </DialogHeader>
-          <div className="border-b p-4">
+          <div className="border-b px-6 py-3">
             <div className="relative">
-              <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search coupons..."
-                className="pl-9"
+                placeholder="Search coupons…"
+                className="pl-8"
                 aria-label="Search coupons"
               />
             </div>
           </div>
-          <div className="max-h-72 divide-y overflow-y-auto">
+          <div className="max-h-80 divide-y overflow-y-auto">
             {filtered.length === 0 ? (
               <div className="p-6 text-center text-sm text-muted-foreground">
                 {selectable.length === 0
                   ? `No active coupons available${currency ? ` in ${currency}` : ""}.`
-                  : "No coupons match the search"}
+                  : "No coupons match the search."}
               </div>
             ) : (
               filtered.map((c) => (
@@ -140,7 +185,7 @@ export function CouponPickerModal({
                     setOpen(false);
                     setSearch("");
                   }}
-                  className="flex w-full flex-col items-start gap-0.5 p-3.5 text-left transition-colors hover:bg-muted/50"
+                  className="flex w-full flex-col items-start gap-0.5 px-6 py-3 text-left transition-colors hover:bg-muted/50"
                 >
                   <span className="flex w-full items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate text-sm font-medium">{c.name || c.id}</span>

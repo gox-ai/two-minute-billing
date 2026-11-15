@@ -586,3 +586,6 @@ they cannot drift.
 - **2026-11-03 (settings slice F)** — The async settlement failure passes the plan policy, the method type, `retries_by_method` and `adaptive_cadence` to `planFailureRearm`. Gate: `verify:settings-dunning-p2`.
 - **2026-11-05** — `OFFLINE_EXCESS_CHOICES` (`credit` | `refund`): an operator's per-call choice for offline money above the amount due (`recordOfflinePayment({ excess })`). `excess_payment` still governs gateway payments only. Gate: `verify:settings-payment-application` 4H.
 - **2026-11-05** — `attribution.ts`: `REVENUE_TYPES`, `revenueLineInfo`, `foldRevenue` (document discount spread over revenue lines with `allocateProRata`) and `billedRevenueByInvoice`, for the `revenue_billed` / `revenue_collected` measures. Existing buckets and their callers are unchanged.
+- **2026-11-15** — The lost-answer sweep, the abandon void and the pending-debit cancel call the
+  gateway under the transaction's span (`joinSpanIfAny`); a lookup of a webhook's candidate
+  charges runs in each candidate's own span, never the event's.

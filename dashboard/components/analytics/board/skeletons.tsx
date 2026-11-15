@@ -18,7 +18,7 @@ const GENERIC: TileUnits[] = [
 export function BoardSkeleton({ tiles = GENERIC }: { tiles?: TileUnits[] }) {
   return (
     <Busy label="dashboard">
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-6 xl:grid-cols-12">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-6 @min-[56.875rem]/main:grid-cols-12">
         {tiles.map((u, i) => (
           <div
             key={i}
@@ -34,7 +34,7 @@ export function BoardSkeleton({ tiles = GENERIC }: { tiles?: TileUnits[] }) {
             </div>
             <div className="flex flex-1 flex-col px-5 py-4">
               <Skeleton className="h-6 w-24" />
-              {u.height > 2 ? <Skeleton className="mt-4 w-full flex-1 rounded-lg" /> : null}
+              {u.height > 2 ? <Skeleton className="mt-4 w-full flex-1 rounded-xl" /> : null}
             </div>
           </div>
         ))}

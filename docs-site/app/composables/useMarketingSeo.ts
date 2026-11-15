@@ -82,6 +82,8 @@ export function organizationNode(base: string, repo?: string): Record<string, un
     "@type": "Organization",
     "@id": `${base}/#organization`,
     name: SITE_NAME,
+    // Google reads the bare domain as the phrase "two minute billing"; these tie it to us.
+    alternateName: ["TwoMinuteBilling", "TM Billing"],
     url: `${base}/`,
     description:
       "Two Minute Billing makes subscription billing software that collects through the merchant's own payment gateway. It runs on Two Minute Billing Cloud or self-hosted.",

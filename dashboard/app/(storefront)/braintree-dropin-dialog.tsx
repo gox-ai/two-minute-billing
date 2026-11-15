@@ -3,8 +3,15 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
+import { braintreeFailure, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog } from "./payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+} from "./payment-dialog";
+import { sdkAmountLabel } from "./storefront-text";
 
 /**
  * Braintree's Drop-in, pinned to an exact version with SRI. It loads its card fields
@@ -107,9 +114,7 @@ function loadDropin(): Promise<void> {
     el.onload = () => resolve();
     el.onerror = () => {
       loading = null;
-      reject(
-        new Error("We could not connect to Braintree. Check your connection. Then try again."),
-      );
+      reject(new Error("We could not load the payment form. Reload the page. Then try again."));
     };
     document.head.appendChild(el);
   });
@@ -121,12 +126,17 @@ function BraintreeDropinDialog({
   params,
   purpose,
   email,
+  businessName,
+  confirmLabel,
   onSettle,
 }: {
   open: boolean;
   params: DropinParams;
   purpose: GatewaySdkContext["purpose"];
   email: string | null;
+  businessName: string;
+  /** The flow's own commit label ("Subscribe"), when the page passes one. */
+  confirmLabel?: string;
   onSettle: (result: GatewaySdkResult) => void;
 }) {
   const container = React.useRef<HTMLDivElement>(null);
@@ -134,10 +144,7 @@ function BraintreeDropinDialog({
   /** Whether Drop-in was made with 3D Secure (a merchant without it fails to create). */
   const threeDs = React.useRef(false);
   const cardsOnly = params.methods.length === 1 && params.methods[0] === "card";
-  const amountLabel =
-    purpose === "payment" && params.amount && params.currency
-      ? `${params.amount} ${params.currency}`
-      : null;
+  const amountLabel = purpose === "payment" ? sdkAmountLabel(params.amount, params.currency) : null;
   const [ready, setReady] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -214,9 +221,10 @@ function BraintreeDropinDialog({
           : undefined,
       );
       onSettle({ status: "completed", clientResult: { nonce } });
-    } catch {
-      // Drop-in shows the field errors itself; the buyer corrects them and tries again.
+    } catch (e) {
+      // Shown here too, even when Drop-in marks the field: the form stays open for a retry.
       setBusy(false);
+      setError(braintreeFailure(purpose, e));
     }
   };
 
@@ -236,15 +244,28 @@ function BraintreeDropinDialog({
       description={dialogDescription(purpose, selected, amountLabel)}
     >
       <div ref={container} className="min-h-40" />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2">
+      <PaymentPrivacyNote
+        business={businessName}
+        instrument={selected === "card" || cardsOnly ? "card" : "other"}
+      />
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={!ready || busy}>
-          {busy ? "Checking…" : purpose === "setup" ? (cardsOnly ? "Save card" : "Save") : "Pay"}
+          {busy
+            ? "Checking…"
+            : (confirmLabel ??
+              (purpose === "setup"
+                ? cardsOnly
+                  ? "Save card"
+                  : "Save"
+                : amountLabel
+                  ? `Pay ${amountLabel}`
+                  : "Pay"))}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }
@@ -258,7 +279,7 @@ export function openBraintreeDropin(
   if (!clientToken)
     return Promise.resolve({
       status: "failed",
-      message: "We could not open the payment form. Contact the business.",
+      message: `We could not open the payment form. ${contactBusiness(context.businessName)}`,
     });
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
   const methods = Array.isArray(params.methods)
@@ -285,6 +306,8 @@ export function openBraintreeDropin(
           params={dropin}
           purpose={context.purpose}
           email={context.prefill?.email ?? null}
+          businessName={context.businessName}
+          confirmLabel={(context as GatewaySdkContext & { confirmLabel?: string }).confirmLabel}
           onSettle={settle}
         />,
       );

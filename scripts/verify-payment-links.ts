@@ -10,6 +10,7 @@ import { withTenant, closeDb } from "@/platform/db";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
 import { clearPublicRateLimits } from "./lib/rate-limit-reset";
+import { tmtestPayAtOnce } from "./lib/tmtest-pay-at-once";
 import { isObjectStoreConfigured, setObjectStoreDriverForTests } from "@/platform/object-store";
 import { checkoutSessions, invoices, subscriptions } from "@db/schema";
 
@@ -37,6 +38,7 @@ const biz = await createBusiness({
   livemode: "test",
   timezone: "UTC",
 });
+await tmtestPayAtOnce(orgId, biz.id);
 const product = async (name: string, kind: "plan" | "addon" | "charge") =>
   createProduct({ organizationId: orgId, businessId: biz.id, name, kind });
 const price = async (

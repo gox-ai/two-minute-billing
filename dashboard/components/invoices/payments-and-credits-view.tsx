@@ -1,10 +1,13 @@
 import * as React from "react";
+import { brandLabel, enumLabel, plural } from "@/lib/labels";
+import { partnerName } from "@/components/partner-logo";
 import Link from "next/link";
 import type { Transaction, PaymentIntentRow } from "@/lib/api/payments";
 import { SectionCard } from "@/components/patterns/section-card";
 import { EmptyState } from "@/components/states";
 import { StatusChip } from "@/components/patterns/chip";
-import { money, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { ATTEMPT_FAILED, displayIntentStatus } from "@/lib/payment-intent-status";
 import type { DunningJourney } from "@/lib/api";
 import { DunningJourneyView, finalActionSentence } from "./dunning-journey-view";
@@ -150,7 +153,9 @@ export function PaymentsAndCreditsView({
               <li key={i.id} className="flex flex-wrap items-start gap-2 text-sm">
                 <StatusChip status={status} />
                 <span className="min-w-0 flex-1">
-                  <span className="font-mono text-xs">{i.id}</span>{" "}
+                  <span className="font-medium" title={i.id}>
+                    Payment intent
+                  </span>{" "}
                   {i.amount_minor != null && i.currency ? (
                     <>
                       —{" "}
@@ -160,7 +165,7 @@ export function PaymentsAndCreditsView({
                     </>
                   ) : null}
                   <span className="text-muted-foreground">
-                    {i.attempt_count > 1 ? `${i.attempt_count} attempts · ` : ""}
+                    {i.attempt_count > 1 ? `${plural(i.attempt_count, "attempt")} · ` : ""}
                     opened {fmtDateTime(i.created_at, tz)}
                   </span>
                   {/* The deadline is the actionable part: past it the clock fails the
@@ -195,26 +200,28 @@ export function PaymentsAndCreditsView({
         <ul className="space-y-3">
           {transactions.map((t) => {
             const method = t.payment_method?.brand
-              ? `${t.payment_method.brand}${t.payment_method.last4 ? ` ending ${t.payment_method.last4}` : ""}`
+              ? `${brandLabel(t.payment_method.brand)}${t.payment_method.last4 ? ` ending ${t.payment_method.last4}` : ""}`
               : t.gateway_key?.startsWith("offline_")
-                ? `offline · ${t.gateway_key.slice("offline_".length).replace(/_/g, " ")}`
-                : (t.gateway_key ?? "gateway");
+                ? `offline payment (${t.gateway_key.slice("offline_".length).replace(/_/g, " ")})`
+                : (t.gateway_account?.name ??
+                  partnerName(t.gateway_key) ??
+                  t.gateway_key ??
+                  "the gateway");
             return (
               <li key={t.id} className="flex flex-wrap items-start gap-2 text-sm">
                 <StatusChip status={t.status} />
                 <span className="min-w-0 flex-1">
                   <Link
                     href={`/businesses/${biz}/transactions/${t.id}`}
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="font-medium text-primary hover:underline"
                   >
-                    {t.id}
+                    {enumLabel(t.type)}
                   </Link>{" "}
-                  —{" "}
+                  of{" "}
                   <span className="font-medium tabular-nums">
                     {money(t.amount_minor, t.currency)}
                   </span>{" "}
-                  <span className="capitalize">{t.type.replace(/_/g, " ")}</span> via{" "}
-                  <span className="font-medium">{method}</span>
+                  via <span className="font-medium">{method}</span>
                   {t.occurred_at ? <> on {fmtDateTime(t.occurred_at, tz)}</> : null}
                   {/* The reason a charge failed is the whole point of showing failures. */}
                   {t.error_text ? (

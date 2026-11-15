@@ -30,6 +30,7 @@ export async function meterForPrice(
   tx: Tx,
   businessId: string,
   ref: string,
+  opts: { amountSource?: string | null } = {},
 ): Promise<typeof meters.$inferSelect> {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
   const [m] = await tx
@@ -47,6 +48,15 @@ export async function meterForPrice(
     throw new MeterPriceError(
       `The meter ${m.key} is archived. You cannot add a price to an archived meter.`,
       "meter",
+    );
+  // A meter paid in credits bills in money only what credits do not pay, by its rate (0530).
+  const [paidInCredits] = await tx.execute(sql`
+    select 1 as x from meter_credit_costs
+    where meter_id = ${m.id} and active and product_id is null and subscription_id is null limit 1`);
+  if (paidInCredits && (opts.amountSource ?? "rate") !== "rate")
+    throw new MeterPriceError(
+      `The meter ${m.key} has a credit cost. A price on it bills the usage that credits do not pay, so it must use a rate.`,
+      "amount_source",
     );
   return m;
 }

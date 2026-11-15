@@ -17,7 +17,7 @@ import { ActionForm } from "@/components/form/action-form";
  * Differential pricing for an addon/charge attached to ONE plan: a Currency ×
  * Billing Frequency grid where each cell sets the item's price when attached to
  * that plan. The plan is chosen upstream (?plan=) via the overview table or the
- * "Set Differential Pricing" modal, so this view is purely the per-plan grid.
+ * "Set differential pricing" modal, so this view is purely the per-plan grid.
  *
  * When a row has a `tiers` array instead of a flat amount, a view-only tier
  * summary is shown inline — tier editing is not supported via this UI; use the
@@ -86,7 +86,7 @@ export function DifferentialGrid({
                           <summary className="cursor-pointer text-xs text-primary hover:underline">
                             {existing!.tiers!.length} tier{existing!.tiers!.length !== 1 ? "s" : ""}
                           </summary>
-                          <div className="mt-1 rounded border bg-muted p-2 text-xs">
+                          <div className="mt-1 rounded-md border bg-muted p-2 text-xs">
                             <div className="overflow-x-auto">
                               <table className="w-full border-collapse">
                                 <thead>
@@ -139,7 +139,7 @@ export function DifferentialGrid({
                           defaultMinor={existing?.amountMinor ?? null}
                         />
                         <Button type="submit" variant="outline" size="sm">
-                          {existing ? "Save" : "Set Price"}
+                          {existing ? "Save" : "Set price"}
                         </Button>
                       </ActionForm>
                     )}

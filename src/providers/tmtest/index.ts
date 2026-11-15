@@ -99,7 +99,7 @@ function newId(prefix: string): string {
 }
 
 /**
- * `submitClientResult` (`buyer_auth_mode=sdk`). Each submission is a `tmtest_charges` row
+ * `submitClientResult` (`buyer_auth_mode=sdk`, or a Pay with no instrument). Each submission is a `tmtest_charges` row
  * of this kind, so a replayed key answers the same outcome. An accepted one is ALSO the
  * new id the gateway hands back (`tmtx_…`): `parent_charge_id` maps it to its intent.
  */
@@ -256,6 +256,13 @@ export class TmtestProvider implements PaymentProvider {
    */
   private readonly buyerAuthMode: "sdk" | "form_post" | null;
 
+  /**
+   * A payment with no instrument (Pay on a hosted page, the buyer choosing the method)
+   * answers the `sdk` challenge even when `buyerAuthMode` is null, so the page opens the
+   * Approve/Decline dialog. Off = it authorizes at once (`buyer_auth_mode=none`).
+   */
+  private readonly buyerPaymentDialog: boolean;
+
   /** Only on `sdk` accounts, as only a nonce gateway has one. */
   readonly submitClientResult?: PaymentProvider["submitClientResult"];
 
@@ -284,6 +291,7 @@ export class TmtestProvider implements PaymentProvider {
       chargeFault?: "mandate_missing" | null;
       ensureCustomerFault?: "reject" | "indeterminate" | null;
       buyerAuthMode?: "sdk" | "form_post" | null;
+      buyerPaymentDialog?: boolean;
       preDebit?: preDebit.TmtestPreDebitOptions | null;
       /** Rails on which the gateway notifies the payer itself (`gatewayNotifiesPayer`). */
       gatewayNotifiesPayer?: Array<"card" | "upi">;
@@ -298,6 +306,7 @@ export class TmtestProvider implements PaymentProvider {
     this.chargeFault = options.chargeFault ?? null;
     this.ensureCustomerFault = options.ensureCustomerFault ?? null;
     this.buyerAuthMode = options.buyerAuthMode ?? null;
+    this.buyerPaymentDialog = options.buyerPaymentDialog ?? false;
     this.preDebit = options.preDebit ?? null;
     let capabilities = options.perDebitMandateReference
       ? { ...TmtestProvider.BASE_CAPABILITIES, mandates: true, perDebitMandateReference: true }
@@ -328,8 +337,13 @@ export class TmtestProvider implements PaymentProvider {
     if (options.gatewayNotifiesPayer?.length)
       capabilities = { ...capabilities, gatewayNotifiesPayer: options.gatewayNotifiesPayer };
     this.capabilities = capabilities;
-    if (this.buyerAuthMode === "sdk")
+    if (this.buyerAuthMode === "sdk" || this.instrumentlessPaymentMode() === "sdk")
       this.submitClientResult = (input) => this.acceptClientResult(input);
+  }
+
+  /** The challenge for a payment intent with no vaulted instrument; null = none. */
+  private instrumentlessPaymentMode(): "sdk" | "form_post" | null {
+    return this.buyerAuthMode ?? (this.buyerPaymentDialog ? "sdk" : null);
   }
 
   /**
@@ -340,10 +354,11 @@ export class TmtestProvider implements PaymentProvider {
     intentId: string,
     setup: boolean,
     returnUrl?: string | null,
+    mode: "sdk" | "form_post" | null = this.buyerAuthMode,
   ): BuyerAuthorization {
-    if (this.buyerAuthMode === "sdk")
+    if (mode === "sdk")
       return { mode: "sdk", sdk: { provider: PROVIDER_KEY, params: { intent: intentId } } };
-    if (this.buyerAuthMode === "form_post")
+    if (mode === "form_post")
       return {
         mode: "form_post",
         formPost: {
@@ -1134,6 +1149,7 @@ export class TmtestProvider implements PaymentProvider {
               row.chargeId,
               setup,
               typeof returnUrl === "string" ? returnUrl : null,
+              !setup && row.vaultId == null ? this.instrumentlessPaymentMode() : this.buyerAuthMode,
             ),
       };
     }
@@ -1271,8 +1287,9 @@ export class TmtestProvider implements PaymentProvider {
     // A checkout rail ALWAYS needs the buyer: there is no vaulted instrument to
     // authorize off-session, whatever the card behaviour says. So does an `sdk` /
     // `form_post` intent with no instrument: the buyer supplies it in that challenge.
+    const challengeMode = v ? this.buyerAuthMode : this.instrumentlessPaymentMode();
     const requiresAction =
-      behavior === "requires_action" || checkout != null || (this.buyerAuthMode != null && !v);
+      behavior === "requires_action" || checkout != null || (challengeMode != null && !v);
     // Store the intent as a gateway-side charge row so consumeIntent can capture it.
     await store.insertCharge({
       chargeId: intentId,
@@ -1300,7 +1317,7 @@ export class TmtestProvider implements PaymentProvider {
         status: "requires_action",
         authorization: checkout
           ? { mode: "checkout", checkout }
-          : this.buyerChallenge(intentId, false, input.returnUrl),
+          : this.buyerChallenge(intentId, false, input.returnUrl, challengeMode),
       };
     }
     return { intentId, status: "authorized" };

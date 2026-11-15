@@ -1,5 +1,5 @@
 import { DeltaChip } from "@/components/analytics/delta-chip";
-import { pctFromBps } from "@/lib/format";
+import { changePct } from "@/components/analytics/format";
 import type { AnalyticsResult } from "@/lib/analytics-api";
 import type { SeriesPolarity } from "@/components/analytics/series-format";
 import { localYmd, rangeLabel } from "@/components/analytics/home/parts";
@@ -51,7 +51,7 @@ export function CompareDelta({
           rather than leaving a bare "vs <dates>" that reads like missing data. */}
       {bps != null && (bps !== 0 || quiet) ? (
         <DeltaChip direction={bps === 0 ? "flat" : bps < 0 ? "down" : "up"} tone={tone}>
-          {pctFromBps(Math.abs(bps))}
+          {changePct(Math.abs(bps))}
         </DeltaChip>
       ) : null}
       <span className="text-xs text-muted-foreground">

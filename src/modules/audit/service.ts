@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, lt, sql, type SQL } from "drizzle-orm";
-import { withTenant, type Tx } from "@/platform/db";
+import { onPrimary, withTenant, type Tx } from "@/platform/db";
 import { ownedByCustomer } from "@/modules/events/resource-scope";
 import { currentEventContext } from "@/platform/event-context";
 import { businessTimezone } from "@/platform/business-tz";
@@ -19,7 +19,15 @@ import {
   cappedTotal,
 } from "@/platform/list-query";
 import { getTraceId } from "@/platform/trace";
-import { auditLogs, auditLogSnapshots, businesses } from "@db/schema";
+import {
+  auditLogs,
+  auditLogSnapshots,
+  businesses,
+  checkoutSessions,
+  customers,
+  portalSessions,
+  subscriptions,
+} from "@db/schema";
 import { auditSnapshot, changedFields } from "./snapshot";
 import { createLogger } from "@/platform/logger";
 
@@ -105,7 +113,8 @@ export async function writeAuditLog(
     await write(tx);
     return;
   }
-  await withTenant(input.organizationId, write);
+  // An audit row is a write, even when a report route (`onReplica`) records it.
+  await onPrimary(() => withTenant(input.organizationId, write));
 }
 
 /** Columns every UPDATE moves (trigger-bumped); a diff of only these is no change. */
@@ -226,6 +235,113 @@ export async function businessPublicIds(
       .from(businesses)
       .where(inArray(businesses.id, ids));
     return new Map(rows.map((r) => [r.id, r.publicId]));
+  });
+}
+
+/** The hosted page a buyer acted from. Its session id is the row's actor (`authenticatePortal`/`authenticateCheckout`). */
+export type SessionChannel = "checkout" | "portal";
+
+export function sessionChannel(actor: string | null | undefined): SessionChannel | null {
+  if (actor?.startsWith("cosess_")) return "checkout";
+  if (actor?.startsWith("psess_")) return "portal";
+  return null;
+}
+
+/** A session actor's business and customer; `customer` is null when none is attached or it was deleted. */
+export interface SessionActor {
+  businessId: string;
+  customer: {
+    publicId: string;
+    firstName: string | null;
+    lastName: string | null;
+    company: string | null;
+    email: string | null;
+  } | null;
+}
+
+/**
+ * The customer behind each checkout/portal session actor on a page of audit rows: at most
+ * one query per channel, whatever the page size. Filtered by organization explicitly as
+ * well as by RLS, and by business when the caller is business-scoped.
+ */
+export async function sessionActors(
+  organizationId: string,
+  actors: Array<string | null>,
+  businessId?: string,
+): Promise<Map<string, SessionActor>> {
+  const ids = [...new Set(actors.filter((a): a is string => sessionChannel(a) !== null))];
+  const out = new Map<string, SessionActor>();
+  if (ids.length === 0) return out;
+  const checkoutIds = ids.filter((a) => sessionChannel(a) === "checkout");
+  const portalIds = ids.filter((a) => sessionChannel(a) === "portal");
+  const customerCols = {
+    publicId: customers.publicId,
+    firstName: customers.firstName,
+    lastName: customers.lastName,
+    company: customers.company,
+    email: customers.email,
+  };
+  const put = (r: { sessionId: string; businessId: string; customer: SessionActor["customer"] }) =>
+    out.set(r.sessionId, {
+      businessId: r.businessId,
+      customer: r.customer?.publicId ? r.customer : null,
+    });
+
+  return withTenant(organizationId, async (tx) => {
+    if (checkoutIds.length) {
+      // Change mode pins the customer at mint; fall back to the target subscription's.
+      const rows = await tx
+        .select({
+          sessionId: checkoutSessions.publicId,
+          businessId: checkoutSessions.businessId,
+          customer: customerCols,
+        })
+        .from(checkoutSessions)
+        .leftJoin(subscriptions, eq(subscriptions.id, checkoutSessions.subscriptionId))
+        .leftJoin(
+          customers,
+          and(
+            eq(
+              customers.id,
+              sql`coalesce(${checkoutSessions.resultingCustomerId}, ${subscriptions.customerId})`,
+            ),
+            eq(customers.businessId, checkoutSessions.businessId),
+          ),
+        )
+        .where(
+          and(
+            eq(checkoutSessions.organizationId, organizationId),
+            inArray(checkoutSessions.publicId, checkoutIds),
+            businessId ? eq(checkoutSessions.businessId, businessId) : undefined,
+          ),
+        );
+      rows.forEach(put);
+    }
+    if (portalIds.length) {
+      const rows = await tx
+        .select({
+          sessionId: portalSessions.publicId,
+          businessId: portalSessions.businessId,
+          customer: customerCols,
+        })
+        .from(portalSessions)
+        .leftJoin(
+          customers,
+          and(
+            eq(customers.id, portalSessions.customerId),
+            eq(customers.businessId, portalSessions.businessId),
+          ),
+        )
+        .where(
+          and(
+            eq(portalSessions.organizationId, organizationId),
+            inArray(portalSessions.publicId, portalIds),
+            businessId ? eq(portalSessions.businessId, businessId) : undefined,
+          ),
+        );
+      rows.forEach(put);
+    }
+    return out;
   });
 }
 

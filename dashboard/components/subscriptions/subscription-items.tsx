@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 import { Info, Layers } from "lucide-react";
 
 import type { SubscriptionItem } from "@/lib/api";
 import { money } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 
 const INTERVAL_LABEL: Record<string, string> = {
@@ -28,7 +29,9 @@ const GROUPS = [
 const KNOWN = new Set(GROUPS.map((g) => g.kind as string));
 
 /** Name column flexes; the three numeric columns are fixed so they stay aligned. */
-const COLS = "grid grid-cols-[minmax(0,1fr)_4.5rem_7rem_8rem] items-start gap-x-4";
+// On a phone: the name with its amount opposite, then units and unit price, each labelled.
+const COLS =
+  "grid grid-cols-[minmax(0,1fr)_4.5rem_7rem_8rem] items-start gap-x-4 max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-y-1";
 
 /**
  * The subscription's line items.
@@ -161,8 +164,10 @@ export function SubscriptionItems({
         // The numeric columns must not squash the name column on a narrow
         // viewport, so the card scrolls inside itself rather than the page body.
         <div className="overflow-x-auto">
-          <div className="min-w-[34rem]">
-            <div className={`${COLS} border-b py-2 text-xs font-medium text-muted-foreground`}>
+          <div className="sm:min-w-[34rem]">
+            <div
+              className={`${COLS} border-b py-2 text-xs font-medium text-muted-foreground max-sm:hidden`}
+            >
               <span>Item</span>
               <span className="text-right">Units</span>
               <span className="text-right">Unit price</span>
@@ -191,19 +196,23 @@ export function SubscriptionItems({
                       className={`${COLS} border-b border-border/40 py-3 last:border-0`}
                     >
                       <div className="min-w-0 space-y-1">
-                        <a
-                          href={`/businesses/${biz}/catalog/${kind === "plan" ? "plans" : "addons"}`}
+                        {/* A client link to the product's own page: a plain <a> reloaded the
+                            whole page (and Billy's panel with it) and went to the list. */}
+                        <Link
+                          href={
+                            it.product
+                              ? `/businesses/${biz}/catalog/products/${it.product}`
+                              : `/businesses/${biz}/catalog/${kind === "plan" ? "plans" : "addons"}`
+                          }
                           className="block truncate text-sm font-semibold text-primary hover:underline"
                           title={it.product_name || it.price}
                         >
                           {it.product_name || it.price}
-                        </a>
+                        </Link>
 
                         {it.id && itemActions?.[it.id] ? <div>{itemActions[it.id]}</div> : null}
                         {it.unit_price_overridden ? (
-                          <Badge variant="outline" className="tracking-wide uppercase">
-                            Price override set
-                          </Badge>
+                          <Chip className="tracking-wide uppercase">Price override set</Chip>
                         ) : null}
 
                         <ul className="space-y-0.5 text-xs text-muted-foreground">
@@ -230,13 +239,13 @@ export function SubscriptionItems({
                         </ul>
                       </div>
 
-                      <div className="text-right text-sm text-foreground tabular-nums">
+                      <div className="text-right text-sm text-foreground tabular-nums max-sm:col-span-2 max-sm:text-left max-sm:before:me-2 max-sm:before:text-xs max-sm:before:text-muted-foreground max-sm:before:content-['Units']">
                         {showUnits ? qty : "—"}
                       </div>
-                      <div className="text-right text-sm text-foreground tabular-nums">
+                      <div className="text-right text-sm text-foreground tabular-nums max-sm:col-span-2 max-sm:text-left max-sm:before:me-2 max-sm:before:text-xs max-sm:before:text-muted-foreground max-sm:before:content-['Unit_price']">
                         {unit != null ? money(unit, currency) : "—"}
                       </div>
-                      <div className="text-right text-sm font-semibold text-foreground tabular-nums">
+                      <div className="text-right text-sm font-semibold text-foreground tabular-nums max-sm:col-start-2 max-sm:row-start-1">
                         {unit != null ? `${money(unit * qty, currency)} ` : "—"}
                         {unit != null ? (
                           <span className="text-xs font-normal text-muted-foreground">
@@ -264,15 +273,15 @@ export function SubscriptionItems({
                   {discount.source === "coupon" ? "Coupons" : "Discounts"}
                 </div>
                 <div className={`${COLS} border-b border-border/40 py-3 last:border-0`}>
-                  <div className="col-span-3 min-w-0 space-y-1">
+                  <div className="col-span-3 min-w-0 space-y-1 max-sm:col-span-1">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       {discount.href ? (
-                        <a
+                        <Link
                           href={discount.href}
                           className="text-sm font-semibold text-primary hover:underline"
                         >
                           {discount.label}
-                        </a>
+                        </Link>
                       ) : (
                         <span className="text-sm font-semibold text-foreground">
                           {discount.label}

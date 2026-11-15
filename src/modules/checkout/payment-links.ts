@@ -5,6 +5,8 @@ import { config } from "@/platform/config";
 import {
   businesses,
   checkoutSessions,
+  couponItemConstraints,
+  coupons,
   paymentLinkItems,
   paymentLinks,
   prices,
@@ -12,6 +14,8 @@ import {
 } from "@db/schema";
 import { getPriceByPublicId } from "@/modules/catalog/service";
 import { formatMoney } from "@/platform/currency";
+import { zonedDayString } from "@/platform/timezones";
+import { centsToCredits } from "@/modules/assistant/allowance";
 import {
   CheckoutError,
   createCheckoutSession,
@@ -364,12 +368,19 @@ export interface PricingPageView {
     name: string;
     livemode: string;
     logoUrl: string | null;
+    iconUrl: string | null;
+    faviconUrl: string | null;
     brandColor: string | null;
+    /** The buyer's contact for the page footer; null when unset. */
+    supportEmail: string | null;
+    website: string | null;
   };
   links: Array<{
     id: string;
     name: string;
     mode: "create" | "purchase";
+    /** The product the card sells (the plan, else the first line), so a page can group cadences. */
+    product: { id: string; name: string };
     /** The plan or first item's own description, for the card body. */
     description: string | null;
     /** That product's picture, or null. */
@@ -380,7 +391,13 @@ export interface PricingPageView {
       amountMinor: number | null;
       interval: string | null;
       intervalCount: number;
+      /** `flat`, `per_unit`, or a metered model: what `amount` is the price OF. */
+      model: string;
     };
+    /** The price's `metadata.assistant_allowance_usd_cents`: assistant use the plan includes a month. */
+    assistantAllowanceUsdCents: number | null;
+    /** The same allowance in credits, as members see it. */
+    assistantCredits: number | null;
   }>;
   /**
    * Plans shown with no checkout (`isDisplayOnly`): one per active price. The page links them to
@@ -394,7 +411,97 @@ export interface PricingPageView {
     interval: string | null;
     /** The price's `metadata.volume_limit_minor`: how much the plan covers a month. */
     limitMinor: number | null;
+    /** The price's `metadata.assistant_allowance_usd_cents`: assistant use included a month. */
+    assistantAllowanceUsdCents: number | null;
+    /** The same allowance in credits, as members see it. */
+    assistantCredits: number | null;
   }>;
+  /**
+   * Discounts to advertise: active percentage coupons whose `metadata.pricing_page_until` is
+   * still ahead. The coupon itself decides who gets it; this only says it exists.
+   */
+  offers: Array<{
+    name: string;
+    percentOff: number;
+    /** Billing periods the discount lasts; null for forever. */
+    periods: number | null;
+    /** The plan intervals it applies to; empty for every interval. */
+    intervals: string[];
+    endsAt: string;
+    /** The last day it runs, as a date in the business's timezone (YYYY-MM-DD). */
+    endsOn: string;
+    /** The code a buyer enters at checkout; null when the business does not let buyers enter codes. */
+    code: string | null;
+  }>;
+}
+
+/** Percentage coupons the business shows on its pricing page until `pricing_page_until`. */
+async function pricingPageOffers(
+  businessId: string,
+  timezone: string | null,
+  now: Date,
+  buyerCodes: boolean,
+) {
+  const rows = await systemDb
+    .select()
+    .from(coupons)
+    .where(
+      and(
+        eq(coupons.businessId, businessId),
+        eq(coupons.active, true),
+        eq(coupons.kind, "percentage"),
+        isNotNull(sql`${coupons.metadata}->>'pricing_page_until'`),
+      ),
+    );
+  const out: PricingPageView["offers"] = [];
+  for (const c of rows) {
+    const m = (c.metadata ?? {}) as Record<string, unknown>;
+    const until = new Date(String(m.pricing_page_until));
+    if (Number.isNaN(until.getTime()) || until <= now) continue;
+    if (c.validFrom && c.validFrom > now) continue;
+    if (c.redeemBy && c.redeemBy <= now) continue;
+    if (c.maxRedemptions != null && c.timesRedeemed >= c.maxRedemptions) continue;
+    const scope = await systemDb
+      .select({ periods: couponItemConstraints.billingPeriods })
+      .from(couponItemConstraints)
+      .where(
+        and(eq(couponItemConstraints.couponId, c.id), eq(couponItemConstraints.itemKind, "plan")),
+      );
+    const intervals = scope.flatMap((r) =>
+      ((r.periods as Array<{ interval: string }> | null) ?? []).map((p) => p.interval),
+    );
+    out.push({
+      name: typeof m.pricing_page_label === "string" ? m.pricing_page_label : (c.name ?? c.code),
+      percentOff: (c.percentOffBps ?? 0) / 100,
+      periods:
+        c.durationType === "forever"
+          ? null
+          : c.durationType === "repeating"
+            ? (c.durationInPeriods ?? 1)
+            : 1,
+      intervals: [...new Set(intervals)],
+      endsAt: until.toISOString(),
+      endsOn: zonedDayString(until, timezone),
+      code: buyerCodes ? c.code : null,
+    });
+  }
+  return out;
+}
+
+/** A price's included assistant use, in cents and in credits (null when the price has none). */
+function allowanceOf(metadata: unknown) {
+  const cents = metaCount(metadata, "assistant_allowance_usd_cents");
+  return {
+    assistantAllowanceUsdCents: cents,
+    assistantCredits: cents == null ? null : centsToCredits(cents),
+  };
+}
+
+/** A whole, non-negative number from price metadata, or null. */
+function metaCount(metadata: unknown, key: string): number | null {
+  const v = (metadata as Record<string, unknown> | null)?.[key];
+  const n = v == null ? NaN : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /** The public pricing page: a business's active links marked for it. Null for an unknown business. */
@@ -432,6 +539,7 @@ export async function getPricingPage(businessPublicId: string): Promise<PricingP
       id: l.publicId,
       name: l.name,
       mode: modeOf(rows.map((r) => r.price)),
+      product: { id: lead.product.publicId, name: lead.product.name },
       description: lead.product.description ?? lead.price.description ?? null,
       imageUrl: lead.product.imageUrl,
       price: {
@@ -444,7 +552,9 @@ export async function getPricingPage(businessPublicId: string): Promise<PricingP
         amountMinor: lead.price.amountMinor == null ? null : Number(lead.price.amountMinor),
         interval: lead.price.type === "recurring" ? lead.price.interval : null,
         intervalCount: lead.price.intervalCount,
+        model: lead.price.usageAggregation ? "usage" : lead.price.model,
       },
+      ...allowanceOf(lead.price.metadata),
     });
   }
   const shown = await systemDb
@@ -465,7 +575,11 @@ export async function getPricingPage(businessPublicId: string): Promise<PricingP
       name: biz.name,
       livemode: biz.livemode,
       logoUrl: biz.logoUrl,
+      iconUrl: biz.iconUrl,
+      faviconUrl: biz.faviconUrl,
       brandColor: biz.brandColor,
+      supportEmail: biz.supportEmail,
+      website: biz.website,
     },
     links: out,
     displayPlans: shown.map(({ price, product }) => {
@@ -477,7 +591,20 @@ export async function getPricingPage(businessPublicId: string): Promise<PricingP
         amountMinor: price.amountMinor == null ? null : Number(price.amountMinor),
         interval: price.type === "recurring" ? price.interval : null,
         limitMinor: limit != null && Number.isFinite(Number(limit)) ? Number(limit) : null,
+        ...allowanceOf(price.metadata),
       };
     }),
+    offers: await pricingPageOffers(biz.id, biz.timezone, new Date(), biz.allowCustomerCoupons),
   };
+}
+
+/** The business a link belongs to, archived or not: lets a refused link still name its business. */
+export async function paymentLinkBusiness(linkPublicId: string): Promise<string | null> {
+  const [row] = await systemDb
+    .select({ business: businesses.publicId })
+    .from(paymentLinks)
+    .innerJoin(businesses, eq(businesses.id, paymentLinks.businessId))
+    .where(eq(paymentLinks.publicId, linkPublicId))
+    .limit(1);
+  return row?.business ?? null;
 }

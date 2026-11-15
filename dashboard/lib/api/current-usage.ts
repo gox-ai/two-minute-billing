@@ -47,7 +47,15 @@ export interface CurrentUsageItem {
   /** Meter items: model values with no resolved price; they bill the default rate. */
   unpriced_models?: string[];
   /** The same as list keys where the meter names a token type: what a cost row would set. */
-  unpriced_keys?: Array<{ provider: string | null; model: string; token_type: string }>;
+  unpriced_keys?: Array<{
+    provider: string | null;
+    model: string;
+    token_type: string;
+    /** Null: the meter names no unit (tokens, else requests). */
+    unit?: string | null;
+    quality?: string | null;
+    resolution?: string | null;
+  }>;
   /** Projected amounts are estimates. */
   estimate?: boolean;
 }
@@ -58,6 +66,40 @@ export interface CurrentUsageTotals {
   tax_lines: Array<{ label: string; amount_minor: number }>;
   total_minor: number;
 }
+
+/**
+ * One credit-cost meter: what credits paid, what the next invoice bills in money (in the
+ * totals) and the units below zero that nothing billed. Quantities and units are decimal text.
+ */
+export interface CurrentCreditUsage {
+  meter: string;
+  name: string;
+  unit: string;
+  unit_name: string;
+  unit_plural_name: string;
+  paid_quantity: string;
+  paid_units: string;
+  billed: Array<{
+    basis: "meter" | "unit";
+    /** Absent on the portal. */
+    price?: string | null;
+    quantity: string;
+    units: string;
+    amount_minor: number;
+  }>;
+  billed_amount_minor: number;
+  overshoot_units: string;
+  below_zero_quantity?: string;
+}
+
+/** "120 credits", "1 credit": a unit amount with the unit's own name. */
+export const creditAmount = (
+  units: string,
+  m: Pick<CurrentCreditUsage, "unit_name" | "unit_plural_name">,
+) =>
+  `${Number(units).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${
+    units === "1" ? m.unit_name : m.unit_plural_name
+  }`;
 
 export interface CurrentUsage extends CurrentUsageTotals {
   object: "current_usage";
@@ -82,6 +124,8 @@ export interface CurrentUsage extends CurrentUsageTotals {
     period_end: string | null;
   }>;
   projection: (CurrentUsageTotals & { minimum_true_up_minor: number }) | null;
+  /** Only with a credit-cost meter, on the customer's oldest live subscription. */
+  credit_usage?: CurrentCreditUsage[];
   discounts_applied: false;
   trial: {
     start: string;
@@ -104,9 +148,13 @@ export interface CustomerCurrentUsage {
   }>;
 }
 
-/** True when the view has anything to show: metered items, settled usage or trial units. */
+/** True when the view has anything to show: metered items, settled or credit usage, trial units. */
 export const hasUsage = (u: CurrentUsage | null | undefined): u is CurrentUsage =>
-  !!u && (u.items.length > 0 || u.settled_charges.length > 0 || (u.trial?.items.length ?? 0) > 0);
+  !!u &&
+  (u.items.length > 0 ||
+    u.settled_charges.length > 0 ||
+    (u.credit_usage?.length ?? 0) > 0 ||
+    (u.trial?.items.length ?? 0) > 0);
 
 export function getCurrentUsage(biz: string, sub: string) {
   return apiGetOrNull<CurrentUsage>(

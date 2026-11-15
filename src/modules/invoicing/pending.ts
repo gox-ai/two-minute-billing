@@ -9,7 +9,7 @@
  * → credit → collect money math runs once, at close (pre-tax discounts/promo see
  * the complete line set). Transitions: pending → paid | posted | payment_due.
  */
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { systemDb, withTenant } from "@/platform/db";
 import { billSubscriptionPeriod } from "./service";
 import { InvoiceOpsError } from "./ops";
@@ -58,6 +58,24 @@ export async function closeInvoice(
   if (!inv.subscriptionId)
     throw new InvoiceOpsError("You cannot close a pending invoice that has no subscription");
 
+  // A held renewal invoice closes with the renewal's tail; the collect pump charges it.
+  if (inv.holdUntil) {
+    const { finalizeHeldInvoice } = await import("@/modules/subscriptions/renewal");
+    const { stampNow } = await import("@/platform/clock");
+    const closed = await finalizeHeldInvoice(organizationId, inv.id, stampNow(businessId), {
+      auditWrite: (finalized) => ({
+        action: "invoice.close",
+        before: { status: inv.status, total_minor: Number(inv.totalMinor) },
+        after: { status: finalized.status, total_minor: Number(finalized.totalMinor) },
+      }),
+    });
+    if (!closed)
+      throw new InvoiceOpsError(
+        "We could not close the invoice. It is not pending now. Refresh the invoice to see its status.",
+      );
+    return { invoice: closed.invoice, payment: null };
+  }
+
   const sub = await withTenant(organizationId, async (tx) => {
     const [s] = await tx
       .select()
@@ -99,12 +117,20 @@ export async function closeInvoice(
 
 /**
  * Clock pass: auto-close pending invoices whose business set
- * `auto_close_pending_after_days` and whose period ended that many days ago.
+ * `auto_close_pending_after_days` and whose period ended that many days ago, then finalize
+ * held renewal invoices whose `hold_until` has passed (the usage grace window).
  * System-wide; each close runs in its org's RLS context inside `closeInvoice`.
  */
 export async function runAutoClosePending(
   now: Date,
 ): Promise<{ closed: number; errors: TickError[] }> {
+  const pending = await closeExpiredPending(now);
+  const { runCloseHeldInvoices } = await import("@/modules/subscriptions/renewal");
+  const held = await runCloseHeldInvoices(now);
+  return { closed: pending.closed + held.closed, errors: [...pending.errors, ...held.errors] };
+}
+
+async function closeExpiredPending(now: Date): Promise<{ closed: number; errors: TickError[] }> {
   const errors: TickError[] = [];
   const rows = await systemDb
     .select({
@@ -119,6 +145,8 @@ export async function runAutoClosePending(
     .where(
       and(
         eq(invoices.status, "pending"),
+        // A held invoice closes at its own `hold_until`.
+        isNull(invoices.holdUntil),
         isNotNull(businesses.autoClosePendingAfterDays),
         isNotNull(invoices.periodEnd),
         scanBusinessFilter(invoices.businessId),

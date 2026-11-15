@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { actionOk, actionError, type ActionResult } from "@/lib/action-result";
-import { requirePermission } from "@/lib/session";
+import { requirePermission, requireUser } from "@/lib/session";
 import {
   createGatewayAccount,
   updateGatewayAccount,
@@ -321,13 +321,15 @@ export async function deleteGatewayAccountAction(biz: string, gwa: string): Prom
 }
 
 /**
- * Balance for the refund dialogs, loaded when one opens. No permission gate here: the API
- * checks `gateways:view`, and an operator without it simply sees no balance.
+ * Balance for the refund dialogs, loaded when one opens. Session only: the API checks
+ * `gateways:view`, and an operator without it simply sees no balance. `requirePermission`
+ * would redirect them off the invoice they are refunding.
  */
 export async function loadGatewayBalanceAction(
   biz: string,
   gwa: string,
   currency: string,
 ): Promise<GatewayBalance | null> {
+  await requireUser();
   return getGatewayBalance(biz, gwa, currency).catch(() => null);
 }

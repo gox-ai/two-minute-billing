@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { sentenceCase } from "@/lib/labels";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getReport, listBusinesses, type AnalyticsRange } from "@/lib/api";
@@ -66,10 +68,9 @@ export default async function ReportPage({
         <PageHeader
           title="Report"
           className="mb-0"
-          breadcrumbs={[
-            { label: "Reports", href: `/businesses/${biz}/reports` },
+          breadcrumbs={reportCrumbs(biz, undefined, "Report", [
             { label: "Stats", href: `/businesses/${biz}/reports/stats` },
-          ]}
+          ])}
         />
         <div>
           <ErrorState
@@ -102,14 +103,15 @@ export default async function ReportPage({
   return (
     <NavPendingProvider>
       <PageHeader
-        title={report.name}
+        title={sentenceCase(report.name)}
         description={report.description}
         className="mb-0"
-        breadcrumbs={[
-          { label: "Reports", href: `/businesses/${biz}/reports` },
-          { label: "Stats", href: `/businesses/${biz}/reports/stats` },
-          { label: report.name },
-        ]}
+        breadcrumbs={reportCrumbs(
+          biz,
+          businesses.data.find((b) => b.id === biz)?.name,
+          sentenceCase(report.name),
+          [{ label: "Stats", href: `/businesses/${biz}/reports/stats` }],
+        )}
         actions={
           <>
             <Link
@@ -121,7 +123,7 @@ export default async function ReportPage({
             {/* The CSV comes from the engine's own resolver, not this page's JSON — the
                 download and the screen are the same answer rendered twice. */}
             <Button asChild variant="outline">
-              <a href={`/businesses/${biz}/reports/stats/${key}/csv?${qs({})}`}>
+              <a data-document-link href={`/businesses/${biz}/reports/stats/${key}/csv?${qs({})}`}>
                 <Download aria-hidden className="text-muted-foreground" />
                 Download CSV
               </a>

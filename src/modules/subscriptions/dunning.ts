@@ -85,6 +85,15 @@ export async function applyDunningFinalAction(input: {
   config: DunningConfig;
 }): Promise<void> {
   const { organizationId, businessId, config } = input;
+  // A late-usage invoice stays not_paid: no final action on it or its cancelled subscription.
+  const [target] = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ purpose: invoices.purpose })
+      .from(invoices)
+      .where(and(eq(invoices.businessId, businessId), eq(invoices.publicId, input.invoicePublicId)))
+      .limit(1),
+  );
+  if (target?.purpose === "late_usage") return;
   // Invoice: not_paid (already set) | void (reverse ledger) | write_off (bad debt / CN).
   try {
     if (config.finalAction.invoice === "void")
@@ -150,6 +159,9 @@ export async function applyDunningFinalAction(input: {
   }
   // Subscription: cancel (historical default) | retain (SUB-7 — survives exhaustion).
   if (input.subscriptionId && subscriptionAction === "cancel") {
+    // This cancel writes the row itself: a held invoice (usage grace) closes first.
+    const { closeHeldInvoiceFirst } = await import("./renewal");
+    await closeHeldInvoiceFirst(organizationId, input.subscriptionId);
     await withTenant(organizationId, async (tx) => {
       /**
        * "Cancelled – No Card" means no payment instrument was on file to
@@ -229,6 +241,20 @@ export async function applyDunningFinalAction(input: {
         )
         .returning();
       if (!c) return;
+      // Plan credits of the unpaid period: the held ones go, and the business rule decides
+      // the unused part of the granted ones.
+      {
+        const { voidUnpaidPlanCredits } = await import("@/modules/credits/service");
+        const [biz] = await tx
+          .select({ billingRulesConfig: businesses.billingRulesConfig })
+          .from(businesses)
+          .where(eq(businesses.id, businessId))
+          .limit(1);
+        await voidUnpaidPlanCredits(tx, {
+          subscriptionId: c.id,
+          voidUnused: resolveBillingRulesConfig(biz).planCredits.onUnpaidCancel === "void_unused",
+        });
+      }
       // Cancelled → cached mrr 0, same rule as every other cancel path (see
       // cancelSubscription). Involuntary churn is the case where a stale rate is
       // most misleading: the revenue is exactly what dunning just lost.

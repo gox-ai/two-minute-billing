@@ -23,11 +23,14 @@ import { standingFor } from "@/modules/auth/org-two-factor";
 import type { ApiKeyKind, ApiKeyScope, KeyMode } from "@/platform/api-key";
 import { updateEventContext } from "@/platform/event-context";
 import { updateTraceContext } from "@/platform/trace";
+import { pinRequestClockFor } from "@/platform/clock";
 import { createLogger } from "./logger";
 import { config } from "@/platform/config";
 import { effectiveLiveAccess, effectiveOrganizationStatus, isCloud } from "@/platform/edition";
 import { consumePublicRateLimit, consumeRateLimit } from "@/platform/rate-limit";
 import { noteRequestLogAuth, noteRequestLogBusiness } from "@/modules/request-log/capture";
+import { authenticateOAuthAccess, isOAuthAccessToken } from "@/modules/oauth/service";
+import { isInnerCall } from "@/platform/inner-call";
 
 const log = createLogger("auth.api");
 
@@ -108,6 +111,8 @@ export function authOrganizationView(o: {
 // The authenticated organization is attached to the request for downstream handlers.
 declare module "fastify" {
   interface FastifyRequest {
+    /** The business an OAuth access token was granted for; null for any other credential. */
+    oauthBusiness?: string | null;
     organization?: {
       /** Registered-entity fields (0235) — see where this object is built. */
       legalName?: string | null;
@@ -190,6 +195,9 @@ export const READ_SCOPE_POSTS: ReadonlySet<string> = new Set([
   "/v1/businesses/:biz/customers/:cus/subscription_estimate",
   "/v1/businesses/:biz/emails/templates/:type/preview",
   "/v1/businesses/:biz/prices/:price/rate_change_preview",
+  // MCP's JSON-RPC envelope is a POST; every tool behind it is a read (src/api/mcp-routes.ts).
+  "/mcp",
+  "/mcp/:biz",
 ]);
 
 /** Methods that never change state. */
@@ -305,6 +313,15 @@ async function authenticateOperatorSession(token: string): Promise<AuthContext |
  * keys reach both). A mode mismatch answers 404 — same as a nonexistent
  * business — so key mode never leaks the other partition's ids.
  */
+/** Where an OAuth access token may be used: /mcp, or an in-process tool call, on its business. */
+function oauthAudienceOk(req: FastifyRequest, businessPublicId: string): boolean {
+  const route = req.routeOptions?.url ?? "";
+  const biz = (req.params as { biz?: string } | undefined)?.biz;
+  if (route === "/mcp") return true;
+  if (route === "/mcp/:biz") return biz === businessPublicId;
+  return isInnerCall(req.headers as Record<string, unknown>) && biz === businessPublicId;
+}
+
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   // A request may carry BOTH a session cookie and an API key — that is the dashboard
   // mid-migration off its key, and it is also any proxy that forwards a browser's
@@ -338,7 +355,20 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   const sessionCtx = sessionToken ? await authenticateOperatorSession(sessionToken) : null;
   // An expired/unknown session is not a refusal when a valid key is also present: that
   // is an integration's call, so it falls through to the key below.
-  const keyCtx = keyToken ? await authenticateApiKey(keyToken) : null;
+  let keyCtx: AuthContext | null = null;
+  let oauthBusiness: string | null = null;
+  if (keyToken && isOAuthAccessToken(keyToken)) {
+    // An OAuth access token's audience is the MCP server. It reaches /mcp, and the /v1 routes
+    // an MCP tool calls in-process for it — always on the business it was granted for.
+    const access = await authenticateOAuthAccess(keyToken);
+    if (access && oauthAudienceOk(req, access.businessPublicId)) {
+      keyCtx = access.ctx;
+      oauthBusiness = access.businessPublicId;
+    }
+  } else if (keyToken) {
+    keyCtx = await authenticateApiKey(keyToken);
+  }
+  req.oauthBusiness = oauthBusiness;
   // B12: off the critical path — never awaited, never throws.
   if (keyCtx?.apiKeyId) markApiKeyUsed(keyCtx.apiKeyId);
 
@@ -599,10 +629,16 @@ async function finishAuthentication(req: FastifyRequest, reply: FastifyReply, ct
   // The IP established at onRequest is deliberately left in place: unlike the clock
   // or a seed, there IS a real request behind this one, and its origin is exactly
   // what the audit trail's `actor_ip` is for.
+  // A change the member confirmed in the assistant is theirs, made via the assistant. Only an
+  // in-process call (the per-process secret header) can claim it.
+  const viaAssistant =
+    ctx.apiKeyKind === "dashboard" &&
+    isInnerCall(req.headers as Record<string, unknown>) &&
+    req.headers["x-tmb-via"] === "assistant";
   updateEventContext(
     ctx.apiKeyKind === "dashboard"
       ? {
-          source: "dashboard",
+          source: viaAssistant ? "assistant" : "dashboard",
           // A session-authenticated request already knows the person, and knows the org
           // came FROM them — no second lookup, and no mismatch to guard against.
           actor: ctx.operator?.email ?? (await dashboardActor(req, ctx.organization.id)),
@@ -692,6 +728,7 @@ export async function authenticatePortal(req: FastifyRequest, reply: FastifyRepl
   }
   req.portalSession = ctx;
   updateEventContext({ actor: ctx.sessionPublicId });
+  await pinRequestClockFor(ctx.businessId);
 }
 
 // ——— Hosted checkout (#10d) ——————————————————————————————————————————————
@@ -727,4 +764,5 @@ export async function authenticateCheckout(req: FastifyRequest, reply: FastifyRe
   }
   req.checkoutSession = ctx;
   updateEventContext({ actor: ctx.sessionPublicId });
+  await pinRequestClockFor(ctx.businessId);
 }

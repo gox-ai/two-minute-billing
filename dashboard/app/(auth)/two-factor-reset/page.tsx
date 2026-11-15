@@ -39,7 +39,9 @@ export default async function TwoFactorResetPage({
       <Card>
         {view === "done" ? (
           <CardHeader className="space-y-2 text-center">
-            <CardTitle className="text-xl">Reset cancelled</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>Reset cancelled</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               Your two-factor authentication stays on. Did you not ask support to disable it? Then
               change your password now.
@@ -47,7 +49,9 @@ export default async function TwoFactorResetPage({
           </CardHeader>
         ) : view === "dead" ? (
           <CardHeader className="space-y-2 text-center">
-            <CardTitle className="text-xl">This link does not operate</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>This link does not operate</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               {result === "completed"
                 ? "The reset is complete. You cannot cancel it now. If you did not ask for the reset, do these steps: sign in, enable two-factor authentication again, and contact support."
@@ -57,7 +61,9 @@ export default async function TwoFactorResetPage({
         ) : (
           <>
             <CardHeader className="space-y-2 text-center">
-              <CardTitle className="text-xl">Cancel the two-factor authentication reset?</CardTitle>
+              <CardTitle className="text-xl">
+                <h1>Cancel the two-factor authentication reset?</h1>
+              </CardTitle>
               <p className="text-sm text-muted-foreground">
                 Someone asked support to disable two-factor authentication on your account. If you
                 did not ask for this, cancel the reset now. Your account does not change.

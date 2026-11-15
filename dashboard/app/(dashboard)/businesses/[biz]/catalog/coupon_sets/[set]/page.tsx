@@ -1,8 +1,10 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses, listCouponSets, listCouponSetCodes } from "@/lib/api";
+import { listBusinesses, listCouponSets, listCouponSetCodes, isApiNotFound } from "@/lib/api";
 import { getCoupon } from "@/lib/api/coupons";
 import { requirePermission } from "@/lib/session";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState } from "@/components/states";
 import { IdChip } from "@/components/patterns/chip";
@@ -38,11 +40,15 @@ export default async function CouponSetDetailPage({
       listCouponSetCodes(biz, set),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
-        <PageHeader title="Coupon Set" />
+        <PageHeader title="Coupon set" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="coupon set"
+          back={{ label: "View coupon sets", href: `/businesses/${biz}/catalog/coupon_sets` }}
+          retry
         />
       </>
     );
@@ -74,8 +80,8 @@ export default async function CouponSetDetailPage({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
-          { label: "Coupon Sets", href: `/businesses/${biz}/catalog/coupon_sets` },
+          { label: "Product catalog" },
+          { label: "Coupon sets", href: `/businesses/${biz}/catalog/coupon_sets` },
           { label: title },
         ]}
         right={<PageRefresh />}

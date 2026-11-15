@@ -2,8 +2,10 @@
  * The access check (design G3 §3.9): "may this customer spend now?". One read-only snapshot, no
  * locks, no writes, no events. Evaluation order, first failure wins: no_subscription →
  * not_entitled → spend_limit_reached → in_flight_limit → insufficient_credit → ok.
+ * A meter with a credit cost answers in units, from the figure the gate offers
+ * (`unitBalanceView`), and needs no subscription.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { stampNow } from "@/platform/clock";
 import { withTenant, type Tx } from "@/platform/db";
 import { formatFixed12, parseFixed12 } from "@/platform/fixed";
@@ -21,6 +23,7 @@ import {
   liveAt,
   liveBalance,
   loadBalanceSnapshot,
+  serializeAvailableUnits,
   type LiveBalance,
 } from "./balance";
 import { allowanceUse, resolveAllowanceSchedule, type CreditsItem } from "./allowance";
@@ -36,6 +39,8 @@ import {
   type EffectivePolicy,
 } from "./policy";
 import { spendLimitEvaluator, type SpendLimitHit } from "./spend-limits";
+import { defaultEstimateSteps, formatCostE6, type CostSource } from "./credit-cost";
+import { formatSteps } from "./units";
 import { LIVE_SUBSCRIPTION_STATUSES, liveMeteredItems, ratedUnbilledUsage } from "./usage";
 
 export interface AccessResult {
@@ -46,7 +51,13 @@ export interface AccessResult {
   meter: string | null;
   currency: string;
   available_minor: number;
-  available_units: Array<{ unit: string; units: number }>;
+  available_units: Array<{
+    unit: string;
+    units: number;
+    /** A unit with no money rate, in the unit's smallest step. */
+    held_units?: number;
+    unsettled_units?: number;
+  }>;
   balance: {
     grants_minor: number;
     unbilled_usage_minor: number;
@@ -60,6 +71,22 @@ export interface AccessResult {
   entitlement: { feature: string; value: string; used: string; resets_at: string | null } | null;
   /** The soonest renewal of a live plan credit grant (G3b). */
   renews_at: string | null;
+  /** Set for a meter that is paid in credits; amounts are in the unit, as decimal text. */
+  credits: {
+    unit: string;
+    credits_per_unit: string;
+    cost_source: CostSource;
+    /** What the estimate costs. */
+    estimate: string;
+    /** What the customer can spend now: the open holds are already taken off. */
+    available: string;
+    /** Reserved by open holds. */
+    held: string;
+    /** Taken by usage events and not drawn from a credit grant yet. */
+    unsettled: string;
+    /** `available` less the estimate, never below 0. */
+    remaining: string;
+  } | null;
   as_of: string;
 }
 
@@ -189,6 +216,9 @@ export async function checkAccess(input: {
   customerKey?: string;
   meterKey?: string | null;
   estimateMinor?: bigint | null;
+  /** A meter with a credit cost: the estimate as a meter quantity, or as credits. */
+  estimateQuantity?: string | null;
+  estimateUnits?: string | null;
   scope?: Record<string, string> | null;
 }): Promise<AccessResult> {
   // Grant the reset windows that are due first, in their own transaction: the check reads one
@@ -218,6 +248,35 @@ export async function checkAccess(input: {
         throw new AccessInputError(`No such meter: ${input.meterKey}`, true);
       const now = stampNow(input.businessId);
 
+      const unitHolds = meter ? await import("./unit-holds") : null;
+      const cost = meter
+        ? await unitHolds!.meterCreditCostFor(tx, { meterId: meter.id, customerId })
+        : null;
+      const inUnits = input.estimateQuantity != null || input.estimateUnits != null;
+      if (
+        cost &&
+        (input.estimateMinor != null ||
+          (input.estimateQuantity != null && input.estimateUnits != null))
+      )
+        throw new AccessInputError(
+          "This meter is paid in credits. Send estimate_quantity or estimate_units, not both, and no estimate.",
+        );
+      if (!cost && inUnits)
+        throw new AccessInputError(
+          "estimate_quantity and estimate_units are for a meter that is paid in credits. Send estimate.",
+        );
+      const estimateSteps =
+        cost && inUnits
+          ? unitHolds!.requestedSteps(cost, {
+              quantity: input.estimateQuantity,
+              units: input.estimateUnits,
+            })
+          : null;
+      if (cost && inUnits && estimateSteps === null)
+        throw new AccessInputError(
+          `${input.estimateUnits != null ? "estimate_units" : "estimate_quantity"} must be a number of 0 or more, with no more decimals than the unit has.`,
+        );
+
       const items = meter ? await liveMeteredItems(tx, { customerId, meterId: meter.id }) : [];
       const [anySub] = meter
         ? []
@@ -231,7 +290,29 @@ export async function checkAccess(input: {
               ),
             )
             .limit(1);
-      const sub = items[0]?.sub ?? null;
+      // A meter paid in credits has no priced item: the customer's live subscriptions, oldest
+      // first, and of those the first whose plan has a feature for the meter.
+      let creditSub: (typeof items)[number]["sub"] | null = null;
+      if (cost && meter) {
+        const live = await tx
+          .select()
+          .from(subscriptions)
+          .where(
+            and(
+              eq(subscriptions.customerId, customerId),
+              inArray(subscriptions.status, [...LIVE_SUBSCRIPTION_STATUSES]),
+              sql`${subscriptions.deletedAt} is null`,
+            ),
+          )
+          .orderBy(subscriptions.createdAt, subscriptions.id);
+        for (const s of live)
+          if (await meterFeature(tx, s.id, meter.id)) {
+            creditSub = s;
+            break;
+          }
+        creditSub ??= live[0] ?? null;
+      }
+      const sub = items[0]?.sub ?? creditSub;
       const currency = (
         sub?.currency ??
         anySub?.currency ??
@@ -259,7 +340,8 @@ export async function checkAccess(input: {
         usage: snap.grants.length || blocking ? usage : [],
         snapshot: snap,
       });
-      const meterLines = meter ? usage.filter((l) => l.meterId === meter.id) : [];
+      // This period's usage: a held invoice's closed window is not in it.
+      const meterLines = meter ? usage.filter((l) => l.meterId === meter.id && !l.held) : [];
       const periodUsed = formatFixed12(
         meterLines.reduce((a, l) => a + parseFixed12(l.quantity), 0n),
       );
@@ -306,7 +388,60 @@ export async function checkAccess(input: {
       const cfg = ctx.business.creditConfig ?? {};
 
       let code: AccessCode = "ok";
-      if (meter ? !sub : !anySub) code = "no_subscription";
+      let credits: AccessResult["credits"] = null;
+      let onExhausted = policy;
+      if (cost && meter) {
+        // In units: the figure the gate offers at this instant. No subscription needed.
+        const { shortTerms } = await import("./usage-gate");
+        const { splitEventUnits } = await import("./credit-cost");
+        const { unitBalanceView } = await import("./usage-settlement");
+        const at = { customerId, unitId: cost.unitId, now };
+        const view = await unitBalanceView(tx, at);
+        // What the gate applies when the estimate is more than the balance.
+        const terms = await shortTerms(tx, {
+          businessId: input.businessId,
+          meterId: meter.id,
+          ...at,
+        });
+        onExhausted = terms.policy;
+        const estimate =
+          estimateSteps ?? defaultEstimateSteps(cost.aggregation, cost.costE6, cost.decimals);
+        if (feature && !meterFeatureAllows(limit, feature.type, used)) code = "not_entitled";
+        else if (limits.some((l) => l.reached)) code = "spend_limit_reached";
+        else if (
+          onExhausted.policy === "block" &&
+          estimateSteps != null &&
+          inFlightRefused({
+            balanceBeforeHoldsMinor: view.beforeHolds,
+            openHoldsMinor: view.held,
+            amountMinor: estimateSteps,
+            shareBps: cfg.in_flight_share_bps ?? CREDIT_CONFIG_DEFAULTS.in_flight_share_bps,
+            applies: cfg.in_flight_applies,
+          })
+        )
+          code = "in_flight_limit";
+        else if (
+          splitEventUnits({
+            due: estimate,
+            offered: view.raw,
+            policy: onExhausted.policy,
+            priced: terms.price !== null,
+            floor: terms.floor,
+          }).refused
+        )
+          code = "insufficient_credit";
+        const fmt = (v: bigint) => formatSteps(v, cost.decimals);
+        credits = {
+          unit: cost.unitKey,
+          credits_per_unit: formatCostE6(cost.costE6),
+          cost_source: cost.source,
+          estimate: fmt(estimate),
+          available: fmt(view.offered),
+          held: fmt(view.held),
+          unsettled: fmt(view.unsettled),
+          remaining: fmt(view.offered > estimate ? view.offered - estimate : 0n),
+        };
+      } else if (meter ? !sub : !anySub) code = "no_subscription";
       else if (feature && !meterFeatureAllows(limit, feature.type, used)) code = "not_entitled";
       else if (limits.some((l) => l.reached)) code = "spend_limit_reached";
       else if (
@@ -317,6 +452,7 @@ export async function checkAccess(input: {
           openHoldsMinor: bal.openHoldsMinor,
           amountMinor: input.estimateMinor,
           shareBps: cfg.in_flight_share_bps ?? CREDIT_CONFIG_DEFAULTS.in_flight_share_bps,
+          applies: cfg.in_flight_applies,
         })
       )
         code = "in_flight_limit";
@@ -331,14 +467,14 @@ export async function checkAccess(input: {
         meter: meter?.key ?? null,
         currency,
         available_minor: Number(bal.availableMinor),
-        available_units: bal.availableUnits.map((u) => ({ unit: u.unit, units: Number(u.units) })),
+        available_units: bal.availableUnits.map(serializeAvailableUnits),
         balance: {
           grants_minor: Number(bal.grantsMinor),
           unbilled_usage_minor: Number(bal.unbilledUsageMinor),
           open_holds_minor: Number(bal.openHoldsMinor),
           overdraft_limit_minor: Number(bal.overdraftLimitMinor),
         },
-        on_exhausted: policy,
+        on_exhausted: onExhausted,
         usage_this_period: { quantity: periodUsed },
         cost_this_period_minor: Number(meterLines.reduce((a, l) => a + l.amountMinor, 0n)),
         limits,
@@ -351,6 +487,7 @@ export async function checkAccess(input: {
             }
           : null,
         renews_at: planCreditsRenewAt(bal, now),
+        credits,
         as_of: now.toISOString(),
       };
     },

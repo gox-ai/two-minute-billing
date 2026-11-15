@@ -1,5 +1,5 @@
 import { ListLoading } from "@/components/patterns/route-loading";
 
 export default function Loading() {
-  return <ListLoading cols={5} />;
+  return <ListLoading cols={4} actions={2} />;
 }

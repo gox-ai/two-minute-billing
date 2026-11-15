@@ -151,7 +151,10 @@ export default async function UnbilledChargesSettings({
                 </Link>
                 . Reactivation and trial conversion always invoice at once.
               </span>
-              <SubmitButton>Save</SubmitButton>
+              {/* Stays right when the note wraps it to its own line. */}
+              <span className="ml-auto">
+                <SubmitButton>Save</SubmitButton>
+              </span>
             </div>
           }
         >

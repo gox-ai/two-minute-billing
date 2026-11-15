@@ -80,4 +80,12 @@ process.argv = [process.argv[0]!, suiteArg, ...process.argv.slice(3)];
  */
 process.env.WEBHOOK_ALLOW_PRIVATE_TARGETS ??= "TRUE";
 
+/**
+ * Docs search runs keyword-only in a suite unless `VERIFY_DOCS_HYBRID=1`: with an OpenAI key
+ * set, a fresh database re-embeds every docs and code section (about $0.14 a run). The live
+ * eval measures the real setup, so it keeps the embeddings.
+ */
+if (process.env.VERIFY_DOCS_HYBRID !== "1" && !suiteArg.includes("assistant-live"))
+  process.env.ASSISTANT_DOCS_VECTORS ??= "off";
+
 await import(target);

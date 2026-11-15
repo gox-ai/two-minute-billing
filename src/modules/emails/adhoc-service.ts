@@ -22,7 +22,15 @@
  */
 import { and, eq } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
-import { businesses, creditNotes, customers, emailMessages, invoices } from "@db/schema";
+import {
+  businesses,
+  creditNotes,
+  customers,
+  emailMessages,
+  invoices,
+  subscriptions,
+} from "@db/schema";
+import { notDeleted } from "@/modules/subscriptions/deleted-sql";
 import { accountHolderName } from "@/modules/customers/names";
 import { publicId } from "@/platform/ids";
 import {
@@ -62,6 +70,10 @@ export interface AdhocEmailInput {
   creditNoteId?: string | null;
   /** `payment_request` only: a grouped request (`preq_…`) instead of one invoice (0388). */
   paymentRequestId?: string | null;
+  /** `subscription_restart` only: the ENDED subscription (`sub_…`) the link restarts. */
+  subscriptionId?: string | null;
+  /** `subscription_restart` only: bill the new term at today's price, or the old one. Default `current`. */
+  restartPrice?: "current" | "keep" | null;
   /** Override the recipient. Defaults to the customer's billing email. */
   to?: string | null;
   /** The operator's covering message, rendered as `{{note}}`. Optional. */
@@ -76,11 +88,12 @@ export interface AdhocEmailResult {
 }
 
 /** Which record each ad-hoc type cannot be composed without. */
-const REQUIRED_RECORD: Record<string, "invoice" | "credit_note" | "customer"> = {
+const REQUIRED_RECORD: Record<string, "invoice" | "credit_note" | "customer" | "subscription"> = {
   invoice_sent: "invoice",
   payment_request: "invoice",
   credit_note_sent: "credit_note",
   payment_method_request: "customer",
+  subscription_restart: "subscription",
 };
 
 /** "Jul 24, 2026" in the business timezone. Templates take pre-formatted date STRINGS —
@@ -107,6 +120,70 @@ export async function sendAdhocEmail(
   businessId: string,
   input: AdhocEmailInput,
 ): Promise<AdhocEmailResult> {
+  const {
+    type,
+    biz,
+    customerRowId,
+    toAddress,
+    ccAddresses,
+    bccAddresses,
+    emailCfg,
+    rendered,
+    invoiceTotalMinor,
+  } = await composeAdhocEmail(organizationId, businessId, input, { mintLink: true });
+  const mailer = resolveMailer(biz);
+  const id = publicId("em");
+  const now = new Date();
+  return deliverAdhocEmail(organizationId, businessId, input, {
+    type,
+    biz,
+    customerRowId,
+    toAddress,
+    ccAddresses,
+    bccAddresses,
+    emailCfg,
+    rendered,
+    invoiceTotalMinor,
+    mailer,
+    id,
+    now,
+  });
+}
+
+/**
+ * The email exactly as `sendAdhocEmail` would send it, without sending, recording or minting
+ * a portal link (the button keeps the portal entry URL). The same checks refuse it: a
+ * missing record, no recipient, a test-mode recipient.
+ */
+export async function previewAdhocEmail(
+  organizationId: string,
+  businessId: string,
+  input: AdhocEmailInput,
+): Promise<{
+  type: EmailType;
+  to: string;
+  cc: string[];
+  subject: string;
+  text: string;
+  html: string;
+}> {
+  const c = await composeAdhocEmail(organizationId, businessId, input, { mintLink: false });
+  return {
+    type: c.type,
+    to: c.toAddress,
+    cc: c.ccAddresses,
+    subject: applySubjectPrefix(c.emailCfg, c.rendered.subject),
+    text: c.rendered.text,
+    html: c.rendered.html,
+  };
+}
+
+async function composeAdhocEmail(
+  organizationId: string,
+  businessId: string,
+  input: AdhocEmailInput,
+  opts: { mintLink: boolean },
+) {
   const type = input.type;
   if (!ADHOC_EMAIL_TYPES.includes(type)) {
     throw new AdhocEmailError(
@@ -143,8 +220,37 @@ export async function sendAdhocEmail(
       portalUrl: portalEntryUrl(),
     };
     let customerRowId: string | null = null;
+    let restartSub: { id: string; publicId: string } | null = null;
 
-    if (type === "payment_request" && input.paymentRequestId) {
+    if (type === "subscription_restart") {
+      if (!input.subscriptionId)
+        throw new AdhocEmailError(`A subscription is required to send a '${type}' email.`);
+      const [sub] = await tx
+        .select()
+        .from(subscriptions)
+        .where(
+          and(
+            eq(subscriptions.businessId, businessId),
+            eq(subscriptions.publicId, input.subscriptionId),
+            notDeleted(),
+          ),
+        )
+        .limit(1);
+      if (!sub)
+        throw new AdhocEmailError(
+          `Subscription '${input.subscriptionId}' was not found in this business.`,
+        );
+      if (sub.status !== "cancelled")
+        throw new AdhocEmailError(
+          `We could not send the restart link. Subscription '${input.subscriptionId}' has not ended.`,
+        );
+      customerRowId = sub.customerId;
+      restartSub = { id: sub.id, publicId: sub.publicId };
+      const { planNameFor } = await import("./outbox");
+      vars.planName = await planNameFor(tx, sub.id);
+      // The preview's button; a send replaces it with a restart checkout minted for it.
+      vars.checkoutUrl = portalEntryUrl();
+    } else if (type === "payment_request" && input.paymentRequestId) {
       // A grouped request: every open invoice it holds, and the live total.
       const { loadPaymentRequestView } = await import("@/modules/payment-requests/service");
       const view = await loadPaymentRequestView(tx, businessId, input.paymentRequestId);
@@ -173,6 +279,12 @@ export async function sendAdhocEmail(
         .limit(1);
       if (!inv)
         throw new AdhocEmailError(`Invoice '${input.invoiceId}' was not found in this business.`);
+      // A pending invoice can still change (a held renewal waits for late usage), so its
+      // amount and due date are not final yet.
+      if (inv.status === "pending")
+        throw new AdhocEmailError(
+          `We could not send the ${type === "invoice_sent" ? "invoice" : "payment request"}. Invoice '${input.invoiceId}' is not final. Send it after it finalizes.`,
+        );
       customerRowId = inv.customerId;
       vars.invoiceNumber = inv.number ?? inv.publicId;
       vars.currency = inv.currency;
@@ -275,10 +387,12 @@ export async function sendAdhocEmail(
       bccAddresses: copies.bcc,
       vars,
       override,
+      restartSub,
     };
   });
 
-  const { biz, customerRowId, toAddress, ccAddresses, bccAddresses, vars, override } = loaded;
+  const { biz, customerRowId, toAddress, ccAddresses, bccAddresses, vars, override, restartSub } =
+    loaded;
   if (!(await testModeAllows(biz, toAddress))) {
     throw new AdhocEmailError(
       "We could not send the email. In test mode, we send email only to the addresses of team members. Change the recipient to the email of a team member.",
@@ -307,8 +421,18 @@ export async function sendAdhocEmail(
    * email nobody can press, and in its own transaction — this path writes the message row
    * after the send, so there is no caller transaction to join.
    */
-  // A merchant URL goes out as it is: no portal session for a page that is not ours.
-  if (blocks.action && !merchantUrl) {
+  // The restart checkout is minted only for a real send, after every refusal above.
+  if (opts.mintLink && restartSub && blocks.action) {
+    const { mintRestartSession } = await import("@/modules/customer-portal/restart");
+    const session = await mintRestartSession({
+      organizationId,
+      businessId,
+      subscription: restartSub,
+      price: input.restartPrice === "keep" ? "keep" : "current",
+    });
+    blocks.action.url = session.url;
+  } else if (opts.mintLink && blocks.action && !merchantUrl) {
+    // A merchant URL goes out as it is: no portal session for a page that is not ours.
     const link = await withTenant(organizationId, (tx) =>
       emailPortalLink(
         tx,
@@ -319,9 +443,43 @@ export async function sendAdhocEmail(
     if (link) blocks.action.url = link;
   }
   const rendered = renderEmail(type, { ...adhocVars, ...blocks }, override);
-  const mailer = resolveMailer(biz);
-  const id = publicId("em");
-  const now = new Date();
+  return {
+    type,
+    biz,
+    customerRowId,
+    toAddress,
+    ccAddresses,
+    bccAddresses,
+    emailCfg,
+    rendered,
+    invoiceTotalMinor,
+  };
+}
+
+async function deliverAdhocEmail(
+  organizationId: string,
+  businessId: string,
+  input: AdhocEmailInput,
+  c: Awaited<ReturnType<typeof composeAdhocEmail>> & {
+    mailer: ReturnType<typeof resolveMailer>;
+    id: string;
+    now: Date;
+  },
+): Promise<AdhocEmailResult> {
+  const {
+    type,
+    biz,
+    customerRowId,
+    toAddress,
+    ccAddresses,
+    bccAddresses,
+    emailCfg,
+    rendered,
+    invoiceTotalMinor,
+    mailer,
+    id,
+    now,
+  } = c;
 
   /**
    * The document itself, attached — the whole point of "Send invoice".
@@ -411,6 +569,8 @@ export async function sendAdhocEmail(
 }
 
 /** Which record a caller must supply for a given type — exported so a UI can say so before submitting. */
-export function requiredRecordFor(type: EmailType): "invoice" | "credit_note" | "customer" | null {
+export function requiredRecordFor(
+  type: EmailType,
+): "invoice" | "credit_note" | "customer" | "subscription" | null {
   return REQUIRED_RECORD[type] ?? null;
 }

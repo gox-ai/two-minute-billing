@@ -30,7 +30,7 @@ export default async function CouponSetsPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Coupon Sets" />
+        <PageHeader title="Coupon sets" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -48,30 +48,55 @@ export default async function CouponSetsPage({
 
   return (
     <>
-      <PageHeader
-        title="Coupon Sets"
-        breadcrumbs={[
-          { label: name, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
-          { label: "Coupon Sets" },
-        ]}
-      />
-
-      {msg ? (
-        <Alert tone="info" className="mb-6">
-          {msg}
-        </Alert>
-      ) : null}
-      {error ? <ErrorState className="mb-6" description={error} /> : null}
-
       {coupons.data.length === 0 ? (
-        <EmptyState
-          icon={<Ticket />}
-          title="Create a coupon first"
-          description="A coupon set needs a parent coupon. Its codes use the discount of the parent coupon."
-        />
+        <>
+          <PageHeader
+            title="Coupon sets"
+            breadcrumbs={[
+              { label: name, href: `/businesses/${biz}` },
+              { label: "Product catalog" },
+              { label: "Coupon sets" },
+            ]}
+          />
+          {msg ? (
+            <Alert tone="info" className="mb-6">
+              {msg}
+            </Alert>
+          ) : null}
+          {error ? <ErrorState className="mb-6" description={error} /> : null}
+          <EmptyState
+            icon={<Ticket />}
+            title="Create a coupon first"
+            description="A coupon set needs a parent coupon. Its codes use the discount of the parent coupon."
+          />
+        </>
       ) : (
-        <CouponSetsTable biz={biz} rows={sets.data} createSlot={generateDialog} />
+        <CouponSetsTable
+          emptyAction={
+            <GenerateCouponSetDialog biz={biz} coupons={coupons.data} variant="outline" />
+          }
+          page={{
+            title: "Coupon sets",
+            breadcrumbs: [
+              { label: name, href: `/businesses/${biz}` },
+              { label: "Product catalog" },
+              { label: "Coupon sets" },
+            ],
+            notice: (
+              <>
+                {msg ? (
+                  <Alert tone="info" className="mb-6">
+                    {msg}
+                  </Alert>
+                ) : null}
+                {error ? <ErrorState className="mb-6" description={error} /> : null}
+              </>
+            ),
+          }}
+          biz={biz}
+          rows={sets.data}
+          createSlot={generateDialog}
+        />
       )}
     </>
   );

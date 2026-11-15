@@ -16,6 +16,7 @@ import { withTenant, type Tx } from "@/platform/db";
 import { stampNow } from "@/platform/clock";
 import { formatMoney } from "@/platform/currency";
 import { createLogger } from "@/platform/logger";
+import { joinSpanIfAny } from "@/platform/trace";
 import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { setTransactionStatus } from "@/modules/transactions/service";
@@ -115,10 +116,12 @@ export async function cancelPendingDebit(input: {
 
   let res;
   try {
-    res = await adapter.cancelPendingCharge({
-      providerChargeId: chargeId,
-      idempotencyKey: `cancel-debit-${pay.publicId}`,
-    });
+    res = await joinSpanIfAny(txn.spanId, () =>
+      adapter.cancelPendingCharge!({
+        providerChargeId: chargeId,
+        idempotencyKey: `cancel-debit-${pay.publicId}`,
+      }),
+    );
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     log.warn("could not reach the gateway to cancel a pending debit", {

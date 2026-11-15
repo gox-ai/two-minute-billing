@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "@/platform/config";
 import {
   LoadProfileRateLimited,
@@ -7,10 +7,20 @@ import {
   sampleLatencyMs,
 } from "@/providers/tmtest/load-profile";
 
+// sleep() advances a fake Date.now instead of waiting, so the bucket refill is exact.
+vi.mock("node:timers/promises", () => ({
+  setTimeout: async (ms: number) => {
+    vi.setSystemTime(Date.now() + ms);
+  },
+}));
+
 const cfg = config as unknown as Record<string, unknown>;
 const saved = { ...cfg };
 const set = (o: Record<string, unknown>) => Object.assign(cfg, o);
-afterEach(() => Object.assign(cfg, saved));
+afterEach(() => {
+  Object.assign(cfg, saved);
+  vi.useRealTimers();
+});
 
 describe("tmtest load profile", () => {
   it("declines nothing while off — the default", () => {
@@ -41,6 +51,7 @@ describe("tmtest load profile", () => {
   });
 
   it("over the rate limit, retries once after a backoff and then throws like a 429", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
     set({ TMTEST_LOAD_PROFILE: "TRUE", TMTEST_LATENCY_P50_MS: 0, TMTEST_RATE_LIMIT_PER_S: 1 });
     const outcomes = await Promise.allSettled([
       loadProfileWait(),

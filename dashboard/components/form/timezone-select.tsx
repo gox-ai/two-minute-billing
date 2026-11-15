@@ -77,6 +77,9 @@ function offsetMinutes(offset: string): number {
   return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
 }
 
+/** The "Not set" item's cmdk value; lowercase, because cmdk lowercases values. */
+const NOT_SET = "__not_set";
+
 interface Zone {
   id: string;
   offset: string;
@@ -91,6 +94,7 @@ export function TimezoneSelect({
   className,
   id,
   description = "Sets the time zone for this business's billing days, invoice dates and every date in the dashboard.",
+  clearable = false,
 }: {
   name?: string;
   defaultValue?: string | null;
@@ -104,6 +108,11 @@ export function TimezoneSelect({
    * label that lies.
    */
   description?: React.ReactNode;
+  /**
+   * Offer "Not set" first, posting `''`. Only where the engine accepts an empty zone (the
+   * organization's); a business always has one.
+   */
+  clearable?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [value, setValue] = useDefaultState(defaultValue ?? "");
@@ -191,6 +200,7 @@ export function TimezoneSelect({
             filter={(itemValue, search) => {
               const q = search.toLowerCase().trim();
               if (!q) return 1;
+              if (itemValue === NOT_SET) return "not set".includes(q) ? 1 : 0;
               const z = zones.find((x) => x.id === itemValue);
               return (z?.search ?? itemValue.toLowerCase()).includes(q) ? 1 : 0;
             }}
@@ -199,6 +209,21 @@ export function TimezoneSelect({
             <CommandList className="max-h-80">
               <CommandEmpty>No matching time zone.</CommandEmpty>
               <CommandGroup>
+                {clearable ? (
+                  <CommandItem
+                    value={NOT_SET}
+                    onSelect={() => {
+                      setValue("");
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn("size-4 shrink-0", value ? "opacity-0" : "opacity-100")}
+                      aria-hidden
+                    />
+                    <span className="flex-1 truncate">Not set</span>
+                  </CommandItem>
+                ) : null}
                 {zones.map((z) => (
                   <CommandItem
                     key={z.id}

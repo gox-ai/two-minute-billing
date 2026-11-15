@@ -69,7 +69,12 @@ export function BreakdownTable({
       <Card>
         <CardContent className="p-0">
           {rows.length === 0 ? (
-            <EmptyState title={emptyTitle} description={emptyDescription} />
+            // Compact: an empty breakdown is one line of news, not a 300px frame.
+            <EmptyState
+              className="min-h-0 py-8"
+              title={emptyTitle}
+              description={emptyDescription}
+            />
           ) : (
             <>
               <div className="w-full overflow-x-auto">

@@ -34,13 +34,15 @@ import {
   billSubscriptionPeriod,
   collectPeriodInvoice,
   commitSubscriptionPeriodInvoice,
+  type BillSubscriptionPeriodInput,
+  type CommitmentInput,
   isAutoCollectOn,
   PeriodAlreadyBilledError,
   PeriodClaimLostError,
   planSubscriptionPeriodInvoice,
 } from "@/modules/invoicing/service";
 import { resolveChargeCandidates } from "@/modules/invoicing/collection";
-import { emitEvent } from "@/modules/events/emit";
+import { emitEvent, refreshEvent, type EventRow } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { usesPendingInvoices } from "@/modules/invoicing/pending";
 import { applyDunningFinalAction } from "./dunning";
@@ -59,10 +61,24 @@ import {
   clockTicks,
   renewalSkips,
 } from "@db/schema";
-import { termCoveredByPriorInvoice, termUsageWindow } from "./usage-window";
+import {
+  pendingInvoiceUsageWindow,
+  termCoveredByPriorInvoice,
+  termUsageWindow,
+  type UsageWindow,
+} from "./usage-window";
+import {
+  USAGE_CLOSE_BASE_MINUTES,
+  effectiveUsageGraceMinutes,
+  minutesBetween,
+  usageCloseAt,
+} from "./usage-close";
+import { isMeteredPrice, snapshotPrice, type PriceSnapshot } from "@/modules/catalog/pricing";
+import { collectionDecision } from "@/modules/invoicing/invoice-rules-config";
+import { getTraceId } from "@/platform/trace";
 import { nextSubPeriodEnd, subPeriodDue, subPeriodFields } from "./sub-periods";
-import { closingCommitment, freshSegments } from "./commitment";
-import { currentClockScope, scanBusinessFilter } from "@/platform/clock";
+import { closingCommitment, freshSegments, type CommitmentSegment } from "./commitment";
+import { activeClockPin, currentClockScope, scanBusinessFilter, stampNow } from "@/platform/clock";
 import { config } from "@/platform/config";
 import { runBounded } from "@/platform/concurrency";
 import type { Tx } from "@/platform/db";
@@ -237,6 +253,7 @@ export async function runBillingClockTick(
               sql`${subscriptions.businessId}`,
               sql`${subscriptions.currentSubPeriodEnd}`,
               now,
+              { start: sql`${subscriptions.currentSubPeriodStart}` },
             ),
           ),
         ),
@@ -317,27 +334,27 @@ export async function runBillingClockTick(
   };
 }
 
-/** Usage closes this many minutes after a period ends, plus the business's own delay. */
-export const USAGE_CLOSE_BASE_MINUTES = 6;
-/** Never wait longer than this past the period end; fold lag past it bills as late usage. */
-export const USAGE_CLOSE_CAP_MINUTES = 30;
-
 /**
  * Decision 2, as ONE predicate for both due scans: a subscription that bills a meter is due
- * once the BUSINESS clock passes `boundary` + 6 min + `usage_close_delay_minutes`, capped at
- * +30. Gated on the business clock (periods end on it), not on the fold watermark (real
- * clock): billing reads the unfolded tail raw, so the wait only keeps late lines rare.
+ * once the BUSINESS clock passes `boundary` + 6 min. A term boundary waits no longer: the
+ * business grace holds only its invoice (`invoices.hold_until`). A monthly usage boundary
+ * inside the term (`subPeriod`) also waits the grace, capped at half the sub-period; it moves
+ * only the usage cursor, so that wait already holds only the invoice. Gated on the business
+ * clock (periods end on it), not on the fold watermark: billing reads the unfolded tail raw.
  */
 export function usageCloseReached(
   subscriptionId: SQL,
   businessId: SQL,
   boundary: SQL,
   now: Date,
+  subPeriod?: { start: SQL },
 ): SQL {
+  const grace = subPeriod
+    ? sql` + least((select b.usage_close_delay_minutes from businesses b where b.id = ${businessId}),
+         coalesce(floor(extract(epoch from (${boundary} - ${subPeriod.start})) / 120)::int, 0))`
+    : sql``;
   return sql`(not exists (select 1 from customer_meter_billing cmb where cmb.subscription_id = ${subscriptionId})
-    or ${boundary} + make_interval(mins => least(${USAGE_CLOSE_CAP_MINUTES},
-         ${USAGE_CLOSE_BASE_MINUTES} + (select b.usage_close_delay_minutes from businesses b
-                                         where b.id = ${businessId})))
+    or ${boundary} + make_interval(mins => ${USAGE_CLOSE_BASE_MINUTES}${grace})
        <= ${now.toISOString()}::timestamptz)`;
 }
 
@@ -395,7 +412,7 @@ async function queueDueRenewals(now: Date): Promise<{ capped: boolean }> {
             and s.current_sub_period_end <= ${at}::timestamptz
             and s.current_sub_period_end < s.current_period_end
             and s.current_period_end > ${at}::timestamptz and ${notQueued}
-            and ${usageCloseReached(sql`s.id`, sql`s.business_id`, sql`s.current_sub_period_end`, now)}
+            and ${usageCloseReached(sql`s.id`, sql`s.business_id`, sql`s.current_sub_period_end`, now, { start: sql`s.current_sub_period_start` })}
           order by s.current_sub_period_end limit ${perBusiness})
       ) x
       ${scope ? sql`where ${scope}` : sql``}
@@ -792,6 +809,43 @@ async function resolveTrialEndCancel(input: {
   return (await isUncollectableAutoCollect(input)) ? "no_card" : null;
 }
 
+/** Auto-collection is on for this subscription and there is nothing at all to charge. */
+async function cardlessAutoCollect(
+  organizationId: string,
+  sub: typeof subscriptions.$inferSelect,
+): Promise<boolean> {
+  const custAutoCollection = await withTenant(organizationId, async (tx) => {
+    const [c] = await tx
+      .select({ ac: customers.autoCollection })
+      .from(customers)
+      .where(eq(customers.id, sub.customerId))
+      .limit(1);
+    return c?.ac ?? null;
+  });
+  // Auto-collect OFF is the send-invoice model — a missing card is not a failure
+  // there, it is the whole arrangement.
+  if (!isAutoCollectOn(sub.autoCollection, custAutoCollection)) return false;
+
+  // "Nothing to charge" is deliberately the NARROWEST possible test: no payment
+  // method row at all, which is exactly the case where `collectInvoice` cannot even
+  // make an attempt (it records `no_payment_method` without calling a gateway).
+  //
+  // An EXPIRED or previously-declined card is left alone to try and fail into
+  // dunning. `resolveChargeCandidates` does not filter by status, so this asks only
+  // "is there anything at all to charge" — and that is the right question, because
+  // cancelling a customer who DOES have a card on file, on our judgement that it
+  // looks stale, is a far worse failure than one wasted retry. Note this is narrower
+  // than the `no_card` reason `applyDunningFinalAction` derives (which also counts a
+  // customer whose every card has expired); the reason string is shared, the test
+  // for reaching it is not.
+  const { primary } = await resolveChargeCandidates({
+    organizationId,
+    customerId: sub.customerId,
+    subscription: sub,
+  });
+  return !primary;
+}
+
 /**
  * Is this a subscription the engine is meant to CHARGE, with nothing at all to charge
  * it with, and a real amount owed? Read-only — the caller decides what to do about it.
@@ -825,37 +879,7 @@ async function isUncollectableAutoCollect(input: {
   // invoice for exactly that reason). Acting here would judge a bill that has not
   // been assembled.
   if (input.createAsPending) return false;
-
-  const custAutoCollection = await withTenant(organizationId, async (tx) => {
-    const [c] = await tx
-      .select({ ac: customers.autoCollection })
-      .from(customers)
-      .where(eq(customers.id, sub.customerId))
-      .limit(1);
-    return c?.ac ?? null;
-  });
-  // Auto-collect OFF is the send-invoice model — a missing card is not a failure
-  // there, it is the whole arrangement.
-  if (!isAutoCollectOn(sub.autoCollection, custAutoCollection)) return false;
-
-  // "Nothing to charge" is deliberately the NARROWEST possible test: no payment
-  // method row at all, which is exactly the case where `collectInvoice` cannot even
-  // make an attempt (it records `no_payment_method` without calling a gateway).
-  //
-  // An EXPIRED or previously-declined card is left alone to try and fail into
-  // dunning. `resolveChargeCandidates` does not filter by status, so this asks only
-  // "is there anything at all to charge" — and that is the right question, because
-  // cancelling a customer who DOES have a card on file, on our judgement that it
-  // looks stale, is a far worse failure than one wasted retry. Note this is narrower
-  // than the `no_card` reason `applyDunningFinalAction` derives (which also counts a
-  // customer whose every card has expired); the reason string is shared, the test
-  // for reaching it is not.
-  const { primary } = await resolveChargeCandidates({
-    organizationId,
-    customerId: sub.customerId,
-    subscription: sub,
-  });
-  if (primary) return false;
+  if (!(await cardlessAutoCollect(organizationId, sub))) return false;
 
   // Cardless — but is anything actually OWED? A free plan, a 100%-off coupon, or a
   // credit balance covering the period all produce an invoice that never needed a
@@ -881,6 +905,8 @@ async function isUncollectableAutoCollect(input: {
     // Usage is metered over the TERM, so a subscription without one (trialling) has no
     // usage window to report — `undefined` is exactly right there.
     usagePeriod: termUsageWindow(sub, { priorCovered: input.priorCovered }),
+    // A probe writes nothing: usage beyond the credits is rated, not queued.
+    creditOverage: "preview",
   });
   // Not reachable while `createAsPending` is false above, but the plan is a union and
   // a draft carries no money — narrow rather than assert, and treat it as collectable
@@ -1112,6 +1138,7 @@ async function loadRenewalCtx(organizationId: string, subscriptionId: string) {
       .select({
         pending: businesses.createPendingInvoices,
         billingRulesConfig: businesses.billingRulesConfig,
+        usageCloseDelayMinutes: businesses.usageCloseDelayMinutes,
       })
       .from(businesses)
       .where(eq(businesses.id, sub.businessId))
@@ -1120,6 +1147,7 @@ async function loadRenewalCtx(organizationId: string, subscriptionId: string) {
       sub,
       recurring,
       bizPending: biz?.pending ?? false,
+      usageGraceMinutes: biz?.usageCloseDelayMinutes ?? 0,
       trialEndDefault: resolveBillingRulesConfig(biz).trialEndAction,
       mode: await billingModeFor(tx, sub.businessId),
     };
@@ -1186,7 +1214,14 @@ export async function renewSubscription(
     endTrialNow?: boolean;
   } = {},
 ): Promise<void> {
-  const ctx = await loadRenewalCtx(organizationId, subscriptionId);
+  const first = await loadRenewalCtx(organizationId, subscriptionId);
+  if (!first?.sub || !first.recurring) return;
+  // A held invoice closes before the subscription bills usage again, so its window stays whole.
+  const ctx =
+    boundaryDue(first.sub, now) &&
+    (await closeHeldInvoicesOf(organizationId, subscriptionId, now)) > 0
+      ? await loadRenewalCtx(organizationId, subscriptionId)
+      : first;
   if (!ctx?.sub || !ctx.recurring) return;
   const { sub, recurring } = ctx;
   // Monthly usage billing: bill the earliest due boundary, one per run.
@@ -1246,7 +1281,13 @@ export async function renewSubscription(
   // subscription has run out its remaining_billing_cycles (SUB-2/SUB-4: it became
   // non_renewing and this is the end of its final cycle).
   if (sub.cancelAtPeriodEnd || sub.remainingBillingCycles === 0) {
-    await cancelAtTermEnd({ organizationId, sub, now, deferNumber: opts.deferNumber });
+    await cancelAtTermEnd({
+      organizationId,
+      sub,
+      now,
+      deferNumber: opts.deferNumber,
+      grace: { configured: createAsPending ? 0 : ctx.usageGraceMinutes, interval, intervalCount },
+    });
     return;
   }
 
@@ -1268,6 +1309,22 @@ export async function renewSubscription(
   // simply "no", and asking it with `requireTerm` would throw on the one subscription
   // shape this function exists to advance.
   const priorCovered = await priorPeriodCovered(organizationId, sub);
+
+  // The usage grace window: the term rolls now and only its invoice waits (`hold_until`).
+  // Real pending-invoice mode already bills its usage at close, so it never holds.
+  const closingWindow = termUsageWindow(sub, { priorCovered: createAsPending || priorCovered });
+  const grace = createAsPending
+    ? 0
+    : await heldGraceMinutes({
+        organizationId,
+        sub,
+        configured: ctx.usageGraceMinutes,
+        window: closingWindow,
+        interval: { unit: interval, count: intervalCount },
+        term: { start: periodStart, end: periodEnd },
+        firstSubPeriodEnd: subPeriodFields(sub, periodStart, periodEnd, ctx.mode)
+          .currentSubPeriodEnd,
+      });
 
   // ── DOES THIS TRIAL CONVERT AT ALL? ────────────────────────────────────────
   // Everything past this point activates the subscription and bills it. A trial has
@@ -1336,6 +1393,8 @@ export async function renewSubscription(
         mode: ctx.mode,
         now,
         deferNumber: opts.deferNumber,
+        hold:
+          grace > 0 ? { window: closingWindow!, until: usageCloseAt(priorBoundary, grace) } : null,
       });
       return;
     }
@@ -1427,6 +1486,7 @@ export async function renewSubscription(
   // invoice commit or roll back together. Run as two transactions, a crash between them (a
   // deploy killing the worker, a lost connection) left the period advanced with no invoice, and
   // nothing re-bills it (D4: 21 such at a worker kill, 258 at connection exhaustion).
+  let renewedEvent: EventRow | null = null;
   const claim = async (tx: Tx): Promise<boolean> => {
     // ATOMIC CLAIM (F review blocker): only a still-renewable sub whose period
     // hasn't been advanced by anyone else. Without the status guard a concurrent
@@ -1487,7 +1547,7 @@ export async function renewSubscription(
         ),
       });
     }
-    await emitEvent(tx, {
+    renewedEvent = await emitEvent(tx, {
       organizationId,
       businessId: sub.businessId,
       type: "subscription_renewed",
@@ -1502,6 +1562,9 @@ export async function renewSubscription(
           current_period_end: inclusiveBoundary(periodEnd, ctx.mode),
         },
         updated.resourceVersion,
+        // Top level, so enrichment keeps it: the renewal's invoice waits for late usage
+        // until then, and the renewal email states no amount.
+        grace > 0 ? { invoice_hold_until: usageCloseAt(priorBoundary, grace).toISOString() } : {},
       ),
     });
     // Audited even though NOBODY CHOSE IT. Every other audited action has an operator
@@ -1533,34 +1596,52 @@ export async function renewSubscription(
     ...nextTermFields,
   };
 
-  const billInput = {
-    organizationId,
-    businessId: sub.businessId,
-    subscription: advanced,
-    periodStart,
-    periodEnd,
-    // Bill metered usage in arrears for the period that just closed — unless a
-    // prior pending invoice already owns that window (transition out of pending
-    // mode must not double-bill it).
-    usagePeriod: termUsageWindow(sub, { priorCovered: createAsPending || priorCovered }),
-    // The closing term's minimum commitment (none for a converting trial).
-    commitment: createAsPending ? undefined : closingCommitment(sub),
-    // Pending mode: create an open draft; it bills its own period's usage at
-    // close, plus the just-ended period's if nothing else claimed it.
-    createAsPending,
-    pendingUsageWindow: createAsPending
-      ? // `sub.currentPeriodStart` is null for a converting trial (it had no term), and the
-        // window it would have covered is the new period itself.
-        {
-          start: priorCovered ? periodStart : (sub.currentPeriodStart ?? periodStart),
-          end: periodEnd,
-        }
-      : undefined,
-  };
+  // Held: a pending draft with the recurring lines, numbered now; the close bills the usage.
+  const held = grace > 0;
+  const billInput: BillSubscriptionPeriodInput = held
+    ? {
+        organizationId,
+        businessId: sub.businessId,
+        subscription: advanced,
+        periodStart,
+        periodEnd,
+        createAsPending: true,
+        pendingUsageWindow: closingWindow,
+        hold: {
+          until: usageCloseAt(priorBoundary, grace),
+          kind: "renewal",
+          commitment: commitmentJson(closingCommitment(sub)),
+          ...(skipCollection ? { noCard: true } : {}),
+        },
+      }
+    : {
+        organizationId,
+        businessId: sub.businessId,
+        subscription: advanced,
+        periodStart,
+        periodEnd,
+        // Bill metered usage in arrears for the period that just closed — unless a
+        // prior pending invoice already owns that window (transition out of pending
+        // mode must not double-bill it).
+        usagePeriod: closingWindow,
+        // The closing term's minimum commitment (none for a converting trial).
+        commitment: createAsPending ? undefined : closingCommitment(sub),
+        // Pending mode: create an open draft; it bills its own period's usage at
+        // close, plus the just-ended period's if nothing else claimed it.
+        createAsPending,
+        pendingUsageWindow: createAsPending
+          ? // `sub.currentPeriodStart` is null for a converting trial (it had no term), and the
+            // window it would have covered is the new period itself.
+            {
+              start: priorCovered ? periodStart : (sub.currentPeriodStart ?? periodStart),
+              end: periodEnd,
+            }
+          : undefined,
+      };
   // Collection rules (0486): a small-invoice write-off or a charge on the due date. Inactive
   // (the default), the commit below is unchanged.
   const rules =
-    createAsPending || skipCollection
+    createAsPending || skipCollection || held
       ? null
       : await loadRenewalCollectionRules(organizationId, sub);
   const ruled = !!rules && rules.autoCollect && collectionRulesActive(rules.cfg, sub.currency);
@@ -1571,6 +1652,10 @@ export async function renewSubscription(
   try {
     billed = await commitSubscriptionPeriodInvoice(await planSubscriptionPeriodInvoice(billInput), {
       claim,
+      // The renewal email was built before this invoice existed: build it again with its amount.
+      afterInvoice: async (tx) => {
+        if (renewedEvent) await refreshEvent(tx, renewedEvent);
+      },
       // The claim already serializes renewals. A conflict here means another invoice opens
       // this period while the term was never advanced: it throws and is recorded on the tick.
       opensPeriod: true,
@@ -1647,6 +1732,8 @@ async function cancelAtTermEnd(input: {
   sub: typeof subscriptions.$inferSelect;
   now: Date;
   deferNumber?: boolean;
+  /** The business grace: the cancel happens now, the closing usage invoice waits. */
+  grace?: { configured: number; interval: Interval; intervalCount: number };
 }): Promise<void> {
   const { organizationId, sub, now } = input;
   const claim = async (tx: Tx): Promise<boolean> => {
@@ -1683,6 +1770,46 @@ async function cancelAtTermEnd(input: {
   };
 
   const term = termOrNull(sub);
+  if (term != null && input.grace && input.grace.configured > 0) {
+    const window = termUsageWindow(
+      {
+        currentPeriodStart: term.start,
+        currentPeriodEnd: term.end,
+        currentSubPeriodStart: sub.currentSubPeriodStart,
+      },
+      { priorCovered: await priorPeriodCovered(organizationId, sub) },
+    );
+    const grace = await heldGraceMinutes({
+      organizationId,
+      sub,
+      configured: input.grace.configured,
+      window,
+      interval: { unit: input.grace.interval, count: input.grace.intervalCount },
+      term,
+    });
+    if (grace > 0) {
+      // A held closing draft: no fixed lines and no plan credits; it bills the usage at close.
+      const draft = await planSubscriptionPeriodInvoice({
+        organizationId,
+        businessId: sub.businessId,
+        subscription: sub,
+        periodStart: term.start,
+        periodEnd: term.end,
+        skipFixed: true,
+        createAsPending: true,
+        pendingUsageWindow: window,
+        hold: {
+          until: usageCloseAt(term.end, grace),
+          kind: "closing",
+          commitment: commitmentJson(closingCommitment(sub)),
+        },
+      });
+      await commitSubscriptionPeriodInvoice(draft, { claim }).catch((e) => {
+        if (!(e instanceof PeriodClaimLostError)) throw e;
+      });
+      return;
+    }
+  }
   const plan =
     term == null
       ? null
@@ -1739,6 +1866,8 @@ async function renewSkipped(input: {
   mode: BillingMode;
   now: Date;
   deferNumber?: boolean;
+  /** The business grace applies: the skip happens now, its usage invoice waits. */
+  hold?: { window: UsageWindow; until: Date } | null;
 }): Promise<void> {
   const { organizationId, sub, periodStart, periodEnd, now } = input;
   // One transaction: the skip is applied with the period advance or not at all.
@@ -1800,10 +1929,22 @@ async function renewSkipped(input: {
     periodStart,
     periodEnd,
     skipFixed: true,
-    usagePeriod: termUsageWindow(sub, { priorCovered: input.priorCovered }),
-    commitment: closingCommitment(sub),
+    ...(input.hold
+      ? {
+          createAsPending: true,
+          pendingUsageWindow: input.hold.window,
+          hold: {
+            until: input.hold.until,
+            kind: "skip" as const,
+            commitment: commitmentJson(closingCommitment(sub)),
+          },
+        }
+      : {
+          usagePeriod: termUsageWindow(sub, { priorCovered: input.priorCovered }),
+          commitment: closingCommitment(sub),
+        }),
   });
-  if (plan.lines.length === 0) {
+  if (plan.lines.length === 0 && !input.hold) {
     await withTenant(organizationId, async (tx) => {
       if (!(await claim(tx))) throw new PeriodClaimLostError();
     }).catch((e) => {
@@ -1828,7 +1969,7 @@ async function renewSkipped(input: {
       .set({ invoiceId: billed.invoice.id })
       .where(eq(renewalSkips.id, input.skipId)),
   );
-  if (billed.numberDeferred) return;
+  if (billed.numberDeferred || billed.invoice.status === "pending") return;
   await applyRenewalOutcome(organizationId, sub, billed.invoice);
 }
 
@@ -1917,6 +2058,292 @@ async function billSubPeriod(input: {
   }
   if (billed.numberDeferred) return;
   await applyRenewalOutcome(organizationId, sub, billed.invoice);
+}
+
+// ── The usage grace window: held renewal invoices ──────────────────────────────
+
+/** What a held draft keeps for its close (`invoices.metadata.held`). */
+interface HeldMeta {
+  kind: "renewal" | "skip" | "closing";
+  commitment: CommitmentJson | null;
+  /** The renewal found no payment method: the close skips the charge, dunning owns it. */
+  no_card?: boolean;
+}
+
+interface CommitmentJson {
+  term: { start: string; end: string };
+  ended_at: string;
+  segments: CommitmentSegment[];
+  cadence: { billing_period_unit: string | null; billing_period: number | null };
+}
+
+/** The closing commitment, frozen on the draft before the term moves. */
+function commitmentJson(c: CommitmentInput | undefined): CommitmentJson | null {
+  if (!c) return null;
+  return {
+    term: { start: c.term.start.toISOString(), end: c.term.end.toISOString() },
+    ended_at: c.endedAt.toISOString(),
+    segments: c.segments,
+    cadence: {
+      billing_period_unit: c.cadence.billingPeriodUnit,
+      billing_period: c.cadence.billingPeriod,
+    },
+  };
+}
+
+function commitmentFrom(j: CommitmentJson | null | undefined): CommitmentInput | undefined {
+  if (!j) return undefined;
+  return {
+    term: { start: new Date(j.term.start), end: new Date(j.term.end) },
+    endedAt: new Date(j.ended_at),
+    segments: j.segments,
+    cadence: {
+      billingPeriodUnit: j.cadence.billing_period_unit,
+      billingPeriod: j.cadence.billing_period,
+    },
+  };
+}
+
+/** True when a term or monthly usage boundary of this subscription is due now. */
+function boundaryDue(sub: typeof subscriptions.$inferSelect, now: Date): boolean {
+  if (subPeriodDue(sub, now)) return true;
+  const boundary =
+    sub.status === "in_trial" ? (sub.trialEnd ?? sub.currentPeriodEnd) : sub.currentPeriodEnd;
+  return boundary != null && boundary.getTime() <= now.getTime();
+}
+
+/** True when the subscription has an item that bills usage (meter or metered price). */
+async function closingTermIsMetered(organizationId: string, subscriptionId: string) {
+  const rows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ item: subscriptionItems, price: prices })
+      .from(subscriptionItems)
+      .innerJoin(prices, eq(prices.id, subscriptionItems.priceId))
+      .where(eq(subscriptionItems.subscriptionId, subscriptionId)),
+  );
+  return rows.some(({ item, price }) => {
+    const snap = (item.priceSnapshot as PriceSnapshot | null) ?? snapshotPrice(price);
+    return isMeteredPrice(snap) || !!snap.meter;
+  });
+}
+
+/**
+ * How long the invoice of the term closing now holds: 0 = it finalizes at once. Only an
+ * active subscription with a closed usage window and a metered item holds, for the business
+ * grace capped at half the plan interval, half `term`, and half the first monthly usage
+ * period of `term` (that boundary bills usage again, so the hold must be closed by then).
+ */
+async function heldGraceMinutes(input: {
+  organizationId: string;
+  sub: typeof subscriptions.$inferSelect;
+  configured: number;
+  window: UsageWindow | undefined;
+  interval: { unit: string | null; count: number | null };
+  term: { start: Date; end: Date };
+  firstSubPeriodEnd?: Date | null;
+}): Promise<number> {
+  const { sub } = input;
+  if (input.configured <= 0 || !input.window || sub.status !== "active") return 0;
+  let grace = effectiveUsageGraceMinutes(
+    input.configured,
+    input.interval,
+    minutesBetween(input.term.start, input.term.end),
+  );
+  const sp = input.firstSubPeriodEnd;
+  if (sp && sp.getTime() < input.term.end.getTime())
+    grace = Math.min(grace, Math.floor(minutesBetween(input.term.start, sp) / 2));
+  if (grace <= 0) return 0;
+  return (await closingTermIsMetered(input.organizationId, sub.id)) ? grace : 0;
+}
+
+/** Finalize every held invoice of a subscription now. Returns how many it closed. */
+async function closeHeldInvoicesOf(
+  organizationId: string,
+  subscriptionId: string,
+  /** The close instant on the business clock; default its stamp now. */
+  now?: Date,
+): Promise<number> {
+  const rows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ id: invoices.id, businessId: invoices.businessId })
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.subscriptionId, subscriptionId),
+          eq(invoices.status, "pending"),
+          isNotNull(invoices.holdUntil),
+        ),
+      )
+      .orderBy(invoices.createdAt),
+  );
+  let closed = 0;
+  for (const r of rows)
+    if (await finalizeHeldInvoice(organizationId, r.id, now ?? stampNow(r.businessId))) closed++;
+  return closed;
+}
+
+/**
+ * A change to the items, term or status of a subscription finalizes its held invoice first,
+ * so the closed period bills on the terms it ran on. Call before the change's transaction.
+ */
+export async function closeHeldInvoiceFirst(
+  organizationId: string,
+  subscriptionId: string,
+): Promise<void> {
+  await closeHeldInvoicesOf(organizationId, subscriptionId);
+}
+
+/**
+ * Finalize a held renewal invoice (`hold_until`): re-plan the same row over its stored usage
+ * window with a cutoff taken now, so usage received in the grace bills on it, with the
+ * stored closing commitment. Then the renewal's tail: the no-payment-method case, the
+ * collection rules, and the charge handed to the collect pump (no gateway call here).
+ * Null when the invoice is not a pending held invoice any more.
+ */
+export async function finalizeHeldInvoice(
+  organizationId: string,
+  invoiceId: string,
+  now: Date,
+  opts: { auditWrite?: BillSubscriptionPeriodInput["auditWrite"] } = {},
+): Promise<{ invoice: typeof invoices.$inferSelect } | null> {
+  const loaded = await withTenant(organizationId, async (tx) => {
+    const [inv] = await tx
+      .select()
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.id, invoiceId),
+          eq(invoices.status, "pending"),
+          isNotNull(invoices.holdUntil),
+        ),
+      )
+      .limit(1);
+    if (!inv?.subscriptionId || !inv.periodStart || !inv.periodEnd) return null;
+    const [sub] = await tx
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.id, inv.subscriptionId))
+      .limit(1);
+    return sub ? { inv, sub } : null;
+  });
+  if (!loaded) return null;
+  const { inv, sub } = loaded;
+  const held = ((inv.metadata as { held?: HeldMeta } | null)?.held ?? {
+    kind: "renewal",
+    commitment: null,
+  }) as HeldMeta;
+  const window = pendingInvoiceUsageWindow(inv);
+  const plan = await planSubscriptionPeriodInvoice({
+    organizationId,
+    businessId: inv.businessId,
+    subscription: sub,
+    periodStart: inv.periodStart!,
+    periodEnd: inv.periodEnd!,
+    usagePeriod: window,
+    existingInvoiceId: inv.id,
+    emitClosedEvent: true,
+    ...(held.kind !== "renewal" ? { skipFixed: true } : {}),
+    commitment: commitmentFrom(held.commitment),
+    heldClose: { kind: held.kind, windowEnd: window.end, at: now },
+    ...(opts.auditWrite ? { auditWrite: opts.auditWrite } : {}),
+  });
+  // No payment method on an auto-collect subscription: finalize it uncollected, dunning owns it.
+  const noCard =
+    held.no_card === true ||
+    (plan.mode === "finalize" &&
+      plan.money.amountDue > 0n &&
+      (await cardlessAutoCollect(organizationId, sub)));
+  const rules = noCard ? null : await loadRenewalCollectionRules(organizationId, sub);
+  const ruled = !!rules && rules.autoCollect && collectionRulesActive(rules.cfg, sub.currency);
+  // A test clock collects in its own tick, as a renewal does: the pump runs on real time.
+  const pinned = activeClockPin()?.businessId === inv.businessId;
+  const inner = plan.inTx;
+  plan.inTx = async (tx, row) => {
+    await inner?.(tx, row);
+    if (noCard || pinned || row.status === "paid") return;
+    if (ruled && collectionDecision(rules!.cfg, row, now) !== "charge") return;
+    // The collect pump charges it and applies the outcome (`collectRenewalInvoice`).
+    await tx
+      .update(invoices)
+      .set({ collectDueAt: sql`now()`, collectTraceId: getTraceId() ?? null })
+      .where(eq(invoices.id, row.id));
+  };
+  let billed: Awaited<ReturnType<typeof commitSubscriptionPeriodInvoice>>;
+  try {
+    billed = await commitSubscriptionPeriodInvoice(plan, { collect: false });
+  } catch (e) {
+    // A concurrent close (the scan racing a manual close or a close-first hook) won.
+    if (e instanceof Error && /no longer pending/.test(e.message)) return null;
+    throw e;
+  }
+  let invoice = billed.invoice;
+  const decision = ruled ? collectionDecision(rules!.cfg, invoice, now) : "charge";
+  if (decision === "write_off" || (pinned && !noCard && decision === "charge")) {
+    invoice = (
+      await (ruled
+        ? settleCollection({
+            organizationId,
+            businessId: inv.businessId,
+            subscription: sub,
+            invoice,
+            cfg: rules!.cfg,
+            now,
+          })
+        : collectPeriodInvoice({
+            organizationId,
+            businessId: inv.businessId,
+            subscription: sub,
+            invoice,
+          }))
+    ).invoice;
+    if (decision === "charge") await applyRenewalOutcome(organizationId, sub, invoice);
+  }
+  return { invoice };
+}
+
+/** Held invoices whose hold has ended, oldest first (the `auto_close_pending` pass). */
+export async function runCloseHeldInvoices(
+  now: Date,
+): Promise<{ closed: number; errors: TickError[] }> {
+  const errors: TickError[] = [];
+  const due = await systemDb
+    .select({
+      id: invoices.id,
+      organizationId: invoices.organizationId,
+      businessId: invoices.businessId,
+      publicId: invoices.publicId,
+    })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.status, "pending"),
+        isNotNull(invoices.holdUntil),
+        lte(invoices.holdUntil, now),
+        scanBusinessFilter(invoices.businessId),
+      ),
+    )
+    .orderBy(invoices.holdUntil)
+    .limit(config.TICK_SCAN_LIMIT);
+  let closed = 0;
+  for (const r of due) {
+    try {
+      if (await finalizeHeldInvoice(r.organizationId, r.id, now)) closed++;
+    } catch (e) {
+      log.recurringError(`held_close_failed:${r.publicId}`, e, {
+        event: "held_close_failed",
+        invoice: r.publicId,
+        businessId: r.businessId,
+      });
+      errors.push({
+        organization: r.organizationId,
+        business: r.businessId,
+        invoice: r.publicId,
+        step: "close_held_invoice",
+        message: (e as Error)?.message ?? String(e),
+      });
+    }
+  }
+  return { closed, errors };
 }
 
 /**

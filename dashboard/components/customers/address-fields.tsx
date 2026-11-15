@@ -2,12 +2,13 @@
 
 import * as React from "react";
 import { Input } from "@/components/ui/input";
-import { Field } from "@/components/form/field";
+import { Field, FieldLayout } from "@/components/form/field";
 import { Combobox } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { PhoneField } from "@/components/ui/phone-field";
 import { useSubdivisions } from "@/lib/use-subdivisions";
 import { useDefaultState } from "@/lib/use-default-state";
+import { cn } from "@/lib/utils";
 import {
   isValidPostal,
   normalizeStateCode,
@@ -17,6 +18,7 @@ import {
   usesPostalCode,
   type Country,
 } from "@/lib/countries";
+import { postalExample, postalNoun } from "./postal-example";
 
 /**
  * Loose billing-address shape shared by every surface (operator customer page +
@@ -121,7 +123,16 @@ export function AddressFields({
   requireContactName = false,
   contactHeading = "Contact (shown on invoices)",
   fieldStates,
+  layout = "stack",
+  autoCompleteSection = "billing",
 }: {
+  /** The browser-autofill section: a ship-to block fills from the shipping address. */
+  autoCompleteSection?: "billing" | "shipping";
+  /**
+   * "rows": each field is a settings row (label left, control on the right edge), for a
+   * card of rows. The card supplies the title, so the "Address" heading is left out.
+   */
+  layout?: "stack" | "rows";
   countries: Country[];
   value?: AddressValue | null;
   prefix?: string;
@@ -148,7 +159,15 @@ export function AddressFields({
   fieldStates?: Partial<Record<AddressFieldKey, AddressFieldState>>;
 }) {
   const a = value ?? {};
+  const rows = layout === "rows";
+  // Stacked: two equal columns once the block is 36rem wide, so they end on the same
+  // right edge as the full-width lines.
+  const GRID = rows ? "divide-y divide-border" : "grid gap-4 @xl:grid-cols-2";
+  // The address is ONE grid: a line spans both columns; Country and postal code keep their
+  // short widths inside a left cell. Row layout has no grid, so these are stack-only.
+  const SPAN = rows ? undefined : "@xl:col-span-2";
   const n = (k: string) => `${prefix}${k}`;
+  const ac = autoCompleteSection;
   const st = (k: AddressFieldKey) => fieldStates?.[k];
   /** The field's own state decides; with none, the caller's default does. */
   const req = (k: AddressFieldKey, fallback: boolean) => {
@@ -157,9 +176,15 @@ export function AddressFields({
   };
   const keep = (k: AddressFieldKey) => <input type="hidden" name={n(k)} value={a[k] ?? ""} />;
   /** A disabled copy for the eye, and hidden inputs that post the stored values. */
-  const readOnly = (k: AddressFieldKey, label: string, shown: string, posts: AddressFieldKey[]) => (
+  const readOnly = (
+    k: AddressFieldKey,
+    label: string,
+    shown: string,
+    posts: AddressFieldKey[],
+    className?: string,
+  ) => (
     <>
-      <Field name={n(k)} label={label}>
+      <Field name={n(k)} label={label} className={className}>
         <Input value={shown} placeholder="Not set" readOnly disabled />
       </Field>
       {posts.map((p) => (
@@ -173,12 +198,13 @@ export function AddressFields({
     label: string,
     fallback: boolean,
     input: React.ComponentProps<typeof Input>,
+    className?: string,
   ) => {
     if (st(k) === "hide") return keep(k);
-    if (st(k) === "read_only") return readOnly(k, label, a[k] ?? "", [k]);
+    if (st(k) === "read_only") return readOnly(k, label, a[k] ?? "", [k], className);
     const required = req(k, fallback);
     return (
-      <Field name={n(k)} label={label} required={required}>
+      <Field name={n(k)} label={label} required={required} className={className}>
         <Input name={n(k)} defaultValue={a[k] ?? ""} required={required} {...input} />
       </Field>
     );
@@ -221,6 +247,8 @@ export function AddressFields({
   const regionState = regionStateOf(st("state_code"), st("state"));
   const regionRequired =
     regionState === undefined || regionState === "hide" ? requireRest : regionState === "mandatory";
+  /** A visible region control sits beside City. */
+  const regionShown = Boolean(countryCode) && regionState !== "hide";
 
   // The stored code, folded through the aliases the API sent — an imported customer
   // may hold `OD` where our canonical code is `OR`, and without the fold the picker
@@ -267,13 +295,40 @@ export function AddressFields({
     return opts;
   }, [subs, regionCode]);
 
+  /** A region an autofill pass gave before the country's list loaded; applied once it does. */
+  const [pendingRegion, setPendingRegion] = React.useState("");
+  React.useEffect(() => {
+    const q = pendingRegion.trim().toUpperCase();
+    if (!q || subs.length === 0) return;
+    const hit = subs.find((s) => s.code === q || s.name.toUpperCase() === q);
+    const code = hit?.code ?? normalizeStateCode(q, aliases);
+    if (hit || subs.some((s) => s.code === code)) setRegionCode(code);
+    setPendingRegion("");
+  }, [pendingRegion, subs, aliases, setRegionCode]);
+
   // ── Postal ─────────────────────────────────────────────────────────────────
-  const hint = postalHint(country);
+  // An example, never the raw mask: "NNNNN-NNNN" means nothing to a buyer.
+  const example = postalExample(country?.code, postalHint(country));
   const showPostal = usesPostalCode(country);
   const postalError =
     postal.trim() && !isValidPostal(country, postal)
-      ? `This does not look like a ${postalLabel(country).toLowerCase()}.${hint ? ` Expected format: ${hint}.` : ""}`
+      ? `We could not accept this ${postalNoun(postalLabel(country))}. The format is not correct.${example ? ` Use this format: ${example}.` : ""}`
       : undefined;
+  const postalShown = showPostal && st("postal_code") !== "hide";
+  // City, region and postal code share one row once the block is wide enough.
+  const PLACE = rows
+    ? GRID
+    : cn(
+        "grid gap-4",
+        SPAN,
+        regionShown && postalShown
+          ? "@xl:grid-cols-3"
+          : regionShown
+            ? "@xl:grid-cols-2"
+            : postalShown
+              ? "@xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]"
+              : undefined,
+      );
 
   /**
    * Blocking, not advisory. Without `setCustomValidity` the browser happily submits a
@@ -285,272 +340,311 @@ export function AddressFields({
     postalRef.current?.setCustomValidity(postalError ?? "");
   }, [postalError]);
 
+  const postalField =
+    showPostal && st("postal_code") === "hide" ? (
+      <input
+        type="hidden"
+        name={n("postal_code")}
+        value={countryKept ? (a.postal_code ?? "") : ""}
+      />
+    ) : showPostal && st("postal_code") === "read_only" ? (
+      readOnly("postal_code", postalLabel(country), a.postal_code ?? "", ["postal_code"])
+    ) : showPostal ? (
+      <Field
+        name={n("postal_code")}
+        label={postalLabel(country)}
+        required={req("postal_code", requireRest)}
+        error={postalError}
+        help={example ? `For example, ${example}.` : undefined}
+        className={rows ? "sm:ms-auto sm:w-40" : "sm:w-40 @xl:w-auto"}
+      >
+        <Input
+          ref={postalRef}
+          name={n("postal_code")}
+          value={postal}
+          onChange={(e) => setPostal(e.target.value)}
+          maxLength={20}
+          required={req("postal_code", requireRest)}
+          autoComplete={`${ac} postal-code`}
+        />
+      </Field>
+    ) : (
+      // Hidden, not omitted: saving replaces the address, so leaving the field
+      // out entirely would silently clear a stored value. This country has no
+      // postal system, so the stored value must go — post empty deliberately.
+      <input type="hidden" name={n("postal_code")} value="" />
+    );
+
   return (
-    <div className="flex flex-col gap-6">
-      {includeContact ? (
-        <section className="flex flex-col gap-4">
-          <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-            {contactHeading}
-          </h3>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/* Only FIRST name is ever required. Last name stays optional even under
+    <FieldLayout value={rows ? "row" : "stack"}>
+      <div className={rows ? "divide-y divide-border" : "@container flex flex-col gap-6"}>
+        {includeContact ? (
+          <section className="flex flex-col gap-4">
+            <h3 className="text-sm font-semibold">{contactHeading}</h3>
+            <div className={GRID}>
+              {/* Only FIRST name is ever required. Last name stays optional even under
                 `requireContactName`: mononyms are common in India, our largest launch
                 market, and a form that refuses one is a form that loses the sale. */}
-            {text("first_name", "First name", requireContactName, {
-              maxLength: 100,
-              autoComplete: "billing given-name",
-            })}
-            {text("last_name", "Last name", false, {
-              maxLength: 100,
-              autoComplete: "billing family-name",
-            })}
-            {text("company", "Company", false, {
-              maxLength: 200,
-              autoComplete: "billing organization",
-            })}
-            {st("phone") === "hide" ? (
-              keep("phone")
-            ) : st("phone") === "read_only" ? (
-              readOnly("phone", "Phone", a.phone ?? "", ["phone"])
-            ) : (
-              <PhoneField
-                name={n("phone")}
-                countries={countries}
-                defaultValue={a.phone}
-                countryCode={countryCode}
-                required={req("phone", requireRest)}
-                help="We store it as an international number."
-              />
-            )}
-          </div>
-        </section>
-      ) : null}
+              {text("first_name", "First name", requireContactName, {
+                maxLength: 100,
+                autoComplete: `${ac} given-name`,
+              })}
+              {text("last_name", "Last name", false, {
+                maxLength: 100,
+                autoComplete: `${ac} family-name`,
+              })}
+              {text("company", "Company", false, {
+                maxLength: 200,
+                autoComplete: `${ac} organization`,
+              })}
+              {st("phone") === "hide" ? (
+                keep("phone")
+              ) : st("phone") === "read_only" ? (
+                readOnly("phone", "Phone", a.phone ?? "", ["phone"])
+              ) : (
+                <PhoneField
+                  name={n("phone")}
+                  countries={countries}
+                  defaultValue={a.phone}
+                  countryCode={countryCode}
+                  required={req("phone", requireRest)}
+                  help="We store it as an international number."
+                  autoComplete={`${ac} tel`}
+                />
+              )}
+            </div>
+          </section>
+        ) : null}
 
-      <section className="flex flex-col gap-4">
-        <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-          Address
-        </h3>
+        <section className={rows ? "divide-y divide-border" : GRID}>
+          {rows ? null : <h3 className={cn("text-sm font-semibold", SPAN)}>Address</h3>}
 
-        {/* Country leads: it decides the region control, the postal label and its
+          {/* Country leads: it decides the region control, the postal label and its
             format, so asking for it first means the rest of the form is already
             correct by the time it is filled in. */}
-        {st("country") === "read_only" ? (
-          readOnly("country", "Country", country?.name ?? a.country ?? "", ["country"])
-        ) : (
-          <Field name={n("country")} label="Country" required={req("country", requireCore)}>
-            <Combobox
+          {st("country") === "read_only" ? (
+            readOnly("country", "Country", country?.name ?? a.country ?? "", ["country"])
+          ) : (
+            <Field
               name={n("country")}
-              value={countryCode}
-              onValueChange={(v: string) => {
-                // Clear the held subdivision HERE, not once the new country's list arrives.
-                // Deferring it leaves a window in which the form would post the PREVIOUS
-                // country's code against the new country — which the API rejects for a
-                // strict country and, worse, silently accepts for a lax one.
-                setCountryCode(v.toUpperCase());
-                setRegionCode("");
-                setStateText("");
-              }}
+              label="Country"
               required={req("country", requireCore)}
-              ariaLabel="Country"
-              placeholder="Select a country…"
-              searchPlaceholder="Search country or code…"
-              emptyMessage="No matching country."
-              className="sm:max-w-sm"
-              // The ISO code is a search term, not a label: an operator who knows `SG`
-              // should not have to remember whether we print "Singapore" or "Singapore,
-              // Republic of". It stays out of the trigger text, which is the country name.
-              options={countries.map((c) => ({ value: c.code, label: c.name, keywords: c.code }))}
-            />
-          </Field>
-        )}
+              className={rows ? undefined : "sm:w-72 sm:max-w-full"}
+            >
+              <Combobox
+                name={n("country")}
+                value={countryCode}
+                onValueChange={(v: string) => {
+                  // Clear the held subdivision HERE, not once the new country's list arrives.
+                  // Deferring it leaves a window in which the form would post the PREVIOUS
+                  // country's code against the new country — which the API rejects for a
+                  // strict country and, worse, silently accepts for a lax one.
+                  setCountryCode(v.toUpperCase());
+                  setRegionCode("");
+                  setStateText("");
+                }}
+                required={req("country", requireCore)}
+                ariaLabel="Country"
+                autoComplete={`${ac} country`}
+                placeholder="Select a country…"
+                searchPlaceholder="Search country or code…"
+                emptyMessage="No matching country."
+                // The ISO code is a search term, not a label: an operator who knows `SG`
+                // should not have to remember whether we print "Singapore" or "Singapore,
+                // Republic of". It stays out of the trigger text, which is the country name.
+                options={countries.map((c) => ({ value: c.code, label: c.name, keywords: c.code }))}
+              />
+            </Field>
+          )}
 
-        {text("line1", "Address line 1", requireCore, {
-          maxLength: 200,
-          autoComplete: "billing address-line1",
-          placeholder: "Street address",
-        })}
+          {text(
+            "line1",
+            "Address line 1",
+            requireCore,
+            {
+              maxLength: 200,
+              autoComplete: `${ac} address-line1`,
+              placeholder: "Street address",
+            },
+            SPAN,
+          )}
 
-        {text("line2", "Address line 2", false, {
-          maxLength: 200,
-          autoComplete: "billing address-line2",
-          placeholder: "Apartment, suite, unit",
-        })}
+          {text(
+            "line2",
+            "Address line 2",
+            false,
+            {
+              maxLength: 200,
+              autoComplete: `${ac} address-line2`,
+              placeholder: "Apartment, suite, unit",
+            },
+            SPAN,
+          )}
 
-        {/* Line 3 is real (the engine stores it) but rarely used, so it starts
+          {/* Line 3 is real (the engine stores it) but rarely used, so it starts
             collapsed rather than sitting empty on every form. It always renders
             once it has a value, because saving REPLACES the address. */}
-        {st("line3") === "hide" || (st("line3") === "read_only" && !a.line3) ? (
-          keep("line3")
-        ) : st("line3") === "read_only" ? (
-          readOnly("line3", "Address line 3", a.line3 ?? "", ["line3"])
-        ) : showLine3 ? (
-          <Field name={n("line3")} label="Address line 3" required={req("line3", false)}>
-            <Input
+          {st("line3") === "hide" || (st("line3") === "read_only" && !a.line3) ? (
+            keep("line3")
+          ) : st("line3") === "read_only" ? (
+            readOnly("line3", "Address line 3", a.line3 ?? "", ["line3"], SPAN)
+          ) : showLine3 ? (
+            <Field
               name={n("line3")}
-              defaultValue={a.line3 ?? ""}
+              label="Address line 3"
               required={req("line3", false)}
-              maxLength={200}
-            />
-          </Field>
-        ) : (
-          <div>
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              className="h-auto p-0"
-              onClick={() => setShowLine3(true)}
+              className={SPAN}
             >
-              + Add address line 3
-            </Button>
-          </div>
-        )}
+              <Input
+                name={n("line3")}
+                defaultValue={a.line3 ?? ""}
+                required={req("line3", false)}
+                maxLength={200}
+                autoComplete={`${ac} address-line3`}
+              />
+            </Field>
+          ) : (
+            <div className={rows ? "px-5 py-3" : SPAN}>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto p-0"
+                onClick={() => setShowLine3(true)}
+              >
+                + Add address line 3
+              </Button>
+            </div>
+          )}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          {text("city", "City", requireRest, {
-            maxLength: 100,
-            autoComplete: "billing address-level2",
-          })}
+          <div className={PLACE}>
+            {text("city", "City", requireRest, {
+              maxLength: 100,
+              autoComplete: `${ac} address-level2`,
+            })}
 
-          {!countryCode ? (
-            /* No country chosen: no region control — a "State" box above an unknown
+            {!countryCode ? (
+              /* No country chosen: no region control — a "State" box above an unknown
                country cannot be validated or labelled correctly. The
                stored values still ride along, because a save REPLACES the address and the
                `requireCore={false}` surfaces (shipping, business profile) can submit
                without a country. */
-            <>
-              <input type="hidden" name={n("state_code")} value={regionCode} />
-              <input type="hidden" name={n("state")} value={stateText} />
-            </>
-          ) : regionState === "hide" ? (
-            <>
-              <input
-                type="hidden"
-                name={n("state_code")}
-                value={countryKept && hasSubdivisions ? (a.state_code ?? "") : ""}
-              />
-              <input type="hidden" name={n("state")} value={countryKept ? (a.state ?? "") : ""} />
-            </>
-          ) : regionState === "read_only" ? (
-            readOnly("state_code", regionLabel(country), regionName || a.state || "", [
-              "state_code",
-              "state",
-            ])
-          ) : hasSubdivisions ? (
-            /* The hidden input is a SIBLING of <Field>, not a second child of it.
+              <>
+                <input type="hidden" name={n("state_code")} value={regionCode} />
+                <input type="hidden" name={n("state")} value={stateText} />
+                {/* Autofill fills the region in the same pass as the country, before this
+                  country's list exists: hold it until the list arrives. Unnamed, so it
+                  never posts. */}
+                <input
+                  autoComplete={`${ac} address-level1`}
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  defaultValue=""
+                  onChange={(e) => setPendingRegion(e.target.value)}
+                  className="pointer-events-none absolute size-px opacity-0"
+                />
+              </>
+            ) : regionState === "hide" ? (
+              <>
+                <input
+                  type="hidden"
+                  name={n("state_code")}
+                  value={countryKept && hasSubdivisions ? (a.state_code ?? "") : ""}
+                />
+                <input type="hidden" name={n("state")} value={countryKept ? (a.state ?? "") : ""} />
+              </>
+            ) : regionState === "read_only" ? (
+              readOnly("state_code", regionLabel(country), regionName || a.state || "", [
+                "state_code",
+                "state",
+              ])
+            ) : hasSubdivisions ? (
+              /* The hidden input is a SIBLING of <Field>, not a second child of it.
                Field clones its child to inject `id` / `aria-invalid`, and a Fragment
                swallows both — the label's htmlFor then points at nothing and React
                warns about an `id` prop on React.Fragment. */
-            <div className="space-y-1.5">
-              <Field
-                name={n("state_code")}
-                label={regionLabel(country)}
-                required={regionRequired}
-                error={
-                  subsFailed
-                    ? `We could not load the ${regionLabel(country).toLowerCase()} list.${regionCode ? " We keep the saved value." : ""}`
-                    : undefined
-                }
-                help={
-                  loadingSubs
-                    ? "Loading…"
-                    : country?.subdivision_strict
-                      ? "We use it to calculate tax."
-                      : "We use it to calculate tax. Select the closest match."
-                }
-              >
-                <Combobox
+              <div className={rows ? undefined : "space-y-1.5"}>
+                <Field
                   name={n("state_code")}
-                  value={regionCode}
-                  onValueChange={setRegionCode}
-                  // Passed to the CONTROL, not just to <Field>. The label drew a required
-                  // asterisk while the posted input was a plain hidden one, which the HTML
-                  // spec bars from constraint validation — so "State *" was submittable
-                  // empty on the very form whose value decides GST. Pre-existing; the old
-                  // SelectField was not given `required` here either.
+                  label={regionLabel(country)}
                   required={regionRequired}
-                  ariaLabel={regionLabel(country)}
-                  placeholder={`Select a ${regionLabel(country).toLowerCase()}…`}
-                  searchPlaceholder={`Search ${regionLabel(country).toLowerCase()} or code…`}
-                  emptyMessage={
-                    loadingSubs ? "Loading…" : `No matching ${regionLabel(country).toLowerCase()}.`
+                  error={
+                    subsFailed
+                      ? `We could not load the ${regionLabel(country).toLowerCase()} list.${regionCode ? " We keep the saved value." : ""}`
+                      : undefined
                   }
-                  options={regionOptions}
-                />
-              </Field>
-              {/* The picker sets both columns, so the two can no longer disagree. */}
-              <input type="hidden" name={n("state")} value={regionName} />
-              {subsFailed ? (
-                /* The only way forward when the list never arrived and nothing is stored.
+                  help={
+                    loadingSubs
+                      ? "Loading…"
+                      : country?.subdivision_strict
+                        ? "We use it to calculate tax."
+                        : "We use it to calculate tax. Select the closest match."
+                  }
+                >
+                  <Combobox
+                    name={n("state_code")}
+                    value={regionCode}
+                    onValueChange={setRegionCode}
+                    // Passed to the CONTROL, not just to <Field>. The label drew a required
+                    // asterisk while the posted input was a plain hidden one, which the HTML
+                    // spec bars from constraint validation — so "State *" was submittable
+                    // empty on the very form whose value decides GST. Pre-existing; the old
+                    // SelectField was not given `required` here either.
+                    required={regionRequired}
+                    ariaLabel={regionLabel(country)}
+                    autoComplete={`${ac} address-level1`}
+                    placeholder={`Select a ${regionLabel(country).toLowerCase()}…`}
+                    searchPlaceholder={`Search ${regionLabel(country).toLowerCase()} or code…`}
+                    emptyMessage={
+                      loadingSubs
+                        ? "Loading…"
+                        : `No matching ${regionLabel(country).toLowerCase()}.`
+                    }
+                    options={regionOptions}
+                  />
+                </Field>
+                {/* The picker sets both columns, so the two can no longer disagree. */}
+                <input type="hidden" name={n("state")} value={regionName} />
+                {subsFailed ? (
+                  /* The only way forward when the list never arrived and nothing is stored.
                    Falling back to free text here is what nulled `state_code`; letting the
                    operator type a code by hand is worse, because a wrong one resolves no
                    place of supply and taxes the line at zero without erroring. */
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  className="h-auto p-0"
-                  onClick={reloadSubs}
-                >
-                  Retry
-                </Button>
-              ) : null}
-            </div>
-          ) : (
-            /* This country genuinely has no subdivisions — the ONLY case that gets free
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0"
+                    onClick={reloadSubs}
+                  >
+                    Retry
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              /* This country genuinely has no subdivisions — the ONLY case that gets free
                text. `state_code` is cleared deliberately rather than omitted: the save
                replaces the address, so an absent field and an empty one mean the same
                thing to the API, and being explicit is what makes that reviewable. */
-            <div className="space-y-1.5">
-              <Field name={n("state")} label={regionLabel(country)}>
-                <Input
-                  name={n("state")}
-                  value={stateText}
-                  onChange={(e) => setStateText(e.target.value)}
-                  maxLength={100}
-                  autoComplete="billing address-level1"
-                />
-              </Field>
-              <input type="hidden" name={n("state_code")} value="" />
-            </div>
-          )}
-        </div>
+              <div className={rows ? undefined : "space-y-1.5"}>
+                <Field name={n("state")} label={regionLabel(country)}>
+                  <Input
+                    name={n("state")}
+                    value={stateText}
+                    onChange={(e) => setStateText(e.target.value)}
+                    maxLength={100}
+                    autoComplete={`${ac} address-level1`}
+                  />
+                </Field>
+                <input type="hidden" name={n("state_code")} value="" />
+              </div>
+            )}
+            {rows ? null : postalField}
+          </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          {showPostal && st("postal_code") === "hide" ? (
-            <input
-              type="hidden"
-              name={n("postal_code")}
-              value={countryKept ? (a.postal_code ?? "") : ""}
-            />
-          ) : showPostal && st("postal_code") === "read_only" ? (
-            readOnly("postal_code", postalLabel(country), a.postal_code ?? "", ["postal_code"])
-          ) : showPostal ? (
-            <Field
-              name={n("postal_code")}
-              label={postalLabel(country)}
-              required={req("postal_code", requireRest)}
-              error={postalError}
-              help={hint ? `Format: ${hint}` : undefined}
-            >
-              <Input
-                ref={postalRef}
-                name={n("postal_code")}
-                value={postal}
-                onChange={(e) => setPostal(e.target.value)}
-                maxLength={20}
-                required={req("postal_code", requireRest)}
-                autoComplete="billing postal-code"
-              />
-            </Field>
-          ) : (
-            // Hidden, not omitted: saving replaces the address, so leaving the field
-            // out entirely would silently clear a stored value. This country has no
-            // postal system, so the stored value must go — post empty deliberately.
-            <input type="hidden" name={n("postal_code")} value="" />
-          )}
-        </div>
-      </section>
-    </div>
+          {rows ? <div className={GRID}>{postalField}</div> : null}
+        </section>
+      </div>
+    </FieldLayout>
   );
 }

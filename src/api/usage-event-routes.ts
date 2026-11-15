@@ -9,6 +9,7 @@ import {
   findStoredEvent,
   ingestUsageEvents,
   serializeUsageEvent,
+  serializeUsageEventWithCredit,
   usageBatchInput,
   UsageEventBilledError,
   UsageEventNotFoundError,
@@ -56,10 +57,14 @@ function instant(v: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** The single-event refusal: 400 for a malformed event, 422 for a refused one. */
+/**
+ * The single-event refusal: 400 for a malformed event, 402 for one stored and not billed
+ * because the customer has no credit left, 422 for any other refused one.
+ */
 function sendEventError(reply: FastifyReply, r: IngestResult) {
   const code = r.error!.code;
-  return reply.code(code === "invalid_request" ? 400 : 422).send({
+  const status = code === "invalid_request" ? 400 : code === "insufficient_credit" ? 402 : 422;
+  return reply.code(status).send({
     error: { type: "invalid_request_error", code, message: r.error!.message },
   });
 }
@@ -103,12 +108,15 @@ export async function registerUsageEventRoutes(app: FastifyInstance) {
           events: [body],
         });
         if (r!.status === "error") return sendEventError(reply, r!);
-        const stored = await withTenant(req.organization!.id, (tx) =>
-          findStoredEvent(tx, business.id, r!.key!),
-        );
-        return reply
-          .code(r!.status === "created" ? 201 : 200)
-          .send({ event: stored ? serializeUsageEvent(stored) : null, status: r!.status });
+        const event = await withTenant(req.organization!.id, async (tx) => {
+          const stored = await findStoredEvent(tx, business.id, r!.key!);
+          if (!stored) return null;
+          // Only an event of a meter with a credit cost makes the second read.
+          return r!.gated
+            ? serializeUsageEventWithCredit(tx, business.id, stored)
+            : serializeUsageEvent(stored);
+        });
+        return reply.code(r!.status === "created" ? 201 : 200).send({ event, status: r!.status });
       },
     );
 

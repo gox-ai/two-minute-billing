@@ -2,7 +2,7 @@
 
 import { useDefaultState } from "@/lib/use-default-state";
 import { Input } from "@/components/ui/input";
-import { RadioField } from "@/components/ui/radio-group";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import { SettingRow } from "@/components/settings/settings-layout";
 
 /** `email_config.linkTarget` + `merchantUrl`: where the links and the button in emails go. */
@@ -18,16 +18,17 @@ export function LinkTargetRow({
   return (
     <SettingRow
       label="Links in emails"
+      htmlFor="link_target"
+      placement="end"
       help="Where the button and the billing portal link in each email go. This includes Pay now and Change payment method."
       errorFor="merchant_url"
       control={
-        <div className="flex flex-col gap-3">
-          <RadioField
+        <div className="flex w-full flex-col gap-2 sm:items-end">
+          <SelectAnswer
             name="link_target"
             ariaLabel="Links in emails"
             value={mode}
             onValueChange={setMode}
-            className="grid-cols-1 sm:grid-cols-2"
             options={[
               { value: "portal", label: "Hosted billing portal" },
               { value: "merchant_url", label: "Your URL" },
@@ -43,7 +44,7 @@ export function LinkTargetRow({
             required={mode === "merchant_url"}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            className={mode === "merchant_url" ? "max-w-md" : "hidden"}
+            className={mode === "merchant_url" ? "w-full sm:w-72" : "hidden"}
           />
         </div>
       }

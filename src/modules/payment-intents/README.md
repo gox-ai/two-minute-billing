@@ -94,6 +94,17 @@ inited|requires_action|authorized|consumed|failed|voided, `id_at_gateway`, `erro
 
 ## Changelog
 
+- **2026-11-13** — A browser `client_result` the gateway refuses throws "We could not take your
+  payment. <reason>. We did not charge you." for a payment and "We could not save your payment
+  method. <reason>." for a setup (was "We could not complete the payment. <reason>" for both).
+  Each surface adds its own next step. Gate: `verify:gateway-sdk-modes`.
+- **2026-11-13** — List and retrieve rows carry `last_error: { code, message } | null`: the
+  newest attempt's `error_code`/`error_text` when that attempt failed. One `DISTINCT ON` query
+  per page (`lastErrorsFor`), served by `payment_attempts_intent_number_uq`. The dashboard list
+  shows it as the "Last error" column.
+- **2026-11-12** — `resumeVerdictFromGateway`: an open intent the gateway reports `failed`, with no
+  `next_action` left (a declined browser result), is closed (`markPaymentIntentVoidedFromGateway`)
+  and answers `closed`, so portal Pay now mints a new intent instead of "already with your bank".
 - **2026-11-03** — An attempt is a SPAN of its caller's trace, not a trace of its own
   (`attemptSpan`). Each attempt mints `pi-…` as `payment_attempts.span_id` (0496); later calls
   on it (fetch, void, consume) join that span; `trace_id` is the request or job that made it,
@@ -689,3 +700,5 @@ inited|requires_action|authorized|consumed|failed|voided, `id_at_gateway`, `erro
 - **2026-11-01 (Tier 3 PR 2)** — Settling an invoice through a payment intent activates its pending credit grants (`activatePaidCreditGrants`).
 - **2026-11-02** — An intent's `expires_at` (create and retry) is counted from `businessWallClock`, the clock `consumePaymentIntent` checks it against. Counted from the real clock, every intent in a business travelled past real time was expired at birth ("took too long to complete"). Gate: `verify:gateway` C7-TT.
 - **2026-11-04** — `createPaymentIntent` books a refusal from the vault step (`ensureProviderCustomer`) exactly like a `createIntent` rejection: intent + failed `gateway_request_rejected` attempt, then rethrown; a `ProviderIndeterminateError` is rethrown with nothing booked. `assertIntentCurrency` (public route only) refuses a currency outside the business default, its currency list and the named invoice's or subscription's currency. `amount_minor` and `max_amount_minor` at most 10^12. tmtest credential `ensure_customer_fault` (`reject` / `indeterminate`). Gate: `verify:gateway` C63+ and PI currency.
+- **2026-11-15** — The attempt's span opens before the provider-customer lookup (create, retry
+  and the setup consume), so `ensure_customer` shows in the attempt's Request/response logs.

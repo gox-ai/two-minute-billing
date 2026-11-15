@@ -7,15 +7,16 @@ import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/action-result";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import { SettingRow } from "@/components/settings/settings-layout";
 import { Loader2 } from "lucide-react";
 import { useFormStatus } from "react-dom";
 
-function SeedButton() {
+function CreateButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" variant="default" size="sm" disabled={pending} className="gap-1.5">
+    <Button type="submit" variant="outline" size="sm" disabled={pending} className="gap-1.5">
       {pending && <Loader2 className="size-3 animate-spin" />}
-      Seed sample data
+      Create sample data
     </Button>
   );
 }
@@ -59,31 +60,48 @@ export function SampleDataSection({ biz, seedAction, removeAction }: SampleDataS
     }
   }
 
+  // Two settings rows: the card around them supplies the title.
   return (
-    <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Add a small set of demo records to this test business: 2 products, 2 prices, 1 coupon and 1
-        customer. Each record has the tag{" "}
-        <span className="font-mono text-xs">metadata.sample=true</span>. Seeding is idempotent. It
-        first deletes all existing sample records. It does not create subscriptions or invoices.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <form action={seedFormAction}>
-          <input type="hidden" name="biz" value={biz} />
-          <SeedButton />
-        </form>
-
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 text-destructive hover:text-destructive"
-          onClick={() => setDeleteOpen(true)}
-          disabled={deleteLoading}
-        >
-          {deleteLoading && <Loader2 className="size-3 animate-spin" />}
-          Delete sample data
-        </Button>
-      </div>
+    <>
+      <SettingRow
+        label="Create sample data"
+        placement="end"
+        help={
+          <>
+            Adds 2 products, 2 prices, 1 coupon and 1 customer, each tagged{" "}
+            <span className="font-mono text-xs">metadata.sample=true</span>. It first deletes the
+            sample records it made before. It does not create subscriptions or invoices.
+          </>
+        }
+        control={
+          <form action={seedFormAction}>
+            <input type="hidden" name="biz" value={biz} />
+            <CreateButton />
+          </form>
+        }
+      />
+      <SettingRow
+        label="Delete sample data"
+        placement="end"
+        help={
+          <>
+            Deletes all records tagged{" "}
+            <span className="font-mono text-xs">metadata.sample=true</span> in this test business.
+          </>
+        }
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-destructive hover:text-destructive"
+            onClick={() => setDeleteOpen(true)}
+            disabled={deleteLoading}
+          >
+            {deleteLoading && <Loader2 className="size-3 animate-spin" />}
+            Delete sample data
+          </Button>
+        }
+      />
 
       <ConfirmDialog
         open={deleteOpen}
@@ -94,6 +112,6 @@ export function SampleDataSection({ biz, seedAction, removeAction }: SampleDataS
         destructive
         onConfirm={handleRemoveConfirm}
       />
-    </div>
+    </>
   );
 }

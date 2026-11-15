@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getBusiness } from "@/lib/api/business-settings";
 import { getHubSpotRun } from "@/lib/api/hubspot";
 import { requirePermission } from "@/lib/session";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { ErrorState } from "@/components/states";
 import { StatusChip } from "@/components/patterns/chip";
 import {

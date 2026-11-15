@@ -9,8 +9,12 @@ import {
 import {
   ALLOWANCE_UPGRADE_LABELS,
   CREDIT_CANCEL_LABELS,
+  CREDIT_DOWNGRADE_CONSEQUENCES,
   CREDIT_DOWNGRADE_LABELS,
+  CREDIT_GRANT_WHEN_LABELS,
   CREDIT_PAUSE_LABELS,
+  CREDIT_UNPAID_CANCEL_LABELS,
+  CREDIT_UPGRADE_CONSEQUENCES,
   CREDIT_UPGRADE_LABELS,
   FIRST_WINDOW_LABELS,
   resetRules,
@@ -26,48 +30,28 @@ export const dynamic = "force-dynamic";
 // .allowances, design-G3b § 6). They apply to credits and allowances that renew on their
 // own clock ("Renews" on a price's Grants credit card or an allowance).
 
-const UPGRADE: Choice[] = [
-  {
-    value: "full",
-    label: CREDIT_UPGRADE_LABELS.full,
-    consequence: "The new plan's credits for the current window are given at the change.",
-  },
-  {
-    value: "prorated",
-    label: CREDIT_UPGRADE_LABELS.prorated,
-    consequence:
-      "The new plan's credits are given at the change, for the part of the window that is left.",
-  },
-  {
-    value: "next_window",
-    label: CREDIT_UPGRADE_LABELS.next_window,
-    consequence: "The new plan's credits start when the next window starts.",
-  },
-];
+const UPGRADE: Choice[] = (["full", "prorated", "next_window"] as const).map((v) => ({
+  value: v,
+  label: CREDIT_UPGRADE_LABELS[v],
+  consequence: CREDIT_UPGRADE_CONSEQUENCES[v],
+}));
 
-const DOWNGRADE: Choice[] = [
-  {
-    value: "next_window",
-    label: CREDIT_DOWNGRADE_LABELS.next_window,
-    consequence: "The new plan's credits start when the next window starts.",
-  },
-  {
-    value: "full",
-    label: CREDIT_DOWNGRADE_LABELS.full,
-    consequence: "The new plan's credits for the current window are given at the change.",
-  },
-];
+const DOWNGRADE: Choice[] = (["next_window", "full", "prorated"] as const).map((v) => ({
+  value: v,
+  label: CREDIT_DOWNGRADE_LABELS[v],
+  consequence: CREDIT_DOWNGRADE_CONSEQUENCES[v],
+}));
 
 const FIRST_WINDOW: Choice[] = [
   {
     value: "full",
     label: FIRST_WINDOW_LABELS.full,
-    consequence: "A window that the subscription start cuts short gives the full credits.",
+    consequence: "A window that the subscription start cuts short grants the full credits.",
   },
   {
     value: "prorated",
     label: FIRST_WINDOW_LABELS.prorated,
-    consequence: "A window that the subscription start cuts short gives credits for its length.",
+    consequence: "A window that the subscription start cuts short grants credits for its length.",
   },
   {
     value: "next_full_window",
@@ -80,12 +64,12 @@ const PAUSE: Choice[] = [
   {
     value: "skip",
     label: CREDIT_PAUSE_LABELS.skip,
-    consequence: "A window that starts while the subscription is paused gives no credits.",
+    consequence: "A window that starts while the subscription is paused grants no credits.",
   },
   {
     value: "keep_granting",
     label: CREDIT_PAUSE_LABELS.keep_granting,
-    consequence: "Each window gives credits, also while the subscription is paused.",
+    consequence: "Each window grants credits, even while the subscription is paused.",
   },
   {
     value: "shift",
@@ -99,12 +83,40 @@ const CANCEL: Choice[] = [
   {
     value: "grant_started_window",
     label: CREDIT_CANCEL_LABELS.grant_started_window,
-    consequence: "Each window that starts before the subscription ends gives credits.",
+    consequence: "Each window that starts before the subscription ends grants credits.",
   },
   {
     value: "stop_at_request",
     label: CREDIT_CANCEL_LABELS.stop_at_request,
-    consequence: "No window gives credits after the cancellation is scheduled.",
+    consequence: "No window grants credits after the cancel request.",
+  },
+];
+
+const GRANT_WHEN: Choice[] = [
+  {
+    value: "invoice_issued",
+    label: CREDIT_GRANT_WHEN_LABELS.invoice_issued,
+    consequence: "The credits of a period are available when its invoice is issued, paid or not.",
+  },
+  {
+    value: "invoice_paid",
+    label: CREDIT_GRANT_WHEN_LABELS.invoice_paid,
+    consequence:
+      "The credits of a period are pending until its invoice is paid. The customer cannot spend pending credits. We void pending credits if the invoice is voided or written off, if the subscription is cancelled for non-payment, or if the window of the credits ends before the payment.",
+  },
+];
+
+const UNPAID_CANCEL: Choice[] = [
+  {
+    value: "keep",
+    label: CREDIT_UNPAID_CANCEL_LABELS.keep,
+    consequence: "Plan credits that we granted stay until they expire.",
+  },
+  {
+    value: "void_unused",
+    label: CREDIT_UNPAID_CANCEL_LABELS.void_unused,
+    consequence:
+      "We void the unused plan credits of each unpaid period, from the oldest unpaid period. Credits that rolled over from a paid period stay.",
   },
 ];
 
@@ -142,7 +154,7 @@ export default async function CreditResetSettings({
     <SettingsPage
       title="Credit and allowance resets"
       crumbs={ruleCrumbs(biz, "Credit and allowance resets")}
-      description="What credits and allowances that renew on their own schedule do on a plan change, in a short first window, during a pause and after a cancellation at the end of the term."
+      description="What credits and allowances that renew on their own schedule do on a plan change, in a short first window, during a pause, after a cancellation at the end of the term and while an invoice is unpaid."
     >
       <ActionForm action={saveBillingRulesAction}>
         <FormIds biz={biz} version={b.resource_version} />
@@ -161,6 +173,11 @@ export default async function CreditResetSettings({
                   {
                     label: "Cancel at term end",
                     value: CREDIT_CANCEL_LABELS[pc.on_cancel_at_period_end],
+                  },
+                  { label: "Credit availability", value: CREDIT_GRANT_WHEN_LABELS[pc.grant_when] },
+                  {
+                    label: "Cancel for non-payment",
+                    value: CREDIT_UNPAID_CANCEL_LABELS[pc.on_unpaid_cancel],
                   },
                   {
                     label: "Allowance on an upgrade",
@@ -185,6 +202,7 @@ export default async function CreditResetSettings({
               label="On a downgrade"
               defaultValue={pc.on_downgrade}
               options={DOWNGRADE}
+              more="With each option, a downgrade at the end of the term grants the full credits of the new plan when its first window starts."
             />
           </SettingsCard>
           <SettingsCard title="First window" meta="A price can set its own">
@@ -207,6 +225,20 @@ export default async function CreditResetSettings({
               label="After a cancellation at the end of the term"
               defaultValue={pc.on_cancel_at_period_end}
               options={CANCEL}
+            />
+          </SettingsCard>
+          <SettingsCard title="Unpaid invoices" meta="Credits">
+            <ChoiceRow
+              name="pc_grant_when"
+              label="Credit availability"
+              defaultValue={pc.grant_when}
+              options={GRANT_WHEN}
+            />
+            <ChoiceRow
+              name="pc_on_unpaid_cancel"
+              label="After a cancellation for non-payment"
+              defaultValue={pc.on_unpaid_cancel}
+              options={UNPAID_CANCEL}
             />
           </SettingsCard>
           <SettingsCard title="Allowances" meta="Plan changes">

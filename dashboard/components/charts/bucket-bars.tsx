@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { useThemeStamp } from "@/components/charts/theme-stamp";
 import { EChart } from "@/components/charts/echart";
 import { money, countCompact, toMajor } from "@/lib/format";
+import { axisMinInterval, blankSeriesNote, isBlankSeries } from "@/components/charts/axis";
 
 echarts.use([BarChart, ScatterChart]);
 
@@ -21,8 +22,9 @@ export function useChartTokens() {
         : getComputedStyle(document.documentElement).getPropertyValue(v).trim() || fallback;
     return {
       gain: read("--chart-1", "#4e4eda"),
-      soft: read("--chart-4", "#7c9ec9"),
-      loss: read("--chart-5", "#b42318"),
+      soft: read("--chart-4", "#0c5484"),
+      // Loss is a meaning, not a series slot: the semantic token, never `--chart-5`.
+      loss: read("--destructive", "#b42318"),
       neutral: read("--muted-foreground", "#64748b"),
       ink: read("--foreground", "#101828"),
       grid: read("--border", "rgba(128,128,128,0.18)"),
@@ -54,8 +56,9 @@ export function formatters(kind: BarKind, currency: string) {
 /**
  * One series as bars, one per bucket. `markers` flags buckets that carry a second, sparser
  * event (a paying customer added) as a dot under the axis; its count shows in the tooltip.
- * `part` is a share of each bar drawn in the loss hue on top of the rest in a neutral hue, so
- * the bars read with a two-colour legend beneath them.
+ * `part` is a share of each bar drawn in the loss hue on top of the rest in `--chart-4`, so
+ * the bars read with a two-colour legend beneath them. A series of only zeros and gaps draws
+ * no plot (its axis would print "0" at every tick): `empty`, or a sentence, takes its place.
  */
 export function BucketBars({
   labels,
@@ -70,6 +73,7 @@ export function BucketBars({
   currency = "USD",
   height = 180,
   barMaxWidth = 18,
+  empty,
 }: {
   labels: string[];
   values: Array<number | null>;
@@ -87,9 +91,12 @@ export function BucketBars({
   height?: number;
   /** Wider bars when there are few buckets (a year of months). */
   barMaxWidth?: number;
+  /** Shown instead of the plot when every bucket is zero or a gap. */
+  empty?: React.ReactNode;
 }) {
   const t = useChartTokens();
   const f = React.useMemo(() => formatters(kind, currency), [kind, currency]);
+  const blank = isBlankSeries(values) && isBlankSeries(markers ?? []);
   const option = React.useMemo(() => {
     const hasMarkers = markers?.some((m) => (m ?? 0) > 0) ?? false;
     return {
@@ -118,6 +125,7 @@ export function BucketBars({
       },
       yAxis: {
         type: "value",
+        minInterval: axisMinInterval(kind, currency),
         splitLine: { lineStyle: { color: t.grid } },
         axisLabel: { color: t.label, fontSize: 12, formatter: (v: number) => f.axis(v) },
       },
@@ -133,8 +141,9 @@ export function BucketBars({
                   const top = part.values[i] ?? 0;
                   return {
                     value: v - top,
-                    // The rest of the bar is neutral, so only the loss-hued share reads as a warning.
-                    itemStyle: { color: t.neutral, borderRadius: top > 0 ? 0 : [3, 3, 0, 0] },
+                    // A calm data hue, not grey: only the loss-hued share reads as a warning,
+                    // and a grey bar reads as disabled.
+                    itemStyle: { color: t.soft, borderRadius: top > 0 ? 0 : [3, 3, 0, 0] },
                   };
                 }),
               },
@@ -171,7 +180,28 @@ export function BucketBars({
           : []),
       ],
     };
-  }, [labels, values, markers, markerLabel, part, notes, seriesLabel, tone, t, f, barMaxWidth]);
+  }, [
+    labels,
+    values,
+    markers,
+    markerLabel,
+    part,
+    notes,
+    seriesLabel,
+    tone,
+    t,
+    f,
+    barMaxWidth,
+    kind,
+    currency,
+  ]);
+  if (blank) {
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        {empty ?? blankSeriesNote(seriesLabel)}
+      </p>
+    );
+  }
   return <EChart option={option} height={height} />;
 }
 

@@ -37,6 +37,7 @@ const EXCLUDED: Record<string, string> = {
   "verify:stripe-live": "live provider calls (--with-live)",
   "verify:paypal-live": "live provider calls (--with-live)",
   "verify:razorpay-live": "live provider calls (--with-live)",
+  "verify:assistant-live": "live model calls that cost money (--with-live)",
   // Tunnel suites need an operator-run ngrok tunnel and a pasted public URL, so they
   // can never be unattended.
   "verify:stripe-tunnel": "needs an operator-run tunnel",
@@ -50,6 +51,7 @@ const LIVE_SUITES = [
   "verify:stripe-live",
   "verify:paypal-live",
   "verify:razorpay-live",
+  "verify:assistant-live",
 ];
 
 /**

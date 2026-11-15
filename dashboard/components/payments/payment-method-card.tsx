@@ -2,9 +2,12 @@ import * as React from "react";
 import { Chip } from "@/components/patterns/chip";
 import { KeyValueGrid, type KeyValueRow } from "@/components/patterns/key-value-grid";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
+import { distinctAccountLabel, GatewayLabel, partnerName } from "@/components/partner-logo";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { paymentMarkKey } from "@/components/brand/payment-mark";
 import { regionFlag, regionName } from "@/lib/countries";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { avsCheckOf } from "@/lib/payment-method-avs";
 import { cn } from "@/lib/utils";
 import type { PaymentMethod } from "@/lib/api";
@@ -23,15 +26,29 @@ import type { PaymentMethod } from "@/lib/api";
  * this has to compile into both. `PaymentMethod` is a TYPE import — pulling the value
  * side of `@/lib/api` would drag `next/headers` into the browser bundle.
  */
+/**
+ * The gateway's name: the catalogue's display name when the caller has it, else the
+ * brand's own name. Null for a gateway with no logo when no name was passed.
+ */
+const gatewayNameOf = (pm: PaymentMethod, gatewayName?: string | null) =>
+  gatewayName ?? partnerName(pm.provider);
+
+/** "via …": the gateway's name, else the account label, never a bare key if avoidable. */
+export const viaName = (pm: PaymentMethod, gatewayName?: string | null) =>
+  gatewayNameOf(pm, gatewayName) ?? pm.gateway_account_label ?? pm.provider;
+
 export function PaymentMethodCard({
   pm,
   tz,
+  gatewayName,
   note,
   actions,
   className,
 }: {
   pm: PaymentMethod;
   tz: string | null;
+  /** `gatewayDisplayName(pm.provider, catalog)`; a gateway with no logo needs it. */
+  gatewayName?: string | null;
   /** One quiet line under the heading for context the instrument itself cannot carry. */
   note?: React.ReactNode;
   /** Footer controls. Omitted entirely (no empty bar) when the caller has none. */
@@ -39,10 +56,10 @@ export function PaymentMethodCard({
   className?: string;
 }) {
   const hasMark = paymentMarkKey({ brand: pm.brand, type: pm.type, mandateRail: pm.mandate?.rail });
-  const rows = paymentMethodRows(pm, tz).filter(Boolean) as KeyValueRow[];
+  const rows = paymentMethodRows(pm, tz, gatewayName).filter(Boolean) as KeyValueRow[];
   const mid = Math.ceil(rows.length / 2);
   return (
-    <div className={cn("overflow-hidden rounded-lg border bg-card", className)}>
+    <div className={cn("overflow-hidden rounded-xl border bg-card", className)}>
       <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
         <div className="flex items-center gap-3">
           <span
@@ -66,7 +83,7 @@ export function PaymentMethodCard({
               <span className="capitalize">{pm.brand ?? pm.type}</span>
               {pm.last4 ? ` ending ${pm.last4}` : ""}
             </div>
-            <div className="text-xs text-muted-foreground">via {pm.provider}</div>
+            <div className="text-xs text-muted-foreground">via {viaName(pm, gatewayName)}</div>
             {note ? <div className="mt-0.5 text-xs text-muted-foreground">{note}</div> : null}
           </div>
         </div>
@@ -143,25 +160,38 @@ function capabilityRow(
  * null as UNKNOWN, so an operator wondering why a renewal asks for authentication needs to
  * see that nobody has answered the question. `pnpm repair:pm-details` fills it in.
  */
-export function paymentMethodRows(pm: PaymentMethod, tz: string | null): Array<KeyValueRow | null> {
+export function paymentMethodRows(
+  pm: PaymentMethod,
+  tz: string | null,
+  gatewayName?: string | null,
+): Array<KeyValueRow | null> {
   const inst = pm.instrument;
+  const name = gatewayNameOf(pm, gatewayName);
+  const account = distinctAccountLabel(pm.provider, pm.gateway_account_label, name);
   // Card-shaped: a `last4` means a card even where the gateway's `type` is vague.
   const cardish = (pm.type ?? "").toLowerCase() === "card" || !!pm.last4;
   const country = inst?.issuer_country?.trim().toUpperCase() || null;
   const flag = regionFlag(country);
 
   return [
-    { label: "Gateway", value: <span className="capitalize">{pm.provider}</span> },
-    // The gateway ACCOUNT ("Razorpay-1"), not a `Type` row.
-    // Omitted for legacy env-configured providers, which have no gateway_accounts row.
-    pm.gateway_account_label ? { label: "Gateway account", value: pm.gateway_account_label } : null,
+    // With no name to show, the account label names it alone; the raw key is the
+    // last resort (a legacy provider with no account row).
+    name
+      ? { label: "Gateway", value: <GatewayLabel gatewayKey={pm.provider} name={name} fit /> }
+      : account
+        ? null
+        : { label: "Gateway", value: pm.provider },
+    // The gateway ACCOUNT ("Razorpay-1"), not a `Type` row. Omitted for legacy
+    // env-configured providers (no gateway_accounts row), and when the label only
+    // repeats the gateway's name.
+    account ? { label: "Gateway account", value: account } : null,
     // The GATEWAY's reference (`<gateway customer id>/<gateway token id>`), never our
     // `pm_…` — that is the row below. Null when the gateway gave us no token to name;
     // then the row is dropped rather than filled with an internal id.
     pm.reference_id
       ? {
           label: "Reference ID",
-          value: <span className="font-mono text-xs break-all">{pm.reference_id}</span>,
+          value: <MiddleEllipsis value={pm.reference_id} className="text-xs" />,
           copy: pm.reference_id,
         }
       : null,
@@ -178,7 +208,7 @@ export function paymentMethodRows(pm: PaymentMethod, tz: string | null): Array<K
      */
     {
       label: "Payment method ID",
-      value: <span className="font-mono text-xs break-all">{pm.id}</span>,
+      value: <MiddleEllipsis value={pm.id} className="text-xs" />,
       copy: pm.id,
     },
     pm.status
@@ -245,7 +275,7 @@ export function paymentMethodRows(pm: PaymentMethod, tz: string | null): Array<K
     inst?.fingerprint
       ? {
           label: "Fingerprint",
-          value: <span className="font-mono text-xs break-all">{inst.fingerprint}</span>,
+          value: <MiddleEllipsis value={inst.fingerprint} className="text-xs" />,
           copy: inst.fingerprint,
         }
       : null,

@@ -64,7 +64,7 @@ export default async function EditPrice({
       returnTo={selfHref}
       crumbs={[
         { label: bizName, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: product.name, href: detailHref },
         { label: `${p.currency}, ${freqLabel(p)}`, href: selfHref },
         { label: "Edit" },

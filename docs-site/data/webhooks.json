@@ -3,8 +3,8 @@
     "src/modules/events/registry.ts",
     "src/modules/webhooks/outbox.ts"
   ],
-  "event_count": 164,
-  "family_count": 40,
+  "event_count": 172,
+  "family_count": 41,
   "delivery": {
     "success": "Any 2xx response.",
     "max_attempts": 6,
@@ -188,6 +188,21 @@
           "internal_note": null
         },
         {
+          "type": "subscription_pending_change_created",
+          "summary": null,
+          "internal_note": "`apply_when_paid`: a change held until its invoice is paid, then applied, or ended (`reason`: expired, replaced, cancelled, voided, moved) with its invoice voided."
+        },
+        {
+          "type": "subscription_pending_change_applied",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "subscription_pending_change_expired",
+          "summary": null,
+          "internal_note": null
+        },
+        {
           "type": "subscription_renewed",
           "summary": null,
           "internal_note": null
@@ -311,7 +326,7 @@
         },
         {
           "type": "invoice_paid",
-          "summary": null,
+          "summary": "`content.invoice` holds the invoice's `id`, `amount_minor` and `currency` (plus `paid_with_credit` when credit paid it). Fetch the invoice for its lines, customer, `metadata` and status. Whether a total-0 invoice sends this event is the billing rule `zero_invoice_paid_event`.",
           "internal_note": null
         },
         {
@@ -415,7 +430,7 @@
         },
         {
           "type": "payment_failed",
-          "summary": null,
+          "summary": "`content.payment` holds the payment's `id`, `amount_minor`, `currency`, the `invoice` id, a decline `code` and a `message` safe to show the payer.",
           "internal_note": null
         },
         {
@@ -981,7 +996,7 @@
         },
         {
           "type": "credit_grant_applied",
-          "summary": "Sent once for each invoice that used credit grants. It lists each grant and the amount that the invoice used.",
+          "summary": "Sent once for each invoice that used credit grants. It lists each grant and the amount that the invoice used. Also sent for each settlement of usage paid in credits: `invoice` is then null and `settlement` holds the settlement's id.",
           "internal_note": null
         },
         {
@@ -1029,6 +1044,23 @@
         {
           "type": "credit_hold_expired",
           "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "credit_usage",
+      "summary": "Usage of a meter that has a credit cost, paid in your credit unit when each usage event arrives.",
+      "internal_note": "usage paid in credits (0526): an event stored and not billed because the customer has no credit left; a settlement (written only when an endpoint lists it)",
+      "events": [
+        {
+          "type": "credit_usage_refused",
+          "summary": "A usage event arrived for a meter with a credit cost, and the customer did not have sufficient credit. The event is stored and is not billed. Carries the usage event's key, the customer, the meter, the credits due, the credits available and the `policy` that applied (`block` or `bill`; `bill` also refuses, because usage that credits do not pay has no money price yet).",
+          "internal_note": null
+        },
+        {
+          "type": "credit_usage_settled",
+          "summary": "A settlement drew the credits of a window of usage from the customer's credit grants. Carries the meter, the window, the quantity, the credits drawn and the revenue posted. We send this event only to an endpoint that lists it by name.",
           "internal_note": null
         }
       ]
@@ -1091,6 +1123,21 @@
         },
         {
           "type": "credit_auto_topup_failed",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_retry_scheduled",
+          "summary": null,
+          "internal_note": "a unit with no money rate (0527): a try failed and runs again; the top-up was turned off after a hard decline, or after the last try"
+        },
+        {
+          "type": "credit_auto_topup_hard_declined",
+          "summary": null,
+          "internal_note": null
+        },
+        {
+          "type": "credit_auto_topup_retries_exhausted",
           "summary": null,
           "internal_note": null
         },

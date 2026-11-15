@@ -113,6 +113,16 @@ export function groupValuesOf(e: string, groupBy: SQL): SQL {
     from unnest(${groupBy}::text[]) with ordinality g(name, ord) order by g.ord)`;
 }
 
+/**
+ * Event `e` counts as usage: not voided, and not refused for credit (`refused_at`, set by the
+ * gate of a meter that is paid in credits). Every read and fold of usage quantity uses this.
+ * A refused event still counts as cost: the daily cost fold reads it apart.
+ */
+export function countsAsUsage(e: string): SQL {
+  const ev = sql.raw(e);
+  return sql`${ev}.voided_at is null and ${ev}.refused_at is null`;
+}
+
 /** Event `e` counts toward a meter whose definition is given as SQL values. */
 export function countsToward(
   e: string,

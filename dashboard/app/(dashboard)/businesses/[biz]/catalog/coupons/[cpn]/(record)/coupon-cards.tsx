@@ -12,11 +12,14 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { StatusChip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { EmptyState } from "@/components/states";
 import { RecordCard } from "@/components/patterns/record-page";
 import { Pager, useCursorPages, type CursorSource } from "@/components/patterns/pager";
 import { HISTORY_PAGE } from "@/lib/cursor-source";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
+import { plural } from "@/lib/labels";
 import type { Subscription } from "@/lib/api";
 import type { CouponRedemption } from "@/lib/api/catalog-stats";
 
@@ -51,13 +54,14 @@ export function CouponSubscriptionsCard({
     >
       {source.rows.length === 0 ? (
         <EmptyState
+          compact
           icon={<Layers />}
           title="No subscriptions"
           description="No subscription has this coupon applied right now."
         />
       ) : (
         <>
-          <Table className="table-fixed max-lg:min-w-2xl">
+          <Table phone="stack" className="table-fixed max-lg:min-w-2xl">
             <colgroup>
               {/* At the 672px floor "non renewing" and a 5-figure MRR still fit whole. */}
               <col className="w-[30%]" />
@@ -70,7 +74,9 @@ export function CouponSubscriptionsCard({
                 <TableHead className="pl-5">Subscription</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="pr-5 text-right">MRR</TableHead>
+                <TableHead phone="aside" className="pr-5 text-right">
+                  MRR
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -79,9 +85,9 @@ export function CouponSubscriptionsCard({
                   <TableCell className="pl-5">
                     <Link
                       href={`/businesses/${biz}/subscriptions/${s.id}`}
-                      className="block truncate font-mono text-xs text-primary hover:underline"
+                      className="flex min-w-0 text-primary hover:underline"
                     >
-                      {s.id}
+                      <MiddleEllipsis value={s.id} className="text-xs" />
                     </Link>
                   </TableCell>
                   <TableCell className="truncate">
@@ -129,18 +135,19 @@ export function CouponRedemptionsCard({
     <RecordCard
       id="redemptions"
       title="Redemption history"
-      meta={page.pager.total ? `${page.pager.total} redemptions` : undefined}
+      meta={page.pager.total ? plural(page.pager.total, "redemption") : undefined}
       flush={source.rows.length > 0}
     >
       {source.rows.length === 0 ? (
         <EmptyState
+          compact
           icon={<History />}
           title="No redemptions"
           description="This coupon has no redemptions yet."
         />
       ) : (
         <>
-          <Table className="table-fixed max-lg:min-w-2xl">
+          <Table phone="stack" className="table-fixed max-lg:min-w-2xl">
             <colgroup>
               {/* Ids truncate; the amount and date keep their whole width. */}
               <col className="w-[17%]" />
@@ -155,7 +162,9 @@ export function CouponRedemptionsCard({
                 <TableHead className="pl-5">Subscription</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Invoice</TableHead>
-                <TableHead className="text-right">Discount</TableHead>
+                <TableHead phone="aside" className="text-right">
+                  Discount
+                </TableHead>
                 <TableHead>Periods left</TableHead>
                 <TableHead className="pr-5">Applied</TableHead>
               </TableRow>
@@ -167,9 +176,9 @@ export function CouponRedemptionsCard({
                     {r.subscription ? (
                       <Link
                         href={`/businesses/${biz}/subscriptions/${r.subscription}`}
-                        className="block truncate font-mono text-xs text-primary hover:underline"
+                        className="flex min-w-0 text-primary hover:underline"
                       >
-                        {r.subscription}
+                        <MiddleEllipsis value={r.subscription} className="text-xs" />
                       </Link>
                     ) : (
                       "—"
@@ -178,18 +187,30 @@ export function CouponRedemptionsCard({
                   <TableCell>
                     <Link
                       href={`/businesses/${biz}/customers/${r.customer}`}
-                      className="block truncate font-mono text-xs text-primary hover:underline"
+                      className="flex min-w-0 text-primary hover:underline"
                     >
-                      {r.customer}
+                      {r.customer_name ? (
+                        <span className="truncate" title={r.customer}>
+                          {r.customer_name}
+                        </span>
+                      ) : (
+                        <MiddleEllipsis value={r.customer} className="text-xs" />
+                      )}
                     </Link>
                   </TableCell>
                   <TableCell>
                     {r.invoice ? (
                       <Link
                         href={`/businesses/${biz}/invoices/${r.invoice}`}
-                        className="block truncate font-mono text-xs text-primary hover:underline"
+                        className="flex min-w-0 text-primary hover:underline"
                       >
-                        {r.invoice}
+                        {r.invoice_number ? (
+                          <span className="truncate" title={r.invoice}>
+                            {r.invoice_number}
+                          </span>
+                        ) : (
+                          <MiddleEllipsis value={r.invoice} className="text-xs" />
+                        )}
                       </Link>
                     ) : (
                       "—"

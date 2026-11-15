@@ -40,7 +40,7 @@ export default async function GatewayWebhooksPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Gateway Webhooks" />
+        <PageHeader title="Gateway webhooks" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -77,7 +77,7 @@ export default async function GatewayWebhooksPage({
       {/* The list chrome stays visible at zero rows — the table owns its empty state. */}
       <GatewayWebhooksTable
         page={{
-          title: "Gateway Webhooks",
+          title: "Gateway webhooks",
           breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Gateway webhooks" }],
         }}
         gatewayCatalog={gatewayCatalog}

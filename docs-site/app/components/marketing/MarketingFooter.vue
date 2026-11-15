@@ -12,29 +12,53 @@ interface FooterLink {
 
 const repo = useRepoUrl();
 const cookies = useCookieConsent();
-const columns: { label: string; children: FooterLink[] }[] = [
+// The footer lists the product in the order billing runs, not the header's menu groups.
+const PRODUCT_ORDER = [
+  "/product/subscriptions",
+  "/product/checkout-portal",
+  "/product/invoicing",
+  "/product/payments",
+  "/product/recovery",
+  "/product/tax",
+  "/product/reporting",
+  "/product/ai-assistant",
+];
+const byOrder = (a: FooterLink, b: FooterLink) =>
+  PRODUCT_ORDER.indexOf(a.to) - PRODUCT_ORDER.indexOf(b.to);
+const columns: { label: string; to?: string; children: FooterLink[] }[] = [
   {
+    // The heading links the overview; Integrations sits with Developers, Pricing with Company.
     label: "Product",
-    children: [
-      { label: "Overview", to: "/product" },
-      ...PRODUCT.map(({ label, to }) => ({ label, to })),
-    ],
+    to: "/product",
+    children: PRODUCT.filter((l) => PRODUCT_ORDER.includes(l.to))
+      .map(({ label, to }) => ({ label, to }))
+      .sort(byOrder),
   },
-  { label: "Solutions", children: SOLUTIONS.map(({ label, to }) => ({ label, to })) },
+  {
+    // Business models first, then regions. "Developers" is its own column.
+    label: "Solutions",
+    children: ["By business model", "By region"].flatMap((g) =>
+      SOLUTIONS.filter((l) => l.group === g).map(({ label, to }) => ({ label, to })),
+    ),
+  },
   {
     label: "Developers",
     children: [
       ...DEVELOPERS.map(({ label, to }) => ({ label, to })),
+      { label: "Integrations", to: "/integrations" },
       ...(repo ? [{ label: "GitHub", to: repo, target: "_blank" }] : []),
     ],
   },
   {
     label: "Company",
-    children: [
-      ...COMPANY.map(({ label, to }) => ({ label, to })),
-      { label: "RSS feed", to: "/blog/rss.xml", external: true },
-    ],
+    children: [...COMPANY.map(({ label, to }) => ({ label, to }))],
   },
+];
+const legal: FooterLink[] = [
+  { label: "Privacy", to: "/privacy" },
+  { label: "Terms", to: "/terms" },
+  { label: "Sub-processors", to: "/sub-processors" },
+  { label: "RSS feed", to: "/blog/rss.xml", external: true },
 ];
 </script>
 
@@ -65,7 +89,10 @@ const columns: { label: string; children: FooterLink[] }[] = [
         class="grid flex-[2_1_560px] grid-cols-2 gap-8 text-[0.9375rem] sm:grid-cols-4"
       >
         <div v-for="col in columns" :key="col.label">
-          <div class="text-sm font-medium text-highlighted">{{ col.label }}</div>
+          <ULink v-if="col.to" :to="col.to" class="block text-sm font-medium text-highlighted">{{
+            col.label
+          }}</ULink>
+          <div v-else class="text-sm font-medium text-highlighted">{{ col.label }}</div>
           <ul class="mt-3.5 flex flex-col gap-0.5">
             <li v-for="l in col.children" :key="l.label">
               <ULink :to="l.to" :target="l.target" :external="l.external" class="mk-foot-link">{{
@@ -86,9 +113,17 @@ const columns: { label: string; children: FooterLink[] }[] = [
         </ul>
       </nav>
     </UContainer>
-    <UContainer class="flex items-center justify-between gap-4 pb-6 text-sm text-muted">
+    <UContainer class="flex flex-wrap items-center justify-between gap-4 pb-6 text-sm text-muted">
       <p>© {{ new Date().getFullYear() }} Two Minute Billing</p>
-      <div class="flex items-center gap-4">
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <ULink
+          v-for="l in legal"
+          :key="l.to"
+          :to="l.to"
+          :external="l.external"
+          class="mk-foot-link"
+          >{{ l.label }}</ULink
+        >
         <button v-if="cookies.enabled" type="button" class="mk-foot-link" @click="cookies.show()">
           Cookie settings
         </button>

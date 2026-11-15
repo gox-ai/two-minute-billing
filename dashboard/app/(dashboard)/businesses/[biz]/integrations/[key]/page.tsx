@@ -8,7 +8,7 @@ import {
   type IntegrationDelivery,
 } from "@/lib/api/integrations";
 import { requirePermission } from "@/lib/session";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { LIMITS } from "@/lib/limits";
 import { ErrorState, EmptyState } from "@/components/states";
 import { Alert } from "@/components/ui/alert";

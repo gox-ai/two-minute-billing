@@ -435,12 +435,17 @@ const def = (id: string): MeasureDef => measureById(id)!;
    * would fail the day another measure correctly stopped folding.
    */
   const perGrain = new Set(MEASURES.filter((m) => m.aggregate === "none").map((m) => m.id));
+  // This book has no invoices, usage or orders, so those measures write nothing here. Their
+  // month-grain values are checked in verify:revenue-mix, verify:metric-usage and
+  // verify:metric-orders.
+  const elsewhere = new Set(["invoices", "usage", "orders"]);
+  const heldHere = MEASURES.filter((m) => perGrain.has(m.id) && !elsewhere.has(m.source));
   ok(
     "per-grain: that pass computes ONLY the non-additive measures — the rest are stored once, daily, and folded",
     onlyNone.length > 0 &&
       [...NOT_FOLDABLE].every((id) => perGrain.has(id)) &&
       onlyNone.every((r) => perGrain.has(r.measure)) &&
-      new Set(onlyNone.map((r) => r.measure)).size === perGrain.size,
+      heldHere.every((m) => onlyNone.some((r) => r.measure === m.id)),
   );
 }
 

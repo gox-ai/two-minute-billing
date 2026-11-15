@@ -44,3 +44,4 @@ Gate: `verify:receipts`.
 
 - **2026-10-25** — Module created (0387): sink, batch numberer + job, snapshot, PDF, API,
   portal routes, optional email attachment.
+- **2026-11-11** — The demo seed (`scripts/seed/load.ts`) builds a receipt for each succeeded payment with `createReceiptForPayment`, dated at the payment and numbered in order: its snapshot predates this module.

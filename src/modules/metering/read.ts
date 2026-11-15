@@ -4,6 +4,7 @@ import { divHalfUp, FIXED12_SCALE, fixed12FromNumeric } from "@/platform/fixed";
 import { meters } from "@db/schema";
 import { toMeterShape } from "./meters";
 import {
+  countsAsUsage,
   BUCKET_MS,
   bucketOf,
   ceil15,
@@ -176,6 +177,11 @@ export async function readMeterUsage(
     cutoff?: UsageCutoff;
     /** Only events whose property `key` equals `value` (a property spend limit). Reads raw. */
     where?: { key: string; value: string };
+    /**
+     * Only the events the gate refused for credit, which no usage read counts (the daily
+     * cost fold: they are cost with no usage). Reads raw.
+     */
+    refusedOnly?: boolean;
   },
 ): Promise<MeterUsage> {
   const m = await loadMeter(tx, input.meterId);
@@ -216,7 +222,12 @@ export async function readMeterUsage(
   }
   const inside: Array<[number, number]> = [];
   // Rollups do not group by a limit property, so a filtered read is raw.
-  if (watermarkMs !== null && !input.where && endMs - startMs >= 2 * BUCKET_MS) {
+  if (
+    watermarkMs !== null &&
+    !input.where &&
+    !input.refusedOnly &&
+    endMs - startMs >= 2 * BUCKET_MS
+  ) {
     for (let i = 0; i < points.length - 1; i++) {
       const a = ceil15(points[i]!);
       const b = floor15(points[i + 1]!);
@@ -341,7 +352,7 @@ export async function readMeterUsage(
         where e.business_id = ${m.businessId} and e.customer_id = ${input.customerId}
           and e.event_name = ${m.eventName}
           and e."timestamp" >= ${iso(startMs)}::timestamptz and e."timestamp" < ${iso(endMs)}::timestamptz
-          and e.voided_at is null
+          and ${input.refusedOnly ? sql`e.voided_at is null and e.refused_at is not null` : countsAsUsage("e")}
           and (${rangeSql(sql`e."timestamp"`, raw)}${tail})
           and ${countsTowardMeter("e", m)}
           ${input.where ? sql`and e.properties ->> ${input.where.key}::text = ${input.where.value}::text` : sql``}
@@ -478,7 +489,7 @@ export async function readMeterEvents(
         e.properties ->> ${m.uniqueProperty ?? ""}::text as uniq
       from usage_events e
       where e.business_id = ${m.businessId} and e.customer_id = ${input.customerId}
-        and e.event_name = ${m.eventName} and e.voided_at is null
+        and e.event_name = ${m.eventName} and ${countsAsUsage("e")}
         ${input.from ? sql`and e."timestamp" >= ${iso(input.from)}::timestamptz` : sql``}
         and e."timestamp" < ${iso(input.to)}::timestamptz
         and ${countsTowardMeter("e", m)}

@@ -4,9 +4,9 @@ import * as React from "react";
 import { toast } from "sonner";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
+import { KeptInput } from "@/components/form/kept-input";
 import { SubmitButton } from "@/components/form/submit-button";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { Alert } from "@/components/ui/alert";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -14,6 +14,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -31,9 +32,32 @@ import {
   setCostAction,
 } from "@/app/(dashboard)/settings/model-prices/actions";
 import type { ModelCostOverride, ModelPriceHistory } from "@/lib/api/model-prices";
-import { COST_DIVISORS, formatListPrice, tokenTypeLabel } from "@/lib/model-prices";
-import { fmtDate, fmtDateTime } from "@/lib/format";
+import {
+  COST_DIVISORS_BY_UNIT,
+  PRICE_UNITS,
+  costRowActions,
+  costTierFields,
+  defaultCostDivisor,
+  formatListPrice,
+  listFeedName,
+  perUnitLabel,
+  shortVersion,
+} from "@/lib/model-prices";
+import { providerName } from "@/lib/model-providers";
+import { Capped, PriceType, Tier, TierText } from "@/components/model-prices/tier-text";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { tzLabel } from "@/lib/tz";
+import { useDefaultState } from "@/lib/use-default-state";
 import { useDisplayTz } from "@/components/business-tz";
 import { DateTimeField } from "@/components/form/datetime-field";
 
@@ -42,6 +66,25 @@ export interface ModelKey {
   provider: string | null;
   model: string;
   token_type: string;
+  /** Absent = tokens. */
+  unit?: string | null;
+  quality?: string | null;
+  resolution?: string | null;
+}
+
+/** "gpt-x · openai · Output · hd", with the unit when it is not tokens. */
+function KeyLine({ k }: { k: ModelKey }) {
+  const unit = PRICE_UNITS.find((u) => u.value === (k.unit ?? "token"));
+  return (
+    <>
+      <span className="font-mono">{k.model}</span>
+      {k.provider ? (
+        <span className="text-muted-foreground"> · {providerName(k.provider)}</span>
+      ) : null}{" "}
+      · <PriceType r={k} />
+      {unit && unit.value !== "token" ? ` · ${unit.label}` : ""}
+    </>
+  );
 }
 
 /**
@@ -51,8 +94,23 @@ export interface ModelKey {
  */
 function InstantInput({ name }: { name: string }) {
   const tz = useDisplayTz();
-  return <DateTimeField id={name} name={name} tz={tz} className="w-60" />;
+  return <DateTimeField id={name} name={name} tz={tz} className="w-60" hideZoneHint />;
 }
+
+/** The zone line `DateTimeField` would print, folded into the field's one help line. */
+function useZoneText(): string {
+  const tz = useDisplayTz();
+  const name = tz || "UTC";
+  const offset = tzLabel(tz);
+  return `Time zone: ${name}${offset !== name ? ` (${offset})` : ""}.`;
+}
+
+/** "Per" is the field's label, so the options name the quantity: "1M tokens", "hour of audio". */
+const perOptions = (unit: string) =>
+  (COST_DIVISORS_BY_UNIT[unit] ?? COST_DIVISORS_BY_UNIT.token!).map((d) => ({
+    value: d,
+    label: perUnitLabel(unit, d).replace(/^per /, ""),
+  }));
 
 /** Set your cost → `POST /v1/organization/model_cost_overrides`. */
 export function SetCostDialog({
@@ -74,9 +132,22 @@ export function SetCostDialog({
   defaultModel?: string;
 }) {
   const options = Array.from(new Set(["USD", ...currencies.map((c) => c.toUpperCase())])).sort();
+  const zoneText = useZoneText();
+  // A row's key fixes its unit; free entry picks one, and "Per" follows it.
+  // Follows the row the dialog is opened for.
+  const [unit, setUnit] = useDefaultState(modelKey?.unit ?? "token");
+  const per = perOptions(unit);
+  // A row opened with a tier keeps its tier fields, so the new cost has the same key.
+  const tiers = costTierFields(unit, modelKey);
+  // Held in state: React resets the form after a failed submit, and a select would go back
+  // to its default.
+  const [divisor, setDivisor] = useDefaultState(defaultCostDivisor(unit));
+  const [currency, setCurrency] = React.useState(
+    options.includes(defaultCurrency.toUpperCase()) ? defaultCurrency.toUpperCase() : "USD",
+  );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="md">
+      <DialogContent size="md" className="flex max-h-[85vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Set your cost</DialogTitle>
           <DialogDescription>
@@ -87,91 +158,154 @@ export function SetCostDialog({
         <ActionForm
           action={setCostAction}
           onSuccess={() => onOpenChange(false)}
-          className="space-y-3"
+          className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          {modelKey ? (
-            <>
-              <input type="hidden" name="provider" value={modelKey.provider ?? ""} />
-              <input type="hidden" name="model" value={modelKey.model} />
-              <input type="hidden" name="token_type" value={modelKey.token_type} />
-              <p className="text-sm">
-                <span className="font-mono">{modelKey.model}</span>
-                {modelKey.provider ? (
-                  <span className="text-muted-foreground"> · {modelKey.provider}</span>
-                ) : null}{" "}
-                · {tokenTypeLabel(modelKey.token_type)}
-              </p>
-            </>
-          ) : (
-            <>
-              <Field
-                name="model"
-                label="Model"
-                required
-                help="The model value that your usage events send."
-              >
-                <Input
+          {/* The fields scroll; the title and the buttons stay in view. */}
+          <div className="-mx-6 min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-0.5">
+            {modelKey ? (
+              <>
+                <input type="hidden" name="provider" value={modelKey.provider ?? ""} />
+                <input type="hidden" name="model" value={modelKey.model} />
+                <input type="hidden" name="token_type" value={modelKey.token_type} />
+                <input type="hidden" name="unit" value={unit} />
+                <p className="text-sm">
+                  <KeyLine k={{ ...modelKey, quality: null, resolution: null }} />
+                </p>
+              </>
+            ) : (
+              <>
+                <Field
                   name="model"
+                  label="Model"
                   required
-                  maxLength={200}
-                  defaultValue={defaultModel}
-                  className="font-mono"
+                  help="The model value that your usage events send."
+                >
+                  <KeptInput
+                    name="model"
+                    required
+                    maxLength={200}
+                    defaultValue={defaultModel}
+                    className="font-mono"
+                  />
+                </Field>
+                <Field
+                  name="token_type"
+                  label="Price type"
+                  required
+                  help={
+                    <>
+                      For example <TierText>input</TierText>, <TierText>output</TierText> or{" "}
+                      <TierText>cache_read</TierText>.
+                    </>
+                  }
+                >
+                  <KeptInput name="token_type" required maxLength={100} className="font-mono" />
+                </Field>
+                <Field name="unit" label="Unit" className="w-72 max-w-full">
+                  <SelectField
+                    name="unit"
+                    value={unit}
+                    onValueChange={(u) => {
+                      setUnit(u);
+                      setDivisor(defaultCostDivisor(u));
+                    }}
+                    ariaLabel="Unit"
+                    options={PRICE_UNITS.map((u) => ({ value: u.value, label: u.label }))}
+                  />
+                </Field>
+                <Field
+                  name="provider"
+                  label="Provider"
+                  help="Optional. Leave empty to use this cost for the model under each provider."
+                >
+                  <KeptInput name="provider" maxLength={100} className="font-mono" />
+                </Field>
+              </>
+            )}
+            {tiers.quality || tiers.resolution ? (
+              <div className="flex flex-wrap gap-3">
+                {tiers.quality ? (
+                  <Field
+                    name="quality"
+                    label="Quality"
+                    className="min-w-0 flex-[1_1_10rem]"
+                    help={
+                      <>
+                        Optional. For example <TierText>hd</TierText>.
+                      </>
+                    }
+                  >
+                    <KeptInput
+                      name="quality"
+                      maxLength={40}
+                      defaultValue={modelKey?.quality ?? ""}
+                      className="font-mono"
+                    />
+                  </Field>
+                ) : null}
+                {tiers.resolution ? (
+                  <Field
+                    name="resolution"
+                    label="Resolution"
+                    className="min-w-0 flex-[1_1_10rem]"
+                    help={
+                      <>
+                        Optional. For example <TierText>1024x1024</TierText>.
+                      </>
+                    }
+                  >
+                    <KeptInput
+                      name="resolution"
+                      maxLength={40}
+                      defaultValue={modelKey?.resolution ?? ""}
+                      className="font-mono"
+                    />
+                  </Field>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-3">
+              <Field name="cost" label="Cost" required className="w-30">
+                <KeptInput name="cost" required inputMode="decimal" className="tabular-nums" />
+              </Field>
+              <Field name="quantity_divisor" label="Per" className="min-w-30 flex-1">
+                {/* Keyed by unit: the options change with it, and the select would keep none. */}
+                <SelectField
+                  key={unit}
+                  name="quantity_divisor"
+                  value={divisor}
+                  onValueChange={(d) => (d ? setDivisor(d) : undefined)}
+                  ariaLabel="Per"
+                  options={per}
                 />
               </Field>
-              <Field
-                name="token_type"
-                label="Token type"
-                required
-                help="For example input, output or cache_read."
-              >
-                <Input name="token_type" required maxLength={100} className="font-mono" />
+              <Field name="currency" label="Currency" className="w-30">
+                <SelectField
+                  name="currency"
+                  value={currency}
+                  onValueChange={setCurrency}
+                  ariaLabel="Currency"
+                  options={options.map((c) => ({ value: c, label: c }))}
+                />
               </Field>
-              <Field
-                name="provider"
-                label="Provider"
-                help="Optional. Leave empty to use this cost for the model under each provider."
-              >
-                <Input name="provider" maxLength={100} className="font-mono" />
-              </Field>
-            </>
-          )}
-          <div className="flex flex-wrap gap-3">
-            <Field name="cost" label="Cost" required className="min-w-0 flex-[1_1_10rem]">
-              <Input name="cost" required inputMode="decimal" className="tabular-nums" />
+            </div>
+            <Field
+              name="effective_from"
+              label="Starts"
+              help={`${zoneText} Leave empty to start now.`}
+            >
+              <InstantInput name="effective_from" />
             </Field>
-            <Field name="quantity_divisor" label="Per" className="w-36">
-              <SelectField
-                name="quantity_divisor"
-                defaultValue="1000000"
-                ariaLabel="Per"
-                options={COST_DIVISORS.map((d) => ({ value: d.value, label: d.label }))}
-              />
-            </Field>
-            <Field name="currency" label="Currency" className="w-32">
-              <SelectField
-                name="currency"
-                defaultValue={
-                  options.includes(defaultCurrency.toUpperCase())
-                    ? defaultCurrency.toUpperCase()
-                    : "USD"
-                }
-                ariaLabel="Currency"
-                options={options.map((c) => ({ value: c, label: c }))}
-              />
+            <Field name="note" label="Note" help="Optional. For example, the contract name.">
+              <KeptInput name="note" maxLength={500} />
             </Field>
           </div>
-          <Field name="effective_from" label="Starts" help="Leave empty to start now.">
-            <InstantInput name="effective_from" />
-          </Field>
-          <Field name="note" label="Note" help="Optional. For example, the contract name.">
-            <Input name="note" maxLength={500} />
-          </Field>
-          <div className="flex justify-end gap-2 pt-1">
+          <DialogFooter className="pt-1">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <SubmitButton>Save</SubmitButton>
-          </div>
+            <SubmitButton>Save cost</SubmitButton>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>
@@ -188,14 +322,15 @@ export function EndCostDialog({
   onOpenChange: (o: boolean) => void;
   cost: ModelCostOverride;
 }) {
+  const zoneText = useZoneText();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>End your cost</DialogTitle>
           <DialogDescription>
-            After the end, cost and margin for {cost.model} use the list price. A price that bills
-            on your cost uses the list price too.
+            After the end, cost and margin for {cost.model} use the list price, if the list has one.
+            A price that bills on your cost uses the list price too.
           </DialogDescription>
         </DialogHeader>
         <ActionForm
@@ -204,15 +339,15 @@ export function EndCostDialog({
           className="space-y-3"
         >
           <input type="hidden" name="id" value={cost.id} />
-          <Field name="effective_to" label="Ends" help="Leave empty to end it now.">
+          <Field name="effective_to" label="Ends" help={`${zoneText} Leave empty to end it now.`}>
             <InstantInput name="effective_to" />
           </Field>
-          <div className="flex justify-end gap-2 pt-1">
+          <DialogFooter className="pt-1">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <SubmitButton>End cost</SubmitButton>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>
@@ -233,11 +368,11 @@ export function PriceHistorySheet({
 }) {
   type Loaded =
     | { status: "error"; message: string; nonce: number }
-    | { status: "ok"; data: ModelPriceHistory; nonce: number };
+    | { status: "ok"; data: ModelPriceHistory; nonce: number; at: number };
   const [loaded, setLoaded] = React.useState<Loaded | null>(null);
   const [toDelete, setToDelete] = React.useState<ModelCostOverride | null>(null);
+  const [toEnd, setToEnd] = React.useState<ModelCostOverride | null>(null);
   const [nonce, setNonce] = React.useState(0);
-  const [now] = React.useState(() => Date.now());
   const tz = useDisplayTz();
   const zone = tzLabel(tz);
   const state = loaded && loaded.nonce === nonce ? loaded : ({ status: "loading" } as const);
@@ -249,7 +384,7 @@ export function PriceHistorySheet({
       if (!live) return;
       setLoaded(
         r.ok
-          ? { status: "ok", data: r.data, nonce }
+          ? { status: "ok", data: r.data, nonce, at: r.at }
           : { status: "error", message: r.message, nonce },
       );
     });
@@ -260,16 +395,16 @@ export function PriceHistorySheet({
 
   const prices = state.status === "ok" ? state.data.prices : [];
   const costs = state.status === "ok" ? state.data.costs : [];
+  // Per load, so a cost that was ended a moment ago reads as ended.
+  const now = state.status === "ok" ? state.at : 0;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-xl">
+      <SheetContent side="right" className="w-full sm:max-w-2xl">
         <SheetHeader className="pr-12">
           <SheetTitle>Price history</SheetTitle>
           <SheetDescription>
-            <span className="font-mono">{modelKey.model}</span>
-            {modelKey.provider ? ` · ${modelKey.provider}` : ""} ·{" "}
-            {tokenTypeLabel(modelKey.token_type)}
+            <KeyLine k={modelKey} />
           </SheetDescription>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 text-sm">
@@ -282,52 +417,79 @@ export function PriceHistorySheet({
               <section className="flex flex-col gap-2">
                 <h3 className="text-sm font-medium">List price</h3>
                 {prices.length === 0 ? (
-                  <p className="text-muted-foreground">The price list has no price for it.</p>
+                  <p className="text-muted-foreground">
+                    The price list has no price for this model.
+                  </p>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border bg-card">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/40 text-xs text-muted-foreground">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">Price</th>
-                          <th className="px-3 py-2 text-left font-medium">Source date</th>
-                          <th className="px-3 py-2 text-left font-medium">Applies from ({zone})</th>
-                          <th className="px-3 py-2 text-left font-medium">Version</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {prices.map((p) => (
-                          <tr key={p.id} className="border-t">
-                            <td className="px-3 py-2 tabular-nums">
-                              {formatListPrice(
-                                p.unit_amount_decimal,
-                                p.currency,
-                                p.quantity_divisor,
-                              )}
-                              <div className="font-mono text-xs text-muted-foreground">{p.id}</div>
-                            </td>
-                            <td className="px-3 py-2">
-                              {p.source_effective_from
-                                ? fmtDate(p.source_effective_from, "UTC")
-                                : "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              {p.effective_from
-                                ? fmtDateTime(p.effective_from, tz)
-                                : "Before we tracked it"}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-xs">
-                              {p.source_version ?? "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <>
+                    {/* Widths in the 638px sheet body: 184 + 108 + 174 + 109 = 575. */}
+                    <div className="overflow-hidden rounded-xl border bg-card">
+                      <Table phone="stack" className="[--phone-row-x:0.75rem]">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Price</TableHead>
+                            <TableHead>Source date</TableHead>
+                            <TableHead>Applies from ({zone})</TableHead>
+                            <TableHead>Source</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {prices.map((p) => (
+                            <TableRow key={p.id}>
+                              <TableCell className="py-2">
+                                {formatListPrice(
+                                  p.unit_amount_decimal,
+                                  p.currency,
+                                  p.quantity_divisor,
+                                  p.unit ?? "token",
+                                )}
+                                {p.quality || p.resolution ? (
+                                  <Capped
+                                    className="max-w-40 text-xs text-muted-foreground"
+                                    text={<Tier quality={p.quality} resolution={p.resolution} />}
+                                  />
+                                ) : null}
+                                {/* The id an invoice line cites; capped, so it sets no width. */}
+                                <div className="max-w-40 text-muted-foreground">
+                                  <MiddleEllipsis value={p.id} className="text-xs" />
+                                </div>
+                              </TableCell>
+                              <TableCell className="py-2">
+                                {p.source_effective_from
+                                  ? fmtDate(p.source_effective_from, "UTC")
+                                  : "—"}
+                              </TableCell>
+                              <TableCell className="py-2">
+                                {p.effective_from
+                                  ? fmtDateTime(p.effective_from, tz)
+                                  : "Before we tracked it"}
+                              </TableCell>
+                              <TableCell className="py-2">
+                                {listFeedName(p.source)}
+                                {p.source_version ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="w-fit font-mono text-xs text-muted-foreground">
+                                        {shortVersion(p.source_version)}
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent className="font-mono text-xs break-all">
+                                      {p.source_version}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                ) : null}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Source date is the date the source gives. Applies from is when we started to
+                      bill with the price. Usage before that time keeps the earlier price.
+                    </p>
+                  </>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Source date is the date the source gives. Applies from is when we started to bill
-                  with the price. Usage before that time keeps the earlier price.
-                </p>
               </section>
 
               <section className="flex flex-col gap-2">
@@ -335,37 +497,50 @@ export function PriceHistorySheet({
                 {costs.length === 0 ? (
                   <p className="text-muted-foreground">You did not set a cost for this model.</p>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border bg-card">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/40 text-xs text-muted-foreground">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">Cost</th>
-                          <th className="px-3 py-2 text-left font-medium">Starts ({zone})</th>
-                          <th className="px-3 py-2 text-left font-medium">Ends ({zone})</th>
-                          <th className="px-3 py-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
+                  // Widths in the 638px sheet body: 216 + 161 + 161 + 86 = 624.
+                  <div className="overflow-hidden rounded-xl border bg-card">
+                    <Table phone="stack" className="[--phone-row-x:0.75rem]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Cost</TableHead>
+                          <TableHead>Starts ({zone})</TableHead>
+                          <TableHead>Ends ({zone})</TableHead>
+                          <TableHead />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
                         {costs.map((c) => {
-                          const notStarted = Date.parse(c.effective_from) > now;
+                          const can = costRowActions(c, now);
                           return (
-                            <tr key={c.id} className="border-t align-top">
-                              <td className="px-3 py-2 tabular-nums">
+                            <TableRow key={c.id}>
+                              <TableCell className="py-2">
                                 {formatListPrice(
                                   c.unit_amount_decimal,
                                   c.currency,
                                   c.quantity_divisor,
+                                  c.unit ?? "token",
                                 )}
-                                {c.note ? (
-                                  <div className="text-xs text-muted-foreground">{c.note}</div>
+                                {c.quality || c.resolution ? (
+                                  <Capped
+                                    className="max-w-48 text-xs text-muted-foreground"
+                                    text={<Tier quality={c.quality} resolution={c.resolution} />}
+                                  />
                                 ) : null}
-                              </td>
-                              <td className="px-3 py-2">{fmtDateTime(c.effective_from, tz)}</td>
-                              <td className="px-3 py-2">
+                                {c.note ? (
+                                  <Capped
+                                    className="max-w-48 text-xs text-muted-foreground"
+                                    text={c.note}
+                                  />
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="py-2">
+                                {fmtDateTime(c.effective_from, tz)}
+                              </TableCell>
+                              <TableCell className="py-2">
                                 {c.effective_to ? fmtDateTime(c.effective_to, tz) : "No end"}
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                {canManage && notStarted ? (
+                              </TableCell>
+                              <TableCell className="py-2 text-right">
+                                {canManage && can.canDelete ? (
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -375,19 +550,39 @@ export function PriceHistorySheet({
                                   >
                                     Delete
                                   </Button>
+                                ) : canManage && can.canEnd ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setToEnd(c)}
+                                  >
+                                    End
+                                  </Button>
                                 ) : null}
-                              </td>
-                            </tr>
+                              </TableCell>
+                            </TableRow>
                           );
                         })}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                   </div>
                 )}
               </section>
             </>
           )}
         </div>
+        {toEnd ? (
+          <EndCostDialog
+            open
+            cost={toEnd}
+            onOpenChange={(o) => {
+              if (o) return;
+              setToEnd(null);
+              setNonce((n) => n + 1);
+            }}
+          />
+        ) : null}
         {toDelete ? (
           <ConfirmDialog
             open

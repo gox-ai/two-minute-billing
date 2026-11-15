@@ -12,6 +12,7 @@
  * attributes once, so each open removes the old copy and loads the script again. A close
  * of the form arrives as a `CLOSE_IFRAME` message from the form's origin.
  */
+import { acceptFailure, contactBusiness, type AcceptResponse } from "./gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "./gateway-sdk";
 
 const SCRIPT = {
@@ -24,12 +25,6 @@ const SCRIPT = {
     origin: "https://js.authorize.net",
   },
 } as const;
-
-interface AcceptResponse {
-  opaqueData?: { dataDescriptor?: string; dataValue?: string };
-  messages?: { resultCode?: string; message?: Array<{ code?: string; text?: string }> };
-  customerInformation?: { firstName?: string; lastName?: string };
-}
 
 let opened = 0;
 
@@ -52,7 +47,7 @@ export function openAuthorizenetAccept(
   if (!apiLoginId || !clientKey)
     return Promise.resolve({
       status: "failed",
-      message: "We could not open the card form. Contact the business.",
+      message: `We could not open the card form. ${contactBusiness(context.businessName)}`,
     });
 
   return new Promise((resolve) => {
@@ -76,12 +71,8 @@ export function openAuthorizenetAccept(
     w[handlerName] = (res: AcceptResponse) => {
       const value = res?.opaqueData?.dataValue;
       if (res?.messages?.resultCode !== "Ok" || !value) {
-        finish({
-          status: "failed",
-          message: bank
-            ? "We could not read the bank account details. Try again. If the problem continues, contact the business."
-            : "We could not read the card details. Try again. If the problem continues, contact the business.",
-        });
+        // Authorize.net's own message texts, kept whole.
+        finish({ status: "failed", message: acceptFailure(res, bank, context.businessName) });
         return;
       }
       finish({
@@ -145,7 +136,7 @@ export function openAuthorizenetAccept(
     script.onerror = () =>
       finish({
         status: "failed",
-        message: "We could not connect to Authorize.net. Check your connection. Then try again.",
+        message: "We could not load the payment form. Reload the page. Then try again.",
       });
     document.body.appendChild(script);
   });

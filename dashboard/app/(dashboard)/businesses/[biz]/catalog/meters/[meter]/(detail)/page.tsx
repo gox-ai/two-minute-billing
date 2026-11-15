@@ -1,8 +1,11 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
+import { listBusinesses, isApiNotFound, listPrices, listProducts } from "@/lib/api";
 import { countMeterEventsLastDay, getMeter, listUsageEvents } from "@/lib/api/meters";
+import { listCreditUnits } from "@/lib/api/credits";
+import { costSentence, creditCostRefusal, type UnitNames } from "@/lib/meter-credit-cost";
 import { allows, requirePermission } from "@/lib/session";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { meterAggregationLabel } from "@/lib/meters";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState, ErrorState } from "@/components/states";
@@ -11,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { IdChip, StatusChip } from "@/components/patterns/chip";
 import { KeyValueGrid } from "@/components/patterns/key-value-grid";
 import {
+  Facts,
   FigureTile,
   FigureTiles,
   RecordCard,
@@ -22,7 +26,12 @@ import {
 import { PageRefresh } from "@/components/patterns/page-refresh";
 import { MoreMenu, MoreSection } from "@/components/patterns/more-menu";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 import { ArchiveMeterButton, SendTestEventDialog } from "@/components/catalog/meter-actions";
+import {
+  MeterCreditCostButton,
+  RemoveCreditCostButton,
+} from "@/components/catalog/meter-credit-cost";
 import { UsageEventsTable } from "@/components/catalog/usage-events-table";
 import { Activity } from "lucide-react";
 
@@ -46,22 +55,20 @@ export default async function MeterDetailPage({
   try {
     [businesses, m] = await Promise.all([listBusinesses(), getMeter(biz, meter)]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Meter" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="meter"
+          back={{ label: "View meters", href: `/businesses/${biz}/catalog/meters` }}
+          retry
         />
       </>
     );
   }
-  if (!m)
-    return (
-      <>
-        <PageHeader title="Meter" />
-        <ErrorState title="Not found" description={`We could not find the meter ${meter}.`} />
-      </>
-    );
+  if (!m) notFound();
 
   const business = businesses.data.find((b) => b.id === biz);
   const tz = business?.timezone ?? null;
@@ -82,6 +89,33 @@ export default async function MeterDetailPage({
       .catch(() => null),
   ]);
 
+  // The credit cost card: units with no money value, the plans, and a price that bills the
+  // meter in money (the API refuses a cost then). Each read degrades on its own.
+  const [units, prices, products] = await Promise.all([
+    listCreditUnits(biz).catch(() => null),
+    canManage ? listPrices(biz).catch(() => null) : Promise.resolve(null),
+    canManage || m.credit_cost?.overrides.length
+      ? listProducts(biz).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const unitNames: Record<string, UnitNames> = Object.fromEntries(
+    (units?.data ?? []).map((u) => [u.id, { name: u.name, plural: u.plural_name }]),
+  );
+  const costUnits = (units?.data ?? [])
+    .filter((u) => u.status === "active" && u.minor_per_unit === null)
+    .map((u) => ({ id: u.id, name: u.name, plural_name: u.plural_name }));
+  const productName = new Map((products?.data ?? []).map((p) => [p.id, p.name]));
+  const planOptions = (products?.data ?? [])
+    .filter((p) => (p.kind ?? "plan") === "plan")
+    .map((p) => ({ value: p.id, label: p.name }));
+  const billingPrice = (prices?.data ?? []).find((p) => p.meter === m.id && p.active !== false);
+  const cost = m.credit_cost ?? null;
+  const refusal = creditCostRefusal(m);
+  const costUnitNames = cost
+    ? (unitNames[cost.unit] ?? { name: cost.unit, plural: cost.unit })
+    : null;
+  const subscriptionCosts = (cost?.overrides ?? []).filter((o) => "subscription" in o).length;
+
   const filters = Object.entries(m.filters);
   const tabHref = (t: string) => (t === "recent" ? href : `${href}?tab=${t}`);
 
@@ -90,7 +124,7 @@ export default async function MeterDetailPage({
       <RecordCrumbs
         items={[
           { label: business?.name ?? biz, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: "Meters", href: base },
           { label: m.name },
         ]}
@@ -191,8 +225,107 @@ export default async function MeterDetailPage({
         </Row>
       </Zone>
 
+      <Zone title="Credits">
+        <Row span="12">
+          <RecordCard
+            id="credit-cost"
+            title="Credit cost"
+            meta={cost ? "Paid with credits" : undefined}
+            actions={
+              canManage && !refusal && (cost || (!billingPrice && costUnits.length > 0)) ? (
+                <>
+                  <MeterCreditCostButton
+                    biz={biz}
+                    meter={m.id}
+                    aggregation={m.aggregation}
+                    valueProperty={m.value_property}
+                    cost={cost}
+                    units={costUnits}
+                    plans={planOptions}
+                  />
+                  {cost ? <RemoveCreditCostButton biz={biz} meter={m.id} /> : null}
+                </>
+              ) : null
+            }
+          >
+            {cost && costUnitNames ? (
+              <div className="flex flex-col gap-3">
+                <Facts
+                  rows={[
+                    { label: "Credit unit", value: costUnitNames.plural },
+                    {
+                      label: "Cost",
+                      value: costSentence(
+                        cost.credits_per_unit,
+                        costUnitNames,
+                        m.aggregation,
+                        m.value_property,
+                      ),
+                    },
+                    ...cost.overrides.flatMap((o) =>
+                      "product" in o
+                        ? [
+                            {
+                              label: productName.get(o.product) ?? o.product,
+                              value: costSentence(
+                                o.credits_per_unit,
+                                costUnitNames,
+                                m.aggregation,
+                                m.value_property,
+                              ),
+                            },
+                          ]
+                        : [],
+                    ),
+                  ]}
+                />
+                {subscriptionCosts > 0 ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    {subscriptionCosts === 1
+                      ? "1 subscription has its own cost."
+                      : `${subscriptionCosts} subscriptions have their own cost.`}{" "}
+                    You can change them through the API.
+                  </p>
+                ) : null}
+              </div>
+            ) : refusal ? (
+              <p className="m-0 text-sm text-muted-foreground">{refusal}</p>
+            ) : billingPrice ? (
+              <Alert tone="neutral">
+                A price bills this meter in money, so its usage cannot also be paid with credits. To
+                use credits, archive that price first.{" "}
+                <Link
+                  href={`/businesses/${biz}/catalog/products/${billingPrice.product}/prices/${billingPrice.id}`}
+                  className="text-primary hover:underline"
+                >
+                  View price
+                </Link>
+              </Alert>
+            ) : costUnits.length === 0 ? (
+              <p className="m-0 text-sm text-muted-foreground">
+                No credit cost. To pay this meter with credits, create a credit unit with no money
+                value first.{" "}
+                {canManage ? (
+                  <Link
+                    href={`/businesses/${biz}/settings/credit-units/new`}
+                    className="text-primary hover:underline"
+                  >
+                    Create a credit unit
+                  </Link>
+                ) : null}
+              </p>
+            ) : (
+              <p className="m-0 text-sm text-muted-foreground">
+                No credit cost. Events of this meter take no credits.
+              </p>
+            )}
+          </RecordCard>
+        </Row>
+      </Zone>
+
       <Zone title="Events">
         <nav aria-label="Events" className={SEGMENT_TRACK}>
+          <SegmentIndicator />
           <Link href={tabHref("recent")} className={segmentItem(tab === "recent")}>
             Recent events
           </Link>
@@ -256,14 +389,16 @@ export default async function MeterDetailPage({
                 events={events.data}
                 tz={tz}
                 valueProperty={m.value_property}
+                units={unitNames}
               />
             )}
           </RecordCard>
         </Row>
       </Zone>
-      {canManage ? (
+      {/* A meter that credits pay is not billed through a price. */}
+      {canManage && !cost ? (
         <p className="text-sm text-muted-foreground">
-          To bill this meter, add a price with the Usage model to a plan or addon and select this
+          To bill this meter, add a price with the Usage model to a plan or add-on and select this
           meter in “Bill from a meter”.{" "}
           <Button asChild variant="link" className="h-auto p-0">
             <Link href={`/businesses/${biz}/catalog/plans`}>View plans</Link>

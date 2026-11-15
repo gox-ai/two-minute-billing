@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ChevronDown, CirclePlus } from "lucide-react";
+import { ADD_METHOD_ANCHOR, OPEN_ADD_METHOD_EVENT } from "./section-link";
 
 /**
  * "Add a payment method", as a disclosure rather than a permanently-open form.
@@ -32,10 +33,17 @@ export function AddMethodDisclosure({
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const panelId = React.useId();
+  // "Add a payment method" / "Update payment method" elsewhere on the page opens this.
+  React.useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_ADD_METHOD_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ADD_METHOD_EVENT, onOpen);
+  }, []);
 
   return (
     <>
       <button
+        id={ADD_METHOD_ANCHOR}
         type="button"
         aria-expanded={open}
         aria-controls={panelId}

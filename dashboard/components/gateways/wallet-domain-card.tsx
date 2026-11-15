@@ -87,7 +87,7 @@ export function WalletDomainCard({
           />
           {/* Enabled with the field EMPTY: blank is the normal case, and the server
               resolves the storefront domain. */}
-          <Button onClick={handleRegister} disabled={busy}>
+          <Button type="button" onClick={handleRegister} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Wallet className="size-3.5" />}
             <span className="ml-1">Register &amp; check</span>
           </Button>

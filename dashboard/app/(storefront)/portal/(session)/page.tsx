@@ -1,21 +1,23 @@
 import { cache } from "react";
 import Link from "next/link";
 import {
-  Clock,
   CreditCard,
   Download,
   FileText,
   Info,
+  Package,
   LogOut,
   ReceiptText,
   ShoppingBag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
-import { Chip, StatusChip } from "@/components/patterns/chip";
+import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import {
   portalMe,
   portalListPaymentMethods,
@@ -24,22 +26,28 @@ import {
   portalListPurchases,
   portalListSubscriptions,
   portalListShippingAddresses,
-  portalLinkNotice,
   portalListReceipts,
   portalListRequests,
   portalGetCreditRunway,
   portalGetCredits,
   portalListSpendLimits,
 } from "@/lib/portal-api";
-import { readPortalBusiness, readStorefrontToken } from "@/lib/storefront-session";
-import { SafeHtml } from "@/components/safe-html";
+import { readStorefrontToken } from "@/lib/storefront-session";
 import {
   portalRemoveBackupAction,
   portalSetBackupAction,
   portalSetDefaultAction,
   portalLogoutAction,
 } from "./actions";
-import { EmailCodeSignIn } from "./email-code-sign-in";
+import { ExpiredCard, PortalContact, SignedOutCard } from "./portal-dead-ends";
+import {
+  buyerInvoiceState,
+  METHOD_PROBLEM_LABEL,
+  methodProblem,
+  normalizeMethodWords,
+  PAYABLE_STATUSES,
+  payableNow,
+} from "./portal-state";
 import { RemovePaymentMethod } from "./remove-method";
 import { AddCard } from "./add-card";
 import { AddMethodDisclosure } from "./add-method-disclosure";
@@ -54,7 +62,6 @@ import {
   BrandTheme,
   Glyph,
   ProductGlyph,
-  NoticeCard,
   Row,
   RowList,
   StorefrontFooter,
@@ -66,22 +73,21 @@ import {
   MethodGlyph,
   PlanCard,
   SetupCard,
+  lastFailure,
   methodLabel,
   mandateState,
+  setupNeeds,
 } from "./portal-chrome";
 import { PortalPanes } from "./portal-panes";
 import { PortalCreditsSection } from "./portal-credits";
 import { PortalUsageControlsSection } from "./portal-usage-controls";
 import { isPortalTab, type PortalTab } from "./portal-tabs";
 
-/**
- * Mirrors `OPEN_INVOICE_STATUSES` in src/modules/invoicing/status.ts — the statuses
- * where the engine will actually take money. Rendering "Pay now" on anything else
- * offers a control that is refused the moment it is pressed.
- */
-const PAYABLE_STATUSES = new Set(["posted", "payment_due", "not_paid"]);
+/** Buyer invoice tones on the chip palette. */
+const CHIP_TONE = { success: "green", warning: "tan", error: "red", neutral: "gray" } as const;
 import { getCountries } from "@/lib/api/geo";
 import { accountHolderName } from "@/lib/names";
+import { canChargeMethod } from "@/lib/payment-method-status";
 import { SetupReturn } from "./setup-return";
 import { PaymentReturn } from "./payment-return";
 
@@ -111,68 +117,6 @@ export async function generateMetadata() {
 }
 
 /**
- * Shown when there is no session cookie at all — someone opened `/portal` directly, or
- * their cookie expired. Worded identically to the invalid-token card below, because
- * from the buyer's side the two are the same situation and the difference is ours to
- * care about, not theirs.
- *
- * There is deliberately NO self-serve way back in, so the copy says "ask for a new link"
- * and stops there rather than pointing anywhere. `/portal/request` used to be the answer
- * and was deleted on 2026-08-30 — a single-use link a buyer requests by email is spent by
- * the mail scanner before they click it. See `src/modules/customer-portal/README.md`
- * § "Self-serve access". Do not add a link here until something exists to link to.
- */
-async function ExpiredCard() {
-  // The business comes from the link's own failed exchange or the last session on this
-  // browser (`rememberPortalBusiness`); with neither, the default copy stands alone.
-  const biz = await readPortalBusiness();
-  const notice = biz ? await portalLinkNotice(biz) : null;
-  const card = (
-    <NoticeCard icon={<Clock />} title="This link is not valid or is expired">
-      {notice?.message_html ? (
-        <SafeHtml
-          html={notice.message_html}
-          className="[&_a]:text-primary [&_a]:underline [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground [&_ol]:list-inside [&_ol]:list-decimal [&_p]:my-2 [&_ul]:list-inside [&_ul]:list-disc"
-        />
-      ) : (
-        "Billing links are valid for a limited time. Ask for a new link."
-      )}
-      {biz && notice?.email_code ? <EmailCodeSignIn business={biz} /> : null}
-    </NoticeCard>
-  );
-  if (!notice) return card;
-  return (
-    <BrandTheme brand={notice.business}>
-      <StorefrontHeader brand={notice.business} eyebrow="Billing portal" />
-      {card}
-    </BrandTheme>
-  );
-}
-
-/**
- * F-22: what a buyer sees right after pressing "Sign out" — landing on this same route
- * with no cookie left. Reusing `ExpiredCard`'s copy there would tell someone who just
- * chose to leave that their link "expired", which reads as a failure of something that
- * worked exactly as asked. Same empty state underneath (no session, nothing to show),
- * different word for why it's empty. No link back in, same as `ExpiredCard` — there is
- * still no self-serve way back in; the buyer needs a fresh link either way.
- */
-async function SignedOutCard() {
-  // Phase 4: where the business offers sign-in by code, the way back is on this card.
-  const biz = await readPortalBusiness();
-  const notice = biz ? await portalLinkNotice(biz) : null;
-  const codeOn = !!biz && !!notice?.email_code;
-  return (
-    <NoticeCard icon={<LogOut />} title="You are signed out">
-      {codeOn
-        ? "Your billing session ended. To return, sign in with your email."
-        : "Your billing session ended. To return, ask for a new link."}
-      {codeOn ? <EmailCodeSignIn business={biz!} /> : null}
-    </NoticeCard>
-  );
-}
-
-/**
  * Buyer-facing billing portal (P14). Everything on this page is authed by the
  * customer-scoped portal token, which since W1 lives in an HttpOnly cookie set by
  * `/portal/s/<token>` rather than in this page's URL — the org API key is never used
@@ -192,6 +136,8 @@ export default async function PortalPage({
 }: {
   searchParams: Promise<{
     signed_out?: string;
+    /** `expired`: the continue page's link was refused. */
+    link?: string;
     /** Narrow-screen section filter — see `portal-panes.tsx`. */
     tab?: string;
     /** Gateway redirect returns. They also decide which section the buyer lands in. */
@@ -208,6 +154,7 @@ export default async function PortalPage({
 }) {
   const {
     signed_out,
+    link,
     tab,
     setup,
     invoices: invoicesParam,
@@ -234,7 +181,11 @@ export default async function PortalPage({
     // `?signed_out=1` only ever comes from `portalLogoutAction`'s own redirect — an
     // attacker-crafted URL carrying it lands on a session-less page either way, so
     // there is nothing to gain from spoofing it and nothing to check.
-    return signed_out ? <SignedOutCard /> : <ExpiredCard />;
+    return signed_out ? (
+      <SignedOutCard />
+    ) : (
+      <ExpiredCard reason={link === "expired" ? "link" : "session"} />
+    );
   }
 
   // The buyer's address form needs the same country data the operator forms use.
@@ -299,7 +250,7 @@ export default async function PortalPage({
   /** Open and processing payment requests the business sent this buyer. */
   const requests = reqs.ok && reqs.data ? reqs.data.data : [];
   /** Saved methods a request can charge: a dead instrument would only be refused. */
-  const payMethods = methods.filter((pm) => !pm.status || pm.status === "valid");
+  const payMethods = methods.filter((pm) => canChargeMethod(pm.status));
   /** Live shipping addresses (0360). */
   const shippingAddresses = ships.ok && ships.data ? ships.data.data : [];
   /** Shipping shows when the business collects it, or this customer already has a book. */
@@ -356,6 +307,16 @@ export default async function PortalPage({
     (i) => PAYABLE_STATUSES.has(i.status) && !i.payment_in_flight,
   ).length;
 
+  /** Invoices "Pay" can open a checkout for: owed, open, not moving, under the card limit. */
+  const payable = invoices.filter(payableNow);
+  /** The balance card carries the filled "Pay $X" when exactly one invoice is payable. */
+  const balancePay = payable.length === 1 ? payable[0] : null;
+  const setupShown = setupNeeds({ me: meData, methods, invoices, subs: subscriptions, tz }) != null;
+  /** A failed charge or a broken primary: open the add form on the methods pane. */
+  const methodTrouble =
+    lastFailure(invoices, methods) != null ||
+    methods.some((m) => m.is_default && methodProblem(m, tz) != null);
+
   /**
    * Which section a narrow screen opens on. Only matters below 1000px — above it every
    * section is on screen at once and this is ignored.
@@ -378,9 +339,7 @@ export default async function PortalPage({
              actually rendered, so these are preferences, not guarantees. */
           invoices.length > 0
           ? "invoices"
-          : subscriptions.length > 0
-            ? "plan"
-            : "methods";
+          : "plan";
 
   return (
     <BrandTheme brand={brand}>
@@ -389,6 +348,7 @@ export default async function PortalPage({
 
       {meData.return_url ? (
         <a
+          data-document-link
           href={meData.return_url}
           rel="noopener"
           className="mb-2 inline-flex text-sm text-primary hover:underline"
@@ -410,7 +370,9 @@ export default async function PortalPage({
                   thing here the page repeats elsewhere ("Billed to", Billing details),
                   whereas Sign out exists nowhere else — so on a narrow screen the
                   button stays and the name goes. */}
-              <div className="hidden sm:block">
+              {/* The name stays on a phone too (truncated): it is the only place that says
+                  who is signed in. The email is the part a phone gives up. */}
+              <div className="max-w-40 text-right sm:max-w-none">
                 <div className="truncate text-sm font-medium">
                   {holder ?? meData.customer.email}
                 </div>
@@ -419,7 +381,7 @@ export default async function PortalPage({
                     same string — printing it twice, stacked, in the page's top-right.
                     The second line is only worth its space when it differs. */}
                 {holder && meData.customer.email && holder !== meData.customer.email ? (
-                  <div className="truncate text-xs text-muted-foreground">
+                  <div className="hidden truncate text-xs text-muted-foreground sm:block">
                     {meData.customer.email}
                   </div>
                 ) : null}
@@ -445,7 +407,7 @@ export default async function PortalPage({
 
       {/* Its money-side twin: finishes a redirect-mode "Pay now" (a PayPal order, a bank
           auth link), then shows that payment until it settles. */}
-      <PaymentReturn scope={scope} />
+      <PaymentReturn scope={scope} me={meData} invoices={invoices} />
 
       <PortalPanes
         initialTab={initialTab}
@@ -459,7 +421,28 @@ export default async function PortalPage({
             tz={tz}
           />
         }
-        balance={<BalanceCard me={meData} invoices={invoices} methods={methods} holder={holder} />}
+        balance={
+          <BalanceCard
+            me={meData}
+            invoices={invoices}
+            methods={methods}
+            holder={holder}
+            tz={tz}
+            hideWhenClear={setupShown}
+            payNow={
+              balancePay ? (
+                <PayInvoiceButton
+                  invoice={balancePay.id}
+                  currency={balancePay.currency}
+                  amountMinor={balancePay.amount_due_minor}
+                  me={meData}
+                  scope={scope}
+                  size="default"
+                />
+              ) : null
+            }
+          />
+        }
         invoices={
           <>
             {requests.map((r) => {
@@ -486,7 +469,7 @@ export default async function PortalPage({
                           </Glyph>
                           <div className="min-w-0">
                             <div className="truncate text-sm font-medium">
-                              {l.invoice_number ?? l.invoice}
+                              {l.invoice_number ?? "Invoice"}
                             </div>
                             {l.due_date ? (
                               <div className="mt-0.5 text-xs text-muted-foreground">
@@ -543,86 +526,61 @@ export default async function PortalPage({
               description="Pay an open invoice or download a PDF for your records."
               bodyClassName="p-0"
             >
-              {/* The rows are capped and scrolled once there are enough to need it. The list
-                  is already BOUNDED server-side — ten, then "Show older invoices" below — so
-                  this only limits how much height ONE page of it may claim: with no ceiling
-                  the invoice column set the height of the whole portal and pushed the account
-                  column off screen. The "show older" link stays OUTSIDE the scroller, so it is
-                  reachable without scrolling the list to its end first. */}
+              {/* One paging method: "Show older invoices" below. No inner scroll box. */}
               {invoices.length === 0 ? (
                 <EmptyState
+                  compact
                   icon={<FileText />}
                   title="No invoices yet"
                   description="Invoices show here when we issue them."
                 />
               ) : (
-                <div className={invoices.length > 5 ? "max-h-[28rem] overflow-y-auto" : undefined}>
-                  <RowList>
-                    {invoices.map((inv) => (
-                      <Row key={inv.id}>
-                        <div className="flex min-w-0 flex-1 items-center gap-3">
+                <RowList>
+                  {invoices.map((inv) => {
+                    const state = buyerInvoiceState(inv);
+                    const issued = fmtDate(inv.created_at, tz);
+                    // A second date only when it says something the first does not.
+                    const paidOn = inv.paid_at ? fmtDate(inv.paid_at, tz) : null;
+                    const dueOn =
+                      !inv.paid_at && inv.amount_due_minor > 0 && inv.due_date
+                        ? fmtDate(inv.due_date, tz)
+                        : null;
+                    // A held invoice has no Pay button: it finalizes by itself, then we charge it.
+                    const second =
+                      inv.status === "pending" && inv.usage_closes_at
+                        ? `Finalizes on ${fmtDateTime(inv.usage_closes_at, tz)}`
+                        : paidOn && paidOn !== issued
+                          ? `paid ${paidOn}`
+                          : dueOn && dueOn !== issued
+                            ? `due ${dueOn}`
+                            : null;
+                    return (
+                      <Row key={inv.id} className="flex-row flex-wrap items-center gap-x-4 gap-y-2">
+                        <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
                           <Glyph>
                             <FileText />
                           </Glyph>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
                               <span className="truncate text-sm font-medium">
-                                {inv.number ?? inv.id}
+                                {inv.number ?? "Invoice"}
                               </span>
-                              <StatusChip status={inv.status} />
+                              <Chip tone={CHIP_TONE[state.tone]}>{state.label}</Chip>
                             </div>
                             <div className="mt-0.5 text-xs text-muted-foreground">
-                              {fmtDate(inv.created_at, tz)}
-                              {inv.paid_at
-                                ? ` · paid ${fmtDate(inv.paid_at, tz)}`
-                                : inv.due_date
-                                  ? ` · due ${fmtDate(inv.due_date, tz)}`
-                                  : ""}
+                              {issued}
+                              {second ? ` · ${second}` : ""}
                             </div>
                           </div>
                         </div>
-                        {/* Two fixed columns on the right, because the action group's width
-                    changes from row to row (a paid invoice has no "Pay now") — left
-                    to itself, flex put every row's amount at a different x and the
-                    money stopped reading as a column. `min-w` rather than `w` so an
-                    unusually long amount grows instead of truncating. */}
-                        <div className="flex items-center justify-between gap-4 sm:justify-end">
-                          <div className="text-right sm:min-w-28">
-                            <div className="text-sm font-medium tabular-nums">
-                              {money(inv.total_minor, inv.currency)}
-                            </div>
-                            {inv.amount_due_minor > 0 ? (
-                              <div className="text-xs text-muted-foreground tabular-nums">
-                                {money(inv.amount_due_minor, inv.currency)} due
-                              </div>
-                            ) : null}
-                          </div>
-                          <div className="flex shrink-0 items-center justify-end gap-2 sm:w-44">
-                            {/* Only where there is genuinely money to take. A `paid`, `voided`
-                        or zero-balance invoice must not offer a button that would be
-                        refused by the engine the moment it was pressed. */}
+                        {/* Amount on the right edge, so the money reads as one column whatever
+                            actions a row has. */}
+                        <div className="ml-auto flex items-center gap-3">
+                          <div className="flex items-center justify-end gap-2">
                             {inv.payment_in_flight && inv.amount_due_minor <= 0 ? (
-                              /* ── A SETTLED INVOICE WITH A STRAY IN-FLIGHT DEBIT (2026-08-31) ──
-                         The comment above states the rule and the two in-flight branches
-                         below did not apply it — only the `Pay now` branch checked
-                         `amount_due_minor > 0`. So a `paid` invoice rendered "Waiting for
-                         your bank · Approve the request they sent you", in warning colour,
-                         in the same row as its own "Paid" chip.
-                         Reported from the portal 2026-08-31: four invoices on one
-                         subscription showed it, ₹1,43,976.16 of live e-mandate requests
-                         against invoices owing ₹0.00, and the prompt is the RBI/NPCI AFA
-                         approval — so approving really does move money.
-                         Why they are still in flight at all: each invoice was settled by
-                         the NEXT plan change's adjustment credit note, and nothing cancels
-                         a debit already dispatched to the rail when a CREDIT settles its
-                         invoice. That engine gap is filed separately; this branch only stops
-                         us asking the buyer to approve it.
-                         NEUTRAL, not warning: nothing is required of them. And the abandon
-                         control is kept where an AFA request exists, because it is the one
-                         genuinely useful action here — `abandonAuthenticationPendingDebit`
-                         keys on the invoice's in-progress transaction, not on the invoice's
-                         status, so it still works on a settled invoice and is the buyer's way
-                         to stop a debit they do not owe. */
+                              /* A settled invoice with a stray in-flight debit: nothing is required
+                                 of the buyer. The abandon control stays where an AFA request exists,
+                                 because it is their way to stop a debit they do not owe. */
                               <span className="text-right text-xs leading-tight text-muted-foreground">
                                 No payment needed
                                 <span className="block">This invoice is already settled</span>
@@ -634,38 +592,9 @@ export default async function PortalPage({
                                 ) : null}
                               </span>
                             ) : inv.payment_in_flight && inv.awaiting_authentication ? (
-                              /* Waiting on the BUYER, not on us — the rail paused this debit for
-                         their bank's approval (at any amount — the issuer decides) and it
-                         expires unapproved. It is the one in-flight state that needs a
-                         human, so unlike the quiet "processing" below it gets a filled
-                         button.
-
-                         ONE INSTRUCTION AND ONE BUTTON, and the previous version had
-                         neither. It read "Waiting for your bank / Approve their request,
-                         or:" in semantic orange above an orange fill — a status the buyer
-                         cannot act on, an ambiguous "their", a dangling "or:", and the
-                         urgency said twice in one narrow column. Now the text is neutral
-                         and names the action ("Approve the auto-debit with your bank, or")
-                         while the single filled button carries the urgency and completes
-                         the sentence.
-
-                         ⚠️ THE ESCAPE HATCH IS OFFERED ONLY WHERE WE CAN KILL THE FIRST
-                         ATTEMPT (2026-09-12). Releasing our own hold does not stop the
-                         gateway taking the money, so on a gateway that cannot void an
-                         in-flight debit "pay another way" is a double-charge button:
-                         RazorPay declares `intentVoid: false`, and their Late Authorisation
-                         behaviour can authorise a payment sitting in `created`
-                         RETROACTIVELY for up to three days while they poll the bank. The
-                         dialog's "decline the request if it arrives" is no safeguard there
-                         either — under late authorisation no request reaches the buyer to
-                         decline. So that branch tells them what to do and what we are
-                         doing, and offers nothing they cannot act on.
-
-                         Where we CAN cancel (Stripe, measured), the hatch is real and not a
-                         "Resend" that would do nothing: we cannot re-send the BANK's
-                         request, but we can release OUR hold, which is what unblocks paying
-                         here. Without it the only option was to wait out the window for a
-                         payment they may already have decided against. */
+                              /* Waiting on the BUYER's bank approval. The escape hatch only where
+                                 the gateway can void the first attempt: elsewhere "pay another
+                                 way" could charge twice. */
                               <div className="flex flex-col items-end gap-1.5 text-right text-xs leading-tight">
                                 {canCancelAtGateway(inv.in_flight_gateway) ? (
                                   <>
@@ -689,36 +618,28 @@ export default async function PortalPage({
                                 )}
                               </div>
                             ) : inv.payment_in_flight ? (
-                              /* Money is already moving on this invoice. Say so instead of
-                         offering a button the engine will refuse — a bank transfer or a
-                         UPI debit can take a while to confirm, and a buyer told nothing
-                         will either pay twice or think we lost it. */
+                              /* Money is moving: say so instead of a button the engine refuses. */
                               <span className="text-xs text-muted-foreground">
                                 Payment processing…
                               </span>
                             ) : inv.amount_due_minor > 0 &&
                               PAYABLE_STATUSES.has(inv.status) &&
                               inv.over_card_limit ? (
-                              /* Above the business's card limit: the checkout offers cards,
-                                 so there is no Pay now. The PDF shows how to pay. */
-                              <span className="text-xs text-muted-foreground">
+                              /* Above the business's card limit: there is no checkout to open. */
+                              <span className="max-w-56 text-right text-xs text-muted-foreground">
                                 We do not accept a card for this amount. The PDF shows how to pay.
                               </span>
                             ) : inv.amount_due_minor > 0 && PAYABLE_STATUSES.has(inv.status) ? (
-                              /* No "by card" sub-line here, and its absence is deliberate.
-                         It existed to answer "which method will Pay now open?" while the
-                         answer was a single rail we chose. It is not any more: the intent
-                         is minted with `letBuyerChooseMethod`, so the gateway's own sheet
-                         offers whatever the merchant has enabled and the BUYER picks.
-                         Naming a rail here would now be a claim the checkout does not
-                         honour, which is worse than saying nothing — the sheet itself is
-                         the honest answer, and it arrives one click later. */
+                              /* No rail is named: the buyer picks it in the provider's own form. */
                               <PayInvoiceButton
                                 invoice={inv.id}
                                 currency={inv.currency}
+                                amountMinor={inv.amount_due_minor}
                                 me={meData}
                                 scope={scope}
                                 focus={payInvoice === inv.id}
+                                variant={balancePay?.id === inv.id ? "outline" : "default"}
+                                refusalSlot={`pay-refusal-${inv.id}`}
                               />
                             ) : null}
                             <Button asChild variant="outline" size="sm">
@@ -727,11 +648,30 @@ export default async function PortalPage({
                               </Link>
                             </Button>
                           </div>
+                          <div className="min-w-20 text-right">
+                            <div className="text-sm font-medium tabular-nums">
+                              {money(inv.total_minor, inv.currency)}
+                            </div>
+                            {/* A held invoice is not final: usage is added when it finalizes. */}
+                            {inv.status === "pending" && inv.usage_closes_at ? (
+                              <div className="text-xs text-muted-foreground">so far</div>
+                            ) : null}
+                            {/* Only when part is already paid: a second copy of the total says nothing. */}
+                            {inv.status !== "pending" &&
+                            inv.amount_due_minor > 0 &&
+                            inv.amount_due_minor !== inv.total_minor ? (
+                              <div className="text-xs text-muted-foreground tabular-nums">
+                                {money(inv.amount_due_minor, inv.currency)} due
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
+                        {/* A Pay now refusal, on its own line under the row (see PayInvoiceButton). */}
+                        <div id={`pay-refusal-${inv.id}`} className="basis-full empty:hidden" />
                       </Row>
-                    ))}
-                  </RowList>
-                </div>
+                    );
+                  })}
+                </RowList>
               )}
               {/* A LINK, not a button: this is the same page with more of the same list, so
                   it survives a reload and a share, needs no client state, and works before
@@ -767,8 +707,11 @@ export default async function PortalPage({
                           ? "Refunded"
                           : `${money(p.refunded_minor, p.currency)} refunded`;
                     return (
-                      <Row key={p.invoice}>
-                        <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <Row
+                        key={p.invoice}
+                        className="flex-row flex-wrap items-center gap-x-4 gap-y-2"
+                      >
+                        <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
                           <ProductGlyph src={first?.image_url} fallback={<ShoppingBag />} />
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
@@ -786,16 +729,14 @@ export default async function PortalPage({
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between gap-4 sm:justify-end">
-                          <div className="text-right text-sm font-medium tabular-nums sm:min-w-28">
+                        <div className="ml-auto flex items-center gap-3">
+                          <Button asChild variant="outline" size="sm">
+                            <Link href={`/portal/invoices/${p.invoice}/pdf`} prefetch={false}>
+                              <Download className="size-4" /> Receipt
+                            </Link>
+                          </Button>
+                          <div className="min-w-20 text-right text-sm font-medium tabular-nums">
                             {money(p.total_minor, p.currency)}
-                          </div>
-                          <div className="flex shrink-0 items-center justify-end sm:w-44">
-                            <Button asChild variant="outline" size="sm">
-                              <Link href={`/portal/invoices/${p.invoice}/pdf`} prefetch={false}>
-                                <Download className="size-4" /> Receipt
-                              </Link>
-                            </Button>
                           </div>
                         </div>
                       </Row>
@@ -810,37 +751,33 @@ export default async function PortalPage({
                 description="A receipt for each payment that you made. Download a PDF for your records."
                 bodyClassName="p-0"
               >
-                <div className={receipts.length > 5 ? "max-h-[28rem] overflow-y-auto" : undefined}>
-                  <RowList>
-                    {receipts.map((rc) => (
-                      <Row key={rc.id}>
-                        <div className="flex min-w-0 flex-1 items-center gap-3">
-                          <Glyph>
-                            <ReceiptText />
-                          </Glyph>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium">{rc.number}</div>
-                            <div className="mt-0.5 text-xs text-muted-foreground">
-                              {fmtDate(rc.paid_at, tz)} · {rc.method}
-                            </div>
+                <RowList>
+                  {receipts.map((rc) => (
+                    <Row key={rc.id} className="flex-row flex-wrap items-center gap-x-4 gap-y-2">
+                      <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
+                        <Glyph>
+                          <ReceiptText />
+                        </Glyph>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{rc.number}</div>
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {fmtDate(rc.paid_at, tz)} · {normalizeMethodWords(rc.method)}
                           </div>
                         </div>
-                        <div className="flex items-center justify-between gap-4 sm:justify-end">
-                          <div className="text-right text-sm font-medium tabular-nums sm:min-w-28">
-                            {money(rc.amount_minor, rc.currency)}
-                          </div>
-                          <div className="flex shrink-0 items-center justify-end sm:w-44">
-                            <Button asChild variant="outline" size="sm">
-                              <Link href={`/portal/receipts/${rc.id}/pdf`} prefetch={false}>
-                                <Download className="size-4" /> PDF
-                              </Link>
-                            </Button>
-                          </div>
+                      </div>
+                      <div className="ml-auto flex items-center gap-3">
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={`/portal/receipts/${rc.id}/pdf`} prefetch={false}>
+                            <Download className="size-4" /> PDF
+                          </Link>
+                        </Button>
+                        <div className="min-w-20 text-right text-sm font-medium tabular-nums">
+                          {money(rc.amount_minor, rc.currency)}
                         </div>
-                      </Row>
-                    ))}
-                  </RowList>
-                </div>
+                      </div>
+                    </Row>
+                  ))}
+                </RowList>
                 {moreReceipts ? (
                   <div className="border-t px-5 py-3 text-center">
                     <Link
@@ -857,31 +794,60 @@ export default async function PortalPage({
           </>
         }
         plan={
-          subscriptions.length > 0 || credits || canAddLimit ? (
-            <>
-              {subscriptions.length > 0 ? (
-                <PlanCard
-                  subs={subscriptions}
-                  tz={tz}
-                  allowCoupons={meData.business.allow_customer_coupons}
-                  offeredRails={offeredRails}
-                  shippingAddresses={shippingOn ? shippingAddresses : undefined}
+          <>
+            {subscriptions.length > 0 ? (
+              <PlanCard
+                subs={subscriptions}
+                tz={tz}
+                allowCoupons={meData.business.allow_customer_coupons}
+                offeredRails={offeredRails}
+                shippingAddresses={shippingOn ? shippingAddresses : undefined}
+              />
+            ) : (
+              /* No subscription: say so, and give a way forward. */
+              <Card className="gap-0 py-0">
+                <h2 className="sr-only">Your plan</h2>
+                <EmptyState
+                  compact
+                  icon={<Package />}
+                  title="You have no subscription"
+                  description={
+                    brand.has_pricing_page && brand.id
+                      ? `To subscribe, select a plan from ${business}.`
+                      : `To subscribe, contact ${business}.`
+                  }
+                  action={
+                    brand.has_pricing_page && brand.id ? (
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/pricing/${brand.id}`} prefetch={false}>
+                          View plans
+                        </Link>
+                      </Button>
+                    ) : (
+                      <PortalContact
+                        name={business}
+                        supportEmail={brand.support_email}
+                        website={brand.website}
+                        className="mt-0"
+                      />
+                    )
+                  }
                 />
-              ) : null}
-              {credits ? <PortalCreditsSection credits={credits} tz={tz} /> : null}
-              {credits ||
-              spendLimits?.length ||
-              canAddLimit ||
-              (runway && runway.runway_days != null) ? (
-                <PortalUsageControlsSection
-                  runway={runway}
-                  limits={spendLimits}
-                  currency={runway?.currency ?? spendLimits?.[0]?.currency ?? "USD"}
-                  tz={tz}
-                />
-              ) : null}
-            </>
-          ) : null
+              </Card>
+            )}
+            {credits ? <PortalCreditsSection credits={credits} tz={tz} /> : null}
+            {/* Shown when there is a limit, a limit the buyer may add, or a runway to state. */}
+            {spendLimits?.length || canAddLimit || (runway && runway.runway_days != null) ? (
+              <PortalUsageControlsSection
+                runway={runway}
+                limits={spendLimits}
+                canAdd={canAddLimit}
+                business={business}
+                currency={runway?.currency ?? spendLimits?.[0]?.currency ?? "USD"}
+                tz={tz}
+              />
+            ) : null}
+          </>
         }
         methods={
           <>
@@ -897,6 +863,7 @@ export default async function PortalPage({
             >
               {methods.length === 0 ? (
                 <EmptyState
+                  compact
                   icon={<CreditCard />}
                   title="No payment method saved"
                   /* "Add one below" is only true once the billing address is on file —
@@ -916,13 +883,14 @@ export default async function PortalPage({
                    each row carries a mandate-status line, so five instruments ran to
                    1024px and the card towered over everything beside it. Four rows fit,
                    the rest scroll, and no instrument becomes unreachable. */
-                <div className={methods.length > 4 ? "max-h-[26rem] overflow-y-auto" : undefined}>
+                <div>
                   <RowList>
                     {methods.map((pm) => {
                       /* What the mandate behind this instrument is doing — see `mandateState`. The
                  chip, the limit line and the well below all read it, so they cannot end up
                  telling the buyer three different stories about one authorization. */
                       const mandate = mandateState(pm);
+                      const problem = methodProblem(pm, tz);
                       return (
                         <li key={pm.id} className="px-5 py-3.5">
                           <div className="flex flex-col gap-2.5">
@@ -943,8 +911,12 @@ export default async function PortalPage({
                                   {/* Every card the engine will fall back to, so a removed one
                               is visibly different. */}
                                   {pm.role === "backup" ? <Chip>Backup</Chip> : null}
-                                  {pm.status && pm.status !== "valid" ? (
-                                    <StatusChip status={pm.status} />
+                                  {problem ? (
+                                    <Chip tone={problem === "pending" ? "gray" : "red"}>
+                                      {METHOD_PROBLEM_LABEL[problem]}
+                                    </Chip>
+                                  ) : pm.status === "expiring" ? (
+                                    <Chip tone="tan">Expires soon</Chip>
                                   ) : null}
                                   {/* A mandate the bank has not confirmed yet. The instrument's own
                             status is still `valid` here — nothing is wrong with it — so
@@ -957,7 +929,19 @@ export default async function PortalPage({
                                 </div>
                                 {pm.exp_month && pm.exp_year ? (
                                   <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                                    Expires {String(pm.exp_month).padStart(2, "0")}/{pm.exp_year}
+                                    {problem === "expired" ? "Expired" : "Expires"}{" "}
+                                    {String(pm.exp_month).padStart(2, "0")}/{pm.exp_year}
+                                  </div>
+                                ) : null}
+                                {/* Why it cannot be charged, and the fix. A dead mandate has its
+                                    own well below. */}
+                                {problem && !(problem === "invalid" && mandate.kind === "dead") ? (
+                                  <div className="mt-1 text-xs text-destructive">
+                                    {problem === "invalid"
+                                      ? "We cannot charge this payment method. Add a new one."
+                                      : problem === "expired"
+                                        ? "We cannot charge an expired card. Add a new payment method."
+                                        : "We cannot charge it until it is verified."}
                                   </div>
                                 ) : null}
                                 {/* The mandate's per-debit CEILING, as the PROVIDER registered and
@@ -1008,7 +992,7 @@ export default async function PortalPage({
                               </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2 sm:ml-12">
-                              {!pm.is_default ? (
+                              {!pm.is_default && !problem ? (
                                 <ActionForm action={portalSetDefaultAction}>
                                   <input type="hidden" name="pm" value={pm.id} />
                                   {/* OUTLINE, deliberately — do not "promote" this to the default
@@ -1040,7 +1024,7 @@ export default async function PortalPage({
                                     Remove backup
                                   </Button>
                                 </ActionForm>
-                              ) : !pm.is_default ? (
+                              ) : !pm.is_default && !problem ? (
                                 <ActionForm action={portalSetBackupAction}>
                                   <input type="hidden" name="pm" value={pm.id} />
                                   <Button type="submit" variant="outline" size="sm">
@@ -1067,7 +1051,7 @@ export default async function PortalPage({
                     bank portal. Saying so here is the difference between an honest
                     control and one that implies the autopay has been cancelled. */}
                           {pm.mandate?.rail ? (
-                            <div className="mt-2.5 flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground sm:ml-12">
+                            <div className="mt-2.5 flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground sm:ml-12">
                               <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                               {/* One well, three states. "Auto-debit authorized" was said unconditionally,
                         which is simply untrue while the bank is still confirming (a netbanking
@@ -1090,7 +1074,7 @@ export default async function PortalPage({
                                 </span>
                               ) : (
                                 <span>
-                                  Auto-debit authorized ({pm.mandate.rail}). If you remove it here,
+                                  Auto-debit authorized ({pm.mandate.rail}). If you delete it here,
                                   we stop charges from this account. To cancel the mandate, revoke
                                   it in your UPI app or bank portal.
                                 </span>
@@ -1114,9 +1098,12 @@ export default async function PortalPage({
                   provider redirect. See `add-method-disclosure.tsx`. */}
               <div className="border-t px-5 py-4">
                 <AddMethodDisclosure
-                  defaultOpen={methods.length === 0 || setup === "return" || addCard === "1"}
+                  defaultOpen={
+                    methods.length === 0 || setup === "return" || addCard === "1" || methodTrouble
+                  }
                 >
                   <AddCard
+                    currency={subscriptions[0]?.currency ?? invoices[0]?.currency ?? null}
                     scope={scope}
                     me={meData}
                     gateways={gateways}
@@ -1147,14 +1134,30 @@ export default async function PortalPage({
                 description="Where we send your orders. Each subscription ships to your default address unless you select a different one."
                 bodyClassName="p-0"
               >
-                <ShippingAddresses addresses={shippingAddresses} countries={countries} />
+                <ShippingAddresses
+                  addresses={shippingAddresses}
+                  countries={countries}
+                  billing={{
+                    ...meData.customer.address,
+                    first_name:
+                      meData.customer.address.first_name ??
+                      (meData.customer.address.last_name ? null : meData.customer.first_name),
+                    last_name:
+                      meData.customer.address.last_name ??
+                      (meData.customer.address.first_name ? null : meData.customer.last_name),
+                  }}
+                />
               </StorefrontSection>
             ) : null}
           </>
         }
       />
 
-      <StorefrontFooter business={business} />
+      <StorefrontFooter
+        business={business}
+        supportEmail={brand.support_email}
+        website={brand.website}
+      />
     </BrandTheme>
   );
 }

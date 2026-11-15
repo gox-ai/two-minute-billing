@@ -9,6 +9,7 @@ import type {
   AutoTopupTrigger,
   LimitInterval,
 } from "@/lib/usage-controls";
+import type { PurchaseLimits, UnitTopupBody } from "@/lib/unit-topup";
 
 interface List<T> {
   object: "list";
@@ -201,8 +202,19 @@ export interface AutoTopup {
   max_runs_per_day: number;
   /** null = the customer's charge order. */
   payment_method: string | null;
+  /** False: a run has no payment method to charge. Absent on an older API. */
+  has_payment_method?: boolean;
   grant: { priority?: number; expires_after_months?: number | null; tax_treatment?: string };
+  /** A unit with no money value: the threshold in credits and the pack a run buys. */
+  threshold_units?: string | null;
+  pack_price?: string | null;
+  pack_quantity?: number | null;
+  /** "Recharge to N credits": whole packs until the balance is at least this. */
+  target_units?: string | null;
+  /** Purchase limits per window; also honoured by a money top-up. */
+  purchase_limits?: PurchaseLimits | null;
   status: "active" | "disabled";
+  /** payment_declined | retries_exhausted | operator | customer */
   disabled_reason: string | null;
   disabled_at: string | null;
   /** The last "threshold too low" notice (weekly check); null = none. */
@@ -234,6 +246,10 @@ export interface AutoTopupRun {
   object: "auto_topup_run";
   /** `atur_…` */
   id: string;
+  /** `atu_…`: the top-up that made the run. */
+  auto_topup?: string | null;
+  /** Failed charge tries. A top-up in units tries a soft decline again. */
+  attempts?: number;
   trigger: AutoTopupTrigger;
   amount_minor: number;
   currency: string;
@@ -249,9 +265,23 @@ export const getAutoTopup = (biz: string, cus: string, currency: string) =>
   apiGetOrNull<AutoTopup>(`${c(biz, cus)}/auto_topup?currency=${enc(currency)}`);
 export const saveAutoTopup = (biz: string, cus: string, body: AutoTopupWrite) =>
   apiWrite(`${c(biz, cus)}/auto_topup`, body, "PUT");
-export const setAutoTopupEnabled = (biz: string, cus: string, currency: string, on: boolean) =>
+/** The top-up of one credit unit with no money value; null when it has none. */
+export const getUnitAutoTopup = (biz: string, cus: string, unit: string) =>
+  apiGetOrNull<AutoTopup>(`${c(biz, cus)}/auto_topup?unit=${enc(unit)}`);
+export const saveUnitAutoTopup = (biz: string, cus: string, body: UnitTopupBody) =>
+  apiWrite(`${c(biz, cus)}/auto_topup`, body, "PUT");
+/** `unit` set: the top-up of that credit unit; else the money top-up in `currency`. */
+export const setAutoTopupEnabled = (
+  biz: string,
+  cus: string,
+  currency: string,
+  on: boolean,
+  unit?: string,
+) =>
   apiWrite(
-    `${c(biz, cus)}/auto_topup/${on ? "enable" : "disable"}?currency=${enc(currency)}`,
+    `${c(biz, cus)}/auto_topup/${on ? "enable" : "disable"}?${
+      unit ? `unit=${enc(unit)}` : `currency=${enc(currency)}`
+    }`,
     {},
     "POST",
   );

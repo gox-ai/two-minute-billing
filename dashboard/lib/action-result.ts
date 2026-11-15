@@ -20,6 +20,11 @@ export interface ActionResult {
   redirectTo?: string;
   /** Failure only: the engine's `Request-Id`; the toast links to that request log row. */
   requestId?: string;
+  /**
+   * Failure only: submitted values a `KeptInput` shows again after React resets the form.
+   * Never a secret: a password is not sent back.
+   */
+  values?: Record<string, string>;
 }
 
 export const actionOk = (message?: string, redirectTo?: string): ActionResult => ({

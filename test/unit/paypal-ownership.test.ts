@@ -709,7 +709,7 @@ describe("#31 · PayPal webhook normalization reports ownership", () => {
   });
 
   /** Sign a body exactly the way PayPal does: id|time|webhook_id|crc32(raw body). */
-  function deliver(event: unknown) {
+  function deliver(event: unknown, extra: Stub[] = []) {
     const body = JSON.stringify(event);
     const transmissionId = "tid-1";
     const transmissionTime = "2026-09-04T00:00:00Z";
@@ -724,7 +724,7 @@ describe("#31 · PayPal webhook normalization reports ownership", () => {
       "paypal-transmission-time": transmissionTime,
       "paypal-transmission-sig": signer.sign(keyPem, "base64"),
     };
-    stubFetch([{ match: (m, u) => m === "GET" && u === CERT_URL, text: certPem }]);
+    stubFetch([{ match: (m, u) => m === "GET" && u === CERT_URL, text: certPem }, ...extra]);
     return paypal().normalizeWebhook({ payload: body, headers });
   }
 
@@ -873,6 +873,46 @@ describe("#31 · PayPal webhook normalization reports ownership", () => {
     expect(dispute!.type).toBe("dispute.created");
     expect(dispute!.ownership).toBe("unknown");
     expect(dispute!.providerObjectCreatedAt?.toISOString()).toBe("2026-08-20T05:00:00.000Z");
+  });
+
+  describe("a dispute names the order of the disputed capture", () => {
+    // A charge that did not complete at once is stored under its ORDER id; the dispute
+    // names the capture. Without the order id the dispute matches no payment.
+    const disputeOn = (capture: string) => ({
+      id: "WH-EVT-6",
+      event_type: "CUSTOMER.DISPUTE.CREATED",
+      create_time: "2026-09-04T09:00:00Z",
+      resource: {
+        dispute_id: "PP-D-2",
+        status: "OPEN",
+        dispute_amount: { value: "97.00", currency_code: "USD" },
+        disputed_transactions: [{ seller_transaction_id: capture }],
+      },
+    });
+    const captureRead = (status: number, json: unknown): Stub => ({
+      match: (m, u) => m === "GET" && u.endsWith("/v2/payments/captures/cap_9"),
+      status,
+      json,
+    });
+
+    it("carries the capture's order id as the intent", async () => {
+      const [ev] = await deliver(disputeOn("cap_9"), [
+        OAUTH,
+        captureRead(200, {
+          id: "cap_9",
+          supplementary_data: { related_ids: { order_id: "ord_9" } },
+        }),
+      ]);
+      expect(ev!.providerChargeId).toBe("cap_9");
+      expect(ev!.providerIntentId).toBe("ord_9");
+    });
+
+    it("still delivers the dispute when the capture cannot be read", async () => {
+      const [ev] = await deliver(disputeOn("cap_9"), [OAUTH, captureRead(404, {})]);
+      expect(ev!.type).toBe("dispute.created");
+      expect(ev!.providerChargeId).toBe("cap_9");
+      expect(ev!.providerIntentId).toBeUndefined();
+    });
   });
 
   it("carries ownership on the refund branch too, not just the default one", async () => {

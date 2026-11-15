@@ -5,9 +5,22 @@ import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  contactBusiness,
+  squareThrown,
+  squareTokenFailure,
+  type SquareTokenResult,
+} from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
 import { useDefaultState } from "@/lib/use-default-state";
-import { PaymentDialog } from "./payment-dialog";
+import { cn } from "@/lib/utils";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+} from "./payment-dialog";
+import { sdkAmountLabel } from "./storefront-text";
 
 /**
  * Square's Web Payments SDK. Square publishes one unversioned URL per environment and no SRI
@@ -21,13 +34,7 @@ const SCRIPT = {
   production: "https://web.squarecdn.com/v1/square.js",
 } as const;
 
-interface TokenResult {
-  status?: string;
-  token?: string;
-  errors?: Array<{ field?: string; type?: string }>;
-}
-/** Errors the card fields show themselves. */
-const CARD_FIELDS = new Set(["cardNumber", "expirationDate", "cvv", "postalCode"]);
+type TokenResult = SquareTokenResult;
 
 interface TokenEvent {
   detail?: { tokenResult?: TokenResult; error?: unknown };
@@ -67,7 +74,7 @@ function loadSquare(src: string): Promise<void> {
       el.onload = () => resolve();
       el.onerror = () => {
         loading.delete(src);
-        reject(new Error("We could not connect to Square. Check your connection. Then try again."));
+        reject(new Error("We could not load the payment form. Reload the page. Then try again."));
       };
       document.head.appendChild(el);
     });
@@ -112,15 +119,24 @@ function SquarePaymentsDialog({
   const [offered, setOffered] = React.useState<Extra[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  /** The bank account section raised `error`: shown there, not above it by the card. */
+  const [errorAtBank, setErrorAtBank] = React.useState(false);
   const [holder, setHolder] = useDefaultState(context.prefill?.name ?? "");
+  const [bankOpen, setBankOpen] = React.useState(false);
 
-  const done = React.useCallback(
-    (token: string | undefined, method: string) => {
-      if (token) onSettle({ status: "completed", clientResult: { token, method } });
-      else {
-        setBusy(false);
-        setError("We could not read the payment details. Try again, or use a different method.");
-      }
+  /** A bank or Cash App result that arrives as an event, after the buyer leaves the dialog. */
+  const tokenized = React.useCallback(
+    (e: TokenEvent, method: string) => {
+      const r = e.detail?.tokenResult;
+      if (r?.status === "OK" && r.token)
+        return onSettle({ status: "completed", clientResult: { token: r.token, method } });
+      setBusy(false);
+      const said = e.detail?.error
+        ? squareThrown(e.detail.error, purpose)
+        : squareTokenFailure(r, purpose);
+      if (!said) return;
+      setErrorAtBank(method === "ach");
+      setError(said);
     },
     [onSettle],
   );
@@ -167,10 +183,7 @@ function SquarePaymentsDialog({
               const k = await payments.cashAppPay(request(), {
                 redirectURL: window.location.href,
               });
-              k.addEventListener?.("ontokenization", (e) => {
-                const r = e.detail?.tokenResult;
-                done(r?.status === "OK" ? r.token : undefined, "cash_app_pay");
-              });
+              k.addEventListener?.("ontokenization", (e) => tokenized(e, "cash_app_pay"));
               await k.attach!(cashEl.current!);
               return k;
             },
@@ -192,10 +205,7 @@ function SquarePaymentsDialog({
                 redirectURI: window.location.origin + window.location.pathname,
                 transactionId: crypto.randomUUID(),
               });
-              b.addEventListener?.("ontokenization", (e) => {
-                const r = e.detail?.tokenResult;
-                done(r?.status === "OK" ? r.token : undefined, "ach");
-              });
+              b.addEventListener?.("ontokenization", (e) => tokenized(e, "ach"));
               return b;
             },
           ]);
@@ -226,7 +236,7 @@ function SquarePaymentsDialog({
       card.current = null;
       extras.current = {};
     };
-  }, [open, params, purpose, context.businessName, done]);
+  }, [open, params, purpose, context.businessName, tokenized]);
 
   const names = (context.prefill?.name ?? "").trim().split(/\s+/);
   const verification = {
@@ -247,24 +257,25 @@ function SquarePaymentsDialog({
   const run = async (method: string, tokenize: () => Promise<TokenResult>) => {
     setBusy(true);
     setError(null);
+    setErrorAtBank(false);
     try {
       const r = await tokenize();
-      if (r.status === "OK") done(r.token, method);
-      else {
-        setBusy(false);
-        // The card fields show their own errors. Any other refusal shows nowhere, so say so.
-        const errors = r.errors ?? [];
-        const onFields = errors.length > 0 && errors.every((e) => CARD_FIELDS.has(e.field ?? ""));
-        if (!onFields)
-          setError("We could not complete the check. Try again, or use a different method.");
-      }
-    } catch {
+      if (r.status === "OK" && r.token)
+        return onSettle({ status: "completed", clientResult: { token: r.token, method } });
       setBusy(false);
-      setError("We could not complete the check. Try again, or use a different method.");
+      // Field errors too, even though the card fields mark them. Null only for a wallet sheet
+      // the buyer closed.
+      const said = squareTokenFailure(r, purpose);
+      if (said) setError(said);
+    } catch (e) {
+      setBusy(false);
+      setError(squareThrown(e, purpose));
     }
   };
 
   const extra = (name: Extra) => extras.current[name];
+  const wallets = offered.some((m) => m !== "ach");
+  const confirmLabel = (context as GatewaySdkContext & { confirmLabel?: string }).confirmLabel;
 
   return (
     <PaymentDialog
@@ -277,74 +288,103 @@ function SquarePaymentsDialog({
           : `Select how to pay${amountLabel ? ` ${amountLabel}` : ""}.`
       }
     >
+      {/* One primary: the card, committed from the footer. A wallet is a one-tap shortcut
+          above it; a bank account is a second way in, folded below it. */}
       <div className="flex flex-col gap-3">
-        <div
-          ref={googleEl}
-          hidden={!offered.includes("google_pay")}
-          onClick={() => {
-            const g = extra("google_pay");
-            if (g && !busy) void run("google_pay", () => g.tokenize());
-          }}
-        />
-        {offered.includes("apple_pay") ? (
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => run("apple_pay", () => extra("apple_pay")!.tokenize())}
-          >
-            Pay with Apple Pay
-          </Button>
-        ) : null}
-        <div
-          ref={afterpayEl}
-          hidden={!offered.includes("afterpay")}
-          onClick={() => {
-            const a = extra("afterpay");
-            if (a && !busy) void run("afterpay", () => a.tokenize());
-          }}
-        />
-        <div ref={cashEl} hidden={!offered.includes("cash_app_pay")} />
-        <div ref={cardEl} className="min-h-24" />
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {offered.includes("ach") ? (
-          <div className="flex flex-col gap-2 border-t pt-3">
-            <Label htmlFor="sq-ach-holder">Account holder name</Label>
-            <Input
-              id="sq-ach-holder"
-              value={holder}
-              onChange={(e) => setHolder(e.target.value)}
-              autoComplete="name"
-            />
+        <div className={cn("flex flex-col gap-2", !wallets && "hidden")}>
+          <div
+            ref={googleEl}
+            hidden={!offered.includes("google_pay")}
+            onClick={() => {
+              const g = extra("google_pay");
+              if (g && !busy) void run("google_pay", () => g.tokenize());
+            }}
+          />
+          {offered.includes("apple_pay") ? (
             <Button
               variant="outline"
-              disabled={busy || !holder.trim()}
-              onClick={() => {
-                const b = extra("ach");
-                if (!b) return;
-                setBusy(true);
-                setError(null);
-                // The token arrives on `ontokenization` after the buyer finishes with their bank.
-                void b
-                  .tokenize({
-                    accountHolderName: holder.trim(),
-                    intent: "CHARGE",
-                    amount: params.amount,
-                    currency: params.currency,
-                  })
-                  .catch(() => {
-                    setBusy(false);
-                    setError(
-                      "We could not connect to your bank. Try again, or use a different method.",
-                    );
-                  });
-              }}
+              disabled={busy}
+              onClick={() => run("apple_pay", () => extra("apple_pay")!.tokenize())}
             >
-              Pay by bank account (ACH)
+              Pay with Apple Pay
             </Button>
+          ) : null}
+          <div
+            ref={afterpayEl}
+            hidden={!offered.includes("afterpay")}
+            onClick={() => {
+              const a = extra("afterpay");
+              if (a && !busy) void run("afterpay", () => a.tokenize());
+            }}
+          />
+          <div ref={cashEl} hidden={!offered.includes("cash_app_pay")} />
+        </div>
+        {wallets ? (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="h-px flex-1 bg-border" aria-hidden />
+            Or pay by card
+            <span className="h-px flex-1 bg-border" aria-hidden />
           </div>
         ) : null}
+        <div ref={cardEl} className="min-h-24" />
+        <PaymentPrivacyNote business={context.businessName} />
+        <RefusalAlert message={errorAtBank && bankOpen ? null : error} />
+        {offered.includes("ach") ? (
+          bankOpen ? (
+            <div className="flex flex-col gap-2 border-t pt-3">
+              <div className="text-sm font-medium">US bank account</div>
+              <Label htmlFor="sq-ach-holder">Account holder name</Label>
+              <Input
+                id="sq-ach-holder"
+                value={holder}
+                onChange={(e) => setHolder(e.target.value)}
+                autoComplete="name"
+              />
+              <p className="text-xs text-muted-foreground">
+                You sign in to your bank on the next page. Then you come back here.
+              </p>
+              <Button
+                variant="outline"
+                className="self-start"
+                disabled={busy || !holder.trim()}
+                onClick={() => {
+                  const b = extra("ach");
+                  if (!b) return;
+                  setBusy(true);
+                  setError(null);
+                  // The token arrives on `ontokenization` after the buyer finishes with their bank.
+                  void b
+                    .tokenize({
+                      accountHolderName: holder.trim(),
+                      intent: "CHARGE",
+                      amount: params.amount,
+                      currency: params.currency,
+                    })
+                    .catch((e: unknown) => {
+                      setBusy(false);
+                      setErrorAtBank(true);
+                      setError(squareThrown(e, purpose));
+                    });
+                }}
+              >
+                Continue to your bank
+              </Button>
+              <RefusalAlert message={errorAtBank ? error : null} />
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto self-start p-0"
+              onClick={() => setBankOpen(true)}
+            >
+              Pay from a US bank account
+            </Button>
+          )
+        ) : null}
       </div>
-      <div className="flex justify-end gap-2">
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
           Cancel
         </Button>
@@ -355,9 +395,12 @@ function SquarePaymentsDialog({
           }}
           disabled={!ready || busy}
         >
-          {busy ? "Checking…" : purpose === "setup" ? "Save card" : "Pay by card"}
+          {busy
+            ? "Checking…"
+            : (confirmLabel ??
+              (purpose === "setup" ? "Save card" : amountLabel ? `Pay ${amountLabel}` : "Pay"))}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }
@@ -382,9 +425,9 @@ export function openSquarePayments(
   if (!params.applicationId || !params.locationId)
     return Promise.resolve({
       status: "failed",
-      message: "We could not open the payment form. Contact the business.",
+      message: `We could not open the payment form. ${contactBusiness(context.businessName)}`,
     });
-  const amountLabel = params.amount ? `${params.amount} ${params.currency}` : null;
+  const amountLabel = sdkAmountLabel(params.amount, params.currency);
   return new Promise((resolve) => {
     const host = document.createElement("div");
     document.body.appendChild(host);

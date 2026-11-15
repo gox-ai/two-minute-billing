@@ -26,7 +26,7 @@ export function SyncedBadge({ syncedAt }: { syncedAt: string | null | undefined 
     <span
       data-synced={stale ? "stale" : "fresh"}
       title={`Last refreshed ${at.toLocaleString()}`}
-      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm whitespace-nowrap text-foreground/80 tabular-nums"
+      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border bg-card px-3 text-sm whitespace-nowrap text-foreground/80 tabular-nums"
     >
       <Icon aria-hidden className={"size-4 " + (stale ? "text-warning" : "text-success")} />
       Synced {ago(mins)}

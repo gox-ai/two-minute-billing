@@ -7,14 +7,11 @@ import { Copy, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { acknowledgeRecoveryCodesAction } from "@/app/auth-actions";
+import { fmtDate } from "@/lib/format-date";
 
 /** The downloaded file names the account and the date, so a copy found later says what it unlocks. */
 function codesText(codes: readonly string[], email: string): string {
-  const date = new Date().toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  const date = fmtDate(new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone);
   return [
     "Recovery codes",
     `Account: ${email}`,

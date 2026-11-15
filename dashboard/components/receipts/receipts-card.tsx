@@ -8,7 +8,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { receiptPdfHref } from "@/lib/receipt-links";
 import type { Receipt } from "@/lib/api/receipts";
 
@@ -50,13 +51,15 @@ export function ReceiptsCard({
       ) : rows.length === 0 ? (
         <p className="m-0 text-sm text-muted-foreground">{emptyText}</p>
       ) : (
-        <Table>
+        <Table phone="stack">
           <TableHeader>
             <TableRow>
               <TableHead className="pl-5">Number</TableHead>
               <TableHead>Method</TableHead>
               <TableHead>Paid</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              <TableHead phone="aside" className="text-right">
+                Amount
+              </TableHead>
               <TableHead className="pr-5 text-right">PDF</TableHead>
             </TableRow>
           </TableHeader>
@@ -75,7 +78,11 @@ export function ReceiptsCard({
                 </TableCell>
                 <TableCell className="pr-5 text-right">
                   {r.number ? (
-                    <a href={receiptPdfHref(biz, r.id)} className="text-primary hover:underline">
+                    <a
+                      data-document-link
+                      href={receiptPdfHref(biz, r.id)}
+                      className="text-primary hover:underline"
+                    >
                       Download
                     </a>
                   ) : (

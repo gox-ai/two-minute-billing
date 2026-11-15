@@ -112,7 +112,7 @@ export const USAGE_VIEW_PATHS = {
       tags: ["Analytics"],
       summary: "Usage margin",
       description:
-        "Over meter usage lines of finalized invoices (not voided) dated in the range: revenue = line amount − its discount − its credit notes, before tax; margin = revenue − cost. A line with no full cost is counted in `lines_without_cost` and left out of revenue and cost. One row per group and currency; currencies are never added together. Needs `usage_margin:view`.",
+        "Over meter usage lines of finalized invoices (not voided) dated in the range: revenue = line amount − its discount − its credit notes, before tax; margin = revenue − cost. A line with no full cost is counted in `lines_without_cost` and left out of revenue and cost. One row per group and currency; currencies are never added together.\n\n`scope=all` also counts usage that no invoice line bills (cost only): its cost per day, from the event's own cost or your cost (else the list), as on a usage line. A day of usage is cost only when no usage line of an invoice that is not voided covers that day for the customer and meter, and no live subscription will bill it. By customer and by plan, `total_revenue_minor` holds every revenue line in the range (plan fees, usage, one-time sales), after discounts and credit notes, before tax. The cost-only figures are written each night for the days up to yesterday. The fields of `scope=billed` keep their meaning in both scopes. Needs `usage_margin:view`.",
       parameters: [
         biz,
         q("from", "Start, inclusive (RFC 3339).", { type: "string", format: "date-time" }, true),
@@ -122,10 +122,19 @@ export const USAGE_VIEW_PATHS = {
           { type: "string", format: "date-time" },
           true,
         ),
-        q("group_by", "Default `customer`.", {
-          type: "string",
-          enum: ["customer", "model", "meter"],
-        }),
+        q(
+          "group_by",
+          "Default `customer`. `plan`: the plan of the invoice's subscription, and for cost-only usage the plan of the customer's subscription live that day; `\"\"` = no plan.",
+          {
+            type: "string",
+            enum: ["customer", "model", "meter", "plan"],
+          },
+        ),
+        q(
+          "scope",
+          "`billed` (default): usage lines only. `all`: also usage no invoice line bills, and every revenue line by customer and plan.",
+          { type: "string", enum: ["billed", "all"] },
+        ),
         q("currency", "One currency only."),
         q("customer", "One customer's id (cus_…)."),
       ],
@@ -146,6 +155,48 @@ const marginFields = {
   margin_percent: { type: "string", nullable: true, example: "35.96" },
   lines: { type: "integer" },
   lines_without_cost: { type: "integer" },
+  total_revenue_minor: {
+    type: "integer",
+    description:
+      "With `scope=all`. By customer and plan: every revenue line. By meter and model: every usage line, also those with no full cost.",
+  },
+  cost_only_minor: {
+    type: "integer",
+    description: "With `scope=all`. Cost of usage that no invoice line bills.",
+  },
+  cost_only_rows: {
+    type: "integer",
+    description: "With `scope=all`. Days of cost-only usage, per customer, meter and group values.",
+  },
+  cost_only_rows_without_cost: {
+    type: "integer",
+    description:
+      "With `scope=all`. Of `cost_only_rows`, those with no full cost: not in `cost_only_minor`.",
+  },
+  total_cost_minor: {
+    type: "integer",
+    description: "With `scope=all`. `cost_minor` + `cost_only_minor`.",
+  },
+  total_margin_minor: {
+    type: "integer",
+    description: "With `scope=all`. `total_revenue_minor` − `total_cost_minor`.",
+  },
+  total_margin_percent: {
+    type: "string",
+    nullable: true,
+    example: "62.18",
+    description: "With `scope=all`. Null when `total_revenue_minor` is 0.",
+  },
+  plan_fee_minor: {
+    type: "integer",
+    description:
+      "With `scope=all` and `group_by=plan`. Recurring and proration lines of plan products.",
+  },
+  subscribers: {
+    type: "integer",
+    description:
+      "With `scope=all` and `group_by=plan`. Customers with a subscription on the plan that was live in the range.",
+  },
 };
 
 export const USAGE_VIEW_SCHEMAS = {
@@ -210,7 +261,8 @@ export const USAGE_VIEW_SCHEMAS = {
     type: "object",
     properties: {
       object: { type: "string", enum: ["usage_margin"] },
-      group_by: { type: "string", enum: ["customer", "model", "meter"] },
+      group_by: { type: "string", enum: ["customer", "model", "meter", "plan"] },
+      scope: { type: "string", enum: ["billed", "all"] },
       from: { type: "string", format: "date-time" },
       to: { type: "string", format: "date-time" },
       data: {
@@ -226,6 +278,17 @@ export const USAGE_VIEW_SCHEMAS = {
             },
             model: { type: "string" },
             meter: { type: "string" },
+            meter_name: {
+              type: "string",
+              nullable: true,
+              description: "With `group_by=meter`: the meter's name.",
+            },
+            plan: { type: "string", description: 'The plan product\'s id; `""` = no plan.' },
+            plan_name: {
+              type: "string",
+              nullable: true,
+              description: "With `group_by=plan`: the plan product's name.",
+            },
             ...marginFields,
           },
         },

@@ -29,6 +29,7 @@ import {
   type SeriesPeriod,
 } from "./query";
 import {
+  combinesAcrossBusinesses,
   denominatorIsMoney,
   hasMoneyHalves,
   measureById,
@@ -262,14 +263,13 @@ export interface AnalyticsScope {
    * spanning several zones is not a single wall-clock interval, and no zone can make it
    * one. Stated rather than reconciled.
    *
-   * It is NOT where "today" is: see `zones` and `scopeToday`.
+   * It is NOT where "today" is: each business's today is its own (`zoneOf`, `dayGroups`).
    */
   timezone: string;
-  /**
-   * The zones the scope's businesses cut their days in (null is UTC), distinct. Each one's
-   * newest row is its own local today, so the answer's last day is the earliest of them.
-   */
+  /** The zones the scope's businesses cut their days in (null is UTC), distinct. */
   zones: string[];
+  /** Each business's zone, by row id: where its own today is. */
+  zoneOf: Map<string, string>;
   timezoneSource: ResolvedWindow["timezoneSource"];
   /**
    * Where weeks, quarters and years are cut. At organization scope it is the businesses'
@@ -298,21 +298,41 @@ export interface AnalyticsScope {
 }
 
 /**
- * The last day every business in the scope has reached at `at`, in its own zone.
+ * The day an answer's periods are LABELLED on — not the day any business is read at.
  *
- * A business writes today under its own local date, so at 20:00 UTC an Asia/Kolkata book
- * already has tomorrow's row and a New York one does not. Reading the organization at the
- * later day sums one stock with no row for the others, and a missing row is unknown, not
- * zero. So the organization's day is the EARLIEST local today; at business scope it is the
- * business's own.
+ * At business scope it is the business's own today. At organization scope it is the lowest of
+ * the businesses' own todays, so every label is a date each business has reached; each
+ * business is still read at its own today (`dayGroups`), and a day after this one lands in
+ * the period that holds it.
  */
 export function scopeToday(scope: Pick<AnalyticsScope, "zones" | "timezone">, at: Date): string {
-  let earliest: string | null = null;
+  let label: string | null = null;
   for (const zone of scope.zones) {
     const day = zonedDayString(at, zone);
-    if (earliest == null || day < earliest) earliest = day;
+    if (label == null || day < label) label = day;
   }
-  return earliest ?? zonedDayString(at, scope.timezone);
+  return label ?? zonedDayString(at, scope.timezone);
+}
+
+/**
+ * The scope's businesses grouped by their own local today at `at`, lowest day first. One
+ * group when every business shares a date; at 20:00 UTC an Asia/Kolkata book is already a
+ * day ahead of a New York one, and the two are two groups.
+ */
+export function dayGroups(
+  scope: Pick<AnalyticsScope, "businessIds" | "zoneOf" | "timezone">,
+  at: Date,
+): Array<{ today: string; businessIds: string[] }> {
+  const byDay = new Map<string, string[]>();
+  for (const id of scope.businessIds) {
+    const day = zonedDayString(at, scope.zoneOf.get(id) ?? scope.timezone);
+    const ids = byDay.get(day) ?? [];
+    ids.push(id);
+    byDay.set(day, ids);
+  }
+  return [...byDay]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([today, businessIds]) => ({ today, businessIds }));
 }
 
 /** The caller's test/live partition. `all` is a platform or operator credential. */
@@ -412,6 +432,7 @@ export async function resolveScope(
       // where the billing happens.
       timezone: business.timezone ?? "UTC",
       zones: [business.timezone ?? "UTC"],
+      zoneOf: new Map([[business.id, business.timezone ?? "UTC"]]),
       timezoneSource: business.timezone ? "business" : "default",
       calendar: calendarOf(own),
       baseCurrency: useBusiness ? (own?.defaultCurrency ?? null) : orgCurrency,
@@ -447,6 +468,7 @@ export async function resolveScope(
     businessPublicId: null,
     timezone: org?.timezone ?? "UTC",
     zones: [...new Set(rows.map((r) => r.timezone ?? "UTC"))],
+    zoneOf: new Map(rows.map((r) => [r.id, r.timezone ?? "UTC"])),
     timezoneSource: org?.timezone ? "organization" : "default",
     calendar: shared,
     baseCurrency: orgCurrency,
@@ -797,6 +819,106 @@ function windowHalves(
   return { value, denominator };
 }
 
+/** `b` is the later of two cells one group put in the same label period: fold it into `a`. */
+function foldLater(m: MeasureDef, a: SeriesCell, b: SeriesCell): SeriesCell {
+  const add = (x: bigint | null, y: bigint | null) =>
+    x == null && y == null ? null : (x ?? 0n) + (y ?? 0n);
+  if (m.aggregate === "sum")
+    return { ...a, value: add(a.value, b.value), denominator: add(a.denominator, b.denominator) };
+  if (m.aggregate === "ratio") {
+    const fold = m.ratio!;
+    return {
+      ...a,
+      value: fold.numerator === "sum" ? add(a.value, b.value) : b.value,
+      denominator:
+        fold.denominator === "sum"
+          ? add(a.denominator, b.denominator)
+          : fold.denominator === "last"
+            ? b.denominator
+            : a.denominator,
+    };
+  }
+  // A stock, or a distinct count: the later period is the business's own latest.
+  return { ...a, value: b.value, denominator: b.denominator };
+}
+
+/**
+ * Lay each day group's read, cut on its OWN window, onto the answer's label periods.
+ *
+ * A group period goes to the label period that holds its end date; one ending after
+ * `foldAfter` (a business ahead of the label day) goes to the period that holds `foldAfter`,
+ * folded with what that group already put there by the measure's own rule. Groups then add,
+ * as businesses do in one period. A label period no group reached is missing.
+ */
+function onLabelPeriods(
+  m: MeasureDef,
+  labels: readonly SeriesPeriod[],
+  foldAfter: string,
+  parts: ReadonlyArray<{ periods: readonly SeriesPeriod[]; read: MetricSeriesResult }>,
+): MetricSeriesResult {
+  const target = (end: string) => {
+    const day = end > foldAfter ? foldAfter : end;
+    return labels.findIndex((p) => day >= p.start && day <= p.end);
+  };
+  const add = (x: bigint | null, y: bigint | null) =>
+    x == null && y == null ? null : (x ?? 0n) + (y ?? 0n);
+  const cells = new Map<string, SeriesCell>();
+  const slices = new Map<string, SeriesCell & { dimValue: string }>();
+  const reached = new Set<number>();
+  let computedAt: Date | null = null;
+  let sliced = false;
+  for (const { periods: ps, read } of parts) {
+    const at = new Map(ps.map((p) => [p.end, target(p.end)]));
+    for (const p of ps) {
+      const i = at.get(p.end)!;
+      if (i >= 0 && !read.missing.includes(p.end)) reached.add(i);
+    }
+    if (read.computedAt && (computedAt == null || read.computedAt < computedAt))
+      computedAt = read.computedAt;
+    const layOn = <C extends SeriesCell>(
+      list: readonly C[],
+      key: (c: C) => string,
+      into: Map<string, C>,
+    ) => {
+      const mine = new Map<string, C>();
+      for (const c of list) {
+        const i = at.get(c.t);
+        if (i == null || i < 0) continue;
+        const cell = { ...c, t: labels[i]!.end };
+        const k = key(cell);
+        const prior = mine.get(k);
+        mine.set(k, prior ? ({ ...cell, ...foldLater(m, prior, cell) } as C) : cell);
+      }
+      for (const [k, c] of mine) {
+        const cur = into.get(k);
+        into.set(
+          k,
+          cur
+            ? {
+                ...cur,
+                value: add(cur.value, c.value),
+                denominator: add(cur.denominator, c.denominator),
+              }
+            : c,
+        );
+      }
+    };
+    layOn(read.cells, (c) => `${c.t}\u0000${c.currency}`, cells);
+    if (read.slices) {
+      sliced = true;
+      layOn(read.slices, (c) => `${c.t}\u0000${c.currency}\u0000${c.dimValue}`, slices);
+    }
+  }
+  return {
+    measure: parts[0]!.read.measure,
+    grain: parts[0]!.read.grain,
+    cells: [...cells.values()],
+    ...(sliced ? { slices: [...slices.values()] } : {}),
+    computedAt,
+    missing: labels.filter((_, i) => !reached.has(i)).map((p) => p.end),
+  };
+}
+
 /** A flow's window total is the sum of its buckets; a stock's is the value at the end. */
 function windowTotal(m: MeasureDef, points: SeriesPoint[]): number | null {
   /**
@@ -881,22 +1003,71 @@ export async function resolveAnalytics(
   }
 
   /**
-   * The last day every business has reached (`scopeToday`). A named window ends on it, and an
-   * organization reads no day row past it, so the stock at the end and the previous window's
-   * stock are both every business on the same local date. A period past it is unknown.
+   * The label day (`scopeToday`): the window and its periods are cut on it. At organization
+   * scope each business is still read over its OWN window, ending at its own today, when the
+   * businesses' todays differ (`ownDays`); a business ahead of the label puts its later days
+   * in the period that holds the label day. So an additive figure is the sum of the business
+   * answers, and no period holds one business's row alone.
    */
   const today = scopeToday(scope, now);
   const through = scope.scope === "organization" ? today : undefined;
-  const window = resolveWindow({
-    range: req.range,
-    start: req.start,
-    end: req.end,
-    timezone: scope.timezone,
-    timezoneSource: scope.timezoneSource,
-    calendar: scope.calendar,
-    today,
-  });
+  const windowAt = (day: string) =>
+    resolveWindow({
+      range: req.range,
+      start: req.start,
+      end: req.end,
+      timezone: scope.timezone,
+      timezoneSource: scope.timezoneSource,
+      calendar: scope.calendar,
+      today: day,
+    });
+  const window = windowAt(today);
   const periods = buildPeriods(grain, window.start, window.end, scope.calendar);
+  const groups = scope.scope === "organization" ? dayGroups(scope, now) : [];
+  const ownDays = groups.length > 1;
+  if (
+    ownDays &&
+    m.aggregate === "none" &&
+    scope.businessIds.length > 1 &&
+    !combinesAcrossBusinesses(m, grain)
+  ) {
+    // Each group reads on its own, so a group of one would not refuse.
+    throw new MeasureRefused(
+      `${m.name} is not additive, so it cannot be combined across businesses. Ask for one business.`,
+    );
+  }
+  /**
+   * Each group's own window (or the one before it), cut into periods, and read. A stock or a
+   * distinct count is read back to the label window's start as well: its figure is the end's
+   * alone, and the oldest point then holds every business at that date.
+   */
+  const byOwnDay = (
+    prev: boolean,
+    read: (
+      ids: readonly string[],
+      ps: readonly SeriesPeriod[],
+      thru: string,
+    ) => Promise<MetricSeriesResult>,
+    asOfDate = m.aggregate === "last" || m.aggregate === "none",
+  ) => {
+    const ref = prev ? previousWindow(window) : window;
+    return Promise.all(
+      groups.map(async (g) => {
+        const own = windowAt(g.today);
+        const w = prev ? previousWindow(own) : own;
+        const from = asOfDate && ref.start < w.start ? ref.start : w.start;
+        const ps = buildPeriods(grain, from, w.end, scope.calendar);
+        return { periods: ps, read: await read(g.businessIds, ps, g.today) };
+      }),
+    ).then((parts) =>
+      onLabelPeriods(
+        m,
+        prev ? buildPeriods(grain, ref.start, ref.end, scope.calendar) : periods,
+        ref.end < today ? ref.end : today,
+        parts,
+      ),
+    );
+  };
 
   // A segment is answered from the ledger at read time; see `segment-series.ts`.
   let population: SegmentPopulation | null = null;
@@ -929,6 +1100,8 @@ export async function resolveAnalytics(
     ps: readonly SeriesPeriod[],
     split?: string,
     convert?: Parameters<typeof readMetricSeries>[0]["convert"],
+    ids: readonly string[] = scope.businessIds,
+    thru: string | undefined = through,
   ) =>
     population
       ? readSegmentSeries({
@@ -940,12 +1113,12 @@ export async function resolveAnalytics(
         })
       : readMetricSeries({
           organizationId: scope.organizationId,
-          businessIds: scope.businessIds,
+          businessIds: ids,
           measure: m.id,
           grain,
           periods: ps,
           calendar: scope.calendar,
-          ...(through ? { through } : {}),
+          ...(thru ? { through: thru } : {}),
           ...(split ? { split } : {}),
           ...(convert ? { convert } : {}),
         });
@@ -964,7 +1137,10 @@ export async function resolveAnalytics(
     split?: string,
     convert?: Parameters<typeof readMetricSeries>[0]["convert"],
     ratesKey = "",
+    prev = false,
   ): Promise<MetricSeriesResult> => {
+    if (ownDays)
+      return byOwnDay(prev, (ids, gps, thru) => readLive(gps, split, convert, ids, thru));
     const closed = ps.filter((p) => p.end < yesterday);
     if (
       !seriesCacheEnabled() ||
@@ -1016,13 +1192,28 @@ export async function resolveAnalytics(
     ...new Set([
       ...(fxImpact ? [] : read.cells.map((c) => c.currency)),
       ...(bookScoped
-        ? await fxBookCurrencies({
-            organizationId: scope.organizationId,
-            businessIds: scope.businessIds,
-            grain,
-            periods,
-            ...(through ? { through } : {}),
-          })
+        ? ownDays
+          ? (
+              await Promise.all(
+                groups.map((g) => {
+                  const w = windowAt(g.today);
+                  return fxBookCurrencies({
+                    organizationId: scope.organizationId,
+                    businessIds: g.businessIds,
+                    grain,
+                    periods: buildPeriods(grain, w.start, w.end, scope.calendar),
+                    through: g.today,
+                  });
+                }),
+              )
+            ).flat()
+          : await fxBookCurrencies({
+              organizationId: scope.organizationId,
+              businessIds: scope.businessIds,
+              grain,
+              periods,
+              ...(through ? { through } : {}),
+            })
         : []),
     ]),
   ]
@@ -1079,16 +1270,22 @@ export async function resolveAnalytics(
       : undefined;
   if (dayConvert && !fxImpact)
     read = await readPeriods(periods, req.split, dayConvert, JSON.stringify(convert!.rates));
-  if (fxImpact)
-    read = await readFxImpact({
+  const fxRead = (ids: readonly string[], ps: readonly SeriesPeriod[], thru?: string) =>
+    readFxImpact({
       organizationId: scope.organizationId,
-      businessIds: scope.businessIds,
+      businessIds: ids,
       grain,
-      periods,
+      periods: ps,
       currency,
-      ...(through ? { through } : {}),
+      ...(thru ? { through: thru } : {}),
       ...(convert ? { convert: { ...convert, ...(dayConvert ? { dayConvert } : {}) } } : {}),
     });
+  // FX is a difference of stocks, so each group is read over its own window and only then
+  // laid onto the label periods.
+  if (fxImpact)
+    read = ownDays
+      ? await byOwnDay(false, fxRead, false)
+      : await fxRead(scope.businessIds, periods, through);
   const totals = collapse(m, read.cells, currency, convert);
   const series: SeriesPoint[] = periods.map((p) => {
     const cell = totals.get(p.end);
@@ -1234,6 +1431,7 @@ export async function resolveAnalytics(
       undefined,
       dayConvert,
       convert ? JSON.stringify(convert.rates) : "",
+      true,
     );
     // Converted like the current window: without `convert` a converted answer's comparison
     // kept only the base currency's cells.

@@ -16,7 +16,17 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Columns3, Download, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowDownWideNarrow,
+  ArrowUp,
+  ArrowUpDown,
+  ArrowUpNarrowWide,
+  ChevronDown,
+  Columns3,
+  Download,
+  X,
+} from "lucide-react";
 import {
   Table,
   TableBody,
@@ -37,9 +47,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableSearch } from "@/components/table-search";
+import { installRowPress } from "@/components/ui/row-press";
 import { toast } from "sonner";
 import { buildCsv, EXPORT_ROW_CAP, type ExportCell } from "@/lib/table-export";
 import { cn } from "@/lib/utils";
+import { planPhoneRow, type PhonePlace } from "@/lib/phone-row";
+import { useListLayout } from "@/lib/use-list-layout";
 
 declare module "@tanstack/react-table" {
   // Column-level presentation hints, read by the renderers below.
@@ -62,11 +75,23 @@ declare module "@tanstack/react-table" {
     /** Fixed width utility, e.g. `'w-12'`. */
     width?: string;
     /**
+     * This column takes the table's spare width; every other column keeps its content
+     * width. Default: the first visible data column.
+     */
+    grow?: boolean;
+    /**
      * The CSV cells this column exports, in order. Default: its header and value. Split a
      * composite cell (plan + id), write money in major units with its currency, or `[]` to
      * leave the column out. Every column exports, shown or hidden.
      */
     exportAs?: ExportCell<TData>[];
+    /**
+     * Where the column goes in a stacked row (a narrow list card): `title` (first line), `aside`
+     * (first line, right: money, status), `detail` (label and value under it) or `hide`.
+     * Default `detail`; the title defaults to the `grow` column and an `id: "status"`
+     * column to `aside`. See `lib/phone-row.ts`.
+     */
+    phone?: PhonePlace;
   }
 }
 
@@ -104,6 +129,12 @@ export interface DataTableManualMode<TData = unknown> {
   ) => Promise<{ rows: TData[]; capped: boolean }>;
 }
 
+export interface DataTableEmptyContext {
+  /** The search box holds text, so the empty table may be the search's doing. */
+  searching: boolean;
+  clearSearch: () => void;
+}
+
 export interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
@@ -112,10 +143,15 @@ export interface DataTableProps<TData, TValue> {
   searchPlaceholder?: string;
   /** Rows per page; omit to disable pagination. */
   pageSize?: number;
-  /** Rendered when `data` is empty (or filtered to nothing). */
-  emptyState?: React.ReactNode;
-  /** Toolbar count: "N <countLabel>" next to the search box. */
+  /**
+   * Rendered when `data` is empty (or filtered to nothing). A function hears whether the
+   * search narrowed the rows, and gets the way to clear it.
+   */
+  emptyState?: React.ReactNode | ((ctx: DataTableEmptyContext) => React.ReactNode);
+  /** Toolbar count: "N <countLabel>" next to the search box. Plural. */
   countLabel?: string;
+  /** The count's noun for exactly one row; derived from `countLabel` when absent. */
+  countSingular?: string;
   /** Enable the Export CSV button; used as the downloaded file name. */
   exportName?: string;
   /** Show the column-visibility chooser. */
@@ -217,7 +253,33 @@ export function resolveDefaultSort<TData, TValue>(
   return created ? [{ id: created, desc: true }] : [];
 }
 
+/** "1 region", "2 regions": the count's noun, lowercased mid-sentence. */
+function countNoun(n: number, pluralForm: string, singular?: string): string {
+  const word =
+    n === 1 ? (singular ?? pluralForm.replace(/ies$/, "y").replace(/s$/, "")) : pluralForm;
+  return word
+    .split(" ")
+    .map((w) => (w.length > 1 && w === w.toUpperCase() ? w : w.toLowerCase()))
+    .join(" ");
+}
+
 const ALIGN_CLASS = { left: "text-left", right: "text-right", center: "text-center" } as const;
+
+/**
+ * Spare width goes to ONE column. Auto layout shares it out by content width, so it
+ * pooled in whichever column had the widest row. Every other column is pinned to its
+ * content (`w-px`); `*:w-max` keeps wrappable content (a flex-wrap line, TruncateCell)
+ * at its natural width instead of letting the pin squeeze it to one word per line.
+ */
+const SHRINK_CELL = "w-px *:w-max";
+const SHRINK_ALIGN = { left: "", right: "*:ms-auto", center: "*:mx-auto" } as const;
+
+/** Cells pin 24px/20px lines for the table row; a stacked row lets a long value wrap. */
+const PHONE_LINES = "[&_.h-5]:h-auto [&_.h-5]:min-h-5 [&_.h-6]:h-auto [&_.h-6]:min-h-6";
+
+function headerLabel(header: unknown): string {
+  return typeof header === "string" ? header : "";
+}
 
 /**
  * Client-side data-table (TanStack) with search / sort / pagination plus the
@@ -225,6 +287,11 @@ const ALIGN_CLASS = { left: "text-left", right: "text-right", center: "text-cent
  * bulk row selection and a sticky row-menu column. Every list view reuses this —
  * see `patterns/list-page` for the full list archetype (segments + filter builder +
  * Create/Import chrome) built on top of it.
+ *
+ * In a card narrower than 52.5rem (`list-narrow`, globals.css) the same rows render as a
+ * stacked list (`li[data-slot=list-row]`), placed by each column's `meta.phone`; no table, no
+ * head row, no sideways scroll. The card is the size container, not the window, so a list
+ * beside Billy's panel or on a small laptop stacks too.
  */
 export function DataTable<TData, TValue>({
   columns,
@@ -234,6 +301,7 @@ export function DataTable<TData, TValue>({
   pageSize = 10,
   emptyState,
   countLabel,
+  countSingular,
   exportName,
   columnChooser = false,
   persistKey,
@@ -257,6 +325,8 @@ export function DataTable<TData, TValue>({
   applyHidden,
 }: DataTableProps<TData, TValue>) {
   const router = useRouter();
+  const probe = React.useRef<HTMLDivElement>(null);
+  const layout = useListLayout(probe);
   const [sorting, setSorting] = React.useState<SortingState>(() =>
     resolveDefaultSort(columns, defaultSort),
   );
@@ -432,6 +502,41 @@ export function DataTable<TData, TValue>({
   });
 
   const rows = table.getRowModel().rows;
+  const dataColumns = table
+    .getVisibleLeafColumns()
+    .filter((c) => c.id !== "__select" && c.id !== "__menu");
+  const growId = (dataColumns.find((c) => c.columnDef.meta?.grow) ?? dataColumns[0])?.id;
+  // Columns with a fixed `meta.width` size themselves.
+  const sizeClass = (
+    id: string,
+    meta: { width?: string; align?: keyof typeof ALIGN_CLASS } | undefined,
+    body: boolean,
+  ) =>
+    id === growId || meta?.width
+      ? undefined
+      : cn(SHRINK_CELL, body && meta?.align && SHRINK_ALIGN[meta.align]);
+  const phonePlan = planPhoneRow(
+    dataColumns.map((c) => ({
+      id: c.id,
+      grow: c.columnDef.meta?.grow,
+      phone: c.columnDef.meta?.phone,
+    })),
+  );
+  const phoneDetail = phonePlan.detail.map((id) => ({
+    id,
+    label: headerLabel(table.getColumn(id)?.columnDef.header),
+  }));
+  const labelled = phoneDetail.filter((d) => d.label);
+  const unlabelled = phoneDetail.filter((d) => !d.label);
+  // Let inner links/buttons/menus win — the row is only a fallback target for its dead area.
+  const openRow = (href: string) => (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("a,button,input,select,[role=menuitem]")) return;
+    router.push(href);
+  };
+  const hasRowHref = !!onRowHref;
+  React.useEffect(() => {
+    if (hasRowHref) installRowPress();
+  }, [hasRowHref]);
   const loadedCount = table.getFilteredRowModel().rows.length;
   const filteredCount = manual ? manual.total : loadedCount;
   const countText = `${filteredCount.toLocaleString("en")}${manual?.totalCapped ? "+" : ""}`;
@@ -439,7 +544,12 @@ export function DataTable<TData, TValue>({
   const from = filteredCount === 0 ? 0 : manual ? 1 : pageIndex * ps + 1;
   const to = manual ? loadedCount : Math.min((pageIndex + 1) * ps, filteredCount);
   const selectedRows = table.getFilteredSelectedRowModel().rows;
+  const searching = (manual ? manual.search : globalFilter).trim() !== "";
+  const clearSearch = () => (manual ? manual.onSearchChange("") : setGlobalFilter(""));
   const clearSelection = () => table.resetRowSelection();
+  const selectAllHeader = table
+    .getHeaderGroups()[0]
+    ?.headers.find((h) => h.column.id === "__select");
 
   // Every column the table defines, shown or hidden: the column chooser shapes the screen,
   // not the file. Values come off the row, so rows fetched only for the export work too.
@@ -567,295 +677,423 @@ export function DataTable<TData, TValue>({
 
       {/* One card: the toolbar row, the filter band, then the table. `bg-card`, not
           transparent — on the tinted ground a bare table reads as the page. */}
-      <div className="overflow-hidden rounded-xl border bg-card">
-        {hasToolbar ? (
-          <div className="flex flex-wrap items-center gap-2 border-b px-3.5 py-3">
-            {toolbarLead}
-            {countLabel && !onCountText ? (
-              <span className="text-sm">
-                <strong className="font-semibold">{countText}</strong>{" "}
-                <span className="text-muted-foreground">{countLabel.toLowerCase()}</span>
-              </span>
-            ) : null}
-            {searchable ? (
-              <TableSearch
-                placeholder={searchPlaceholder}
-                debounceMs={searchDebounceMs}
-                loading={manual?.loading}
-                externalValue={manual?.search}
-                onSettled={onSearchSettled}
-                className="relative max-w-md min-w-40 flex-[1_1_12rem]"
-              />
-            ) : null}
-            {searchable ? searchHint : null}
-            <div className="ms-auto flex flex-wrap items-center gap-2">
-              {exportName ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" disabled={exporting}>
-                      <Download className="size-3.5" /> Export{" "}
-                      <ChevronDown className="size-3.5 opacity-60" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-60">
-                    {manual?.exportAll ? (
-                      <DropdownMenuItem onSelect={() => void exportAll()}>
-                        {manual.total > EXPORT_ROW_CAP || manual.totalCapped
-                          ? `Export the first ${EXPORT_ROW_CAP.toLocaleString("en")} rows as CSV`
-                          : `Export all ${countText} row${manual.total === 1 ? "" : "s"} as CSV`}
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onSelect={() => exportCsv()}>
-                        {/* Without `exportAll`, manual mode exports what has loaded so far. */}
-                        Export {manual ? `${loadedCount} loaded` : loadedCount} row
-                        {loadedCount === 1 ? "" : "s"} as CSV
-                      </DropdownMenuItem>
-                    )}
-                    {enableSelection ? (
-                      <DropdownMenuItem
-                        disabled={selectedRows.length === 0}
-                        onSelect={() => exportCsv(selectedRows.map((r) => r.original))}
-                      >
-                        Export selected as CSV
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+      <div className="@container/list overflow-hidden rounded-xl border bg-card">
+        {/* 1px wide only while the card is narrow: `useListLayout` reads it. */}
+        <div ref={probe} aria-hidden className="h-0 w-0 list-narrow:w-px" />
+        {/* The bulk bar lays over the toolbar row, so selecting a row never moves the table. */}
+        <div className="relative">
+          {hasToolbar ? (
+            <div className="flex flex-wrap items-center gap-2 border-b px-3.5 py-3">
+              {toolbarLead}
+              {countLabel && !onCountText ? (
+                <span className="text-sm">
+                  <strong className="font-semibold">{countText}</strong>{" "}
+                  <span className="text-muted-foreground">
+                    {countNoun(filteredCount, countLabel, countSingular)}
+                  </span>
+                </span>
               ) : null}
-              {toolbarExtras}
-              {sortMenu.length > 0 ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      Sort by{activeSortLabel ? `: ${activeSortLabel}` : ""}
-                      {activeSort ? (
-                        activeSort.desc ? (
-                          <ArrowDown className="size-3.5" />
-                        ) : (
-                          <ArrowUp className="size-3.5" />
-                        )
-                      ) : (
-                        <ChevronDown className="size-3.5 opacity-60" />
-                      )}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                      Sort by
-                    </DropdownMenuLabel>
-                    {sortMenu.map((o) => (
-                      <DropdownMenuItem key={o.id} onSelect={() => toggleSort(o.id)}>
-                        <span className="flex-1">{o.label}</span>
-                        {activeSort?.id === o.id ? (
-                          activeSort.desc ? (
-                            <ArrowDown className="size-3.5" />
-                          ) : (
-                            <ArrowUp className="size-3.5" />
-                          )
-                        ) : null}
-                      </DropdownMenuItem>
-                    ))}
-                    {activeSort ? (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => applySorting([])}>
-                          Clear sort
+              {searchable ? (
+                <TableSearch
+                  placeholder={searchPlaceholder}
+                  debounceMs={searchDebounceMs}
+                  loading={manual?.loading}
+                  externalValue={manual ? manual.search : globalFilter}
+                  onSettled={onSearchSettled}
+                  // Narrow card: its own full-width row, above the controls.
+                  className="relative max-w-md min-w-40 flex-[1_1_12rem] list-narrow:order-first list-narrow:max-w-none list-narrow:basis-full"
+                />
+              ) : null}
+              {searchable ? searchHint : null}
+              <div className="ms-auto flex flex-wrap items-center gap-2">
+                {exportName ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" disabled={exporting}>
+                        <Download className="size-3.5" />
+                        <span className="list-narrow:sr-only">Export</span>
+                        <ChevronDown className="size-3.5 opacity-60 list-narrow:hidden" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-60">
+                      {manual?.exportAll ? (
+                        <DropdownMenuItem onSelect={() => void exportAll()}>
+                          {manual.total > EXPORT_ROW_CAP || manual.totalCapped
+                            ? `Export the first ${EXPORT_ROW_CAP.toLocaleString("en")} rows as CSV`
+                            : `Export all ${countText} row${manual.total === 1 ? "" : "s"} as CSV`}
                         </DropdownMenuItem>
-                      </>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
-              {columnChooser ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" aria-label="Select columns">
-                      <Columns3 className="size-3.5" />
-                      <ChevronDown className="size-3.5 opacity-60" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuLabel>Columns</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {table
-                      .getAllLeafColumns()
-                      .filter((c) => c.id !== "__select" && c.getCanHide())
-                      .map((c) => (
-                        <DropdownMenuCheckboxItem
-                          key={c.id}
-                          checked={c.getIsVisible()}
-                          onCheckedChange={(v) => c.toggleVisibility(!!v)}
+                      ) : (
+                        <DropdownMenuItem onSelect={() => exportCsv()}>
+                          {/* Without `exportAll`, manual mode exports what has loaded so far. */}
+                          Export {manual ? `${loadedCount} loaded` : loadedCount} row
+                          {loadedCount === 1 ? "" : "s"} as CSV
+                        </DropdownMenuItem>
+                      )}
+                      {enableSelection ? (
+                        <DropdownMenuItem
+                          disabled={selectedRows.length === 0}
+                          onSelect={() => exportCsv(selectedRows.map((r) => r.original))}
                         >
-                          {columnLabel(c.columnDef as ColumnDef<TData, TValue>, c.id)}
-                        </DropdownMenuCheckboxItem>
+                          Export selected as CSV
+                        </DropdownMenuItem>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                {toolbarExtras}
+                {sortMenu.length > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        <span className="list-narrow:sr-only">
+                          Sort by{activeSortLabel ? `: ${activeSortLabel}` : ""}
+                        </span>
+                        {activeSort ? (
+                          activeSort.desc ? (
+                            <ArrowDown className="size-3.5 list-narrow:hidden" />
+                          ) : (
+                            <ArrowUp className="size-3.5 list-narrow:hidden" />
+                          )
+                        ) : (
+                          <ChevronDown className="size-3.5 opacity-60 list-narrow:hidden" />
+                        )}
+                        {/* Narrow card: one icon that still shows the direction. */}
+                        {activeSort?.desc ? (
+                          <ArrowDownWideNarrow className="hidden size-3.5 list-narrow:block" />
+                        ) : activeSort ? (
+                          <ArrowUpNarrowWide className="hidden size-3.5 list-narrow:block" />
+                        ) : (
+                          <ArrowUpDown className="hidden size-3.5 list-narrow:block" />
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                        Sort by
+                      </DropdownMenuLabel>
+                      {sortMenu.map((o) => (
+                        <DropdownMenuItem key={o.id} onSelect={() => toggleSort(o.id)}>
+                          <span className="flex-1">{o.label}</span>
+                          {activeSort?.id === o.id ? (
+                            activeSort.desc ? (
+                              <ArrowDown className="size-3.5" />
+                            ) : (
+                              <ArrowUp className="size-3.5" />
+                            )
+                          ) : null}
+                        </DropdownMenuItem>
                       ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
-              {toolbarEnd}
+                      {activeSort ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => applySorting([])}>
+                            Clear sort
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                {/* Hidden in a narrow card: its rows show every visible column as label and
+                    value, so there is no width to choose columns for. */}
+                {columnChooser ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label="Select columns"
+                        className="list-narrow:hidden"
+                      >
+                        <Columns3 className="size-3.5" />
+                        <ChevronDown className="size-3.5 opacity-60" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      <DropdownMenuLabel>Columns</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {table
+                        .getAllLeafColumns()
+                        .filter((c) => c.id !== "__select" && c.getCanHide())
+                        .map((c) => (
+                          <DropdownMenuCheckboxItem
+                            key={c.id}
+                            checked={c.getIsVisible()}
+                            onCheckedChange={(v) => c.toggleVisibility(!!v)}
+                          >
+                            {columnLabel(c.columnDef as ColumnDef<TData, TValue>, c.id)}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                {toolbarEnd}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+
+          {enableSelection && selectedRows.length > 0 ? (
+            <div
+              className={cn(
+                "flex flex-wrap items-center gap-2 border-b bg-card bg-linear-to-r from-accent/60 to-accent/60 px-3.5 py-2 text-sm",
+                // A narrow card's bar may wrap past the toolbar's height: it grows down, never clips.
+                hasToolbar &&
+                  "absolute inset-0 z-20 list-narrow:bottom-auto list-narrow:min-h-full",
+              )}
+            >
+              {/* Stacked rows have no head row, so select-all lives here. */}
+              {selectAllHeader && layout !== "table" ? (
+                <span className="hidden items-center list-narrow:flex">
+                  {flexRender(
+                    selectAllHeader.column.columnDef.header,
+                    selectAllHeader.getContext(),
+                  )}
+                </span>
+              ) : null}
+              <strong className="font-semibold">{selectedRows.length} selected</strong>
+              {exportName ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => exportCsv(selectedRows.map((r) => r.original))}
+                >
+                  <Download className="size-3.5" />
+                  <span className="list-narrow:sr-only">Export selected</span>
+                </Button>
+              ) : null}
+              {bulkActions?.(
+                selectedRows.map((r) => r.original),
+                clearSelection,
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ms-auto"
+                onClick={clearSelection}
+                aria-label="Clear selection"
+              >
+                <X className="size-3.5" />
+                <span className="list-narrow:sr-only">Clear</span>
+              </Button>
+            </div>
+          ) : null}
+        </div>
 
         {toolbarBelow ? (
           <div className="space-y-3 border-b px-3.5 py-3 empty:hidden">{toolbarBelow}</div>
         ) : null}
 
-        {enableSelection && selectedRows.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 border-b bg-accent/60 px-3.5 py-2 text-sm">
-            <strong className="font-semibold">{selectedRows.length} selected</strong>
-            {exportName ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => exportCsv(selectedRows.map((r) => r.original))}
-              >
-                <Download className="size-3.5" /> Export selected
-              </Button>
-            ) : null}
-            {bulkActions?.(
-              selectedRows.map((r) => r.original),
-              clearSelection,
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ms-auto"
-              onClick={clearSelection}
-              aria-label="Clear selection"
-            >
-              <X className="size-3.5" /> Clear
-            </Button>
-          </div>
-        ) : null}
-
         <div
-          className={cn("transition-opacity", manual?.loading && "pointer-events-none opacity-60")}
+          className={cn(
+            "transition-opacity",
+            manual?.loading && "pointer-events-none opacity-60",
+            // `useListLayout` mounts one layout; until it can (SSR, hydration) CSS picks it.
+            "list-narrow:[&>[data-slot=table-container]]:hidden",
+          )}
+          data-list-layout={layout}
           aria-busy={manual?.loading || undefined}
         >
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((hg) => (
-                <TableRow key={hg.id} className="border-b hover:bg-transparent">
-                  {hg.headers.map((header) => {
-                    const canSort = header.column.getCanSort();
-                    const meta = header.column.columnDef.meta;
-                    const sorted = header.column.getIsSorted();
+          {layout === "phone" ? null : (
+            <Table>
+              <TableHeader>
+                {table.getHeaderGroups().map((hg) => (
+                  <TableRow key={hg.id} className="border-b hover:bg-transparent">
+                    {hg.headers.map((header) => {
+                      const canSort = header.column.getCanSort();
+                      const meta = header.column.columnDef.meta;
+                      const sorted = header.column.getIsSorted();
+                      return (
+                        <TableHead
+                          key={header.id}
+                          className={cn(
+                            // No local type override: the label and its soft band come from `ui/table`.
+                            // 12px gutters (the `ui/table` default); the outer edges line up
+                            // with the toolbar's 14px.
+                            "h-11 px-3 first:pl-3.5 last:pr-3.5",
+                            meta?.align && ALIGN_CLASS[meta.align],
+                            sizeClass(header.column.id, meta, false),
+                            meta?.width,
+                            meta?.headClassName,
+                            // Opaque under the band, so the frozen head cell matches the row.
+                            header.column.id === "__menu" &&
+                              "sticky right-0 z-10 bg-card bg-linear-to-r from-muted/40 to-muted/40 px-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] last:pr-2",
+                          )}
+                        >
+                          {header.isPlaceholder ? null : canSort ? (
+                            <button
+                              type="button"
+                              className={cn(
+                                // Baseline, not center: reversed, the icon is the start item and an
+                                // inline-flex takes its baseline from it, lifting the label 1.5px.
+                                "group/head touch-target relative inline-flex items-baseline gap-1 hover:text-foreground",
+                                meta?.align === "right" && "flex-row-reverse",
+                              )}
+                              onClick={header.column.getToggleSortingHandler()}
+                            >
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              {sorted === "asc" ? (
+                                <ArrowUp className="size-3.5 self-center" />
+                              ) : sorted === "desc" ? (
+                                <ArrowDown className="size-3.5 self-center" />
+                              ) : (
+                                // Only the sorted column shows its arrow; the rest appear on
+                                // hover or keyboard focus.
+                                <ArrowUpDown className="size-3.5 self-center opacity-0 group-hover/head:opacity-40 group-focus-visible/head:opacity-40" />
+                              )}
+                            </button>
+                          ) : (
+                            flexRender(header.column.columnDef.header, header.getContext())
+                          )}
+                        </TableHead>
+                      );
+                    })}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {rows.length ? (
+                  rows.map((row) => {
+                    const href = onRowHref?.(row.original);
                     return (
-                      <TableHead
-                        key={header.id}
+                      <TableRow
+                        key={row.id}
+                        data-state={row.getIsSelected() && "selected"}
                         className={cn(
-                          // No local type override: the label and its soft band come from `ui/table`.
-                          "h-11 px-4",
-                          meta?.align && ALIGN_CLASS[meta.align],
-                          meta?.width,
-                          meta?.headClassName,
-                          // Opaque under the band, so the frozen head cell matches the row.
-                          header.column.id === "__menu" &&
-                            "sticky right-0 z-10 bg-card bg-linear-to-r from-muted/40 to-muted/40 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)]",
+                          "group/row hover:bg-muted/70 has-aria-expanded:bg-muted/70",
+                          href && "cursor-pointer",
                         )}
+                        onClick={href ? openRow(href) : undefined}
                       >
-                        {header.isPlaceholder ? null : canSort ? (
-                          <button
-                            type="button"
-                            className={cn(
-                              // Baseline, not center: reversed, the icon is the start item and an
-                              // inline-flex takes its baseline from it, lifting the label 1.5px.
-                              "group/head touch-target relative inline-flex items-baseline gap-1 hover:text-foreground",
-                              meta?.align === "right" && "flex-row-reverse",
-                            )}
-                            onClick={header.column.getToggleSortingHandler()}
-                          >
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {sorted === "asc" ? (
-                              <ArrowUp className="size-3.5 self-center" />
-                            ) : sorted === "desc" ? (
-                              <ArrowDown className="size-3.5 self-center" />
-                            ) : (
-                              // Only the sorted column shows its arrow; the rest appear on
-                              // hover or keyboard focus.
-                              <ArrowUpDown className="size-3.5 self-center opacity-0 group-hover/head:opacity-40 group-focus-visible/head:opacity-40" />
-                            )}
-                          </button>
-                        ) : (
-                          flexRender(header.column.columnDef.header, header.getContext())
-                        )}
-                      </TableHead>
+                        {row.getVisibleCells().map((cell) => {
+                          const meta = cell.column.columnDef.meta;
+                          return (
+                            <TableCell
+                              key={cell.id}
+                              className={cn(
+                                // Top-aligned, so one-line cells sit on the first line of a
+                                // two-line Info cell. 5px + 24px + 2px + 20px + 5px = a 56px
+                                // two-line row; a one-line row is the 44px `h-11` minimum.
+                                "px-3 py-1.25 align-top first:pl-3.5 last:pr-3.5",
+                                meta?.align && ALIGN_CLASS[meta.align],
+                                sizeClass(cell.column.id, meta, true),
+                                meta?.width,
+                                meta?.cellClassName,
+                                // The actions column is sticky so it stays reachable while a
+                                // wide table scrolls. A `border-l` read as an ordinary column
+                                // rule, which made the data scrolling UNDER it look like a
+                                // clipped value (e.g. "$129.0("). A left shadow reads as a
+                                // floating edge instead, which is what it actually is.
+                                // Its ground stays opaque: the row's hover is a gradient layered on
+                                // the card, so data scrolling under the cell never shows through.
+                                cell.column.id === "__menu" &&
+                                  "sticky right-0 z-10 bg-card px-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] group-hover/row:bg-linear-to-r group-hover/row:from-muted/70 group-hover/row:to-muted/70 group-has-aria-expanded/row:bg-linear-to-r group-has-aria-expanded/row:from-muted/70 group-has-aria-expanded/row:to-muted/70 group-data-[state=selected]/row:bg-muted last:pr-2",
+                              )}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
                     );
-                  })}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
+                  })
+                ) : (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell
+                      colSpan={allColumns.length}
+                      className="h-24 p-6 text-center text-muted-foreground"
+                    >
+                      {typeof emptyState === "function"
+                        ? emptyState({ searching, clearSearch })
+                        : (emptyState ?? "No results.")}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+          {layout === "table" ? null : (
+            <ul className="hidden divide-y list-narrow:block">
               {rows.length ? (
                 rows.map((row) => {
                   const href = onRowHref?.(row.original);
+                  const cells = new Map(row.getVisibleCells().map((c) => [c.column.id, c]));
+                  const render = (id: string | undefined) => {
+                    const cell = id ? cells.get(id) : undefined;
+                    return cell ? flexRender(cell.column.columnDef.cell, cell.getContext()) : null;
+                  };
                   return (
-                    <TableRow
+                    <li
                       key={row.id}
-                      data-state={row.getIsSelected() && "selected"}
-                      className={cn("group/row hover:bg-muted/40", href && "cursor-pointer")}
-                      onClick={
-                        href
-                          ? (e) => {
-                              // Let inner links/buttons/menus win — the row is only
-                              // a fallback target for the "dead" area of the row.
-                              if (
-                                (e.target as HTMLElement).closest(
-                                  "a,button,input,select,[role=menuitem]",
-                                )
-                              )
-                                return;
-                              router.push(href);
-                            }
-                          : undefined
-                      }
+                      data-slot="list-row"
+                      data-pressable={href ? true : undefined}
+                      data-state={row.getIsSelected() ? "selected" : undefined}
+                      className={cn(
+                        "flex gap-3 px-3.5 py-3 hover:bg-muted/70 has-aria-expanded:bg-muted/70 data-[state=selected]:bg-muted",
+                        PHONE_LINES,
+                        href && "cursor-pointer",
+                      )}
+                      onClick={href ? openRow(href) : undefined}
                     >
-                      {row.getVisibleCells().map((cell) => {
-                        const meta = cell.column.columnDef.meta;
-                        return (
-                          <TableCell
-                            key={cell.id}
-                            className={cn(
-                              // Rows are airy and top-aligned (two-line Info cells).
-                              // Opt into wrapping per column with `meta.cellClassName`.
-                              "px-4 py-3 align-top",
-                              meta?.align && ALIGN_CLASS[meta.align],
-                              meta?.width,
-                              meta?.cellClassName,
-                              // The actions column is sticky so it stays reachable while a
-                              // wide table scrolls. A `border-l` read as an ordinary column
-                              // rule, which made the data scrolling UNDER it look like a
-                              // clipped value (e.g. "$129.0("). A left shadow reads as a
-                              // floating edge instead, which is what it actually is.
-                              cell.column.id === "__menu" &&
-                                "sticky right-0 z-10 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] group-hover/row:bg-muted/40 group-data-[state=selected]/row:bg-muted",
-                            )}
-                          >
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </TableCell>
-                        );
-                      })}
-                    </TableRow>
+                      {cells.has("__select") ? (
+                        <div className="flex h-6 shrink-0 items-center self-start">
+                          {render("__select")}
+                        </div>
+                      ) : null}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1 wrap-anywhere">
+                            {render(phonePlan.title)}
+                          </div>
+                          {phonePlan.aside.length ? (
+                            <div className="flex max-w-1/2 shrink-0 flex-col items-end gap-0.5 text-right wrap-anywhere">
+                              {phonePlan.aside.map((id) => (
+                                <div key={id} className="flex min-h-6 items-center">
+                                  {render(id)}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        {labelled.length ? (
+                          <dl className="mt-1.5 grid grid-cols-[fit-content(40%)_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1">
+                            {labelled.map(({ id, label }) => (
+                              <React.Fragment key={id}>
+                                <dt className="text-xs text-muted-foreground">{label}</dt>
+                                <dd className="min-w-0 wrap-anywhere">{render(id)}</dd>
+                              </React.Fragment>
+                            ))}
+                          </dl>
+                        ) : null}
+                        {/* A column with no head (an inline action) runs under the list. */}
+                        {unlabelled.length ? (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                            {unlabelled.map(({ id }) => (
+                              <React.Fragment key={id}>{render(id)}</React.Fragment>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      {/* The ⋯ (a 32px button) centred on the 24px first line. */}
+                      {cells.has("__menu") ? (
+                        <div className="-my-1 -me-2 shrink-0">{render("__menu")}</div>
+                      ) : null}
+                    </li>
                   );
                 })
               ) : (
-                <TableRow className="hover:bg-transparent">
-                  <TableCell
-                    colSpan={allColumns.length}
-                    className="h-24 p-6 text-center text-muted-foreground"
-                  >
-                    {emptyState ?? "No results."}
-                  </TableCell>
-                </TableRow>
+                <li className="p-6 text-center text-muted-foreground">
+                  {typeof emptyState === "function"
+                    ? emptyState({ searching, clearSearch })
+                    : (emptyState ?? "No results.")}
+                </li>
               )}
-            </TableBody>
-          </Table>
+            </ul>
+          )}
         </div>
       </div>
 
       {filteredCount > 0 ? (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
           <span>
             Showing {from}–{to} of {countText}
           </span>

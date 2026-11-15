@@ -5,7 +5,7 @@ import * as React from "react";
 // for a buyer still typing an address, or paying through another gateway. This loads it
 // only when `loadStripe` runs, at the Stripe payment step.
 import { loadStripe } from "@stripe/stripe-js/pure";
-import type { Stripe as StripeJs, StripeElements } from "@stripe/stripe-js";
+import type { Stripe as StripeJs } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,10 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { stripeAppearance } from "@/lib/stripe-elements";
+import { gatewayFailure, refusalMessage, RETRY_IN_FORM } from "@/lib/gateway-errors";
+import { confirmStripeIntent } from "@/lib/stripe-confirm";
+import { ShieldCheck } from "lucide-react";
+import { privacyText, type Instrument } from "./storefront-text";
 
 /**
  * The storefront's payment modal — one shape for every gateway.
@@ -57,25 +61,64 @@ export function PaymentDialog({
         if (!o) onClose();
       }}
     >
+      {/* The page behind stays readable: the order summary is what the buyer commits to,
+          so the scrim tints it and does not blur it. */}
+      <style href="tmb-payment-dialog" precedence="default">
+        {`body:has([data-payment-dialog]) [data-slot="dialog-overlay"]{backdrop-filter:none}`}
+      </style>
       {/* A click on the overlay does NOT dismiss this one. Everything else in the app
           is a short confirm flow where an outside click is a cheap escape hatch; here
           it throws away a card the buyer is halfway through typing AND strands the
           setup intent we just opened on the gateway. Deliberate exits only: Cancel,
           the ✕, or Escape. */}
-      <DialogContent size="sm" data-brand onInteractOutside={(e) => e.preventDefault()}>
-        <DialogHeader>
+      {/* Height-capped with an inner scroller: a tall gateway form scrolls under the header,
+          and `PaymentDialogFooter` stays at the bottom of the screen. */}
+      <DialogContent
+        size="sm"
+        data-brand
+        data-payment-dialog
+        className="flex max-h-[90dvh] flex-col overflow-hidden"
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        {/* Room for the × on both sides while the phone sheet centres the title. */}
+        <DialogHeader className="px-8 sm:pr-8 sm:pl-0">
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
-        {children}
+        <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-1">
+          {children}
+        </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-/** Errors Stripe's Payment Element already shows under the fields: a field error or a card decline. */
-function shownByElement(type: string | undefined): boolean {
-  return type === "validation_error" || type === "card_error";
+/**
+ * The dialog's action row. Sticky at the foot of the scrolling body, so Cancel and the
+ * commit button stay on screen however tall the gateway's form is.
+ */
+export function PaymentDialogFooter({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="sticky bottom-0 z-10 -mx-6 mt-auto flex justify-end gap-2 bg-popover px-6 pt-2">
+      {children}
+    </div>
+  );
+}
+
+/** The privacy sentence under a gateway's fields: who never sees what the buyer types. */
+export function PaymentPrivacyNote({
+  business,
+  instrument = "card",
+}: {
+  business: string;
+  instrument?: Instrument;
+}) {
+  return (
+    <p className="flex items-start gap-2 text-xs text-muted-foreground">
+      <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span>{privacyText(business, instrument)}</span>
+    </p>
+  );
 }
 
 /**
@@ -83,94 +126,32 @@ function shownByElement(type: string | undefined): boolean {
  *
  * Shown IN the dialog, not as a toast: a toast sat in the far corner while the dialog
  * stayed open with nothing changed, and went away by itself, so the buyer saw nothing.
- * `reason` is the engine's or the gateway's own sentence, kept whole.
  */
-export function refusalMessage(failed: string, reason: string, nextStep: string): string {
-  const said = reason.trim();
-  const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
-  // The engine's messages often already open with "We could not …": do not say it twice.
-  return /^We could not /.test(sentence)
-    ? `${sentence} ${nextStep}`
-    : `${failed} ${sentence} ${nextStep}`;
-}
-
-/** `pending`: a bank debit Stripe accepted and has not settled (`processing`). */
-type ConfirmOutcome =
-  | { ok: true; providerToken: string; pending: boolean }
-  /** `inForm`: a field error the Payment Element already shows under the field. */
-  | { ok: false; error: string; inForm?: boolean };
+export { refusalMessage } from "@/lib/gateway-errors";
 
 /**
- * Confirm a Stripe intent client-side.
- *
- * A second click on an intent a previous attempt already confirmed comes back
- * `setup_intent_unexpected_state` / `payment_intent_unexpected_state`. That is not a
- * failure: the intent succeeded and only our completion leg didn't, so we retrieve it
- * and carry on rather than walling the buyer behind an intent that in fact went
- * through.
+ * A refusal beside the control that caused it, scrolled into view when it appears or
+ * changes: under a tall gateway form or below the fold it was easy to miss. `nearest` moves
+ * the dialog body or the page only as far as needed; the bottom margin clears the sticky
+ * `PaymentDialogFooter`. The error `Alert` is `role="alert"`, so it is announced.
  */
-async function confirmIntent(
-  stripe: StripeJs,
-  elements: StripeElements,
-  purpose: "setup" | "payment",
-  clientSecret: string,
-  returnUrl?: string,
-): Promise<ConfirmOutcome> {
-  // With a return URL, a method that must redirect (a bank page) can leave and come back.
-  // Without one, Stripe refuses those methods at confirm.
-  const confirmParams = returnUrl ? { confirmParams: { return_url: returnUrl } } : {};
-  if (purpose === "setup") {
-    const first = await stripe.confirmSetup({
-      elements,
-      redirect: "if_required",
-      ...confirmParams,
-    });
-    let intent = first.setupIntent;
-    let errMsg = first.error?.message;
-    if (first.error?.code === "setup_intent_unexpected_state") {
-      intent = (await stripe.retrieveSetupIntent(clientSecret)).setupIntent;
-      errMsg = undefined;
-    }
-    if (!intent || intent.status !== "succeeded" || !intent.payment_method) {
-      return {
-        ok: false,
-        error: errMsg ?? "We could not confirm your card. Try again.",
-        inForm: shownByElement(first.error?.type),
-      };
-    }
-    return {
-      ok: true,
-      pending: false,
-      providerToken:
-        typeof intent.payment_method === "string"
-          ? intent.payment_method
-          : intent.payment_method.id,
-    };
-  }
-  const first = await stripe.confirmPayment({
-    elements,
-    redirect: "if_required",
-    ...confirmParams,
-  });
-  let intent = first.paymentIntent;
-  let errMsg = first.error?.message;
-  if (first.error?.code === "payment_intent_unexpected_state") {
-    intent = (await stripe.retrievePaymentIntent(clientSecret)).paymentIntent;
-    errMsg = undefined;
-  }
-  // `requires_capture` counts: a card authorizes, and the second leg captures it
-  // server-side against the invoice. `processing` is a bank debit on its way, not a
-  // failure: the second leg books it as pending.
-  const pending = intent?.status === "processing";
-  const authorized =
-    pending || intent?.status === "succeeded" || intent?.status === "requires_capture";
-  if (!intent || !authorized)
-    return {
-      ok: false,
-      error: errMsg ?? "We could not confirm the payment. Try again.",
-      inForm: shownByElement(first.error?.type),
-    };
-  return { ok: true, providerToken: intent.id, pending };
+export function RefusalAlert({
+  message,
+  className,
+}: {
+  message: string | null | undefined;
+  className?: string;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (message) ref.current?.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }, [message]);
+  if (!message) return null;
+  return (
+    <div ref={ref} className={cn("scroll-mt-4 scroll-mb-14", className)}>
+      <Alert tone="error">{message}</Alert>
+    </div>
+  );
 }
 
 /**
@@ -179,7 +160,7 @@ async function confirmIntent(
  * The PAN never touches us — Elements posts it to Stripe from its own iframe, which
  * is what keeps this page in PCI SAQ-A. All three storefront card surfaces (portal
  * add-card, hosted checkout, the 3DS sheet on "Pay now") mount this one component,
- * so the confirm-and-recover dance above exists once instead of three times.
+ * so the confirm-and-recover dance (`confirmStripeIntent`) exists once instead of three times.
  */
 export function StripeIntentForm({
   purpose,
@@ -292,8 +273,9 @@ function StripeIntentFormInner({
     setError(null);
     try {
       onBeforeConfirm?.();
-      const outcome = await confirmIntent(stripe, elements, purpose, clientSecret, returnUrl);
-      if (!outcome.ok) return void setError(outcome.inForm ? null : outcome.error);
+      const outcome = await confirmStripeIntent(stripe, elements, purpose, clientSecret, returnUrl);
+      // Every failure is shown here, a field error too: never left to the Element alone.
+      if (!outcome.ok) return void setError(outcome.error);
       const refused = await onAuthorized(outcome.providerToken, { pending: outcome.pending });
       if (typeof refused === "string") setError(refused);
     } catch {
@@ -330,9 +312,19 @@ function StripeIntentFormInner({
         if (typeof refused === "string") setError(refused);
         return;
       }
-      setError(first.error?.message ?? "We could not confirm the payment. Try again.");
+      setError(
+        gatewayFailure("We could not confirm your payment.", first.error?.message, RETRY_IN_FORM),
+      );
       // A failed check leaves the intent waiting for a card: show the card form.
       if (after?.status === "requires_payment_method") setProbe(false);
+    } catch {
+      setError(
+        refusalMessage(
+          "We could not confirm your payment.",
+          "The request did not finish",
+          `Select ${confirmLabel} to try again.`,
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -345,15 +337,15 @@ function StripeIntentFormInner({
           We charge the card that you added. Your bank asks you to confirm the payment in the next
           step.
         </p>
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <div className="flex justify-end gap-2">
+        <RefusalAlert message={error} />
+        <PaymentDialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={submitSavedCard} disabled={busy}>
             {busy ? busyLabel : confirmLabel}
           </Button>
-        </div>
+        </PaymentDialogFooter>
       </div>
     );
   }
@@ -374,13 +366,15 @@ function StripeIntentFormInner({
         would have nothing to fill. 360px is the measured height of the real single-card
         form, so there is no jump when it arrives.
       */}
-      {loadFailed ? (
-        <Alert tone="error">
-          We could not open the payment form. Close this window and reload the page. Then try again.
-        </Alert>
-      ) : null}
+      <RefusalAlert
+        message={
+          loadFailed
+            ? "We could not open the payment form. Close this dialog and reload the page. Then try again."
+            : null
+        }
+      />
       <div className={cn("relative", !ready && !loadFailed && "min-h-[360px]")}>
-        <div className={cn("transition-opacity duration-200", ready ? "opacity-100" : "opacity-0")}>
+        <div className={cn("transition-opacity", ready ? "opacity-100" : "opacity-0")}>
           {/* Left on the DEFAULT `auto` layout deliberately. An explicit
               `layout: { type: 'accordion', radios: … }` looked like the closer match to
               our single-column forms, and measured worse: inside this 448px dialog
@@ -393,8 +387,8 @@ function StripeIntentFormInner({
         </div>
         {!ready && !loadFailed ? <CardFormSkeleton /> : null}
       </div>
-      {error ? <Alert tone="error">{error}</Alert> : null}
-      <div className="flex justify-end gap-2">
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
@@ -404,7 +398,7 @@ function StripeIntentFormInner({
         <Button onClick={submit} disabled={busy || !ready || savedCard === null}>
           {busy ? busyLabel : confirmLabel}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </div>
   );
 }

@@ -25,12 +25,7 @@ const freeBand = await useFreeBand();
             >.
           </p>
           <div class="mt-8 flex flex-wrap items-center gap-6">
-            <UButton
-              :to="signUp"
-              size="xl"
-              leading-icon="i-lucide-arrow-up-right"
-              class="h-13.5 px-6.5 text-[1.0625rem] font-medium"
-            >
+            <UButton :to="signUp" size="xl" class="h-13.5 px-6.5 text-[1.0625rem] font-medium">
               Start for free
             </UButton>
             <ULink

@@ -122,6 +122,9 @@ const log = createLogger("jobs");
 export const TICK_PASSES = [
   // ── State machine: money and subscription state. Never shed. ──
   "scheduled_changes",
+  // Changes held for payment (`apply_when_paid`): applied when paid, expired when due.
+  // Before `renewal`: a held change never crosses a renewal. Database only.
+  "pending_changes",
   "renewal",
   "auto_close_pending",
   "invoice_due_transitions",
@@ -153,6 +156,8 @@ export const TICK_PASSES = [
   "usage_threshold_invoices",
   // Usage alerts: period-end resolves, the daily tier catch-up and lead-time re-check. Database only.
   "usage_alerts",
+  // Late usage after a cancellation (opt-in): raises the invoice; the collect pump charges it.
+  "late_usage_invoices",
   // ── Customer-visible and money-releasing. Shed only under real pressure. ──
   "reminders",
   "payment_source_sweep",
@@ -163,6 +168,10 @@ export const TICK_PASSES = [
   "activate_credit_grants",
   "expire_credit_grants",
   "expire_credit_holds",
+  // Usage paid in credits: draws what ingest took, each hour, and closes grace windows. Database only.
+  "settle_credit_usage",
+  // Usage beyond the credits of a customer with no subscription: the one-off invoice. Money.
+  "bill_credit_overage",
   // ── Housekeeping: table cleanup. First to be shed, by design. ──
   "sweep_rate_limits",
   "sweep_login_attempts",
@@ -346,6 +355,20 @@ export async function runBillingClockTickOnce(
         // the row retried silently every minute — a scheduled cancel could go
         // permanently un-applied with nothing anywhere to show for it.
         if (sched) errors.push(...sched.errors);
+        const held = await runPass(
+          "pending_changes",
+          async () => {
+            const { runPendingChanges } = await import("@/modules/subscriptions/pending-change");
+            return runPendingChanges(now);
+          },
+          (r) => ({
+            applied: r.applied,
+            expired: r.expired,
+            waiting: r.waiting,
+            failed: r.errors.length,
+          }),
+        );
+        if (held) errors.push(...held.errors);
         const renewal = await runPass(
           "renewal",
           () => runBillingClockTick(now),
@@ -529,7 +552,7 @@ export async function runBillingClockTickOnce(
         const reaped = await runPass(
           "reap_transfers",
           () => reapStuckTransfers(started),
-          (r) => ({ reaped: r.reaped }),
+          (r) => ({ reaped: r.reaped, requeued: r.requeued }),
         );
         // Reap Idempotency-Key records orphaned by a process crash mid-request: a stale
         // `in_progress` (nothing durable written) is freed for a fresh attempt; a stale
@@ -579,6 +602,17 @@ export async function runBillingClockTickOnce(
           },
           (r) => ({ resolved: r.resolved, tiers: r.tiers, capped: r.capped ? 1 : 0, ...r.daily }),
         );
+        // Late usage of an invoiced period after a cancellation: one more invoice, database only.
+        const lateUsage = await runPass(
+          "late_usage_invoices",
+          async () => {
+            const { runLateUsageInvoices } =
+              await import("@/modules/subscriptions/late-usage-invoices");
+            return runLateUsageInvoices(now);
+          },
+          (r) => ({ raised: r.raised, waiting: r.waiting, failed: r.errors.length }),
+        );
+        if (lateUsage) errors.push(...lateUsage.errors);
         // Renamed from `trial_reminders` (2026-08-10): the pass emits renewal and
         // cancellation reminders too, so the old name described a third of what it does.
         // Historical clock_ticks rows keep the old key — the ops label map still resolves it.
@@ -662,6 +696,22 @@ export async function runBillingClockTickOnce(
             return expireCreditHolds(now);
           },
           (r) => ({ expired: r.expired }),
+        );
+        await runPass(
+          "settle_credit_usage",
+          async () => {
+            const { runSettleCreditUsage } = await import("@/modules/credits/usage-settlement");
+            return runSettleCreditUsage(now);
+          },
+          (r) => ({ settled: r.settled, locked: r.locked, failed: r.failed }),
+        );
+        await runPass(
+          "bill_credit_overage",
+          async () => {
+            const { runBillCreditOverage } = await import("@/modules/credits/overage");
+            return runBillCreditOverage(now);
+          },
+          (r) => ({ invoiced: r.invoiced, failed: r.failed }),
         );
         // Deliver due TM Test Gateway async webhooks (late failures, timeouts) through
         // the real inbound pipeline BEFORE outbound delivery, so any reconciliation
@@ -1341,6 +1391,9 @@ const tasks: Record<string, Task> = {
     recordJobRun("retention_sweep", async () => {
       const { runRetentionSweep } = await import("@/modules/ops/retention");
       await runRetentionSweep(new Date());
+      // The assistant's screenshots: a fixed 90 days, whatever the organization's retention mode.
+      const { sweepAttachments } = await import("@/modules/assistant/service");
+      await sweepAttachments(new Date());
     }),
 
   /** Compare sampled older days with a recompute; `metric_daily_reproducible` reads it. */
@@ -1429,6 +1482,8 @@ const tasks: Record<string, Task> = {
     const r = await runModelPriceSync();
     if (r.status === "failed")
       log.warn("model price sync failed", { event: "model_prices_sync", error: r.error });
+    else if (r.failures?.length)
+      log.warn("model price sync ran; a source failed", { event: "model_prices_sync", ...r });
     else log.info("model price sync ran", { event: "model_prices_sync", ...r });
   },
 
@@ -1456,6 +1511,39 @@ const tasks: Record<string, Task> = {
       );
     const { sendQueuedSignInCode } = await import("@/modules/customer-portal/login-code");
     await sendQueuedSignInCode(p);
+  },
+
+  /** Apply one async transfer run, item by item (0517). Resumable; a lease keeps it single. */
+  transfer_run: async (payload, helpers) => {
+    const p = payload as { run?: string } | null;
+    if (!p?.run) throw new Error("transfer_run: payload needs run");
+    const { runTransferJob } = await import("@/modules/transfer/runner");
+    const r = await runTransferJob(p.run);
+    helpers.logger.info("transfer_run finished", { run: p.run, result: r });
+  },
+
+  /** One channel of a support notice to our team, queued with the member's message (0513). */
+  support_notice_send: async (payload, helpers) => {
+    const p = payload as import("@/modules/assistant/support-notify").SupportNoticeJob | null;
+    if (!p?.message || (p.channel !== "chat" && p.channel !== "email"))
+      throw new Error("support_notice_send: payload needs message and channel");
+    const { sendSupportNotice } = await import("@/modules/assistant/support-notify");
+    await sendSupportNotice(p, {
+      attempts: helpers.job.attempts,
+      maxAttempts: helpers.job.max_attempts,
+    });
+  },
+
+  /** One channel of an access-request notice to our team, queued with the request. */
+  access_request_notice_send: async (payload, helpers) => {
+    const p = payload as import("@/modules/auth/signup-requests").AccessRequestNoticeJob | null;
+    if (!p?.request || (p.channel !== "chat" && p.channel !== "email"))
+      throw new Error("access_request_notice_send: payload needs request and channel");
+    const { sendAccessRequestNotice } = await import("@/modules/auth/signup-requests");
+    await sendAccessRequestNotice(p, {
+      attempts: helpers.job.attempts,
+      maxAttempts: helpers.job.max_attempts,
+    });
   },
 
   team_alert_send: async (payload) => {
@@ -1891,6 +1979,11 @@ const graphileLogger = new GraphileLogger((scope) => (level, message, meta) => {
  * `role` scopes BOTH what it executes and what it schedules — see `WorkerRole`. Defaults
  * to `billing`, the engine's clock, which is now the only role.
  */
+/** The runner's connection: direct, never through a transaction-mode pooler (holds a LISTEN). */
+export function queueDatabaseUrl(): string {
+  return config.QUEUE_DATABASE_URL ?? config.DATABASE_URL;
+}
+
 export async function startWorker(
   role: WorkerRole | "all" = "billing",
   /**
@@ -1903,7 +1996,7 @@ export async function startWorker(
   events: WorkerEvents = new EventEmitter() as WorkerEvents,
 ): Promise<Runner> {
   return run({
-    connectionString: config.DATABASE_URL,
+    connectionString: queueDatabaseUrl(),
     // `collect` runs only the stranded-lock sweep here; its concurrency goes to the pump lanes.
     // Idle slots are not free: every job insert wakes each one into a job lookup.
     concurrency: role === "collect" ? 1 : WORKER_CONCURRENCY,

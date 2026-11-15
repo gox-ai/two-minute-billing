@@ -3,13 +3,7 @@ import { getBusiness } from "@/lib/api/business-settings";
 import { brandImageSupport } from "@/lib/api/brand-images";
 import { previewEmailTemplate, type EmailPreview as EmailPreviewPayload } from "@/lib/api/emails";
 import { ErrorState } from "@/components/states";
-import {
-  SettingsCard,
-  SettingsColumns,
-  SettingsPage,
-  SettingsSummary,
-} from "@/components/settings/settings-layout";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SettingsPage, SettingsSummary } from "@/components/settings/settings-layout";
 import { BrandEditor } from "@/components/brand/brand-editor";
 import {
   CheckoutPreview,
@@ -83,7 +77,12 @@ export default async function BrandStylesSettings({
       ]}
       description="Your logo, icon, favicon and brand color. Customers see them on the self-serve portal, hosted checkout, invoices and billing email."
     >
-      <SettingsColumns
+      <BrandEditor
+        biz={biz}
+        brand={brand}
+        resourceVersion={b.resource_version}
+        upload={upload}
+        action={saveBrandAction}
         summary={
           <SettingsSummary
             items={[
@@ -93,13 +92,13 @@ export default async function BrandStylesSettings({
               {
                 label: "Brand color",
                 value: brand.brand_color ? (
-                  <span className="inline-flex items-center gap-2 font-mono uppercase">
+                  <span className="inline-flex items-center gap-2 font-mono">
                     <span
                       aria-hidden
-                      className="size-3.5 rounded-sm border"
+                      className="size-3.5 rounded-xs border"
                       style={{ background: brand.brand_color }}
                     />
-                    {brand.brand_color}
+                    {brand.brand_color.toLowerCase()}
                   </span>
                 ) : (
                   "Not set. We use the neutral palette."
@@ -108,42 +107,13 @@ export default async function BrandStylesSettings({
             ]}
           />
         }
-      >
-        {/* The editor is the only tab that writes; the other four render what is SAVED. */}
-        <SettingsCard title="Brand" meta="Edit, then preview each surface" padded>
-          <Tabs defaultValue="logo">
-            <TabsList className="flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
-              <TabsTrigger value="logo">Logo &amp; color</TabsTrigger>
-              <TabsTrigger value="email">Email</TabsTrigger>
-              <TabsTrigger value="invoice">Invoice</TabsTrigger>
-              <TabsTrigger value="checkout">Checkout</TabsTrigger>
-              <TabsTrigger value="portal">Self-serve portal</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="logo" className="pt-6">
-              <BrandEditor
-                biz={biz}
-                brand={brand}
-                resourceVersion={b.resource_version}
-                upload={upload}
-                action={saveBrandAction}
-              />
-            </TabsContent>
-            <TabsContent value="email" className="pt-6">
-              <EmailPreview html={emailHtml} subject={emailSubject} />
-            </TabsContent>
-            <TabsContent value="invoice" className="pt-6">
-              <InvoicePreview brand={brand} />
-            </TabsContent>
-            <TabsContent value="checkout" className="pt-6">
-              <CheckoutPreview brand={brand} />
-            </TabsContent>
-            <TabsContent value="portal" className="pt-6">
-              <PortalPreview brand={brand} />
-            </TabsContent>
-          </Tabs>
-        </SettingsCard>
-      </SettingsColumns>
+        previews={{
+          email: <EmailPreview html={emailHtml} subject={emailSubject} />,
+          invoice: <InvoicePreview brand={brand} />,
+          checkout: <CheckoutPreview brand={brand} />,
+          portal: <PortalPreview brand={brand} />,
+        }}
+      />
     </SettingsPage>
   );
 }

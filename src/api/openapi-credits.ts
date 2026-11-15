@@ -90,8 +90,12 @@ export const CREDIT_PATHS = {
       tags: ["Credits"],
       summary: "Create a credit unit",
       description:
-        "Your own unit of credit. The first grant in the unit fixes `currency`, `minor_per_unit` " +
-        "and `decimals`. Needs `credits:manage`.",
+        "Your own unit of credit. Send `minor_per_unit` to give the unit a money rate. Send " +
+        "`minor_per_unit: null` for a unit with no rate: its credits are counted in units only, " +
+        "and a grant in it has no money value. `minor_per_unit` is required: a request without " +
+        "the field is refused with 400 (send a rate, or null for a unit with no money value). " +
+        "The first grant in the unit fixes `currency`, `minor_per_unit` and " +
+        "`decimals`. Needs `credits:manage`.",
       parameters: [biz],
       requestBody: {
         required: true,
@@ -203,15 +207,34 @@ export const CREDIT_PATHS = {
   "/v1/businesses/{biz}/customers/{cus}/credit_grants/{grant}/void": {
     post: {
       tags: ["Credits"],
-      summary: "Void a promotional credit grant",
+      summary: "Void a credit grant",
       description:
-        "Books out what remains of a promotional grant. A paid grant leaves only through a credit " +
-        "note on its invoice, so the money side has a document. Needs `credits:manage`.",
+        "Books out what remains of a promotional grant. A paid grant leaves through a credit " +
+        "note on its invoice, so the money side has a document. To void a paid grant with no " +
+        "refund, send `without_refund: true` with a `reason`: the cost of the unused credit is " +
+        "written off as breakage. Needs `credits:manage`.",
       parameters: [biz, cus, grantParam],
       responses: {
         "200": json("CreditGrant", "The voided grant."),
-        "409": err("The grant is paid, or not active."),
+        "400": err("`without_refund` with no `reason`, or on a promotional grant."),
+        "409": err("The grant is paid and `without_refund` is not set, or it is not active."),
         "404": err("No such credit grant."),
+      },
+    },
+  },
+  "/v1/businesses/{biz}/customers/{cus}/credit_usage": {
+    get: {
+      tags: ["Credits"],
+      summary: "List credit usage",
+      description:
+        "The settlements of usage paid in credits, newest first. Usage of a meter with a credit " +
+        "cost takes its credits when each event arrives; a settlement then draws them from the " +
+        "customer's credit grants, each hour and in the period invoice, and posts the cost of " +
+        "paid credit as revenue. Needs `credits:view`.",
+      parameters: [biz, cus, limit(1000, 50), after, q("meter", "Only settlements of this meter.")],
+      responses: {
+        "200": json("CreditUsageList", "The settlements."),
+        "404": err("No such customer."),
       },
     },
   },
@@ -257,10 +280,19 @@ export const CREDIT_PATHS = {
       summary: "Hold credit",
       description:
         "Reserves an estimated amount before a call, so parallel calls cannot spend the same credit. " +
-        "Refused with 402 and a `code`: `in_flight_limit` when open holds would pass the business's " +
-        "share of the balance, `insufficient_credit` when the customer's policy blocks and the " +
+        "Refused with 402 and a `code`: `in_flight_limit` when open holds plus this amount would pass " +
+        "the business's share of the balance (`credit_config.in_flight_share_bps`, default 50%; it " +
+        "applies with no hold open too), `insufficient_credit` when the customer's policy blocks and the " +
         "amount is more than is available. A hold that is not captured or released expires after " +
-        "`expires_in` seconds (default: the business's hold time, 60). Needs `credit_holds:manage`.",
+        "`expires_in` seconds (default: the business's hold time, 60). " +
+        "A meter that is paid in credits takes a hold in units: send `quantity` (the meter " +
+        "quantity the work will use; the meter's credit cost for this customer converts it) or " +
+        "`units` (credits), and no `amount_minor`. The units are reserved at once: no usage event " +
+        "and no other hold can spend them. Such a hold is refused with `insufficient_credit` " +
+        "when the balance does not cover it, also under the `bill` policy: a hold reserves " +
+        "credits the customer has, never money overage or an overdraft. The customer needs no " +
+        "subscription. " +
+        "Needs `credit_holds:manage`.",
       parameters: [biz, cus],
       requestBody: {
         required: true,
@@ -308,7 +340,23 @@ export const CREDIT_PATHS = {
         "(`usage_event`, the body of `POST …/usage_events`) or the `key` of one already sent " +
         "(`usage_event_id`). The hold stops counting and the event starts counting together. Usage " +
         "above the hold is accepted; past the overdraft limit the hold is marked `overdraft` and the " +
-        "rest bills on the next invoice. Needs `credit_holds:manage`.",
+        "rest bills on the next invoice. " +
+        "A hold in units: its units go back to the balance and the event takes what it costs, in " +
+        "one step. An event that costs less leaves the rest in the balance. An event that costs " +
+        "more takes what the balance has; the rest is billed in money when the policy is `bill` " +
+        "and the meter or the unit has a money price (`credits_uncovered`), else it takes the " +
+        "balance below zero and the next grant pays it first; the hold is marked `overdraft`. With " +
+        "`usage_event_id`, an event that was refused for credit while the hold was open is paid " +
+        "now. A hold in money does not cover an event of a meter that is paid in credits: when " +
+        "the balance is short the capture is refused with 402 `insufficient_credit` and the hold " +
+        "stays open. " +
+        "A hold in units can be used in steps: send `final: false` and the hold stays open with " +
+        "the units that the event did not use (`remaining_units`). Each step has its own " +
+        "`Idempotency-Key`. A step that leaves no units closes the hold. Release the hold to " +
+        "give back the rest. " +
+        "If a credit grant expires while the hold is open, the held units from that grant stay " +
+        "reserved for the hold: a capture still uses them, and a release or the hold's expiry " +
+        "lets them expire with the grant. Needs `credit_holds:manage`.",
       parameters: [biz, holdParam],
       requestBody: {
         required: true,
@@ -317,9 +365,34 @@ export const CREDIT_PATHS = {
       responses: {
         "200": json("CreditHold", "The captured hold."),
         "400": err("The body is not correct."),
+        "402": err(
+          "`insufficient_credit`: the event uses a meter that is paid in credits, and this hold does not cover it.",
+        ),
         "404": err("No such credit hold."),
         "409": err("The hold is already captured, released or expired."),
         "422": err("The usage event was refused."),
+      },
+    },
+  },
+  "/v1/businesses/{biz}/credit_holds/{hold}/extend": {
+    post: {
+      tags: ["Credits"],
+      summary: "Extend a credit hold",
+      description:
+        "Moves the expiry of a hold in units later, for work that runs in steps: the hold then " +
+        "expires `expires_in` seconds from now. The new expiry must be later than the current " +
+        "expiry. The held units do not change. A hold in money cannot be extended. " +
+        "Needs `credit_holds:manage`.",
+      parameters: [biz, holdParam],
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: ref("CreditHoldExtend") } },
+      },
+      responses: {
+        "200": json("CreditHold", "The hold with its new expiry."),
+        "400": err("The body is not correct, or the hold is in money."),
+        "404": err("No such credit hold."),
+        "409": err("The hold is already captured, released or expired."),
       },
     },
   },
@@ -327,7 +400,11 @@ export const CREDIT_PATHS = {
     post: {
       tags: ["Credits"],
       summary: "Release a credit hold",
-      description: "Frees the held amount at once. Needs `credit_holds:manage`.",
+      description:
+        "Frees the held amount at once. A hold in units gives back the units that it still " +
+        "reserves. Units from a credit grant that expired while the hold was open expire with " +
+        "that grant. " +
+        "Needs `credit_holds:manage`.",
       parameters: [biz, holdParam],
       responses: {
         "200": json("CreditHold", "The released hold."),
@@ -342,15 +419,35 @@ export const CREDIT_PATHS = {
       summary: "Check access",
       description:
         "May this customer spend now? Always 200: read `allowed` and `code`. Checks, first failure " +
-        "wins: `no_subscription`, `not_entitled`, `spend_limit_reached`, `in_flight_limit` (only with " +
-        "`estimate`), `insufficient_credit` (only when the customer's policy is to block), then `ok`. " +
-        "Writes nothing. 95% of access checks answer in less than 100 ms, measured at our server. " +
-        "Network time is not included. Needs `credits:view`.",
+        "wins: `no_subscription` (no live subscription has a price on the meter, even with paid " +
+        "credit), `not_entitled`, `spend_limit_reached`, `in_flight_limit` (only with `estimate` " +
+        "under a block policy; checked before credit, so a small balance can answer it in place of " +
+        "`insufficient_credit`), `insufficient_credit` (only when the customer's policy is to " +
+        "block), then `ok`. " +
+        "A meter that is paid in credits answers in units and needs no subscription: " +
+        "`no_subscription` is not checked, `not_entitled` applies only when a subscription has a " +
+        "feature for the meter, and `credits` gives the balance that a usage event can spend at " +
+        "this instant, with the open holds taken off. Send `estimate_quantity` or " +
+        "`estimate_units`. With no estimate, the check uses one event of a `count` meter, else " +
+        "the smallest part of a credit. `insufficient_credit` answers as the event would be " +
+        "answered: under `bill` with a money price (the meter's own usage price, else the unit's " +
+        "overage price) the estimate is allowed, and inside the overdraft limit too. Under `bill` " +
+        "with no money price it is refused as under `block`. A customer with no subscription is " +
+        "always `block` (`on_exhausted.source` = `no_subscription`). " +
+        "Writes nothing. Needs `credits:view`.",
       parameters: [
         biz,
         cus,
         q("meter", "The meter the call will use."),
         q("estimate", "The estimated cost in minor units.", { type: "integer", minimum: 0 }),
+        q(
+          "estimate_quantity",
+          "A meter that is paid in credits: the meter quantity the call will use, as a decimal.",
+        ),
+        q(
+          "estimate_units",
+          "A meter that is paid in credits: the credits the call will use, as a decimal.",
+        ),
         q("scope[<property>]", "A usage property value, for scoped spend limits. Up to 10."),
       ],
       responses: {
@@ -372,6 +469,14 @@ export const CREDIT_PATHS = {
         { ...q("customer_key", "A usage key of the customer."), required: true },
         q("meter", "The meter the call will use."),
         q("estimate", "The estimated cost in minor units.", { type: "integer", minimum: 0 }),
+        q(
+          "estimate_quantity",
+          "A meter that is paid in credits: the meter quantity the call will use, as a decimal.",
+        ),
+        q(
+          "estimate_units",
+          "A meter that is paid in credits: the credits the call will use, as a decimal.",
+        ),
         q("scope[<property>]", "A usage property value, for scoped spend limits. Up to 10."),
       ],
       responses: {
@@ -413,7 +518,12 @@ export const CREDIT_SCHEMAS = {
       name: str("Singular, for example `credit`."),
       plural_name: str("For example `credits`."),
       currency: str("ISO 4217."),
-      minor_per_unit: str(RATE),
+      minor_per_unit: nullable(str(`${RATE} Null = the unit has no rate.`)),
+      rated: {
+        type: "boolean",
+        description:
+          "True when the unit has a money rate. False: its credits are counted in units only.",
+      },
       decimals: int("0 to 4. Grant amounts are whole numbers of 10^-decimals units."),
       locked: { type: "boolean", description: "True after the first grant in this unit." },
       locked_at: nullable({ type: "string", format: "date-time" }),
@@ -429,6 +539,7 @@ export const CREDIT_SCHEMAS = {
       "plural_name",
       "currency",
       "minor_per_unit",
+      "rated",
       "decimals",
       "locked",
       "status",
@@ -442,7 +553,9 @@ export const CREDIT_SCHEMAS = {
       name: str("Singular."),
       plural_name: str("Plural. Default: `name` followed by `s`."),
       currency: str("ISO 4217."),
-      minor_per_unit: str(RATE),
+      minor_per_unit: nullable(
+        str(`${RATE} Required: send a rate, or null for a unit with no money value.`),
+      ),
       decimals: int("0 to 4. Default 0."),
     },
     required: ["name", "currency", "minor_per_unit"],
@@ -453,7 +566,9 @@ export const CREDIT_SCHEMAS = {
       name: str("Singular."),
       plural_name: str("Plural."),
       currency: str("ISO 4217. Refused once the unit is locked."),
-      minor_per_unit: str(`${RATE} Refused once the unit is locked.`),
+      minor_per_unit: nullable(
+        str(`${RATE} Null removes the rate. Refused once the unit is locked.`),
+      ),
       decimals: int("0 to 4. Refused once the unit is locked."),
       expected_version: int("The `resource_version` you read."),
     },
@@ -468,7 +583,7 @@ export const CREDIT_SCHEMAS = {
       unit: nullable(str("The credit unit's id. Null = money.")),
       amount: int("Units at grant, in the unit's smallest step (money: minor units)."),
       amount_decimal: str("`amount` in whole units, as a decimal string."),
-      face_minor: int("The money value at grant. Fixed for life."),
+      face_minor: int("The money value at grant. Fixed for life. 0 for a unit with no rate."),
       cost_basis_minor: int("Paid: the net money received for it. Promotional: 0."),
       category: { type: "string", enum: ["paid", "promotional"] },
       priority: int("0 to 100. Lower draws first."),
@@ -491,7 +606,7 @@ export const CREDIT_SCHEMAS = {
         properties: {
           units: int("In the unit's smallest step."),
           units_decimal: str("In whole units."),
-          face_minor: int("Money value left."),
+          face_minor: int("Money value left. 0 for a unit with no rate."),
           cost_minor: int("Cost basis left."),
         },
       },
@@ -530,7 +645,9 @@ export const CREDIT_SCHEMAS = {
       applicability: { ...applicability, description: "Default: every usage line (`metered`)." },
       on_exhausted: policy,
       metadata: { type: "object", additionalProperties: true },
-      price_minor: int("Paid only: the net price, without tax. It is the cost basis."),
+      price_minor: int(
+        "Paid only: the net price, without tax. It is the cost basis. For a unit with no rate, it is the only money the grant has.",
+      ),
       tax_treatment: {
         type: "string",
         enum: ["taxed_at_purchase", "taxed_at_use"],
@@ -576,11 +693,46 @@ export const CREDIT_SCHEMAS = {
       face_minor: int("Signed money value."),
       cost_minor: int("Signed cost basis."),
       invoice: nullable(str("The invoice, for a draw or a restore.")),
+      settlement: nullable(
+        str("The credit usage settlement (cst_…), for a draw of usage paid in credits."),
+      ),
       created_at: { type: "string", format: "date-time" },
     },
     required: ["object", "id", "kind", "grant", "currency", "units", "face_minor", "created_at"],
   },
   CreditTransactionList: list("CreditTransaction", "A page of credit movements."),
+  CreditUsage: {
+    type: "object",
+    description: "One settlement of usage paid in credits: a customer, a meter and a window.",
+    properties: {
+      object: { type: "string", enum: ["credit_usage"] },
+      id: str("cst_…"),
+      customer: str("cus_…"),
+      meter: str("The meter's id."),
+      unit: str("The credit unit's id."),
+      kind: {
+        type: "string",
+        enum: ["usage", "late"],
+        description:
+          "`usage`: events received in the window. `late`: late events that a credit grant paid in its grace window, after it ended.",
+      },
+      status: { type: "string", enum: ["settled"] },
+      window_start: { type: "string", format: "date-time" },
+      window_end: { type: "string", format: "date-time" },
+      events: int("Usage events in the settlement."),
+      quantity: str("The usage, in units of the meter."),
+      credits_due: str("What the usage costs, in whole credits."),
+      credits_drawn: str("What the settlement drew from the credit grants."),
+      quantity_uncovered: str(
+        "Usage that no credit paid. Only for events that a credit hold covers.",
+      ),
+      currency: str("ISO 4217."),
+      revenue_minor: int("The cost of the paid credit drawn: the revenue the settlement posted."),
+      created_at: { type: "string", format: "date-time" },
+    },
+    required: ["object", "id", "customer", "meter", "unit", "window_start", "window_end"],
+  },
+  CreditUsageList: list("CreditUsage", "A page of credit usage settlements."),
   CreditHold: {
     type: "object",
     properties: {
@@ -588,7 +740,17 @@ export const CREDIT_SCHEMAS = {
       id: str("chd_…"),
       customer: str("cus_…"),
       currency: str("ISO 4217."),
-      amount_minor: int("The amount held."),
+      amount_minor: int("The amount held. 0 for a hold in units."),
+      unit: nullable(str("The credit unit's id. Set for a hold in units.")),
+      units: nullable(
+        str("The credits held at the start, as a decimal. Null for a hold in money."),
+      ),
+      remaining_units: nullable(
+        str("The credits that the hold still reserves. 0 when the hold is closed."),
+      ),
+      captured_units: nullable(
+        str("The credits that the captured usage events took in total, as a decimal."),
+      ),
       meter: nullable(str("The meter's id.")),
       scope: nullable({
         type: "object",
@@ -600,7 +762,8 @@ export const CREDIT_SCHEMAS = {
       captured_minor: nullable(int("The rated value of the captured usage event.")),
       overdraft: {
         type: "boolean",
-        description: "The captured usage took the balance past the overdraft limit.",
+        description:
+          "The captured usage took the balance past the overdraft limit. For a hold in units: the event cost more credits than the balance had.",
       },
       metadata: nullable({ type: "object", additionalProperties: true }),
       created_at: { type: "string", format: "date-time" },
@@ -612,7 +775,15 @@ export const CREDIT_SCHEMAS = {
   CreditHoldCreate: {
     type: "object",
     properties: {
-      amount_minor: int("The estimated cost, more than 0."),
+      amount_minor: int(
+        "The estimated cost, more than 0. Not for a meter that is paid in credits.",
+      ),
+      quantity: str(
+        "A meter that is paid in credits: the meter quantity the work will use, as a decimal. The meter's credit cost for this customer converts it to credits.",
+      ),
+      units: str(
+        "A meter that is paid in credits: the credits to hold, as a decimal. Send `quantity` or `units`, not both.",
+      ),
       currency: str("ISO 4217. Default: the customer's currency."),
       meter: str("The meter the call will use."),
       scope: {
@@ -623,7 +794,6 @@ export const CREDIT_SCHEMAS = {
       expires_in: int("Seconds, 1 to 86,400. Default: the business's hold time (60)."),
       metadata: { type: "object", additionalProperties: true },
     },
-    required: ["amount_minor"],
   },
   CreditHoldCapture: {
     type: "object",
@@ -635,7 +805,21 @@ export const CREDIT_SCHEMAS = {
         description: "A usage event to record now.",
       },
       usage_event_id: str("The `key` of a usage event that you already sent."),
+      final: {
+        type: "boolean",
+        description:
+          "Default true: the capture closes the hold. False, for a hold in units: the hold stays open with the units that the event did not use.",
+      },
     },
+  },
+  CreditHoldExtend: {
+    type: "object",
+    properties: {
+      expires_in: int(
+        "Seconds from now, 1 to 86,400. The new expiry must be later than the current expiry.",
+      ),
+    },
+    required: ["expires_in"],
   },
   AccessCheck: {
     type: "object",
@@ -654,7 +838,15 @@ export const CREDIT_SCHEMAS = {
           type: "object",
           properties: {
             unit: str("The credit unit's id."),
-            units: int("In the unit's smallest step."),
+            units: int(
+              "In the unit's smallest step. For a unit with no money rate: what a usage event can spend now. A credit grant counts only while its window contains this time, and usage that is not settled yet and open holds are taken off.",
+            ),
+            held_units: int(
+              "Only for a unit with no money rate: reserved by open holds, in the unit's smallest step.",
+            ),
+            unsettled_units: int(
+              "Only for a unit with no money rate: taken by usage events and not drawn from a credit grant yet.",
+            ),
           },
         },
       },
@@ -679,6 +871,8 @@ export const CREDIT_SCHEMAS = {
               "grant",
               "plan_price",
               "business_default",
+              "no_subscription",
+              "trial",
             ],
           },
         },
@@ -711,6 +905,23 @@ export const CREDIT_SCHEMAS = {
         type: "string",
         format: "date-time",
         description: "When the customer's plan credits next renew. Null = no plan credits renew.",
+      }),
+      credits: nullable({
+        type: "object",
+        description:
+          "Set for a meter that is paid in credits. Amounts are in the credit unit, as decimals.",
+        properties: {
+          unit: str("The credit unit's id."),
+          credits_per_unit: str("What one unit of the meter costs this customer."),
+          cost_source: { type: "string", enum: ["meter", "plan", "subscription"] },
+          estimate: str("What the estimate costs."),
+          available: str(
+            "What a usage event can spend at this instant. The open holds are already taken off.",
+          ),
+          held: str("Reserved by open holds."),
+          unsettled: str("Taken by usage events and not drawn from a credit grant yet."),
+          remaining: str("`available` less the estimate, never below 0."),
+        },
       }),
       as_of: { type: "string", format: "date-time" },
     },
@@ -848,6 +1059,17 @@ const grantsCreditSchema = {
       description:
         "Per cycle: when the credits renew (absent = each term). Each window gets its own grant, " +
         "which pays only the usage inside that window. Credits do not renew by the hour.",
+    },
+    unit_cost_basis: {
+      type: "string",
+      pattern: "^\\d{1,12}(\\.\\d{1,12})?$",
+      description:
+        "Per cycle, for a credit unit with no money rate: money per whole credit (a decimal in " +
+        "major units), a share of the plan fee. The credit of each term is then paid credit: " +
+        "units × this amount is deferred from the term invoice's revenue and recognised as the " +
+        "credits are used; what is left at expiry is breakage. Absent: the credit has no money " +
+        "value. Applies to a term grant written with its invoice; a grant that waits for its " +
+        "invoice to be paid, a reset window and carried credit have no cost basis.",
     },
     first_window: {
       type: "string",

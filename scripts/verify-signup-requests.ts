@@ -4,8 +4,8 @@
  *
  * Pins:
  *  - GET /auth/signup reports `requests` only on Cloud with sign-up locked,
- *  - a request is stored, emailed to the team and posted to the chat webhook; a repeat updates
- *    the open request, and a double submit is one request and one lead,
+ *  - a request is stored and queues the team's email and chat post, which the engine job sends;
+ *    a repeat updates the open request, and a double submit is one request and one lead,
  *  - the request endpoint is 409 while sign-up is open and 403 on self-hosted,
  *  - a sign-up link creates the account for that address while sign-up stays locked, signs in,
  *    and works one time; a taken address does not spend it,
@@ -21,6 +21,7 @@ import { closeDb, systemDb } from "@/platform/db";
 import { config } from "@/platform/config";
 import { setMailer, type OutboundEmail } from "@/providers/mailer";
 import {
+  ACCESS_REQUEST_NOTICE_TASK,
   SignupRequestError,
   dismissSignupRequest,
   inviteSignupRequest,
@@ -28,6 +29,7 @@ import {
 import { memberships, organizations, signupRequests, users } from "@db/schema";
 import { clearPublicRateLimits } from "./lib/rate-limit-reset";
 import { pinMfaMandateOff } from "./lib/mfa-policy";
+import { runQueuedJobs } from "./lib/run-queued-jobs";
 
 let pass = 0;
 let fail = 0;
@@ -68,13 +70,19 @@ const hook = createServer((req, res) => {
   });
 });
 await new Promise<void>((r) => hook.listen(0, "127.0.0.1", r));
-cfg.LEAD_CHAT_WEBHOOK_URL = `http://127.0.0.1:${(hook.address() as AddressInfo).port}/hook`;
+const hookUrl = `http://127.0.0.1:${(hook.address() as AddressInfo).port}/hook`;
+// The support channel takes access requests; the deprecated name and the ops channel are unset.
+cfg.SUPPORT_CHAT_WEBHOOK_URL = hookUrl;
+cfg.LEAD_CHAT_WEBHOOK_URL = undefined;
+cfg.OPS_ALERT_WEBHOOK_URL = undefined;
 
 const app = await buildApp({ logger: false });
 await clearPublicRateLimits();
 const j = (r: { body: string }) => JSON.parse(r.body);
 const post = (url: string, payload: unknown) =>
   app.inject({ method: "POST", url, payload: payload as object });
+/** The team's notices go out from the job queue, as the worker sends them. */
+const notify = () => runQueuedJobs(ACCESS_REQUEST_NOTICE_TASK);
 const stamp = Date.now();
 const email = `ada+${stamp}@example.com`;
 const request = {
@@ -114,6 +122,8 @@ mail.length = 0;
 {
   const r = await post("/auth/signup_requests", request);
   ok("§B a request answers 202", r.statusCode === 202, r.body);
+  ok("§B nothing is sent before the job runs", mail.length === 0 && chat.length === 0);
+  await notify();
   const rows = await openRows();
   ok("§B one open request stored", rows.length === 1 && rows[0]!.company === request.company);
   ok(
@@ -128,15 +138,28 @@ mail.length = 0;
       !!chat[0]!.text?.includes(request.company),
     chat,
   );
-  // Unset, the lead channel falls back to the back-office alert channel.
-  cfg.OPS_ALERT_WEBHOOK_URL = cfg.LEAD_CHAT_WEBHOOK_URL;
-  cfg.LEAD_CHAT_WEBHOOK_URL = undefined;
-  await post("/auth/signup_requests", { ...request, company: `Renamed ${stamp}` });
+  // The deprecated LEAD_CHAT_WEBHOOK_URL still posts until production renames it.
+  cfg.SUPPORT_CHAT_WEBHOOK_URL = undefined;
+  cfg.LEAD_CHAT_WEBHOOK_URL = hookUrl;
+  await post("/auth/signup_requests", { ...request, company: `Lead ${stamp}` });
+  await notify();
   ok(
-    "§B with only OPS_ALERT_WEBHOOK_URL set, chat still gets the post",
+    "§B with only the deprecated LEAD_CHAT_WEBHOOK_URL set, chat still gets the post",
     chat.length === 2,
     chat.length,
   );
+  // Both unset, it falls back to the back-office alert channel.
+  cfg.OPS_ALERT_WEBHOOK_URL = hookUrl;
+  cfg.LEAD_CHAT_WEBHOOK_URL = undefined;
+  await post("/auth/signup_requests", { ...request, company: `Renamed ${stamp}` });
+  await notify();
+  ok(
+    "§B with only OPS_ALERT_WEBHOOK_URL set, chat still gets the post",
+    chat.length === 3,
+    chat.length,
+  );
+  // The extra posts above count against the per-IP request limit; later sections start clean.
+  await clearPublicRateLimits();
   const again = await openRows();
   ok(
     "§B a repeat updates the open request",
@@ -152,6 +175,7 @@ mail.length = 0;
     post("/auth/signup_requests", dup),
     post("/auth/signup_requests", dup),
   ]);
+  await notify();
   const dupRows = await systemDb
     .select()
     .from(signupRequests)

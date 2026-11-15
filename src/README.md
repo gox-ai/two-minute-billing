@@ -36,6 +36,7 @@ HTTP → src/api/<domain>-routes.ts (zod validation, auth, idempotency)
 **Subscriptions & billing:** [subscriptions](modules/subscriptions/README.md) · [dunning-policies](modules/dunning-policies/README.md) · [invoicing](modules/invoicing/README.md) · [metering](modules/metering/README.md) · [model-prices](modules/model-prices/README.md) · [usage-controls](modules/usage-controls/README.md) · [metrics](modules/metrics/README.md) · [team-alerts](modules/team-alerts/README.md)
 **Payments & gateway:** [gateway](modules/gateway/README.md) · [payment-methods](modules/payment-methods/README.md) · [payment-intents](modules/payment-intents/README.md) · [transactions](modules/transactions/README.md) · [payments](modules/payments/README.md) · [payment-requests](modules/payment-requests/README.md) · [receipts](modules/receipts/README.md) · [refunds](modules/refunds/README.md) · [disputes](modules/disputes/README.md)
 **Ops tooling:** [migration](modules/migration/README.md) · [transfer](modules/transfer/README.md) · [time-travel](modules/time-travel/README.md) · [reason-codes](modules/reason-codes/README.md)
+**Assistant & AI tools:** [assistant](modules/assistant/README.md) (Billy) · [assistant-tools](modules/assistant-tools/README.md) (also the MCP server) · [assistant-docs](modules/assistant-docs/README.md) · [oauth](modules/oauth/README.md)
 
 ## Hard rules (see [docs/GUIDE.md](../docs/GUIDE.md) for the full list)
 
@@ -378,6 +379,8 @@ Tables it owns + the load-bearing columns / enums / invariants.
 Money/ledger/RLS rules specific to this module; non-obvious behaviors; known nits.
 
 ## Changelog
+- **2026-11-13** — Billing clock pass `bill_credit_overage` (after `settle_credit_usage`, moves money): the one-off invoice for usage beyond the credits of a customer with no subscription (credits README, 0530).
+- **2026-11-13** — Billing clock pass `settle_credit_usage` (after `expire_credit_holds`, database only): settles usage paid in credits each hour and closes the grace window of expired grants (credits README).
 - **2026-11-04** — Every API response defaults to `Cache-Control: private, no-store` (+ `Pragma: no-cache`) unless the route set its own; the test gateway's loose CSP applies to its HTML page only. The usage widget clears the global CORS grant before applying the business's origin list.
 
 - **YYYY-MM-DD** — change (branch/commit).

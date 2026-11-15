@@ -1,0 +1,62 @@
+/* Motion: dialog-origin. Owned by the matching component; tokens from globals.css only. */
+
+/* A dialog is one shape that grows out of the control that opened it, on the assistant's
+   clock (`--dur-morph`, `--ease-glide`): the shell leaves the press point small and round,
+   and what it says arrives in the last part, never on a half-grown shape. Closing runs
+   back: the content leaves first, then the shell shrinks home (`DIALOG_FROM_CLICK`,
+   components/ui/dialog.tsx). `--origin-x/-y` are percentages of the dialog's own box, set
+   before the first frame; unset, it grows from its centre. Desktop only: below 640px the
+   bottom sheet keeps its slide. */
+@keyframes m-dialog-from-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--origin-dx), var(--origin-dy)) scale(0.3);
+    border-radius: 26px;
+  }
+  25% {
+    opacity: 1;
+  }
+}
+/* A different name from the entrance, so Radix Presence waits for the exit. */
+@keyframes m-dialog-from-out {
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translate(var(--origin-dx), var(--origin-dy)) scale(0.3);
+    border-radius: 26px;
+  }
+}
+@keyframes m-dialog-content-in {
+  from,
+  55% {
+    opacity: 0;
+  }
+}
+@keyframes m-dialog-content-out {
+  35%,
+  to {
+    opacity: 0;
+  }
+}
+
+@media (width >= 40rem) {
+  .dialog-from-click {
+    /* A translate % is of the dialog's own box: this puts its centre on the press. */
+    --origin-dx: calc(var(--origin-x, 50%) - 50%);
+    --origin-dy: calc(var(--origin-y, 50%) - 50%);
+  }
+  .dialog-from-click[data-state="open"] {
+    animation: m-dialog-from-in var(--dur-morph) var(--ease-glide) both;
+  }
+  .dialog-from-click[data-state="open"] > * {
+    animation: m-dialog-content-in var(--dur-morph) var(--ease-glide) backwards;
+  }
+  .dialog-from-click[data-state="closed"] {
+    animation: m-dialog-from-out var(--dur-slow-out) var(--ease-glide) forwards;
+  }
+  .dialog-from-click[data-state="closed"] > * {
+    animation: m-dialog-content-out var(--dur-slow-out) var(--ease-out) forwards;
+  }
+}

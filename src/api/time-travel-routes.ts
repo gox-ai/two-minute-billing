@@ -11,6 +11,8 @@ import {
   wipeTestBusinessData,
   TimeTravelError,
 } from "@/modules/time-travel/service";
+import { resetTestBusiness, ResetTestBusinessError } from "@/modules/tenancy/reset-test-business";
+import { TenancyError } from "@/modules/tenancy/service";
 import { timeTravels } from "@db/schema";
 
 function serialize(tm: typeof timeTravels.$inferSelect | null) {
@@ -31,23 +33,26 @@ function serialize(tm: typeof timeTravels.$inferSelect | null) {
   };
 }
 
-// Time travel is destructive + spans a business's whole clock → require an all-mode
-// key (like transfers), and it only runs on TEST businesses.
+// Time travel is destructive and moves a whole business's clock: test and all-mode keys only.
+// A test key reaches only test businesses, and the service refuses a live business too.
 // `await reply` is load-bearing: callers bare-`return` on false, and on these
 // idempotent write routes the async idempotencyOnSend hook leaves the 403 in flight,
 // which used to make Fastify double-send and crash the process (see
 // platform/reply-guard.ts). Awaiting the thenable reply parks until it is flushed.
-async function requireAll(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
-  if (req.keyLivemode !== "all") {
-    await reply
-      .code(403)
-      .send({ error: { type: "forbidden", message: "This action requires an all-mode API key" } });
+async function requireTestOrAllKey(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  if (req.keyLivemode !== "test" && req.keyLivemode !== "all") {
+    await reply.code(403).send({
+      error: {
+        type: "forbidden",
+        message: "A live key cannot use the test tools. Use a test key.",
+      },
+    });
     return false;
   }
   return true;
 }
 
-/** H4 (TL-4): Time Travel routes — test businesses only, all-key gated. */
+/** H4 (TL-4): Time Travel routes — test businesses only; test or all-mode keys. */
 export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<void> {
   const startBody = z.object({ genesis_time: z.string().datetime() });
   const travelBody = z.object({
@@ -64,7 +69,7 @@ export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<vo
       onSend: idempotencyOnSend,
     },
     async (req, reply) => {
-      if (!(await requireAll(req, reply))) return;
+      if (!(await requireTestOrAllKey(req, reply))) return;
       const biz = await resolveBusiness(req, reply);
       if (!biz) return;
       const p = startBody.safeParse(req.body);
@@ -91,7 +96,7 @@ export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<vo
       onSend: idempotencyOnSend,
     },
     async (req, reply) => {
-      if (!(await requireAll(req, reply))) return;
+      if (!(await requireTestOrAllKey(req, reply))) return;
       const biz = await resolveBusiness(req, reply);
       if (!biz) return;
       const p = travelBody.safeParse(req.body);
@@ -132,7 +137,7 @@ export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<vo
       onSend: idempotencyOnSend,
     },
     async (req, reply) => {
-      if (!(await requireAll(req, reply))) return;
+      if (!(await requireTestOrAllKey(req, reply))) return;
       const biz = await resolveBusiness(req, reply);
       if (!biz) return;
       const p = stopBody.safeParse(req.body ?? {});
@@ -159,7 +164,7 @@ export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<vo
       onSend: idempotencyOnSend,
     },
     async (req, reply) => {
-      if (!(await requireAll(req, reply))) return;
+      if (!(await requireTestOrAllKey(req, reply))) return;
       const biz = await resolveBusiness(req, reply);
       if (!biz) return;
       try {
@@ -167,6 +172,29 @@ export async function registerTimeTravelRoutes(app: FastifyInstance): Promise<vo
         return reply.code(200).send({ object: "test_data_deletion", deleted: r.wiped });
       } catch (e) {
         if (e instanceof TimeTravelError) return badRequest(reply, e.message);
+        throw e;
+      }
+    },
+  );
+  // Reset a test business to a new test twin of its live business: same ids, nothing else kept.
+  app.post(
+    "/v1/businesses/:biz/test_data/reset",
+    {
+      preHandler: [authenticate, requirePerm("test_tools:manage"), idempotency],
+      onSend: idempotencyOnSend,
+    },
+    async (req, reply) => {
+      if (!(await requireTestOrAllKey(req, reply))) return;
+      const biz = await resolveBusiness(req, reply);
+      if (!biz) return;
+      try {
+        const r = await resetTestBusiness({ orgId: req.organization!.id, bizId: biz.id });
+        return reply
+          .code(200)
+          .send({ object: "test_data_reset", business: biz.publicId, deleted: r.deleted });
+      } catch (e) {
+        if (e instanceof ResetTestBusinessError || e instanceof TenancyError)
+          return badRequest(reply, e.message);
         throw e;
       }
     },

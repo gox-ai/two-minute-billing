@@ -15,6 +15,7 @@ import {
 import { EmptyState } from "@/components/states";
 import { Pager, useLocalPages } from "@/components/patterns/pager";
 import { cn } from "@/lib/utils";
+import { sentenceCase } from "@/lib/labels";
 
 /**
  * The widget library: everything this business can place or open, in one list.
@@ -86,6 +87,10 @@ function KindPill({ kind }: { kind: Kind }) {
     </span>
   );
 }
+
+/** "Plan" → "plan" mid-sentence; an acronym ("MRR band") keeps its case. */
+const inSentence = (label: string) =>
+  /^[A-Z][a-z]/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label;
 
 export function WidgetLibrary({ widgets }: { widgets: LibraryWidget[] }) {
   const [q, setQ] = React.useState("");
@@ -236,14 +241,14 @@ function FamilyCard({
           className="flex w-full items-center gap-2.5 px-5 py-3.5 text-left hover:bg-muted/40"
         >
           <ChevronDown aria-hidden className="size-4 shrink-0 -rotate-90 text-muted-foreground" />
-          <span className="min-w-0 truncate text-sm font-semibold">{family}</span>
+          <span className="min-w-0 truncate text-sm font-semibold">{sentenceCase(family)}</span>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{rows.length}</span>
-          <span className="hidden min-w-0 flex-1 truncate text-sm text-muted-foreground md:block">
+          <span className="hidden min-w-0 flex-1 text-sm text-muted-foreground md:block">
             {rows
-              .slice(0, 5)
+              .slice(0, 3)
               .map((w) => w.name)
               .join(", ")}
-            {rows.length > 5 ? " …" : ""}
+            {rows.length > 3 ? `, and ${rows.length - 3} more` : ""}
           </span>
           <span className="ml-auto shrink-0 text-sm font-medium text-primary">
             Show {rows.length}
@@ -267,46 +272,48 @@ function FamilyCard({
             <ChevronDown aria-hidden className="size-4" />
           </button>
         ) : null}
-        <h3 className="text-sm font-semibold">{family}</h3>
+        <h3 className="text-sm font-semibold">{sentenceCase(family)}</h3>
         <span className="text-xs text-muted-foreground tabular-nums">{rows.length}</span>
       </div>
-      <Table className="table-fixed [&_td:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5">
+      {/* Three columns, not five: the cut and the kind of figure read as one line under the
+          description, so the description gets the width and wraps to two or three lines
+          instead of five to ten. Nothing is cut; rows align at the top. */}
+      <Table className="table-fixed [&_td]:align-top [&_td:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5">
         <colgroup>
-          <col className="w-[23%]" />
-          <col className="w-[27%]" />
-          <col className="w-[17%]" />
-          <col className="w-[18%]" />
+          <col className="w-[30%]" />
+          <col />
           {/* Fixed, sized for the widest pill ("Measure") plus the cell gutters. */}
-          <col className="w-32" />
+          <col className="w-28" />
         </colgroup>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Stat</TableHead>
             <TableHead>What it answers</TableHead>
-            <TableHead>Split by</TableHead>
-            <TableHead>What it is</TableHead>
             <TableHead className="text-right">Kind</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {page.map((w) => {
-            const cut = w.dimensions.length > 0 ? w.dimensions.join(", ") : "—";
+            const facts = [
+              w.unitLabel,
+              w.basisLabel,
+              w.grains.length > 1 ? `By ${w.grains.join(", ")}` : null,
+              w.dimensions.length > 0
+                ? `Split by ${w.dimensions.map(inSentence).join(", ")}`
+                : null,
+            ].filter((f): f is string => f != null);
             return (
               <TableRow key={`${w.source}:${w.id}`}>
-                <TableCell className="truncate font-medium" title={w.name}>
+                <TableCell className="font-medium">
                   <Link href={w.href} className="text-primary hover:underline">
-                    {w.name}
+                    {sentenceCase(w.name)}
                   </Link>
                 </TableCell>
-                <TableCell className="truncate text-muted-foreground" title={w.description}>
-                  {w.description}
-                </TableCell>
-                <TableCell className="truncate text-muted-foreground" title={cut}>
-                  {cut}
-                </TableCell>
-                <TableCell className="truncate text-muted-foreground">
-                  {w.unitLabel} · {w.basisLabel}
-                  {w.grains.length > 1 ? ` · ${w.grains.join("/")}` : ""}
+                <TableCell>
+                  <span className="block text-muted-foreground">{w.description}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {facts.join(" · ")}
+                  </span>
                 </TableCell>
                 <TableCell className="text-right">
                   <KindPill kind={kindOf(w)} />

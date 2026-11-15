@@ -16,6 +16,7 @@ import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
 import { createSubscription } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod, dunningNotHeldSql } from "@/modules/invoicing/service";
+import { collectInvoiceNow, createManualInvoice } from "@/modules/invoicing/ops";
 import { retryDueInvoice, runDunningPass } from "@/modules/subscriptions/dunning";
 import { getDunningJourney } from "@/modules/invoicing/dunning-journey";
 import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective";
@@ -523,6 +524,68 @@ const scopedPass = (bizId: string, now = new Date()) =>
     "P9 no call site resolves the business config alone",
     offenders.length === 0,
     offenders.join(", ") || "none",
+  );
+}
+
+// ── P10: a manual first failure is attempt 1 ────────────────────────────────────
+// Held at 0, the first scheduled retry also indexed offset 1, so 1, 3, 5, 7 ran on days
+// 1, 2, 3, 5, 7 — one extra charge.
+{
+  const b = await setupBusiness("ManualFirst", { dun_one_time_invoices: true });
+  const customer = await createCustomer({
+    organizationId: b.orgId,
+    businessId: b.bizId,
+    email: "manual-first@example.com",
+    currency: "USD",
+    address: { country: "US" },
+  });
+  await vaultPaymentMethod({
+    organizationId: b.orgId,
+    businessId: b.bizId,
+    customer,
+    token: "4000000000009995",
+  });
+  const { invoice } = await createManualInvoice({
+    organizationId: b.orgId,
+    businessId: b.bizId,
+    customerId: customer.id,
+    currency: "USD",
+    lines: [{ description: "One-time", amountMinor: 4000n, kind: "one_time" as const }],
+  });
+  await collectInvoiceNow(b.orgId, b.bizId, invoice.publicId);
+  const first = await getInv(b.orgId, invoice.id);
+  const due = first.dueDate!.getTime();
+  const day = 86_400_000;
+  check(
+    "P10 a manual first failure starts dunning as attempt 1, retry at offset 1",
+    first.dunningStatus === "in_progress" &&
+      first.attemptCount === 1 &&
+      first.nextAttemptAt?.getTime() === due + day,
+    `dunning=${first.dunningStatus} attempts=${first.attemptCount} next=${first.nextAttemptAt?.toISOString()}`,
+  );
+  const at = new Date(due + day + 60_000);
+  await runWithClockScope({ onlyBusinessId: b.bizId, now: at }, () =>
+    retryDueInvoice(
+      { id: invoice.id, organizationId: b.orgId, businessId: b.bizId, subscriptionId: null },
+      at,
+    ),
+  );
+  const second = await getInv(b.orgId, invoice.id);
+  check(
+    "P10 …and the first scheduled retry moves on to offset 3, not the next day",
+    second.attemptCount === 2 && second.nextAttemptAt?.getTime() === due + 3 * day,
+    `attempts=${second.attemptCount} next=${second.nextAttemptAt?.toISOString()} payments=${await payCount(b.orgId, invoice.id)}`,
+  );
+  const started = await withTenant(b.orgId, (tx) =>
+    tx
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.businessId, b.bizId), eq(events.type, "invoice_dunning_started"))),
+  );
+  check(
+    "P10 …and invoice_dunning_started is sent once",
+    started.length === 1,
+    `events=${started.length}`,
   );
 }
 

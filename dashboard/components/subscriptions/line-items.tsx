@@ -62,11 +62,7 @@ export function lineSubtitle(interval: string | null | undefined, slot: string):
 
 /** Group heading: quiet metadata that separates rows, not a band competing with them. */
 export function LineGroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="pt-5 pb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-      {children}
-    </div>
-  );
+  return <div className="pt-5 pb-2 text-xs font-semibold text-muted-foreground">{children}</div>;
 }
 
 /**
@@ -99,7 +95,7 @@ export function LineItemsCard({
         <div
           className={cn(
             LINE_GRID,
-            "hidden border-b py-2.5 text-xs font-medium tracking-wider text-muted-foreground uppercase @2xl:grid",
+            "hidden border-b py-2.5 text-xs font-medium text-muted-foreground @2xl:grid",
             bare ? "border-t px-5" : "px-4",
           )}
         >

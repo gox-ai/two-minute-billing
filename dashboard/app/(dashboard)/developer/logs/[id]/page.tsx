@@ -1,9 +1,10 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
+import { listBusinesses, isApiNotFound } from "@/lib/api";
 import { getRequestLog } from "@/lib/api/request-logs";
 import { requirePermission, allows } from "@/lib/session";
 import { orgTz } from "@/lib/org-tz-server";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { statusTone, type RequestLogDetail } from "@/lib/request-log-types";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, EmptyState } from "@/components/states";
@@ -83,19 +84,23 @@ export default async function RequestLogPage({ params }: { params: Promise<{ id:
   try {
     [log, businesses] = await Promise.all([getRequestLog(id), listBusinesses()]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Request" />
         <ErrorState
-          title="We could not load this request"
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="request"
+          back={{ label: "View request logs", href: "/developer/logs" }}
+          retry
         />
       </>
     );
   }
 
   const crumbs = [
-    { label: "Developers", href: "/developer" },
+    { label: "Overview", href: "/" },
+    { label: "Developer", href: "/developer" },
     { label: "Request logs", href: "/developer/logs" },
     { label: id },
   ];

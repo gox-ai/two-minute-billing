@@ -5,8 +5,14 @@ import { Card } from "@/components/ui/card";
 import { Block, KPI_LABEL, spanClass, type Span } from "@/components/analytics/layout";
 import { measureValueCompact } from "@/components/analytics/format";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
+import { fmtDate, fmtRange } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
+import { CHART_DRAW } from "@/lib/motion";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
+import { RollingNumber } from "@/components/ui/rolling-number";
+import { EMPTY_FIGURE, EmptyFigure } from "@/components/patterns/record-page";
 import { InfoTip } from "@/components/analytics/info-tip";
+import { sparkRange, waterfallFloor } from "@/components/charts/axis";
 import type { CardInfo } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
 import { DeltaChip, type DeltaDirection, type DeltaTone } from "@/components/analytics/delta-chip";
@@ -120,11 +126,12 @@ export function ratioDenominator(r: AnalyticsResult | null): number | null {
   return measured.length > 0 ? (measured[measured.length - 1]!.denominator ?? null) : null;
 }
 
-/** Signed money for a movement: a loss carries its sign, nothing carries none. */
-export function signedMoney(minor: number | null, currency: string): string {
+/** Signed compact money for a movement. Zero (after rounding to a minor unit) has no sign. */
+export function signedMoney(minor: number | null | undefined, currency: string): string {
   if (minor == null) return "—";
-  if (minor === 0) return moneyCompact(0, currency);
-  return `${minor < 0 ? "−" : "+"}${moneyCompact(Math.abs(minor), currency)}`;
+  const m = Math.round(minor);
+  if (m === 0) return moneyCompact(0, currency);
+  return `${m < 0 ? "−" : "+"}${moneyCompact(Math.abs(m), currency)}`;
 }
 
 /* ------------------------------------------------------ shared readings */
@@ -194,6 +201,7 @@ export function ScheduledChanges({
       <span className={v < 0 ? "text-destructive" : undefined}>{signedMoney(v, currency)}</span>
     );
 
+  const nothingBooked = rows.every((r) => !r.count && !r.near && !r.mid);
   return (
     <Block
       span={span}
@@ -202,35 +210,43 @@ export function ScheduledChanges({
       chip="priced at booking"
       action={action}
     >
-      {/* A grid sized to its content, not the fixed ladder: this card takes a third of a row.
+      {nothingBooked ? (
+        <p className="text-sm text-muted-foreground">
+          No changes booked. Scheduled cancellations, upgrades and downgrades show here.
+        </p>
+      ) : (
+        <>
+          {/* A grid sized to its content, not the fixed ladder: this card takes a third of a row.
           Labels wrap between words; only a narrower card than that scrolls. */}
-      <div className="overflow-x-auto">
-        <div className="grid grid-cols-[minmax(min-content,1fr)_auto_auto_auto] items-center gap-x-4 text-sm tabular-nums">
-          <div className="col-span-4 grid h-8 grid-cols-subgrid items-center border-b text-xs font-semibold tracking-wide whitespace-nowrap text-muted-foreground uppercase">
-            <span>Change</span>
-            <span className="text-right">Count</span>
-            <span className="text-right">Next 30d</span>
-            <span className="text-right">31–90d</span>
-          </div>
-          {[...rows, net].map((r, i) => (
-            <div
-              key={r.label}
-              className={cn(
-                "col-span-4 grid min-h-11 grid-cols-subgrid items-center py-1.5",
-                i < rows.length - 1 && "border-b",
-                i === rows.length && "border-t font-medium",
-              )}
-            >
-              <span>{r.label}</span>
-              <span className="text-right">
-                {r.count == null ? "—" : r.count.toLocaleString("en")}
-              </span>
-              <span className="text-right whitespace-nowrap">{cell(r.near)}</span>
-              <span className="text-right whitespace-nowrap">{cell(r.mid)}</span>
+          <div className="overflow-x-auto">
+            <div className="grid grid-cols-[minmax(min-content,1fr)_auto_auto_auto] items-center gap-x-3 text-sm tabular-nums">
+              <div className="col-span-4 grid h-8 grid-cols-subgrid items-center border-b text-xs font-medium whitespace-nowrap text-muted-foreground">
+                <span>Change</span>
+                <span className="text-right">Count</span>
+                <span className="text-right">Next 30d</span>
+                <span className="text-right">31–90d</span>
+              </div>
+              {[...rows, net].map((r, i) => (
+                <div
+                  key={r.label}
+                  className={cn(
+                    "col-span-4 grid min-h-11 grid-cols-subgrid items-center py-1.5",
+                    i < rows.length - 1 && "border-b",
+                    i === rows.length && "border-t font-medium",
+                  )}
+                >
+                  <span>{r.label}</span>
+                  <span className="text-right">
+                    {r.count == null ? "—" : r.count.toLocaleString("en")}
+                  </span>
+                  <span className="text-right whitespace-nowrap">{cell(r.near)}</span>
+                  <span className="text-right whitespace-nowrap">{cell(r.mid)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </Block>
   );
 }
@@ -290,8 +306,8 @@ export function Lines({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * A headline tile: tracked label, 26px figure, one short qualifier. The row it sits in sets
- * its width. A tile with `href` is a way into the list behind the figure.
+ * A headline tile: the Home KPI card (`Headline`) with a link and a loss tone. The row it
+ * sits in sets its width. One label style for every KPI card: the sentence-case header row.
  */
 export function Tile({
   label,
@@ -313,34 +329,17 @@ export function Tile({
   /** On the 12-column grid; omitted when the row sets the width itself. */
   span?: Span;
 }) {
-  const body = (
-    <>
-      <span className="flex items-center gap-1">
-        <span className={KPI_LABEL}>{label}</span>
-        {info ? <InfoTip label={label} info={info} /> : null}
-      </span>
-      <span
-        className={cn(
-          "mt-2 text-2xl font-semibold wrap-anywhere tabular-nums",
-          tone === "loss" && "text-destructive",
-        )}
-        title={title}
-      >
-        {value}
-      </span>
-      {note ? (
-        <span className="mt-1 text-xs text-muted-foreground tabular-nums">{note}</span>
-      ) : null}
-    </>
-  );
-  const shell = "anim-rise flex min-w-0 flex-col gap-0 p-6";
-  const width = span ? spanClass(span) : undefined;
-  return href ? (
-    <Link href={href} className={cn("group min-w-0", width)}>
-      <Card className={cn(shell, "hoverable h-full group-hover:border-primary/40")}>{body}</Card>
-    </Link>
-  ) : (
-    <Card className={cn(shell, width)}>{body}</Card>
+  return (
+    <Headline
+      label={label}
+      value={value}
+      note={note}
+      title={title}
+      href={href}
+      tone={tone}
+      info={info}
+      span={span ?? null}
+    />
   );
 }
 
@@ -381,33 +380,38 @@ export interface HeadlineChange {
   context: string;
 }
 
-// As many columns as stats, so two figures get halves rather than two thirds and a gap.
-const STAT_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3" };
-
 /**
  * A series as a sparkline: the line and a light wash under it, drawn from the same points
- * as the chart it summarises. A null point breaks the line — a gap, never a zero.
+ * as the chart it summarises. A null point breaks the line — a gap, never a zero — unless
+ * `joinGaps`, for a series where a null bucket has no value at all (a rate with no attempts).
  */
 export function Sparkline({
   values,
   className,
+  joinGaps = false,
+  minSpan,
 }: {
   values: Array<number | null>;
   className?: string;
+  joinGaps?: boolean;
+  /** The narrowest vertical range drawn (`sparkRange`). */
+  minSpan?: number;
 }) {
   const W = 240;
   const H = 56;
   const PAD = 4;
   const known = values.filter((v): v is number => v != null && Number.isFinite(v));
   if (known.length < 2) return null;
-  const lo = Math.min(...known);
-  const hi = Math.max(...known);
-  const span = hi - lo || 1;
+  const { lo, hi } = sparkRange(known, minSpan);
+  const span = hi - lo;
   const x = (i: number) => (values.length < 2 ? 0 : (i / (values.length - 1)) * W);
   const y = (v: number) => PAD + (1 - (v - lo) / span) * (H - PAD * 2);
   const runs: Array<Array<[number, number]>> = [];
   values.forEach((v, i) => {
-    if (v == null || !Number.isFinite(v)) return void runs.push([]);
+    if (v == null || !Number.isFinite(v)) {
+      if (!joinGaps) runs.push([]);
+      return;
+    }
     if (runs.length === 0) runs.push([]);
     runs[runs.length - 1]!.push([x(i), y(v)]);
   });
@@ -419,26 +423,29 @@ export function Sparkline({
       aria-hidden
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
-      className={cn("block h-14 w-full", className)}
+      className={cn("chart-short block h-14 w-full", className)}
     >
-      {lines.map((r, i) => (
-        <path
-          key={`a${i}`}
-          d={`${d(r)} L${r.at(-1)![0].toFixed(1)} ${H} L${r[0]![0].toFixed(1)} ${H} Z`}
-          className="fill-chart-1/10"
-        />
-      ))}
-      {lines.map((r, i) => (
-        <path
-          key={`l${i}`}
-          d={d(r)}
-          fill="none"
-          strokeWidth={2}
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-          className="stroke-chart-1"
-        />
-      ))}
+      {/* Keyed on the data: new values replay the draw, a same-data refresh does not. */}
+      <g key={drawKey(values)}>
+        {lines.map((r, i) => (
+          <path
+            key={`a${i}`}
+            d={`${d(r)} L${r.at(-1)![0].toFixed(1)} ${H} L${r[0]![0].toFixed(1)} ${H} Z`}
+            className={cn("fill-chart-1/10", CHART_DRAW && "chart-area")}
+          />
+        ))}
+        {lines.map((r, i) => (
+          <path
+            key={`l${i}`}
+            d={d(r)}
+            fill="none"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+            className={cn("stroke-chart-1", CHART_DRAW && "chart-wipe")}
+          />
+        ))}
+      </g>
     </svg>
   );
 }
@@ -456,17 +463,24 @@ export function Headline({
   note,
   spark,
   featured = false,
+  href,
+  tone,
 }: {
   label: string;
   value: string;
   title?: string;
   /** What the card counts, behind an (i) beside the label. */
   info?: CardInfo;
+  /** The card is a way into the list behind the figure. */
+  href?: string;
+  /** A figure that is money going out. */
+  tone?: "loss";
   /** Movement beside the figure: a chip ("↓ 4.4%") then its context ("in 30 days"). */
   change?: HeadlineChange | null;
   /** Secondary figures, each under its own label; a null value drops the stat. */
   stats?: Array<{ label: string; value: string | null; title?: string; href?: string }>;
-  span?: Span;
+  /** `null`: no column class, the row sets the width. */
+  span?: Span | null;
   /** A cell inside a surface that already draws the card (the one-business panel). */
   bare?: boolean;
   /** Leads the header row. */
@@ -479,10 +493,19 @@ export function Headline({
   featured?: boolean;
 }) {
   const shown = stats.filter((s) => s.value != null);
+  const empty = value === EMPTY_FIGURE;
+  // Emphasis only frames a figure: an empty one stays a plain card.
+  const feature = featured && !empty;
   const figure = (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-      <span className="text-2xl font-medium tracking-[-0.02em] tabular-nums" title={title}>
-        {value}
+      <span
+        className={cn(
+          "text-2xl font-semibold tracking-[-0.02em] tabular-nums",
+          tone === "loss" && "text-destructive",
+        )}
+        title={title}
+      >
+        {empty ? <EmptyFigure /> : <RollingNumber value={value} />}
       </span>
       {change ? (
         <span className={cn("flex items-center gap-2 self-center", spark && "basis-full")}>
@@ -496,12 +519,14 @@ export function Headline({
   );
   const statRow = (cls: string) =>
     shown.length > 0 ? (
-      <dl className={cn("grid gap-x-2 gap-y-3", STAT_COLS[shown.length] ?? "grid-cols-3", cls)}>
+      // A figure is never cut: equal shares while they fit, and a stat that needs more
+      // room than its share wraps to the next line.
+      <dl className={cn("flex flex-wrap gap-x-2 gap-y-3", cls)}>
         {shown.map((s) => (
           // A label that wraps keeps its figure on the row's baseline.
-          <div key={s.label} className="flex min-w-0 flex-col justify-between gap-0.5">
+          <div key={s.label} className="flex flex-1 basis-0 flex-col justify-between gap-0.5">
             <dt className="text-xs text-muted-foreground">{s.label}</dt>
-            <dd className="truncate text-base font-medium tabular-nums" title={s.title}>
+            <dd className="text-base font-medium whitespace-nowrap tabular-nums" title={s.title}>
               {s.href ? (
                 <Link href={s.href} className="figure-link">
                   {s.value}
@@ -529,26 +554,30 @@ export function Headline({
   }
 
   // Header row, body, stat row — each split by a hairline.
-  return (
+  const card = (
     <Card
       className={cn(
         "anim-rise min-w-0 gap-0 overflow-hidden py-0",
-        featured && "surface-feature",
-        spanClass(span),
+        feature && "surface-feature",
+        href ? "hoverable h-full group-hover:border-primary/40" : "self-stretch",
+        span ? spanClass(span) : undefined,
       )}
     >
-      <div className="flex items-center gap-2 border-b px-4 py-3 text-sm font-medium">
+      <div className="flex items-start gap-2 border-b px-4 py-3 text-sm leading-snug font-medium">
         {Icon ? (
           <Icon
-            className={cn("size-4 shrink-0", featured ? "text-primary" : "text-foreground/70")}
+            className={cn(
+              "size-4 shrink-0 translate-y-px",
+              feature ? "text-primary" : "text-foreground/70",
+            )}
           />
         ) : null}
-        <span className="min-w-0 truncate">{label}</span>
+        <span className="min-w-0 wrap-break-word">{label}</span>
         {info ? <InfoTip label={label} info={info} /> : null}
       </div>
-      {/* Two lines in every card — figure, then its change or its note — so a row of these
-          stays one height. A sparkline sits beside them, never under them. */}
-      <div className="flex flex-1 items-center gap-3 px-4 pt-3.5 pb-4">
+      {/* The figure sits at the top of the body, so a card with no note keeps its figure on
+          the row's line instead of centring it. A sparkline sits beside, never under. */}
+      <div className="flex flex-1 items-start gap-3 px-4 pt-3.5 pb-4">
         <div className="flex min-w-0 flex-col">
           {figure}
           {note ? (
@@ -557,10 +586,22 @@ export function Headline({
         </div>
         {/* A set width, not flex-1: the leftover space depends on the figure's length, so
             sparklines in one row came out at different widths. */}
-        {spark ? <Sparkline values={spark} className="ms-auto h-12 w-28 min-w-16 shrink" /> : null}
+        {spark ? (
+          <Sparkline values={spark} className="ms-auto h-12 w-28 min-w-16 shrink self-center" />
+        ) : null}
       </div>
       {statRow("border-t px-4 pt-3 pb-3.5")}
     </Card>
+  );
+  return href ? (
+    <Link
+      href={href}
+      className={cn("group min-w-0 self-stretch", span ? spanClass(span) : undefined)}
+    >
+      {card}
+    </Link>
+  ) : (
+    card
   );
 }
 
@@ -579,10 +620,10 @@ export function Lead({
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span
-        className={cn("text-2xl font-medium tabular-nums", tone === "loss" && "text-destructive")}
+        className={cn("text-2xl font-semibold tabular-nums", tone === "loss" && "text-destructive")}
         title={title}
       >
-        {value}
+        {value === EMPTY_FIGURE ? <EmptyFigure /> : value}
       </span>
       {note ? <span className="text-sm text-muted-foreground tabular-nums">{note}</span> : null}
     </div>
@@ -594,8 +635,9 @@ export function Meter({ fraction, fill = "bg-chart-1" }: { fraction: number; fil
   return (
     <span className="block h-2 rounded-full bg-muted" aria-hidden>
       <span
-        className={cn("anim-grow block h-full rounded-full", fill)}
-        style={{ width: `${Math.min(100, Math.max(0, fraction * 100))}%` }}
+        key={drawKey([fraction])}
+        className={cn(BAR_GROW, "block h-full rounded-full", fill)}
+        style={barStyle(Math.min(100, Math.max(0, fraction * 100)))}
       />
     </span>
   );
@@ -666,7 +708,7 @@ export function TrialsFunnel({
         ) : null}
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">Conversion rate</span>
-          <span className="text-2xl font-medium tabular-nums">{pct ?? "—"}</span>
+          <span className="text-2xl font-semibold tabular-nums">{pct ?? <EmptyFigure />}</span>
           {ended ? (
             <span className="text-sm text-muted-foreground tabular-nums">
               {count(won)} of {count(ended)} ended trials
@@ -791,7 +833,7 @@ export function BarList({
           : "grid-cols-[minmax(0,max-content)_minmax(3rem,1fr)_auto]",
       )}
     >
-      {shown.map((r) => (
+      {shown.map((r, i) => (
         <React.Fragment key={r.key}>
           {r.href ? (
             <Link href={r.href} className="wrap-break-word hover:underline">
@@ -802,8 +844,9 @@ export function BarList({
           )}
           <span className="h-2 rounded-md bg-muted" aria-hidden>
             <span
-              className={cn("anim-grow block h-full rounded-md", fill)}
-              style={{ width: `${Math.min(100, (r.total / widest) * 100)}%` }}
+              key={drawKey([r.total, widest])}
+              className={cn(BAR_GROW, "block h-full rounded-md", fill)}
+              style={barStyle(Math.min(100, (r.total / widest) * 100), i)}
             />
           </span>
           <span className="text-right tabular-nums" title={r.title}>
@@ -823,8 +866,6 @@ export function BarList({
 export { SegmentBar } from "@/components/charts/segment-bar";
 
 /* ---------------------------------------------------------- dates on Home */
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function partsIn(iso: string, tz: string | null) {
   const d = new Date(iso);
@@ -847,13 +888,6 @@ function partsIn(iso: string, tz: string | null) {
   }
 }
 
-/** `28 Sep, 14:05` in the business zone. */
-export function asAtLabel(iso: string | null, tz: string | null): string | null {
-  const p = iso ? partsIn(iso, tz) : null;
-  if (!p) return null;
-  return `${Number(p.day)} ${MONTHS[Number(p.month) - 1]}, ${p.hour}:${p.minute}`;
-}
-
 /** A calendar date, or the business-zone date of an instant, as `YYYY-MM-DD`. */
 export function localYmd(s: string, tz: string | null): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
@@ -861,12 +895,9 @@ export function localYmd(s: string, tz: string | null): string {
   return p ? `${p.year}-${p.month!.padStart(2, "0")}-${p.day!.padStart(2, "0")}` : s.slice(0, 10);
 }
 
-/** `30 Aug – 28 Sep`, with years only when the window crosses one. */
+/** `30 Aug – 28 Sep 2026` from two calendar dates. */
 export function rangeLabel(start: string, end: string): string {
-  const fmt = (ymd: string, year: boolean) =>
-    `${Number(ymd.slice(8, 10))} ${MONTHS[Number(ymd.slice(5, 7)) - 1]}${year ? ` ${ymd.slice(0, 4)}` : ""}`;
-  const crosses = start.slice(0, 4) !== end.slice(0, 4);
-  return `${fmt(start, crosses)} – ${fmt(end, crosses)}`;
+  return fmtRange(start, end);
 }
 
 /** Days in an inclusive calendar window. */
@@ -885,7 +916,7 @@ export function total(r: AnalyticsResult | null, fallbackCurrency: string): stri
  * missing rate reads as something to fix rather than as a parenthesis.
  */
 export function currencyBasis(b: Basis): string {
-  return b.converted ? `reported in ${b.currency}, converted` : `all figures in ${b.currency}`;
+  return b.converted ? `Reported in ${b.currency}, converted` : `All figures in ${b.currency}`;
 }
 
 /* ---------------------------------------------- the last complete month */
@@ -950,13 +981,6 @@ export function readMovement(batch: BatchEntry[]): Movement {
     // Asked for, not divided here: all churned MRR over the COHORT opening mixed two bases.
     churnRateBps: pick(batch, "churn_rate")?.total ?? null,
   };
-}
-
-/** Whether the engine answered any part of the movement at all. */
-export function hasMovement(m: Movement): boolean {
-  return [m.opening, m.newMrr, m.expansion, m.reactivation, m.contraction, m.churn].some(
-    (v) => v != null,
-  );
 }
 
 /** What the waterfall and the net-new row say about the movement no flow measure counts. */
@@ -1026,10 +1050,11 @@ export function netNewParts(
 /**
  * What moved recurring revenue over the period, as a waterfall from opening to closing MRR.
  *
- * Each step floats from the running total before it to the one after. The axis is fitted to
- * the totals, not zero, so a 1% month is visible; the opening and closing bars stand on that
- * floor. Steps of nothing are left out. When the edges come from the MRR stock, FX (rate drift
- * on a converted answer) and Other (what no flow measures) close the gap, so the bars add up.
+ * Each step floats from the running total before it to the one after. The edges stand on zero
+ * when the movement still reads from there; otherwise on a broken axis (`waterfallFloor`) whose
+ * break is drawn across both edge bars, so a cut bar never passes for a whole one. Steps of
+ * nothing are left out. When the edges come from the MRR stock, FX (rate drift on a converted
+ * answer) and Other (what no flow measures) close the gap, so the bars add up.
  */
 export function MovementWaterfall({
   movement,
@@ -1081,14 +1106,15 @@ export function MovementWaterfall({
   const totals = [opening, closing, ...bars.map((b) => b.to)];
   const hi = Math.max(...totals);
   const lo = Math.min(...totals);
-  // The floor sits below the lowest total by the swing again, so the edges read as levels.
   const swing = hi - lo || Math.abs(hi) * 0.05 || 1;
-  const floor = known ? Math.max(0, lo - swing) : Math.min(0, lo);
+  const { floor, broken } = known
+    ? waterfallFloor(lo, hi)
+    : { floor: Math.min(0, lo), broken: false };
   const top = hi + swing * 0.1;
   const H = 180;
   const y = (v: number) => ((v - floor) / (top - floor || 1)) * H;
 
-  const sign = (v: number) => (v > 0 ? "+" : v < 0 ? "−" : "");
+  const sign = (v: number) => (Math.round(v) > 0 ? "+" : Math.round(v) < 0 ? "−" : "");
   const columns = [
     ...(known
       ? [
@@ -1098,7 +1124,8 @@ export function MovementWaterfall({
             amount: opening,
             from: floor,
             to: opening,
-            fill: "bg-muted-foreground/40",
+            // Totals are a neutral share, not a gain: `--chart-4` in both themes.
+            fill: "bg-chart-4",
             edge: true,
             loss: false,
             hint: undefined as string | undefined,
@@ -1112,7 +1139,7 @@ export function MovementWaterfall({
       from: b.from,
       to: b.to,
       // FX and Other are not customer movement: neutral, never loss-red.
-      fill: b.neutral ? "bg-muted-foreground/25" : b.delta < 0 ? "bg-chart-5" : "bg-chart-1",
+      fill: b.neutral ? "bg-chart-4/40" : b.delta < 0 ? "bg-destructive" : "bg-chart-1",
       edge: false,
       loss: !b.neutral && b.delta < 0,
       hint: b.hint,
@@ -1125,7 +1152,7 @@ export function MovementWaterfall({
             amount: closing,
             from: floor,
             to: closing,
-            fill: "bg-foreground",
+            fill: "bg-chart-4",
             edge: true,
             loss: false,
             hint: undefined as string | undefined,
@@ -1134,45 +1161,116 @@ export function MovementWaterfall({
       : []),
   ];
   const grid = { gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` };
+  // Too narrow for one column a step, the steps become rows (NARROW_WATERFALL).
+  const narrow = NARROW_WATERFALL[Math.min(Math.max(columns.length, 5), 10)]!;
+  const x = (v: number) => ((v - floor) / (top - floor || 1)) * 100;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="relative" style={{ height: H }}>
-        <div className="absolute inset-x-0 bottom-0 border-t" />
-        <div className="absolute inset-0 grid gap-3" style={grid}>
-          {columns.map((c) => {
-            const bottom = y(Math.min(c.from, c.to));
-            const height = Math.max(2, Math.abs(y(c.to) - y(c.from)));
-            return (
-              <div key={c.key} className="relative">
-                <div
-                  className={cn("absolute inset-x-1 rounded-sm", c.fill)}
-                  style={{ bottom, height }}
-                />
+    <div className="@container">
+      <ul className={cn("hidden flex-col gap-3", narrow.list)}>
+        {columns.map((c) => {
+          const left = x(Math.min(c.from, c.to));
+          const width = Math.max(0.5, Math.abs(x(c.to) - x(c.from)));
+          return (
+            <li key={c.key} className="flex flex-col gap-1">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-sm text-muted-foreground" title={c.hint}>
+                  {c.label}
+                </span>
+                <span
+                  className={cn(
+                    "text-sm font-medium whitespace-nowrap tabular-nums",
+                    c.loss && "text-destructive",
+                  )}
+                  title={money(Math.abs(c.amount), currency)}
+                >
+                  {c.edge ? "" : sign(c.amount)}
+                  {moneyCompact(Math.abs(c.amount), currency)}
+                </span>
               </div>
-            );
-          })}
-        </div>
-      </div>
-      <div className="grid gap-3" style={grid}>
-        {columns.map((c) => (
-          <div key={c.key} className="flex min-w-0 flex-col items-center gap-0.5 text-center">
-            <span
-              className={cn("text-sm font-medium tabular-nums", c.loss && "text-destructive")}
-              title={money(Math.abs(c.amount), currency)}
-            >
-              {c.edge ? "" : sign(c.amount)}
-              {moneyCompact(Math.abs(c.amount), currency)}
-            </span>
-            <span className="text-xs wrap-break-word text-muted-foreground" title={c.hint}>
-              {c.label}
-            </span>
+              <div className="relative h-2">
+                <div
+                  className={cn("absolute inset-y-0 rounded-xs", c.fill)}
+                  style={{ left: `${left}%`, width: `${width}%` }}
+                >
+                  {broken && c.edge ? (
+                    <span
+                      aria-hidden
+                      className="absolute inset-y-0 left-3 w-1.5 -skew-x-12 bg-card"
+                    />
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <div className={cn("flex flex-col gap-3", narrow.plot)}>
+        <div
+          className="relative"
+          style={{ height: H }}
+          title={broken ? "The axis does not start at zero" : undefined}
+        >
+          <div className="absolute inset-x-0 bottom-0 border-t" />
+          <div className="absolute inset-0 grid gap-3" style={grid}>
+            {columns.map((c) => {
+              const bottom = y(Math.min(c.from, c.to));
+              const height = Math.max(2, Math.abs(y(c.to) - y(c.from)));
+              return (
+                <div key={c.key} className="relative">
+                  <div
+                    className={cn("absolute inset-x-1 rounded-xs", c.fill)}
+                    style={{ bottom, height }}
+                  >
+                    {/* The break: this bar does not start at zero. */}
+                    {broken && c.edge ? (
+                      <span
+                        aria-hidden
+                        className="absolute inset-x-0 bottom-3 h-1.5 -skew-y-12 bg-card"
+                      />
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        ))}
+        </div>
+        <div className="grid gap-3" style={grid}>
+          {columns.map((c) => (
+            <div key={c.key} className="flex min-w-0 flex-col items-center gap-0.5 text-center">
+              <span
+                className={cn(
+                  "text-sm font-medium whitespace-nowrap tabular-nums",
+                  c.loss && "text-destructive",
+                )}
+                title={money(Math.abs(c.amount), currency)}
+              >
+                {c.edge ? "" : sign(c.amount)}
+                {moneyCompact(Math.abs(c.amount), currency)}
+              </span>
+              <span className="text-xs whitespace-nowrap text-muted-foreground" title={c.hint}>
+                {c.label}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
+
+/**
+ * Container widths below which the waterfall is a list: 84px a column less one gap, room for
+ * "Reactivation" and a value like "−$192.79" on one line each.
+ */
+const NARROW_WATERFALL: Record<number, { list: string; plot: string }> = {
+  5: { list: "@max-[25.5rem]:flex", plot: "@max-[25.5rem]:hidden" },
+  6: { list: "@max-[30.75rem]:flex", plot: "@max-[30.75rem]:hidden" },
+  7: { list: "@max-[36rem]:flex", plot: "@max-[36rem]:hidden" },
+  8: { list: "@max-[41.25rem]:flex", plot: "@max-[41.25rem]:hidden" },
+  9: { list: "@max-[46.5rem]:flex", plot: "@max-[46.5rem]:hidden" },
+  10: { list: "@max-[51.75rem]:flex", plot: "@max-[51.75rem]:hidden" },
+};
 
 /** A country code as its English name; the code itself when the runtime has no name for it. */
 export function countryName(code: string): string {
@@ -1184,15 +1282,8 @@ export function countryName(code: string): string {
   }
 }
 
-/** Due in the next 30 days plus already past its date — the renewal book's near edge. */
-export function nearBand(r: AnalyticsResult | null): number | null {
-  const near = slice(r, "1_30");
-  const late = slice(r, "overdue");
-  return near == null && late == null ? null : (near ?? 0) + (late ?? 0);
-}
-
 /**
- * "N open · next deadline 3 Oct" (or "deadline passed 26 Sep"). Without a dated deadline it
+ * "N open · next deadline 3 Oct 2026" (or "deadline passed 26 Sep 2026"). Without a dated deadline it
  * falls back to the horizon split: "M overdue" / "M due within 30 days".
  */
 export function disputeNote(
@@ -1205,9 +1296,7 @@ export function disputeNote(
   const overdue = slice(r, "overdue") ?? 0;
   const soon = slice(r, "1_30") ?? 0;
   const deadline = nextDeadline
-    ? `${Date.parse(nextDeadline) < Date.now() ? "deadline passed" : "next deadline"} ${new Date(
-        nextDeadline,
-      ).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: tz ?? "UTC" })}`
+    ? `${Date.parse(nextDeadline) < Date.now() ? "deadline passed" : "next deadline"} ${fmtDate(nextDeadline, tz)}`
     : null;
   return [
     `${n(open)} open`,

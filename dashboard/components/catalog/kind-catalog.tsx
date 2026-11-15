@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { listBusinesses, listProducts, listProductGroups } from "@/lib/api";
 import { importProductsAction } from "@/app/actions";
 import { requirePermission } from "@/lib/session";
@@ -70,38 +71,41 @@ export async function KindCatalog({
   const basePath = `/businesses/${biz}/catalog/${page}`;
   const singular = title.replace(/s$/, "");
 
-  return (
+  const notice = (
     <>
-      <PageHeader
-        title={title}
-        breadcrumbs={[
-          { label: name, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
-          { label: title },
-        ]}
-      />
-
       {msg ? (
         <Alert tone="info" className="mb-6">
           {msg}
         </Alert>
       ) : null}
       {error ? <ErrorState className="mb-6" description={error} /> : null}
-
       {group ? (
         <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
           <span>
             Filtered to product group{" "}
             <span className="font-medium text-foreground">{groupName}</span>
           </span>
-          <a href={basePath} className="text-primary hover:underline">
+          <Link href={basePath} className="text-primary hover:underline">
             Clear
-          </a>
+          </Link>
         </div>
       ) : null}
+    </>
+  );
 
+  return (
+    <>
       {/* Create / Import / show-archived all live in the list top bar now. */}
       <ProductsListPage
+        page={{
+          title,
+          breadcrumbs: [
+            { label: name, href: `/businesses/${biz}` },
+            { label: "Product catalog" },
+            { label: title },
+          ],
+          notice,
+        }}
         biz={biz}
         rows={rows}
         kind={kind}
@@ -112,9 +116,10 @@ export async function KindCatalog({
         topBarExtras={<ShowArchivedToggle basePath={basePath} showing={showArchived} />}
         importSlot={
           <CreateDialog
-            triggerLabel={`Import ${title}`}
+            triggerLabel={`Import ${title.toLowerCase()}`}
+            triggerSize="sm"
             triggerVariant="outline"
-            title={`Import ${title}`}
+            title={`Import ${title.toLowerCase()}`}
             description={`Enter one ${singular.toLowerCase()} on each line, as name,description. The name is required. The description is optional.`}
           >
             <ActionForm action={importProductsAction} className="space-y-3">

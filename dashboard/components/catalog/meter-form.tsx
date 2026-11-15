@@ -28,6 +28,15 @@ import {
 } from "@/app/(dashboard)/businesses/[biz]/catalog/meters/actions";
 import type { Meter } from "@/lib/api/meters";
 import {
+  PRICE_UNITS,
+  isMediaUnit,
+  normalizeTier,
+  showsResolution,
+  tokenTypeLabel,
+} from "@/lib/model-prices";
+import { providerName } from "@/lib/model-providers";
+import { TierText } from "@/components/model-prices/tier-text";
+import {
   AI_TOKENS_PRESET,
   MAX_GROUP_BY,
   MAX_LIMIT_DIMENSIONS,
@@ -68,8 +77,20 @@ interface Values {
   /** "property" = read it from `token_type_key`; else a fixed token type. */
   token_mode: string;
   token_type_key: string;
+  /** "" = no unit in the mapping: tokens, else requests. */
+  unit: string;
+  /** "" = no tier; "property" = read from the `_key`; "fixed" = the value. */
+  quality_mode: "" | "property" | "fixed";
+  quality: string;
+  quality_key: string;
+  resolution_mode: "" | "property" | "fixed";
+  resolution: string;
+  resolution_key: string;
   cost_currency: string;
 }
+
+const tierMode = (fixed?: string | null, key?: string | null): "" | "property" | "fixed" =>
+  key ? "property" : fixed ? "fixed" : "";
 
 const TOKEN_TYPES = ["input", "output", "cache_read", "cache_write"];
 
@@ -96,6 +117,13 @@ function seedOf(m?: Meter | null): Values {
     model_key: m?.price_list?.model_key ?? "model",
     token_mode: m?.price_list?.token_type ?? "property",
     token_type_key: m?.price_list?.token_type_key ?? "token_type",
+    unit: m?.price_list?.unit ?? "",
+    quality_mode: tierMode(m?.price_list?.quality, m?.price_list?.quality_key),
+    quality: m?.price_list?.quality ?? "",
+    quality_key: m?.price_list?.quality_key ?? "quality",
+    resolution_mode: tierMode(m?.price_list?.resolution, m?.price_list?.resolution_key),
+    resolution: m?.price_list?.resolution ?? "",
+    resolution_key: m?.price_list?.resolution_key ?? "resolution",
     cost_currency: m?.cost_currency ?? "",
   };
 }
@@ -113,7 +141,87 @@ function priceListWire(v: Values): string {
     ...(v.token_mode === "property"
       ? { token_type_key: v.token_type_key.trim() }
       : { token_type: v.token_mode }),
+    ...(v.unit ? { unit: v.unit } : {}),
+    // Tier fields show only for a media unit; hidden ones post nothing.
+    ...(isMediaUnit(v.unit) ? tierWire("quality", v.quality_mode, v.quality, v.quality_key) : {}),
+    ...(showsResolution(v.unit, v.resolution_mode !== "")
+      ? tierWire("resolution", v.resolution_mode, v.resolution, v.resolution_key)
+      : {}),
   });
+}
+
+/** An empty value still posts, so the action can put its message under the field. */
+function tierWire(name: "quality" | "resolution", mode: string, value: string, key: string) {
+  if (mode === "property") return { [`${name}_key`]: key.trim() };
+  if (mode === "fixed") return { [name]: normalizeTier(value) };
+  return {};
+}
+
+/** Quality or resolution: none, a fixed tier, or the property that holds it. */
+function TierFields({
+  name,
+  label,
+  example,
+  mode,
+  value,
+  propKey,
+  onMode,
+  onValue,
+  onKey,
+}: {
+  name: "quality" | "resolution";
+  label: string;
+  example: string;
+  mode: "" | "property" | "fixed";
+  value: string;
+  propKey: string;
+  onMode: (m: "" | "property" | "fixed") => void;
+  onValue: (v: string) => void;
+  onKey: (v: string) => void;
+}) {
+  return (
+    <>
+      <Field name={`${name}_mode`} label={label}>
+        <SelectField
+          value={mode}
+          onValueChange={(x) => onMode(x === "property" || x === "fixed" ? x : "")}
+          ariaLabel={label}
+          options={[
+            { value: "", label: "None" },
+            { value: "fixed", label: "One value" },
+            { value: "property", label: "From property" },
+          ]}
+        />
+      </Field>
+      {mode === "fixed" ? (
+        <Field
+          name={name}
+          label={`${label} value`}
+          help={
+            <>
+              For example <TierText>{example}</TierText>.
+            </>
+          }
+        >
+          <Input
+            value={value}
+            maxLength={40}
+            className="font-mono"
+            onChange={(e) => onValue(e.target.value)}
+          />
+        </Field>
+      ) : mode === "property" ? (
+        <Field name={`${name}_key`} label={`${label} property`} help="Add it to Group by.">
+          <Input
+            value={propKey}
+            maxLength={100}
+            className="font-mono"
+            onChange={(e) => onKey(e.target.value)}
+          />
+        </Field>
+      ) : null}
+    </>
+  );
 }
 
 /** Meter create and edit. A meter with usage keeps its definition: only the name can change. */
@@ -321,7 +429,13 @@ export function MeterForm({
                 mono
                 value={v.event_name}
                 maxLength={200}
-                help="The event_name that your app sends. More than one meter can read the same events."
+                help={
+                  <>
+                    The name of the usage event that your app sends (
+                    <code className="font-mono">event_name</code>). More than one meter can read the
+                    same events.
+                  </>
+                }
                 onChange={(x) => set("event_name", x)}
               />
               <Field name="aggregation" label="Aggregation" help={meterAggregationHint(agg)}>
@@ -609,7 +723,7 @@ function CostCard({
             label="Provider"
             help={
               v.provider_mode === ""
-                ? "We find the provider from the model. If more than one provider has the model, it has no price."
+                ? "We find the provider from the model. If more than one provider lists the model, the event gets no list price."
                 : undefined
             }
           >
@@ -622,7 +736,7 @@ function CostCard({
                 { value: "property", label: "From property" },
                 ...Array.from(
                   new Set([...providers, ...(fixedProvider ? [fixedProvider] : [])]),
-                ).map((p) => ({ value: p, label: p })),
+                ).map((p) => ({ value: p, label: providerName(p) })),
               ]}
             />
           </Field>
@@ -636,21 +750,21 @@ function CostCard({
               />
             </Field>
           ) : null}
-          <Field name="token_mode" label="Token type">
+          <Field name="token_mode" label="Price type">
             <SelectField
               value={v.token_mode}
               onValueChange={(x) => set("token_mode", x)}
-              ariaLabel="Token type"
+              ariaLabel="Price type"
               options={[
                 { value: "property", label: "From property" },
                 ...Array.from(
                   new Set([...TOKEN_TYPES, ...(v.token_mode !== "property" ? [v.token_mode] : [])]),
-                ).map((t) => ({ value: t, label: t })),
+                ).map((t) => ({ value: t, label: tokenTypeLabel(t) })),
               ]}
             />
           </Field>
           {v.token_mode === "property" ? (
-            <Field name="token_type_key" label="Token type property" help="Add it to Group by.">
+            <Field name="token_type_key" label="Price type property" help="Add it to Group by.">
               <Input
                 value={v.token_type_key}
                 maxLength={100}
@@ -658,6 +772,55 @@ function CostCard({
                 onChange={(e) => set("token_type_key", e.target.value)}
               />
             </Field>
+          ) : null}
+          <Field
+            name="unit"
+            label="Unit"
+            help={
+              v.unit
+                ? "The meter value must count this unit. For audio and video, send seconds."
+                : "We use the token price, else the request price."
+            }
+          >
+            <SelectField
+              value={v.unit}
+              onValueChange={(x) => set("unit", x)}
+              ariaLabel="Unit"
+              options={[
+                { value: "", label: "Tokens or requests" },
+                ...PRICE_UNITS.map((u) => ({
+                  value: u.value,
+                  label: u.value.endsWith("_second") ? `${u.label} (seconds)` : u.label,
+                })),
+              ]}
+            />
+          </Field>
+          {isMediaUnit(v.unit) ? (
+            <TierFields
+              name="quality"
+              label="Quality"
+              example="hd"
+              mode={v.quality_mode}
+              value={v.quality}
+              propKey={v.quality_key}
+              onMode={(x) => set("quality_mode", x)}
+              onValue={(x) => set("quality", x)}
+              onKey={(x) => set("quality_key", x)}
+            />
+          ) : null}
+          {/* A stored resolution on a unit that takes none still shows, so it can be removed. */}
+          {showsResolution(v.unit, v.resolution_mode !== "") ? (
+            <TierFields
+              name="resolution"
+              label="Resolution"
+              example="1024x1024"
+              mode={v.resolution_mode}
+              value={v.resolution}
+              propKey={v.resolution_key}
+              onMode={(x) => set("resolution_mode", x)}
+              onValue={(x) => set("resolution", x)}
+              onKey={(x) => set("resolution_key", x)}
+            />
           ) : null}
         </>
       ) : null}

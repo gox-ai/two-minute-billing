@@ -409,7 +409,7 @@ check(
   "a buyer limit above the operator's → refused with the provider's limit",
   over instanceof UsageControlRuleError &&
     over.message ===
-      "We could not save the limit. Your provider's limit is $5.00. Set a limit of $5.00 or less.",
+      "We could not save the limit. This business set a limit of $5.00. Set a limit of $5.00 or less.",
   over?.message,
 );
 const mintPortal = async (cusPublicId: string) => {

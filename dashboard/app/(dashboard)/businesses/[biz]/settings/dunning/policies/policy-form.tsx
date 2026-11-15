@@ -89,7 +89,7 @@ export function PolicyForm({
                 required
                 maxLength={64}
                 defaultValue={policy?.code ?? ""}
-                placeholder="enterprise"
+                placeholder="For example: enterprise"
                 className="font-mono sm:w-72"
               />
             }

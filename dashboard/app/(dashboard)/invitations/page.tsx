@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { EmptyState } from "@/components/states";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { orgTz } from "@/lib/org-tz-server";
 import { acceptInvitationAction, declineInvitationAction } from "@/app/auth-actions";
 
@@ -30,6 +30,7 @@ export default async function InvitationsPage({
     <>
       <PageHeader
         title="Invites"
+        breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Invites" }]}
         description="Organizations that invited you. They cannot see your account details until you accept."
       />
       {error ? (

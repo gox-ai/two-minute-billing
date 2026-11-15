@@ -48,6 +48,8 @@ defineProps<{
           <p class="mt-1.5 text-sm leading-relaxed text-muted">{{ i.body }}</p>
         </div>
       </div>
+      <!-- Optional: a note or link under the cards. -->
+      <slot />
     </div>
   </section>
 </template>

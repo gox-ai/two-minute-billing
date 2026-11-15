@@ -201,14 +201,14 @@ export default async function EmailSenderSettings({
               label="Subject prefix"
               htmlFor="subject_prefix"
               errorFor="subject_prefix"
-              help="We add this to the start of every subject, for example “[Acme]”."
+              help="We add this to the start of every subject, for example “[Brightline]”."
               control={
                 <Input
                   id="subject_prefix"
                   name="subject_prefix"
                   defaultValue={cfg?.subjectPrefix ?? ""}
                   maxLength={40}
-                  placeholder="[Acme]"
+                  placeholder="[Brightline]"
                   className="max-w-72"
                 />
               }

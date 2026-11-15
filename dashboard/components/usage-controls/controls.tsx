@@ -256,7 +256,7 @@ export function CreateTierButton({ biz, currencies }: { biz: string; currencies:
   const [cur, setCur] = useDefaultState(currencies[0] ?? "");
   return (
     <>
-      <Button type="button" size="sm" onClick={() => setOpen(true)}>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
         Create tier
       </Button>
       <EditDrawer
@@ -343,7 +343,7 @@ export function CreateAlertButton({
   const units = kind ? UNIT_OPTIONS[kind] : [];
   return (
     <>
-      <Button type="button" size="sm" onClick={() => setOpen(true)}>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
         Create alert
       </Button>
       <EditDrawer

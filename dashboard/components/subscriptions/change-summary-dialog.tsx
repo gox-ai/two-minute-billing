@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -394,6 +395,11 @@ export function ChangeSummaryDialog({
     (balanceCreditsMinor ?? 0) > 0 ||
     (promotionalDiscountMinor ?? 0) > 0;
   const showImmediate = charges.length > 0 || hasCredits;
+  /** The apply issues a credit note and no invoice: the pane shows the note, not an empty
+   *  invoice table. Only a caller that has the note's total and no invoice gets this. */
+  const creditNoteOnly =
+    charges.length === 0 && invoiceTotalMinor == null && (creditNoteTotalMinor ?? 0) > 0;
+  const immediateLabel = creditNoteOnly ? "Credit note" : chargesLabel;
 
   /** `taxLines` when the engine named the components, else one plain row. */
   const taxRows = (
@@ -487,6 +493,14 @@ export function ChangeSummaryDialog({
     (m) => money(m, currency),
     { audience: "operator", fmtWhen },
   );
+  const creditNotePane = (
+    <div className="flex items-baseline justify-between gap-3 border-b py-2 text-sm">
+      <span>Credit note</span>
+      <span className="font-medium text-success tabular-nums">
+        {money(creditNoteTotalMinor ?? 0, currency)}
+      </span>
+    </div>
+  );
   const creditsSection =
     creditSentences.length > 0 ? (
       <div className="mt-4 border-t pt-3">
@@ -576,15 +590,14 @@ export function ChangeSummaryDialog({
           {/* Headline amount */}
           <div
             className={cn(
-              "rounded-lg border p-4",
+              "rounded-xl border p-4",
               headlineTone === "info"
                 ? "border-info/25 bg-info-soft"
                 : "border-warning/25 bg-warning-soft",
             )}
           >
             <div className="text-2xl font-semibold tracking-tight wrap-anywhere tabular-nums">
-              {money(headlineMinor, currency)}{" "}
-              <span className="text-sm font-normal text-muted-foreground">{currency}</span>
+              {money(headlineMinor, currency)}
             </div>
             <p className="text-xs wrap-break-word text-muted-foreground">
               {headlineLabel}
@@ -596,11 +609,11 @@ export function ChangeSummaryDialog({
 
           {/* Diff */}
           {diff.length > 0 ? (
-            <div className="divide-y rounded-lg border">
+            <div className="divide-y rounded-xl border">
               {diff.map((d, i) => (
                 <div key={i} className="flex items-start gap-3 px-4 py-2.5 text-sm">
                   <span
-                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold tracking-wide uppercase ${DIFF_STYLE[d.kind]}`}
+                    className={`mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-xs font-semibold tracking-wide uppercase ${DIFF_STYLE[d.kind]}`}
                   >
                     {d.kind}
                   </span>
@@ -622,20 +635,28 @@ export function ChangeSummaryDialog({
             <p className="text-sm text-muted-foreground">Estimating charges…</p>
           ) : showImmediate || renewal ? (
             renewal ? (
-              <Tabs defaultValue={showImmediate && total > 0 ? "immediate" : "renewal"}>
+              <Tabs
+                defaultValue={
+                  showImmediate && (total > 0 || creditNoteOnly) ? "immediate" : "renewal"
+                }
+              >
                 <TabsList>
                   {showImmediate ? (
-                    <TabsTrigger value="immediate">{chargesLabel}</TabsTrigger>
+                    <TabsTrigger value="immediate">{immediateLabel}</TabsTrigger>
                   ) : null}
                   <TabsTrigger value="renewal">Renewal charges</TabsTrigger>
                 </TabsList>
                 {showImmediate ? (
                   <TabsContent value="immediate">
-                    <ChargesTable
-                      charges={charges}
-                      currency={currency}
-                      footerRows={immediateFooter}
-                    />
+                    {creditNoteOnly ? (
+                      creditNotePane
+                    ) : (
+                      <ChargesTable
+                        charges={charges}
+                        currency={currency}
+                        footerRows={immediateFooter}
+                      />
+                    )}
                     {creditsSection}
                   </TabsContent>
                 ) : null}
@@ -652,11 +673,19 @@ export function ChangeSummaryDialog({
                 </TabsContent>
               </Tabs>
             ) : (
-              <div className="rounded-lg border p-4">
+              <div className="rounded-xl border p-4">
                 <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  {chargesLabel}
+                  {immediateLabel}
                 </div>
-                <ChargesTable charges={charges} currency={currency} footerRows={immediateFooter} />
+                {creditNoteOnly ? (
+                  creditNotePane
+                ) : (
+                  <ChargesTable
+                    charges={charges}
+                    currency={currency}
+                    footerRows={immediateFooter}
+                  />
+                )}
                 {creditsSection}
               </div>
             )
@@ -667,30 +696,22 @@ export function ChangeSummaryDialog({
           {note ? <div className="text-xs text-muted-foreground">{note}</div> : null}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 border-t px-5 py-3">
-          <p className="hidden text-xs text-muted-foreground sm:block">
-            Nothing happens until you confirm
+        <DialogFooter className="shrink-0 border-t px-5 py-3 sm:items-center">
+          <p className="hidden text-xs text-muted-foreground sm:mr-auto sm:block">
+            Nothing happens until you confirm.
           </p>
-          <div className="ml-auto flex flex-1 gap-2 sm:flex-none sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              className="flex-1 sm:flex-none"
-              onClick={() => onOpenChange(false)}
-              disabled={submitting}
-            >
-              Close
-            </Button>
-            <Button
-              type="button"
-              className="flex-1 sm:flex-none"
-              onClick={proceed}
-              disabled={proceedDisabled || submitting}
-            >
-              {submitting ? "Processing…" : proceedLabel}
-            </Button>
-          </div>
-        </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button type="button" onClick={proceed} disabled={proceedDisabled || submitting}>
+            {submitting ? "Processing…" : proceedLabel}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -24,7 +24,7 @@ export default async function NewMeterPage({ params }: { params: Promise<{ biz: 
       returnTo={listHref}
       crumbs={[
         { label: name, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: "Meters", href: listHref },
         { label: "New meter" },
       ]}

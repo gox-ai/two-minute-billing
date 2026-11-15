@@ -95,6 +95,23 @@ export function pinRequestClock(businessId: string, now: Date): void {
 }
 
 /**
+ * `pinRequestClock` for a request whose business comes from a token, not a `:biz` parameter
+ * (hosted checkout, portal): a time-travelled business records the request's rows at its
+ * simulated instant, as `resolveBusiness` does for the API.
+ */
+export async function pinRequestClockFor(businessId: string): Promise<void> {
+  if (!requestClock.getStore()) return;
+  const { systemDb: db } = await import("@/platform/db");
+  const { timeTravels } = await import("@db/schema");
+  const [tm] = await db
+    .select({ simulatedNow: timeTravels.simulatedNow })
+    .from(timeTravels)
+    .where(eq(timeTravels.businessId, businessId))
+    .limit(1);
+  if (tm?.simulatedNow) pinRequestClock(businessId, tm.simulatedNow);
+}
+
+/**
  * A Drizzle WHERE condition that scopes a clock pass's global scan by the active
  * clock scope: travel → `business_id = <traveled>`; real tick → `business_id NOT
  * IN (<time-travelled>)`; no scope (direct call) → no restriction.

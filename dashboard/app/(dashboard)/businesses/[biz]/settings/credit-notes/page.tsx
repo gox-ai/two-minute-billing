@@ -4,7 +4,6 @@ import { getBusiness } from "@/lib/api/business-settings";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
 import {
   SettingRow,
   SettingsCard,
@@ -12,7 +11,7 @@ import {
   SettingsPage,
   SettingsSummary,
 } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { DocumentNumberingFields } from "@/components/settings/document-numbering-fields";
 import { composeDocumentNumber } from "@/lib/document-numbering";
 import { businessTz } from "@/lib/business-tz-server";
@@ -76,7 +75,7 @@ export default async function CreditNoteSettings({ params }: { params: Promise<{
   });
 
   const toggle = (name: keyof typeof fields, label: string) => (
-    <SettingSwitch name={name} label={label} defaultChecked={fields[name]} />
+    <ToggleAnswer name={name} label={label} defaultChecked={fields[name]} />
   );
 
   return (
@@ -126,11 +125,12 @@ export default async function CreditNoteSettings({ params }: { params: Promise<{
               label="Credit note title"
               htmlFor="cn_title"
               help="Use “REFUND” for a note that returns cash and does not credit the account."
+              placement="end"
               control={
-                <SelectField
+                <SelectAnswer
                   name="cn_title"
+                  ariaLabel="Credit note title"
                   defaultValue={title}
-                  className="w-full sm:w-56"
                   options={[
                     { value: "credit_note", label: "CREDIT NOTE" },
                     { value: "refund", label: "REFUND" },
@@ -179,11 +179,12 @@ export default async function CreditNoteSettings({ params }: { params: Promise<{
               label="Service period basis"
               htmlFor="service_period_basis"
               help="Which dates a credited line reports, when the service period is shown."
+              placement="end"
               control={
-                <SelectField
+                <SelectAnswer
                   name="service_period_basis"
+                  ariaLabel="Service period basis"
                   defaultValue={basis}
-                  className="w-full sm:w-56"
                   options={[
                     { value: "invoice_line_dates", label: "Invoice line dates" },
                     { value: "credit_note_date", label: "Credit note date" },

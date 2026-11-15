@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { listBusinesses } from "@/lib/api";
+import { getSubscription, listBusinesses } from "@/lib/api";
 import { getTransaction, listGatewayWebhooks } from "@/lib/api/payments";
 import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import { gatewayDisplayName } from "@/components/gateways/gateway-meta";
@@ -46,34 +46,28 @@ export default async function TransactionDetailPage({
    * Failing softly: the log is a diagnostic, and a transaction page that 500s because the
    * webhook query hiccuped would lose the money facts too.
    */
-  let callbacks: Awaited<ReturnType<typeof listGatewayWebhooks>>["data"] = [];
-  try {
+  const [cbs, dsp, catalog, sub] = await Promise.all([
     // `filters`, NOT `scope`: scope sets a RAW query key and the engine rejects anything not
     // in its allow-list of bare params, while filters render as `field[op]=value`, which is the
     // documented filter syntax.
-    callbacks = (
-      await listGatewayWebhooks(biz, {
-        limit: 50,
-        filters: [{ field: "transaction", op: "is", value: t.id }],
-      })
-    ).data;
-  } catch {
-    callbacks = [];
-  }
+    listGatewayWebhooks(biz, {
+      limit: 50,
+      filters: [{ field: "transaction", op: "is", value: t.id }],
+    }).catch(() => null),
+    // The disputes on this payment; soft-fail like the callback log.
+    t.type === "payment" && t.reference_payment
+      ? listDisputes(biz, { payment: t.reference_payment, limit: 50 }).catch(() => null)
+      : null,
+    t.gateway_key ? getGatewayCatalogOrEmpty() : null,
+    // The plan name for the Subscription row; the id stays the fallback.
+    t.subscription ? getSubscription(biz, t.subscription).catch(() => null) : null,
+  ]);
+  const callbacks = cbs?.data ?? [];
+  const disputes: Dispute[] = dsp?.data ?? [];
+  const subscriptionName = sub?.items?.find((i) => i.product_kind === "plan")?.product_name ?? null;
 
-  // The disputes on this payment. Soft-fail like the callback log above.
-  let disputes: Dispute[] = [];
-  if (t.type === "payment" && t.reference_payment) {
-    try {
-      disputes = (await listDisputes(biz, { payment: t.reference_payment, limit: 50 })).data;
-    } catch {
-      disputes = [];
-    }
-  }
-
-  const gatewayName = t.gateway_key
-    ? gatewayDisplayName(t.gateway_key, await getGatewayCatalogOrEmpty())
-    : "the gateway";
+  const gatewayName =
+    t.gateway_key && catalog ? gatewayDisplayName(t.gateway_key, catalog) : "the gateway";
 
   return (
     <TransactionDetailView
@@ -82,9 +76,11 @@ export default async function TransactionDetailPage({
       name={name}
       tz={tz}
       livemode={livemode}
+      gatewayCatalog={catalog ?? []}
       initialTransaction={t}
       initialCallbacks={callbacks}
       initialDisputes={disputes}
+      subscriptionName={subscriptionName}
       canManageDisputes={allows(user, "payments:refund", "manager")}
     />
   );

@@ -10,7 +10,7 @@ import { authenticate } from "@/platform/auth";
 import { idempotency, idempotencyOnSend } from "@/platform/idempotency";
 import { withTenant, type Tx } from "@/platform/db";
 import { creditUnits, meters, products, subscriptions } from "@db/schema";
-import { businessWallClock } from "@/platform/clock";
+import { businessWallClock, stampNow } from "@/platform/clock";
 import { businessTimeZone, newRateCache, type RateCache } from "@/modules/usage-controls/measure";
 import { getCustomerByPublicId } from "@/modules/customers/service";
 import {
@@ -41,7 +41,8 @@ import {
   serializeAlert,
   updateAlert,
 } from "@/modules/usage-controls/alerts";
-import { measureRunway } from "@/modules/usage-controls/measure";
+import { measureRunway, runwayMessage } from "@/modules/usage-controls/measure";
+import { measureUnitRunway, unitByKey, unitRunwayView } from "@/modules/credits/reports";
 import { badRequest, conflict, notFound, requirePerm, resolveBusiness } from "./helpers";
 import { parseRequest } from "./strict-params";
 
@@ -612,12 +613,33 @@ export async function registerUsageControlRoutes(app: FastifyInstance) {
     const business = await resolveBusiness(req, reply);
     if (!business) return;
     const { cus } = req.params as { cus: string };
-    const q = req.query as { currency?: string };
+    const q = req.query as { currency?: string; unit?: string };
     if (q.currency !== undefined && !/^[A-Za-z]{3}$/.test(q.currency))
       return badRequest(reply, "Send a 3-letter ISO currency code");
     const org = req.organization!.id;
     const customer = await getCustomerByPublicId(org, business.id, cus);
     if (!customer) return notFound(reply, `No such customer: ${cus}`);
+    // A unit with no rate: runway in units, from the balance the gate offers.
+    if (q.unit !== undefined) {
+      const out = await withTenant(org, async (tx) => {
+        const unit = await unitByKey(tx, business.id, q.unit!);
+        if (!unit) return null;
+        if (unit.minorPerUnitE12 !== null) return "rated" as const;
+        const r = await measureUnitRunway(tx, {
+          customerId: customer.id,
+          unit,
+          now: stampNow(business.id),
+        });
+        return unitRunwayView(customer.publicId, unit, r);
+      });
+      if (out === null) return notFound(reply, `No such credit unit: ${q.unit}`);
+      if (out === "rated")
+        return badRequest(
+          reply,
+          "Runway in units is for a unit with no money value. Leave out unit for runway in money.",
+        );
+      return out;
+    }
     const currency = (
       q.currency ??
       customer.currency ??
@@ -647,9 +669,6 @@ export function runwayView(
     burn_minor_per_day: r.burnMinorPerDay == null ? null : Number(r.burnMinorPerDay),
     spend_last_7_days_minor: Number(r.spend7dMinor),
     auto_topup_minor: Number(r.autoTopupMinor),
-    message:
-      r.runwayDays == null
-        ? "Not enough usage to estimate"
-        : `Runs out in about ${r.runwayDays} ${r.runwayDays === 1 ? "day" : "days"}`,
+    message: runwayMessage(r.runwayDays, r.balanceMinor + r.autoTopupMinor <= 0n),
   };
 }

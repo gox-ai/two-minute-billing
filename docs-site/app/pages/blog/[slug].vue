@@ -170,7 +170,7 @@ useBlogFeedLink();
 
         <aside
           aria-label="On this page"
-          class="order-first min-w-0 text-sm lg:sticky lg:top-[calc(var(--ui-header-height)+1.5rem)] lg:order-none lg:max-w-[17.5rem] lg:flex-[1_1_220px]"
+          class="order-first min-w-0 text-sm lg:sticky lg:top-[calc(var(--ui-header-height)+var(--mk-campaign-h)+1.5rem)] lg:order-none lg:max-w-[17.5rem] lg:flex-[1_1_220px]"
         >
           <template v-if="toc.length">
             <p class="mb-2.5 text-[0.8125rem] font-semibold text-highlighted">On this page</p>
@@ -269,7 +269,7 @@ useBlogFeedLink();
 .blog-prose :deep(h2),
 .blog-bridge h2,
 #sources {
-  scroll-margin-top: calc(var(--ui-header-height) + 1.5rem);
+  scroll-margin-top: calc(var(--ui-header-height) + var(--mk-campaign-h) + 1.5rem);
 }
 .blog-prose :deep(h2) {
   margin: 2.5rem 0 0;

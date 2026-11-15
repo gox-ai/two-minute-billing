@@ -4,8 +4,9 @@ import * as React from "react";
 import { useState } from "react";
 import Link from "next/link";
 import type { ItemConstraint } from "@/lib/api/coupons";
+import { periodSuffix } from "@/lib/coupon-scope";
 
-const KIND_LABEL: Record<string, string> = { plan: "plans", addon: "addons", charge: "charges" };
+const KIND_LABEL: Record<string, string> = { plan: "plans", addon: "add-ons", charge: "charges" };
 
 /**
  * One Discount-Details row per item kind for an `each_specified_item` coupon: what the
@@ -23,7 +24,7 @@ export function CouponScopeRow({
 }: {
   kind: "plan" | "addon" | "charge";
   constraint?: ItemConstraint;
-  /** Product id → display name, for the ids stored on a `specific` constraint. */
+  /** Product or price id → display name, for the ids stored on a `specific` constraint. */
   names: Record<string, string>;
   /** Omitted once the coupon has been redeemed — the engine refuses the change, so
    *  offering the link would be a control that does nothing. */
@@ -34,7 +35,10 @@ export function CouponScopeRow({
   const [open, setOpen] = useState(false);
   const plural = KIND_LABEL[kind];
   const type = constraint?.constraint_type ?? "none";
-  const ids = constraint?.product_ids ?? [];
+  const ids = [...(constraint?.product_ids ?? []), ...(constraint?.price_ids ?? [])];
+  const nProducts = constraint?.product_ids?.length ?? 0;
+  const nPrices = constraint?.price_ids?.length ?? 0;
+  const periods = type === "none" ? "" : periodSuffix(constraint?.billing_periods ?? []);
 
   const Wrap = facts ? React.Fragment : "div";
   return (
@@ -42,8 +46,8 @@ export function CouponScopeRow({
       <dt
         className={
           facts
-            ? "text-muted-foreground capitalize"
-            : "text-xs font-medium tracking-wide text-muted-foreground uppercase"
+            ? "text-muted-foreground first-letter:uppercase"
+            : "text-xs font-medium text-muted-foreground first-letter:uppercase"
         }
       >
         {plural}
@@ -57,9 +61,9 @@ export function CouponScopeRow({
       >
         <span>
           {type === "all"
-            ? `All ${plural} are applicable`
+            ? `All ${plural} are applicable${periods}`
             : type === "specific"
-              ? `Specific ${plural} are applicable`
+              ? `Specific ${plural} are applicable${periods}`
               : "None"}
         </span>
         {changeHref ? (
@@ -75,7 +79,15 @@ export function CouponScopeRow({
               className="text-xs text-primary hover:underline"
               aria-expanded={open}
             >
-              {ids.length} {ids.length === 1 ? plural.replace(/s$/, "") : plural} added
+              {[
+                nProducts
+                  ? `${nProducts} ${nProducts === 1 ? plural.replace(/s$/, "") : plural}`
+                  : null,
+                nPrices ? `${nPrices} ${nPrices === 1 ? "price" : "prices"}` : null,
+              ]
+                .filter(Boolean)
+                .join(" and ") || `0 ${plural}`}{" "}
+              added
             </button>
             {open ? (
               <span className="mt-1 flex flex-wrap gap-1.5">
@@ -90,7 +102,13 @@ export function CouponScopeRow({
                       className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs"
                       // A stored id whose product is gone still shows the id, rather
                       // than an empty chip that hides what the coupon is scoped to.
-                      title={names[id] ? id : "This catalog does not have this product"}
+                      title={
+                        names[id]
+                          ? id
+                          : constraint?.price_ids?.includes(id)
+                            ? "Price"
+                            : "This catalog does not have this product"
+                      }
                     >
                       {names[id] ?? id}
                     </span>

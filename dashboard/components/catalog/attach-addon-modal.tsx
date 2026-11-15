@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import { attachItemToPlanAction } from "@/app/(dashboard)/businesses/[biz]/catalog/products/[prod]/actions";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -20,6 +22,7 @@ import { SubmitButton } from "@/components/form/submit-button";
 import { Alert } from "@/components/ui/alert";
 import { SwitchField } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { Chip } from "@/components/patterns/chip";
 import { useDefaultState } from "@/lib/use-default-state";
 
 type ChargeOnEvent = "subscription_creation" | "trial_start" | "activation" | "on_demand";
@@ -65,7 +68,7 @@ export function AttachAddonModal({
    * reader knows saving stores a plan-specific row rather than editing what they see.
    */
   note?: React.ReactNode;
-  /** Custom trigger element — defaults to a "+ Attach" button. */
+  /** Custom trigger element — defaults to a "Add" button. */
   trigger?: React.ReactNode;
   /**
    * product id → does a quantity mean anything for it, from
@@ -106,8 +109,9 @@ export function AttachAddonModal({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button size="sm" disabled={addons.length === 0 && !editItem}>
-            + Add
+          <Button size="sm" variant="outline" disabled={addons.length === 0 && !editItem}>
+            <Plus />
+            Add
           </Button>
         )}
       </DialogTrigger>
@@ -133,9 +137,7 @@ export function AttachAddonModal({
               <input type="hidden" name="addon" value={editItem.id} />
               <span className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
                 {editItem.name}
-                <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-xs capitalize">
-                  {editItem.kind}
-                </span>
+                <Chip className="ml-2 capitalize">{editItem.kind}</Chip>
               </span>
             </div>
           ) : (
@@ -184,21 +186,20 @@ export function AttachAddonModal({
 
           {/* Charge-specific fields */}
           {isCharge ? (
-            <>
-              <Field name="charge_on_event" label="Charge event">
-                <SelectField
-                  name="charge_on_event"
-                  defaultValue={editConfig?.chargeOnEvent ?? "subscription_creation"}
-                  ariaLabel="Charge on event"
-                  options={(
-                    Object.entries(CHARGE_ON_EVENT_LABELS) as [ChargeOnEvent, string][]
-                  ).map(([v, l]) => ({ value: v, label: l }))}
-                />
-              </Field>
-              <p className="text-xs text-muted-foreground">
-                We bill a charge one time, when its event occurs.
-              </p>
-            </>
+            <Field
+              name="charge_on_event"
+              label="Charge event"
+              help="We bill a charge one time, when its event occurs."
+            >
+              <SelectField
+                name="charge_on_event"
+                defaultValue={editConfig?.chargeOnEvent ?? "subscription_creation"}
+                ariaLabel="Charge on event"
+                options={(Object.entries(CHARGE_ON_EVENT_LABELS) as [ChargeOnEvent, string][]).map(
+                  ([v, l]) => ({ value: v, label: l }),
+                )}
+              />
+            </Field>
           ) : null}
 
           {/* Billing cycles cap — add-ons only. Default quantity only where it rates. */}
@@ -211,6 +212,7 @@ export function AttachAddonModal({
                   min={1}
                   step={1}
                   defaultValue={editConfig?.defaultQuantity ?? 1}
+                  className="w-30 tabular-nums"
                 />
               </Field>
             ) : null}
@@ -219,15 +221,15 @@ export function AttachAddonModal({
               <Field
                 name="billing_cycles"
                 label="Billing cycles cap"
-                help="The maximum number of renewal cycles that we bill this item. Leave empty for no limit."
+                help="Leave empty for no limit."
               >
                 <Input
                   name="billing_cycles"
                   type="number"
                   min={1}
                   step={1}
-                  placeholder="Leave empty for no limit"
                   defaultValue={editConfig?.billingCycles ?? ""}
+                  className="w-30 tabular-nums"
                 />
               </Field>
             )}
@@ -235,7 +237,7 @@ export function AttachAddonModal({
 
           {/* Portal limits: add-ons whose quantity rates. Charges are not sold in the portal. */}
           {showQuantity && !isCharge ? (
-            <div className="space-y-3 rounded-lg border p-3">
+            <div className="space-y-3 rounded-xl border p-3">
               <input type="hidden" name="portal_limits" value="1" />
               <div>
                 <div className="text-sm font-medium">Customer portal</div>
@@ -309,12 +311,12 @@ export function AttachAddonModal({
             </p>
           ) : null}
 
-          <div className="flex justify-end gap-2 pt-2">
+          <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <SubmitButton>{editItem ? "Save" : "Add"}</SubmitButton>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>

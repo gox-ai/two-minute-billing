@@ -71,6 +71,7 @@ export function ShippingAddressButton({
             prefix="sa_"
             requireRest={false}
             contactHeading="Recipient"
+            autoCompleteSection="shipping"
           />
           {address || first ? null : (
             <CheckboxField

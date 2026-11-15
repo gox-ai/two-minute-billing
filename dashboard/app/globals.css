@@ -1,8 +1,21 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./motion/theme-wipe.css";
+@import "./motion/charts.css";
+@import "./motion/rolling-number.css";
+@import "./motion/rail-pill.css";
+@import "./motion/shared-title.css";
+@import "./motion/dialog-origin.css";
+@import "./motion/pull-refresh.css";
 
 /* Dark mode = `.dark` on <html> (class strategy via next-themes-style toggle). */
 @custom-variant dark (&:is(.dark *));
+
+/* A list card (`@container/list`, DataTable) narrower than 52.5rem stacks its rows: below
+   the 56.875rem card of a 1280px window, above the ~51.9rem card a 1600px window keeps
+   beside Billy's panel. The ONE threshold: `useListLayout` reads this verdict through a
+   probe, never a number of its own (test/unit/list-layout.test.ts). */
+@custom-variant list-narrow (@container list (width < 52.5rem));
 
 /* A clickable FIGURE — a number, amount or count that links somewhere. At rest it reads as a
    figure (foreground, like its unlinked neighbours) with a faint dotted underline, so a touch
@@ -85,6 +98,9 @@
   --card-foreground: #101828;
   --popover: #ffffff;
   --popover-foreground: #101828;
+  /* The edge of a floating sheet (menu, select, popover, dialog). Light: the hairline;
+     dark: lifted to 1.57:1 on the card, because #1e2836 on #0f1621 was 1.22:1 — edgeless. */
+  --popover-border: #e2e9f2;
 
   /* Links and navigation text: the brand, 6.13:1 on the card. */
   --primary: #4e4eda;
@@ -102,7 +118,11 @@
   --secondary: #eef2f7;
   --secondary-foreground: #101828;
   --muted: #eef2f7;
-  --muted-foreground: #64748b;
+  /* 4.71:1 on the ground, 5.12 on the card, 4.55 on --muted. #64748b was 4.39 on the ground. */
+  --muted-foreground: #5f6f86;
+  /* Grey chip text: a 90% mix towards the foreground, 5.21:1 on --muted. Dark needs no
+     mix (5.85:1). */
+  --chip-foreground: color-mix(in oklab, var(--muted-foreground) 90%, var(--foreground));
   /* shadcn's `accent` is the subtle hover surface, not the brand hue. */
   --accent: #e8eef7;
   --accent-foreground: #101828;
@@ -136,11 +156,13 @@
   --scrollbar-thumb-hover: #9fb2ca;
 
   /* chart-3 is blue, not amber: beside an orange chart-1 an amber series reads as
-     the same one. */
+     the same one. On the white card: L 0.43-0.77, C >= 0.10, every slot >= 3:1, adjacent
+     pairs clear normal-vision dE 15 and CVD dE 8. chart-4 is a navy darker than chart-3:
+     a lighter steel blue sat too near the sky (dE 12) and below 3:1. */
   --chart-1: #4e4eda;
   --chart-2: #067647;
   --chart-3: #0284c7;
-  --chart-4: #7c9ec9;
+  --chart-4: #0c5484;
   --chart-5: #b42318;
 
   /* The rail follows the theme — a recessed surface, not a dark navy slab. */
@@ -173,12 +195,23 @@
      card is darker than the track, so it cannot be the card. */
   --raised: #ffffff;
 
+  /* Behind a dialog or sheet: ink at 40% (the page stays legible), with a light blur. */
+  --scrim: rgb(16 24 40 / 40%);
+
   /* The featured card: an ink surface with a brand glow, in both themes. */
   --feature: #0b1220;
   --feature-border: #0b1220;
+
+  /* Billy's mark: indigo → cyan → lime. Only for the mark and its launcher's edge. */
+  --billy-1: #4e4eda;
+  --billy-2: #0893a6;
+  --billy-3: #8bcb2b;
 }
 
 .dark {
+  --billy-1: #9393f3;
+  --billy-2: #5ed6e0;
+  --billy-3: #bef264;
   /* Same design, not a second one: every value below is the light token's pair.
      The ground stays BELOW the card here too, so the surface hierarchy reads
      the same way in both themes. */
@@ -186,8 +219,10 @@
   --foreground: #eaf0f8;
   --card: #0f1621;
   --card-foreground: #eaf0f8;
-  --popover: #0f1621;
+  /* One step above the card, so a sheet floating over one reads as a sheet. */
+  --popover: #161f2c;
   --popover-foreground: #eaf0f8;
+  --popover-border: #2c3a4c;
 
   /* 6.39:1 on the card. */
   --primary: #9393f3;
@@ -205,15 +240,17 @@
   --secondary-foreground: #eaf0f8;
   --muted: #161f2c;
   --muted-foreground: #8b9bb0;
+  --chip-foreground: var(--muted-foreground);
   --accent: #1a2534;
   --accent-foreground: #eaf0f8;
 
-  --success: #4ac68b;
+  /* Status text: >= 4.5:1 on card, popover, accent and the -soft chip (5.31 worst). */
+  --success: #1eac76;
   --success-soft: #0c2419;
   /* Lighter and yellower than --primary (L 0.83 vs 0.76), 10.8:1 on the card. */
   --warning: #f2c14e;
   --warning-soft: #2a1e0e;
-  --destructive: #ef7f75;
+  --destructive: #db6c64;
   --destructive-soft: #2b1615;
   --info: #38bdf8;
   --info-soft: #0c2233;
@@ -227,11 +264,13 @@
   --scrollbar-thumb: #2c3a4c;
   --scrollbar-thumb-hover: #3e4f64;
 
-  --chart-1: #8b8bf2;
-  --chart-2: #4ac68b;
-  --chart-3: #38bdf8;
-  --chart-4: #7f9cc0;
-  --chart-5: #ef7f75;
+  /* Inside the dark band (OKLCH L 0.48-0.67, C >= 0.10): adjacent pairs clear normal-vision
+     dE 15 and CVD dE 8. chart-4 sits darker than chart-3, as in light. */
+  --chart-1: #8184f1;
+  --chart-2: #1eac76;
+  --chart-3: #009edb;
+  --chart-4: #3c6aa4;
+  --chart-5: #db6c64;
 
   --sidebar: #0f1621;
   --storefront: #0a0f18;
@@ -244,6 +283,7 @@
   --sidebar-ring: #8b8bf2;
 
   --raised: #243042;
+  --scrim: rgb(2 6 12 / 62%);
 
   /* Above the dark ground and card, so it still reads as a separate sheet. */
   --feature: #171d2a;
@@ -294,6 +334,8 @@
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
+  --color-popover-border: var(--popover-border);
+  --color-chip-foreground: var(--chip-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-solid: var(--solid);
@@ -303,6 +345,7 @@
   --color-solid-bottom: color-mix(in oklab, var(--solid) 90%, black);
   --color-solid-edge: color-mix(in oklab, var(--solid) 78%, black);
   --color-raised: var(--raised);
+  --color-scrim: var(--scrim);
   --color-brand: var(--brand);
   --color-brand-soft: var(--brand-soft);
   --color-brand-border: var(--brand-border);
@@ -369,6 +412,13 @@
   * {
     border-color: var(--border);
     outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  /* One focus look. The primitives draw this ring as a box-shadow (`focus-visible:ring-[3px]
+     ring-ring/50` behind `outline-none`); everything else — nav rows, breadcrumbs, sortable
+     heads, kbd buttons, tooltip triggers — used to fall back to the browser's `outline: auto`. */
+  :focus-visible {
+    outline: 3px solid color-mix(in oklch, var(--ring) 50%, transparent);
+    outline-offset: 0;
   }
 }
 
@@ -676,26 +726,158 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
 }
 
 /* ── Motion ──────────────────────────────────────────────────────────────────
-   R2 moves. The rule everything here follows: motion explains a change, it
-   never announces one. Entrances are short and travel a few pixels; anything
-   that loops is a real pending state, never decoration.
+   Motion explains a change, it never announces one. The feel is native: springs,
+   things grow from where you touched them, panels slide like sheets, controls
+   answer the press. Nothing bounces for show; the spring overshoots ~4%.
 
    Entrances use `both` fill mode, so an element is invisible until its turn —
-   that is the point of the stagger, and it is also why the reduced-motion block
-   collapses durations to 1ms instead of `animation: none`: a 1ms animation still
-   RUNS and lands on its end state, so nothing can be stranded at opacity 0.
+   that is why the reduced-motion block collapses durations to 1ms instead of
+   `animation: none`: a 1ms animation still RUNS and lands on its end state.
+
+   Exits run at ~65% of their entrance. The full map is the ui skill, §4a.
 --------------------------------------------------------------------------- */
 :root {
+  /* Decelerate: colour, fades, page entrances. */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 120ms;
-  --dur: 200ms;
-  --dur-slow: 340ms;
+  /* The sheet curve: anything that slides from an edge. */
+  --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Pops, thumbs, press release. Upgraded to a real spring below. */
+  --ease-spring: var(--ease-out);
+
+  --dur-fast: 160ms;
+  --dur-fast-out: 100ms;
+  --dur-tip: 120ms;
+  --dur-pop: 200ms;
+  --dur-pop-out: 130ms;
+  --dur: 260ms;
+  --dur-out: 170ms;
+  --dur-dock: 300ms;
+  --dur-slow: 420ms;
+  --dur-slow-out: 260ms;
+  /* Billy's bubble ⇄ panel morph (components/assistant/billy-morph.ts). */
+  --dur-morph: 460ms;
 }
 
+/* A damped spring (ζ≈0.72): peaks at 1.04 at 45% of the duration, settles by 80%. */
+@supports (animation-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(
+      0,
+      0.07,
+      0.228,
+      0.414,
+      0.591,
+      0.742,
+      0.858,
+      0.94,
+      0.994,
+      1.024,
+      1.037,
+      1.04,
+      1.037,
+      1.03,
+      1.022,
+      1.015,
+      1.01,
+      1.005,
+      1.002 75%,
+      1
+    );
+  }
+}
+
+/* Overlay motion as Tailwind utilities, so primitives can key them on Radix's
+   `data-state`. Open and closed use DIFFERENT keyframes on purpose: Radix
+   Presence only waits for an exit when the animation name changes. */
+@theme inline {
+  /* Every bare `transition-*` utility runs on our timing, not Tailwind's 150ms. */
+  --default-transition-duration: var(--dur-fast);
+  --default-transition-timing-function: var(--ease-out);
+
+  --animate-scrim-in: m-fade-in var(--dur) var(--ease-out) both;
+  --animate-scrim-out: m-fade-out var(--dur-out) var(--ease-out) forwards;
+  --animate-dialog-in: m-scale-in var(--dur) var(--ease-spring) both;
+  --animate-dialog-out: m-scale-out var(--dur-out) var(--ease-glide) forwards;
+  --animate-pop-in: m-pop-in var(--dur) var(--ease-glide) both;
+  --animate-pop-out: m-shrink-out var(--dur-out) var(--ease-glide) forwards;
+  --animate-tip-in: m-scale-in var(--dur-tip) var(--ease-out) both;
+  --animate-tip-out: m-fade-out var(--dur-fast-out) var(--ease-out) forwards;
+  --animate-sheet-in: m-slide-in var(--dur-morph) var(--ease-glide) both;
+  --animate-sheet-out: m-slide-out var(--dur-slow-out) var(--ease-glide) forwards;
+  --animate-mark: m-mark var(--dur) var(--ease-spring) both;
+}
+
+@keyframes m-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes m-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+/* `--m-scale` lets a caller start closer to 1 (dialogs .96, menus .95). */
+@keyframes m-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(var(--m-scale, 0.95));
+  }
+}
+@keyframes m-scale-out {
+  to {
+    opacity: 0;
+    transform: scale(var(--m-scale-out, 0.97));
+  }
+}
+/* A menu grows out of the control it belongs to (its transform-origin), on the glide curve. */
+@keyframes m-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+  }
+}
+/* A menu shrinks back into the control it came from. */
+@keyframes m-shrink-out {
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+/* `--m-x` / `--m-y` name the edge: 100% is off the right/bottom. */
+@keyframes m-slide-in {
+  from {
+    transform: translate3d(var(--m-x, 0), var(--m-y, 0), 0);
+  }
+}
+@keyframes m-slide-out {
+  to {
+    transform: translate3d(var(--m-x, 0), var(--m-y, 0), 0);
+  }
+}
+@keyframes m-mark {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
 @keyframes r2-rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes r2-rise-far {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
   }
   to {
     opacity: 1;
@@ -750,17 +932,21 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
 }
 
 .anim-rise {
-  animation: r2-rise var(--dur-slow) var(--ease-out) both;
+  animation: r2-rise var(--dur-slow) var(--ease-glide) both;
+}
+/* A floating card that arrives on its own (Billy's nudge): a longer rise on the spring. */
+.anim-rise-spring {
+  animation: r2-rise-far var(--dur-slow) var(--ease-spring) both;
 }
 .anim-fade {
   animation: r2-fade var(--dur) var(--ease-out) both;
 }
 .anim-pop {
-  animation: r2-pop var(--dur) var(--ease-out) both;
+  animation: r2-pop var(--dur) var(--ease-spring) both;
 }
 .anim-grow {
   transform-origin: left center;
-  animation: r2-grow var(--dur-slow) var(--ease-out) both;
+  animation: r2-grow var(--dur-slow) var(--ease-glide) both;
 }
 .anim-draw {
   stroke-dasharray: var(--len, 2000);
@@ -771,7 +957,7 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
    Capped at 12 — past ~500ms of lead-in the last card reads as broken, and
    nothing we render puts more than twelve peers in one band. */
 .anim-stagger > * {
-  animation: r2-rise var(--dur-slow) var(--ease-out) both;
+  animation: r2-rise var(--dur-slow) var(--ease-glide) both;
 }
 .anim-stagger > *:nth-child(1) {
   animation-delay: 0ms;
@@ -811,12 +997,14 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
 }
 
 /* A card that answers the pointer. Deliberately 1px: a card that lifts 4px
-   reads as a modal opening. */
+   reads as a modal opening. Pressed, it gives a little and springs back. */
 .hoverable {
   transition:
     box-shadow var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+    border-color var(--dur-fast) var(--ease-out),
+    scale var(--dur) var(--ease-spring),
+    filter var(--dur-fast) var(--ease-out);
 }
 .hoverable:hover {
   transform: translateY(-1px);
@@ -825,10 +1013,250 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
     0 1px 2px rgb(16 24 40 / 6%),
     0 8px 20px -8px rgb(16 24 40 / 12%);
 }
+.hoverable:active {
+  scale: 0.99;
+  filter: brightness(0.97);
+  transition-duration: 0s;
+}
 .dark .hoverable:hover {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 40%),
     0 8px 20px -8px rgb(0 0 0 / 55%);
+}
+
+/* Press feedback for `<Button>`, a native press highlight: on press-down it dims and gives
+   at once; on release it springs back. `--press-scale: 1` and `--press-dim: 1` turn
+   it off (the link variant). */
+@utility press {
+  transition-property: color, background-color, border-color, box-shadow, opacity, filter, scale;
+  transition-duration:
+    var(--dur-fast), var(--dur-fast), var(--dur-fast), var(--dur-fast), var(--dur-fast),
+    var(--dur-fast), var(--dur);
+  transition-timing-function:
+    var(--ease-out), var(--ease-out), var(--ease-out), var(--ease-out), var(--ease-out),
+    var(--ease-out), var(--ease-spring);
+  &:active:not(:disabled, [aria-disabled="true"]) {
+    scale: var(--press-scale, 0.97);
+    opacity: var(--press-dim, 0.8);
+    transition-duration: 0s;
+  }
+}
+
+/* The segmented control's sliding pill (`ui/segment-indicator.tsx`). Once it has
+   measured, the selected segment drops its own pill so only one is painted. */
+[data-segment-ready] .segment-on,
+[data-segment-ready] > [role="tab"][data-state="active"] {
+  background: transparent;
+}
+[data-segment-ready] .segment-on:not(:focus-visible),
+[data-segment-ready] > [role="tab"][data-state="active"]:not(:focus-visible) {
+  box-shadow: none;
+}
+
+/* Toasts spring in from their edge and restack on the sheet curve. Sonner sets
+   the same four properties; only timing is retuned. Removal stays inside
+   sonner's 200ms unmount. */
+[data-sonner-toaster] [data-sonner-toast] {
+  transition-duration: var(--dur-slow), var(--dur), var(--dur-slow), var(--dur-fast);
+  transition-timing-function:
+    var(--ease-spring), var(--ease-out), var(--ease-glide), var(--ease-out);
+}
+[data-sonner-toaster] [data-sonner-toast][data-removed="true"] {
+  transition-duration: var(--dur-out), var(--dur-fast-out), var(--dur-out), var(--dur-fast-out);
+  transition-timing-function: var(--ease-glide);
+}
+
+/* ── Page navigation (components/route-motion.tsx) ─────────────────────────────
+   One view transition, on <main>. `<html data-nav-motion>` names the move:
+   push (deeper), pop (back up / browser back), tab (rail, tab strips, anything else).
+   A phone gets a full push: the new page slides the full width over the old, which
+   shifts a third as far and dims. A wide screen never shows two pages at once: the old
+   one leaves fast (--nav-old-dur) and the new one fades in over a short slide.
+   Transform and opacity only on desktop, so the compositor runs it; the dim (a filter)
+   is phone-only. The frame (rail, top bar, Billy) is the root snapshot and never
+   animates. */
+:root {
+  --nav-in: 24px;
+  --nav-out: -12px;
+  --nav-new-dur: var(--dur-slow);
+  --nav-old-dur: var(--dur-slow-out);
+  /* Opacity at the far end of a page move; the swipe-back drag reads it too. */
+  --nav-fade: 0;
+}
+@keyframes m-push-new {
+  from {
+    transform: translateX(var(--nav-in));
+    opacity: 0;
+  }
+}
+@keyframes m-push-old {
+  to {
+    transform: translateX(var(--nav-out));
+    opacity: 0;
+  }
+}
+@keyframes m-pop-new {
+  from {
+    transform: translateX(var(--nav-out));
+    opacity: 0;
+  }
+}
+@keyframes m-pop-old {
+  to {
+    transform: translateX(var(--nav-in));
+    opacity: 0;
+  }
+}
+@media (width < 48rem) {
+  :root {
+    --nav-in: 100%;
+    --nav-out: -30%;
+    --nav-new-dur: var(--dur-slow);
+    --nav-old-dur: var(--dur-slow);
+    --nav-fade: 1;
+  }
+  @keyframes m-push-new {
+    from {
+      transform: translateX(var(--nav-in));
+    }
+  }
+  @keyframes m-push-old {
+    to {
+      transform: translateX(var(--nav-out));
+      filter: brightness(0.9);
+    }
+  }
+  @keyframes m-pop-new {
+    from {
+      transform: translateX(var(--nav-out));
+      filter: brightness(0.9);
+    }
+  }
+  @keyframes m-pop-old {
+    to {
+      transform: translateX(var(--nav-in));
+    }
+  }
+}
+/* Clicks pass through to the live page while a transition runs. */
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-group(root) {
+  animation: none;
+}
+::view-transition-old(root) {
+  display: none;
+}
+::view-transition-new(root) {
+  animation: none;
+}
+/* The page moves inside its own box, like a navigation controller's view. */
+::view-transition-group(.page-in),
+::view-transition-group(.page-out) {
+  overflow: clip;
+}
+/* tab, and any navigation we could not classify: a quick cross-dissolve. */
+::view-transition-old(.page-out) {
+  animation: m-fade-out var(--dur-out) var(--ease-out) both;
+}
+::view-transition-new(.page-in) {
+  animation: m-fade-in var(--dur-pop) var(--ease-out) both;
+}
+:root[data-nav-motion="push"]::view-transition-group(.page-in),
+:root[data-nav-motion="pop"]::view-transition-group(.page-out) {
+  z-index: 2;
+}
+:root[data-nav-motion="push"]::view-transition-new(.page-in) {
+  animation: m-push-new var(--nav-new-dur) var(--ease-glide) both;
+}
+:root[data-nav-motion="push"]::view-transition-old(.page-out) {
+  animation: m-push-old var(--nav-old-dur) var(--ease-glide) both;
+}
+:root[data-nav-motion="pop"]::view-transition-new(.page-in) {
+  animation: m-pop-new var(--nav-new-dur) var(--ease-glide) both;
+}
+:root[data-nav-motion="pop"]::view-transition-old(.page-out) {
+  animation: m-pop-old var(--nav-old-dur) var(--ease-glide) both;
+}
+/* Browser back/forward (route-motion.tsx wraps the router's popstate): old and new
+   <main> share one name, so the pair animates inside one group. */
+::view-transition-group(page-pop),
+::view-transition-group(page-push) {
+  animation: none;
+  overflow: clip;
+}
+::view-transition-image-pair(page-pop),
+::view-transition-image-pair(page-push) {
+  isolation: isolate;
+}
+::view-transition-old(page-pop),
+::view-transition-new(page-pop),
+::view-transition-old(page-push),
+::view-transition-new(page-push) {
+  mix-blend-mode: normal;
+}
+::view-transition-old(page-pop) {
+  z-index: 1;
+  animation: m-pop-old var(--nav-old-dur) var(--ease-glide) both;
+}
+::view-transition-new(page-pop) {
+  animation: m-pop-new var(--nav-new-dur) var(--ease-glide) both;
+}
+::view-transition-old(page-push) {
+  animation: m-push-old var(--nav-old-dur) var(--ease-glide) both;
+}
+::view-transition-new(page-push) {
+  animation: m-push-new var(--nav-new-dur) var(--ease-glide) both;
+}
+/* A page entered by navigation already arrived with the transition: its archetype
+   entrances stay still, so nothing fades twice. A hard load keeps them. */
+@supports (view-transition-class: a) {
+  main[data-route-entered] :is(.anim-rise, .anim-rise-spring, .anim-fade, .anim-pop),
+  main[data-route-entered] .anim-stagger > * {
+    animation: none;
+  }
+}
+/* Content that replaces a skeleton (route-motion.tsx marks main) settles in as one block, from
+   half opacity: from nothing, the skeleton left a blank frame and the cards trickled back. */
+main[data-route-skeleton] :is(.anim-rise, .anim-rise-spring, .anim-fade, .anim-pop),
+main[data-route-skeleton] .anim-stagger > * {
+  animation: m-settle var(--dur-pop) var(--ease-out) both;
+}
+@keyframes m-settle {
+  from {
+    opacity: 0.5;
+  }
+}
+
+/* The pending bar: starts on the click, creeps, and completes on arrival. */
+.nav-progress {
+  opacity: 0;
+  transform: scaleX(0);
+  transition:
+    transform var(--dur-fast) var(--ease-glide),
+    opacity var(--dur) var(--ease-out);
+}
+.nav-progress[data-nav-progress="loading"] {
+  opacity: 1;
+  transform: scaleX(0.8);
+  transition:
+    transform 8s cubic-bezier(0.08, 0.6, 0.2, 1),
+    opacity var(--dur-fast) var(--ease-out);
+}
+.nav-progress[data-nav-progress="done"] {
+  opacity: 0;
+  transform: scaleX(1);
+  transition:
+    transform var(--dur) var(--ease-glide),
+    opacity var(--dur) var(--ease-out) var(--dur-fast);
+}
+/* A rail item answers the press at once and holds its highlight while the page loads. */
+.nav-row:active,
+.nav-row:has(> [data-link-pending]) {
+  background-color: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  transition-duration: 0s;
 }
 
 @layer base {
@@ -849,16 +1277,20 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
       opacity var(--dur-fast) var(--ease-out),
       box-shadow var(--dur-fast) var(--ease-out);
   }
-  /* A pressed control should feel pressed. */
-  button:active:not(:disabled),
-  [role="button"]:active {
+  /* A pressed control should feel pressed. `<Button>` scales instead (`press`). */
+  button:active:not(:disabled, [data-slot="button"]),
+  [role="button"]:active:not([data-slot="button"]) {
     transform: translateY(0.5px);
   }
 }
 
 /* Not politeness — vestibular disorders are real, and this is a surface people
-   read for hours. See above for why 1ms and not `none`. */
+   read for hours. See above for why 1ms and not `none`. Decoration goes too:
+   no overshoot, no press scale. */
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --ease-spring: var(--ease-out);
+  }
   *,
   *::before,
   *::after {
@@ -873,6 +1305,16 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
   button:active:not(:disabled),
   [role="button"]:active {
     transform: none;
+  }
+  .hoverable:active,
+  .press:active {
+    scale: none !important;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
   }
 }
 
@@ -892,7 +1334,7 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
   /* The expanded width, as a variable so the collapsed rule has one thing to
      change and the transition has something to interpolate. */
   width: var(--rail-w, 15.5rem);
-  transition: width 180ms var(--ease-out);
+  transition: width var(--dur) var(--ease-glide);
 }
 
 [data-nav="collapsed"] .app-rail {
@@ -1015,13 +1457,17 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
     padding-left: 1.25rem;
     padding-right: 1.25rem;
     transform: translateX(-100%);
-    transition: transform var(--dur) var(--ease-out);
-    box-shadow: none;
+    /* A sheet: in on the sheet curve, out faster. */
+    transition:
+      transform var(--dur-slow-out) var(--ease-glide),
+      box-shadow var(--dur-slow-out) var(--ease-out);
+    box-shadow: 0 0 0 100vmax transparent;
   }
 
   [data-mobile-nav="open"] .app-rail {
     transform: translateX(0);
-    box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--foreground) 45%, transparent);
+    transition-duration: var(--dur-slow);
+    box-shadow: 0 0 0 100vmax var(--scrim);
   }
 
   /* The collapse handle straddles the rail's own edge and has no meaning while
@@ -1043,5 +1489,552 @@ body[data-scroll-locked] > iframe[name^="__privateStripeFrame"] {
     .app-rail {
       transition-duration: 1ms;
     }
+  }
+}
+
+/* Every Billy launcher (option "Balanced", 2026-11-07; all launchers 2026-11-08): the ⌘K
+   rows. Not an action button: a card, so the mark
+   keeps its three colours; a 1.5px edge in them that flows slowly round, a wash and a soft glow; a light that
+   sweeps across three times after the page loads; the spark glints (.billy-twinkle). Every
+   motion stops under prefers-reduced-motion. A solid fill forced the white mark. */
+.billy-launch {
+  --billy-wash: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--billy-1) 14%, var(--card)),
+    color-mix(in oklab, var(--billy-2) 10%, var(--card)),
+    color-mix(in oklab, var(--billy-3) 14%, var(--card))
+  );
+  --billy-edge: linear-gradient(
+    110deg,
+    var(--billy-1),
+    var(--billy-2),
+    var(--billy-3),
+    var(--billy-2),
+    var(--billy-1)
+  );
+  position: relative;
+  overflow: hidden;
+  border: 1.5px solid transparent;
+  background-image: var(--billy-wash), var(--billy-edge);
+  background-origin: padding-box, border-box;
+  background-clip: padding-box, border-box;
+  background-size:
+    100% 100%,
+    300% 100%;
+  box-shadow:
+    0 2px 10px -2px color-mix(in oklab, var(--billy-1) 35%, transparent),
+    0 2px 10px -4px color-mix(in oklab, var(--billy-3) 35%, transparent);
+  animation: billy-flow 6s linear infinite;
+}
+.billy-launch:hover,
+.billy-launch[data-selected="true"] {
+  --billy-wash: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--billy-1) 22%, var(--card)),
+    color-mix(in oklab, var(--billy-2) 16%, var(--card)),
+    color-mix(in oklab, var(--billy-3) 22%, var(--card))
+  );
+  box-shadow:
+    0 4px 14px -2px color-mix(in oklab, var(--billy-1) 45%, transparent),
+    0 4px 14px -4px color-mix(in oklab, var(--billy-3) 45%, transparent);
+  animation-duration: 3s;
+}
+/* The glow replaces the ring utility's box-shadow, so focus shows as an outline. */
+.billy-launch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.billy-launch::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, #fff 55%, transparent) 48%,
+    transparent 66%
+  );
+  transform: translateX(-120%);
+  animation: billy-sweep 4s var(--ease-glide) 3;
+}
+.dark .billy-launch::after {
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, #fff 18%, transparent) 48%,
+    transparent 66%
+  );
+}
+/* The launcher (option B1, 2026-11-09): a round bubble at the bottom right, the card's own
+   ground inside a 2px ring in the three colours that flows slowly round, and a soft glow. */
+.billy-bubble {
+  border: 2px solid transparent;
+  background-image:
+    linear-gradient(var(--card), var(--card)),
+    linear-gradient(
+      110deg,
+      var(--billy-1),
+      var(--billy-2),
+      var(--billy-3),
+      var(--billy-2),
+      var(--billy-1)
+    );
+  background-origin: padding-box, border-box;
+  background-clip: padding-box, border-box;
+  background-size:
+    100% 100%,
+    300% 100%;
+  box-shadow:
+    0 6px 18px -4px color-mix(in oklab, var(--billy-1) 45%, transparent),
+    0 6px 18px -6px color-mix(in oklab, var(--billy-3) 45%, transparent);
+  /* Springs in when it appears; the ring flows behind it. */
+  animation:
+    m-mark var(--dur) var(--ease-spring) both,
+    billy-ring 6s linear infinite;
+  transition:
+    box-shadow var(--dur) var(--ease-out),
+    scale var(--dur-fast) var(--ease-spring);
+}
+.billy-bubble:hover {
+  box-shadow:
+    0 8px 22px -4px color-mix(in oklab, var(--billy-1) 60%, transparent),
+    0 8px 22px -6px color-mix(in oklab, var(--billy-3) 60%, transparent);
+  /* Both durations: one value would re-time the entrance too. */
+  animation-duration: var(--dur), 3s;
+}
+.billy-bubble:active {
+  scale: 0.94;
+  transition-duration: var(--dur), var(--dur-fast-out);
+}
+/* The panel is opening: the bubble shrinks away under it. */
+.billy-bubble[data-state="closed"] {
+  pointer-events: none;
+  animation: m-scale-out var(--dur-out) var(--ease-glide) forwards;
+  --m-scale-out: 0.6;
+}
+.billy-bubble:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@keyframes billy-ring {
+  to {
+    background-position:
+      0 0,
+      -300% 0;
+  }
+}
+.billy-twinkle {
+  transform-box: view-box;
+  transform-origin: 16px 12.4px;
+  animation: billy-twinkle 2.6s var(--ease-glide) infinite;
+}
+@keyframes billy-flow {
+  to {
+    background-position:
+      0 0,
+      -300% 0;
+  }
+}
+@keyframes billy-sweep {
+  0%,
+  55% {
+    transform: translateX(-120%);
+  }
+  85%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+@keyframes billy-twinkle {
+  0%,
+  70%,
+  100% {
+    transform: scale(1) rotate(0);
+  }
+  80% {
+    transform: scale(1.25) rotate(45deg);
+  }
+  90% {
+    transform: scale(0.9) rotate(90deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .billy-launch,
+  .billy-launch::after,
+  .billy-bubble,
+  .billy-twinkle {
+    animation: none;
+  }
+  .billy-bubble:active {
+    scale: none;
+  }
+}
+
+/* Large-title collapse (components/large-title.tsx, flag in lib/motion.ts). */
+.compact-title {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-glide);
+}
+.compact-title[data-shown] {
+  pointer-events: auto;
+  opacity: 1;
+  transform: none;
+}
+
+/* ── Gestures (components/main-gestures.tsx, components/ui/row-press.ts) ───────────
+   Flags in lib/motion.ts. Kept apart from the page-navigation block: the swipe drives
+   its own drag and only shifts that block's pop animation on commit. */
+
+/* Swipe back: <main> follows the finger in the pop's shape, at `--swipe-p` (0..1). */
+main[data-swiping] {
+  translate: calc(var(--nav-in) * var(--swipe-p, 0)) 0;
+  opacity: calc(1 - (1 - var(--nav-fade)) * var(--swipe-p, 0));
+  box-shadow:
+    -1px 0 0 var(--border),
+    -16px 0 32px -16px var(--scrim);
+}
+main[data-swiping="settle"] {
+  transition:
+    translate var(--dur) var(--ease-glide),
+    opacity var(--dur) var(--ease-out);
+}
+/* Committed: the browser-back pop starts `--swipe-t` of the way in, where the finger let go. */
+:root[data-swipe-back]::view-transition-old(page-pop) {
+  animation-delay: calc(var(--swipe-t, 0) * -1 * var(--nav-old-dur, var(--dur-slow)));
+}
+:root[data-swipe-back]::view-transition-new(page-pop) {
+  animation-delay: calc(var(--swipe-t, 0) * -1 * var(--dur-slow));
+}
+/* The page's swipe replaces Chromium's own history swipe (set only where it runs). */
+:root[data-swipe-nav],
+:root[data-swipe-nav] body {
+  overscroll-behavior-x: none;
+}
+
+/* Row press: a cell highlight, on clickable rows only. Lights at once (row-press.ts
+   adds the delay for touch), fades out fast. Opaque, so a sticky cell matches its row. */
+:root {
+  --row-press: color-mix(in oklab, var(--foreground) 9%, var(--card));
+}
+[data-slot="table-row"][data-pressable] {
+  -webkit-tap-highlight-color: transparent;
+}
+[data-slot="table-row"][data-pressable] > [data-slot="table-cell"] {
+  transition: background-color var(--dur-out) var(--ease-out);
+}
+[data-slot="table-row"][data-pressed] > [data-slot="table-cell"] {
+  background-color: var(--row-press);
+  transition-duration: 0s;
+}
+/* DataTable's stacked rows (a narrow list card): the row is one box, so it lights whole. */
+[data-slot="list-row"][data-pressable] {
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--dur-out) var(--ease-out);
+}
+[data-slot="list-row"][data-pressed] {
+  background-color: var(--row-press);
+  transition-duration: 0s;
+}
+
+/* ── Billy: bubble ⇄ panel, one shape (components/assistant/billy-morph.ts) ─────────
+   The browser morphs the `billy` group between the bubble's and the panel's rects. The
+   image pair is the skin: card ground, the three-colour ring turning to run down the
+   panel's left edge, the radius opening from the bubble's 26px to square.
+   The panel's content arrives in the last 40%, never on a half-grown shape; on close it
+   leaves first, then the shape shrinks home. */
+@property --billy-ring {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+@property --billy-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 110deg;
+}
+::view-transition-group(billy) {
+  z-index: 3;
+  animation-duration: var(--dur-morph);
+  animation-timing-function: var(--ease-glide);
+}
+::view-transition-image-pair(billy) {
+  box-sizing: border-box;
+  overflow: clip;
+  border: 2px solid transparent;
+  background-image:
+    linear-gradient(var(--card), var(--card)),
+    linear-gradient(
+      var(--billy-angle),
+      color-mix(in oklab, var(--billy-1) var(--billy-ring), var(--border)),
+      color-mix(in oklab, var(--billy-2) var(--billy-ring), var(--border)),
+      color-mix(in oklab, var(--billy-3) var(--billy-ring), var(--border)),
+      color-mix(in oklab, var(--billy-2) var(--billy-ring), var(--border)),
+      color-mix(in oklab, var(--billy-1) var(--billy-ring), var(--border))
+    );
+  background-origin: padding-box, border-box;
+  background-clip: padding-box, border-box;
+  background-size:
+    100% 100%,
+    300% 100%;
+}
+::view-transition-old(billy),
+::view-transition-new(billy) {
+  width: 100%;
+  height: 100%;
+  mix-blend-mode: normal;
+  object-fit: none;
+}
+:root[data-billy-morph="open"]::view-transition-image-pair(billy) {
+  animation: billy-skin-open var(--dur-morph) var(--ease-glide) both;
+}
+:root[data-billy-morph="open"]::view-transition-old(billy) {
+  object-position: 100% 100%;
+  animation: m-fade-out calc(var(--dur-morph) * 0.3) var(--ease-out) both;
+}
+:root[data-billy-morph="open"]::view-transition-new(billy) {
+  object-position: 0 0;
+  animation: billy-content-in var(--dur-morph) var(--ease-glide) both;
+}
+:root[data-billy-morph="close"]::view-transition-image-pair(billy) {
+  animation: billy-skin-close var(--dur-morph) var(--ease-glide) both;
+}
+:root[data-billy-morph="close"]::view-transition-old(billy) {
+  object-position: 0 0;
+  animation: m-fade-out calc(var(--dur-morph) * 0.4) var(--ease-out) both;
+}
+:root[data-billy-morph="close"]::view-transition-new(billy) {
+  object-position: 100% 100%;
+  animation: billy-bubble-back var(--dur-morph) var(--ease-out) both;
+}
+/* Bubble ⇄ floating window: the ring stays whole; only the radius opens (26px ⇄ 14px). */
+:root[data-billy-morph="open"][data-billy-shape="float"]::view-transition-image-pair(billy) {
+  animation-name: billy-skin-window-open;
+}
+:root[data-billy-morph="close"][data-billy-shape="float"]::view-transition-image-pair(billy) {
+  animation-name: billy-skin-window-close;
+}
+@keyframes billy-skin-window-open {
+  from {
+    border-radius: 26px;
+  }
+  to {
+    border-radius: 14px;
+  }
+}
+@keyframes billy-skin-window-close {
+  from {
+    border-radius: 14px;
+  }
+  to {
+    border-radius: 26px;
+  }
+}
+/* Side panel ⇄ floating window: the edge ring opens into the full ring and back. The old
+   content leaves first, the new arrives last, as on open. */
+:root[data-billy-morph="swap"]::view-transition-old(billy) {
+  object-position: 0 0;
+  animation: m-fade-out calc(var(--dur-morph) * 0.3) var(--ease-out) both;
+}
+:root[data-billy-morph="swap"]::view-transition-new(billy) {
+  object-position: 0 0;
+  animation: billy-content-in var(--dur-morph) var(--ease-glide) both;
+}
+:root[data-billy-morph="swap"][data-billy-shape="float"]::view-transition-image-pair(billy) {
+  animation: billy-skin-to-window var(--dur-morph) var(--ease-glide) both;
+}
+:root[data-billy-morph="swap"][data-billy-shape="dock"]::view-transition-image-pair(billy) {
+  animation: billy-skin-to-panel var(--dur-morph) var(--ease-glide) both;
+}
+@keyframes billy-skin-to-window {
+  from {
+    border-radius: 0;
+    border-width: 0 0 0 2px;
+    --billy-angle: 180deg;
+    background-size:
+      100% 100%,
+      100% 100%;
+  }
+  to {
+    border-radius: 14px;
+    border-width: 2px;
+    --billy-angle: 110deg;
+    background-size:
+      100% 100%,
+      300% 100%;
+  }
+}
+@keyframes billy-skin-to-panel {
+  from {
+    border-radius: 14px;
+    border-width: 2px;
+    --billy-angle: 110deg;
+    background-size:
+      100% 100%,
+      300% 100%;
+  }
+  to {
+    border-radius: 0;
+    border-width: 0 0 0 2px;
+    --billy-angle: 180deg;
+    background-size:
+      100% 100%,
+      100% 100%;
+  }
+}
+/* The panel keeps the ring as its left edge (.billy-edge): the ring turns vertical and
+   narrows to that edge, so the last frame IS the docked panel. */
+@keyframes billy-skin-open {
+  from {
+    border-radius: 26px;
+    border-width: 2px;
+    --billy-angle: 110deg;
+    background-size:
+      100% 100%,
+      300% 100%;
+  }
+  to {
+    border-radius: 0;
+    border-width: 0 0 0 2px;
+    --billy-angle: 180deg;
+    background-size:
+      100% 100%,
+      100% 100%;
+  }
+}
+@keyframes billy-skin-close {
+  from {
+    border-radius: 0;
+    border-width: 0 0 0 2px;
+    --billy-angle: 180deg;
+    background-size:
+      100% 100%,
+      100% 100%;
+  }
+  to {
+    border-radius: 26px;
+    border-width: 2px;
+    --billy-angle: 110deg;
+    background-size:
+      100% 100%,
+      300% 100%;
+  }
+}
+/* A phone opens Billy full screen, with no edge: the ring settles into the border colour. */
+@media (width < 40rem) {
+  @keyframes billy-skin-open {
+    from {
+      border-radius: 26px;
+      --billy-ring: 100%;
+      background-position:
+        0 0,
+        0 0;
+    }
+    55% {
+      --billy-ring: 100%;
+    }
+    to {
+      border-radius: 0;
+      --billy-ring: 0%;
+      background-position:
+        0 0,
+        -200% 0;
+    }
+  }
+  @keyframes billy-skin-close {
+    from {
+      border-radius: 0;
+      --billy-ring: 0%;
+      background-position:
+        0 0,
+        -200% 0;
+    }
+    45% {
+      --billy-ring: 100%;
+    }
+    to {
+      border-radius: 26px;
+      --billy-ring: 100%;
+      background-position:
+        0 0,
+        0 0;
+    }
+  }
+}
+@keyframes billy-content-in {
+  0%,
+  60% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes billy-bubble-back {
+  0%,
+  70% {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* The docked panel's left edge: the bubble's ring, top to bottom (see billy-skin-open).
+   A phone shows the panel full width, with no edge. */
+@media (width >= 40rem) {
+  .billy-edge {
+    border-left: 2px solid transparent;
+    border-image: linear-gradient(
+        180deg,
+        var(--billy-1),
+        var(--billy-2),
+        var(--billy-3),
+        var(--billy-2),
+        var(--billy-1)
+      )
+      1;
+  }
+}
+/* Back from a morph, the bubble is already in place: the ring flows on, no second pop. */
+.billy-bubble[data-returning] {
+  animation: billy-ring 6s linear infinite;
+}
+.billy-bubble[data-returning]:hover {
+  animation-duration: 3s;
+}
+/* Fallback where view transitions are missing: the panel is revealed from the bubble's
+   rect with clip-path, and closes back into it. */
+.billy-reveal[data-state="open"] {
+  animation: billy-reveal-in var(--dur-morph) var(--ease-glide) both;
+}
+.billy-reveal[data-state="closed"] {
+  animation: billy-reveal-out var(--dur-morph) var(--ease-glide) forwards;
+}
+.billy-reveal[data-state="open"] > * {
+  animation: billy-content-in var(--dur-morph) var(--ease-glide) both;
+}
+.billy-reveal[data-state="closed"] > * {
+  animation: m-fade-out calc(var(--dur-morph) * 0.4) var(--ease-out) forwards;
+}
+@keyframes billy-reveal-in {
+  from {
+    clip-path: inset(var(--rv-t, 0) var(--rv-r, 0) var(--rv-b, 0) var(--rv-l, 0) round 26px);
+  }
+  to {
+    clip-path: inset(0 round 0);
+  }
+}
+@keyframes billy-reveal-out {
+  from {
+    clip-path: inset(0 round 0);
+  }
+  to {
+    clip-path: inset(var(--rv-t, 0) var(--rv-r, 0) var(--rv-b, 0) var(--rv-l, 0) round 26px);
   }
 }

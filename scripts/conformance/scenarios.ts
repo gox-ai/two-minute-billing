@@ -231,6 +231,18 @@ async function s5(c: Ctx) {
         bad.push(`${step.after}: cash ${cash - cash0} losses ${losses}`);
     }
     c.row(id, bad.length === 0, bad.join("; "));
+    // The dispute names the disputed payment, so the operator reaches its customer,
+    // invoice and subscription from it.
+    const rows = await w.disputes();
+    const linked = rows.filter(
+      (d) =>
+        d.paymentId === b.paymentId && d.invoiceId === b.invoiceId && d.customerId === b.customerId,
+    );
+    c.row(
+      `${id}.linked`,
+      rows.length > 0 && linked.length === rows.length,
+      `${linked.length} of ${rows.length} disputes link to the payment`,
+    );
     const n = await w.entries();
     await w.redeliver();
     c.row(`${id}.redelivery-posts-nothing`, (await w.entries()) === n);

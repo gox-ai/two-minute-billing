@@ -1,3 +1,5 @@
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import { listWebhookEndpointsDetail, listDeliveries } from "@/lib/api/developer";
 import { requirePermission } from "@/lib/session";
 import { IdChip } from "@/components/patterns/chip";
@@ -29,28 +31,28 @@ export default async function WebhookDetailPage({ params }: { params: Promise<{ 
       listDeliveries(id, { limit: PAGE_SIZE }),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <ErrorState
-        title="We could not load the endpoint"
-        description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+        error={e}
+        thing="webhook endpoint"
+        back={{ label: "View webhooks", href: "/developer/webhooks" }}
+        retry
       />
     );
   }
 
   const endpoint = endpoints.data.find((e) => e.id === id);
-  if (!endpoint) {
-    return (
-      <ErrorState
-        title="Endpoint not found"
-        description={`No webhook endpoint has the ID ${id}.`}
-      />
-    );
-  }
+  if (!endpoint) notFound();
 
   return (
     <div className="flex flex-col gap-4">
       <RecordCrumbs
-        items={[{ label: "Developer", href: "/developer" }, { label: "Webhook endpoint" }]}
+        items={[
+          { label: "Developer", href: "/developer" },
+          { label: "Webhooks", href: "/developer/webhooks" },
+          { label: "Webhook endpoint" },
+        ]}
         right={<PageRefresh />}
       />
 

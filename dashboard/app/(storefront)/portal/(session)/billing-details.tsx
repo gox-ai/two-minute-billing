@@ -106,7 +106,7 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
               "Full name" field above it, this block is the only place a name can come from. */}
           <AddressFields
             countries={countries}
-            value={me.customer.address}
+            value={prefilled(me)}
             requireContactName
             contactHeading="Your name (printed on your invoices)"
             fieldStates={fieldStates}
@@ -133,11 +133,7 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
               name="tax_registration_number"
               label="Tax registration number"
               required={taxIdState === "mandatory"}
-              help={
-                taxIdState === "mandatory"
-                  ? "GSTIN in India. To claim input tax credit, it must be on your invoice. If you add it later, invoices that you already have do not change."
-                  : "GSTIN in India. This is optional. To claim input tax credit, it must be on your invoice. If you add it later, invoices that you already have do not change."
-              }
+              help={taxIdHelp(me.customer.address.country, taxIdState === "mandatory")}
             >
               <Input
                 name="tax_registration_number"
@@ -149,15 +145,15 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
               />
             </Field>
           )}
-          <div className="flex gap-2 pt-1">
-            <Button type="submit">Save billing details</Button>
-            {/* No cancel while the details are still missing: there is nothing to
-                go back to, and the add-card flow below is blocked until they exist. */}
+          <div className="flex justify-end gap-2 pt-1">
+            {/* No cancel while the details are still missing: there is nothing to go back
+                to, and adding a payment method is blocked until they exist. */}
             {complete ? (
               <Button type="button" variant="outline" onClick={() => setEditing(false)}>
                 Cancel
               </Button>
             ) : null}
+            <Button type="submit">Save billing details</Button>
           </div>
         </ActionForm>
       </div>
@@ -200,6 +196,42 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
       </Button>
     </div>
   );
+}
+
+const EU_VAT = new Set(
+  "AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split(" "),
+);
+
+/** Help for the tax number, named for the customer's own country. */
+export function taxIdHelp(country: string | null | undefined, mandatory: boolean): string {
+  const c = country?.toUpperCase() ?? "";
+  const what =
+    c === "IN"
+      ? "Your GSTIN. To claim input tax credit, it must be on your invoice."
+      : EU_VAT.has(c) || c === "GB"
+        ? "Your VAT number. We print it on your invoices."
+        : c === "AU"
+          ? "Your ABN. We print it on your invoices."
+          : c === "CA"
+            ? "Your GST/HST number. We print it on your invoices."
+            : "Your business tax number. We print it on your invoices.";
+  return `${what}${mandatory ? "" : " This is optional."} If you add it later, invoices that you already have do not change.`;
+}
+
+/**
+ * The address form's starting values. An empty contact name starts from the account
+ * holder's, which is what "Billed to" already shows (the same fallback the invoice uses),
+ * and an empty phone from the customer's own.
+ */
+function prefilled(me: PortalMe): PortalMe["customer"]["address"] {
+  const a = me.customer.address;
+  const noContact = !a.first_name && !a.last_name;
+  return {
+    ...a,
+    first_name: noContact ? me.customer.first_name : a.first_name,
+    last_name: noContact ? me.customer.last_name : a.last_name,
+    phone: a.phone ?? me.customer.phone,
+  };
 }
 
 /**

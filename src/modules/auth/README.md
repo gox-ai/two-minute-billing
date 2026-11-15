@@ -98,6 +98,16 @@ None.
   party is in their account.
 
 ## Changelog
+- **2026-11-09** — Access-request notices go through the job queue. `submitSignupRequest` queues
+  `access_request_notice_send` (chat + email, key `access_request_notice:<channel>:<request>`) in
+  the transaction that stores the request; the engine worker sends them within seconds and retries
+  a failed channel (10 attempts). Text unchanged; chat is `SUPPORT_CHAT_WEBHOOK_URL` →
+  `LEAD_CHAT_WEBHOOK_URL` → `OPS_ALERT_WEBHOOK_URL`. `verify:signup-requests` drains the queue.
+- **2026-11-06** — **Session windows are the installation's only.** The organization's idle
+  timeout and session length (0482) are gone from Settings → Security and from
+  `POST /auth/organization/security/session_policy`, which now takes only `mfa_required_roles`.
+  `effectiveIdleMinutes` / `effectiveAbsoluteTtlHours` return `SESSION_IDLE_MINUTES` /
+  `SESSION_ABSOLUTE_TTL_HOURS` and ignore the 0482 columns, which stay in the schema unread.
 - **2026-11-05** — Invite emails (new and existing account, and resends) name the person who sent them: `inviterOf(actorUserId)`. A seed or script invite has no person and keeps "Someone". Account emails are sent under `accountBrand().name` (cloud: "Two Minute Billing"; self-hosted: `MAIL_FROM_NAME`, unchanged).
 - **2026-11-04** — The common-password check also compares with trailing symbols/digits removed and with every symbol removed, so `Password1!`, `Admin123!` and `P@ssw0rd!` are refused (the composition rule made an exact match impossible).
 - **2026-07-06** — As-built baseline documented (post clone-program phases 0→H).

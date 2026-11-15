@@ -2,24 +2,38 @@
  * The price source feed (genai-prices v2 `data_slim.json`, MIT) read into our own shape.
  *
  * A zod subset: provider id, model id, `match.equals` aliases and `prices`. Numbers stay the
- * text the source wrote (`parseJsonExact`), so no price passes through a float. Only the
+ * text the source wrote (`parseJsonExact`), so no price passes through a float. Each price key
+ * maps to a kind, a unit and a divisor (`feedPriceKeyOf`). Only the
  * standard price is kept: `price_variants` (batch, service tier) and time-of-day entries
  * (`constraint.start_time`) are skipped and counted. Context tiers keep their base price.
  */
 import { z } from "zod";
 import { JsonNumber, parseJsonExact } from "@/modules/metering/json-source";
 import { majorTextToMinorFixed12 } from "./decimal";
+import type { ModelPriceUnit } from "./units";
 
-/** One price of one token type: cents per `divisor` units, Fixed12. */
+/** One price of one kind in one unit: cents per `divisor` units, Fixed12. */
 export interface ParsedPrice {
+  tokenType: string;
+  unit: ModelPriceUnit;
+  /** '' or absent = no tier (the first feed has none). */
+  quality?: string;
+  resolution?: string;
   value: bigint;
   divisor: bigint;
   rounded: boolean;
 }
 
+/** The `ParsedEntry.prices` key: kind, unit and tier (a tier only when there is one). */
+export const priceKey = (tokenType: string, unit: string, quality = "", resolution = "") =>
+  quality || resolution
+    ? `${tokenType}\u0000${unit}\u0000${quality}\u0000${resolution}`
+    : `${tokenType}\u0000${unit}`;
+
 /** A dated entry. `startDate` null = the undated first entry ("before we tracked it"). */
 export interface ParsedEntry {
   startDate: string | null;
+  /** By `priceKey(kind, unit)`. */
   prices: Map<string, ParsedPrice>;
   tiers: Record<string, unknown> | null;
 }
@@ -36,7 +50,7 @@ export interface ParsedModel {
 export interface ParseSummary {
   providers: number;
   models: number;
-  /** Price keys whose unit we do not bill (hours, pages, characters). */
+  /** Price keys whose suffix is not a unit we know. */
   skippedUnits: number;
   /** Time-of-day entries (`start_time`/`end_time`): not the standard price. */
   skippedTimeOfDay: number;
@@ -84,11 +98,28 @@ const feed = z.array(
   z.object({ id: z.string(), name: z.string().optional(), models: z.array(model) }).passthrough(),
 );
 
-/** `<x>_mtok` → per 1,000,000; `<x>_kcount` → per 1,000. Anything else is not billed. */
-export function tokenTypeOf(key: string): { tokenType: string; divisor: bigint } | null {
-  const m = /^([a-z0-9_]+?)_(mtok|kcount)$/.exec(key);
+const SUFFIX_UNITS: Record<string, { unit: ModelPriceUnit; divisor: bigint }> = {
+  mtok: { unit: "token", divisor: 1_000_000n },
+  kcount: { unit: "request", divisor: 1_000n },
+  mchars: { unit: "character", divisor: 1_000_000n },
+  kpages: { unit: "page", divisor: 1_000n },
+  gpixels: { unit: "pixel", divisor: 1_000_000_000n },
+};
+
+/**
+ * A feed price key → kind, unit and divisor; null for a suffix we do not know.
+ * `<kind>_mtok` per 1M tokens · `<kind>_kcount` per 1K requests · `<kind>_mchars` per 1M
+ * characters · `<kind>_kpages` per 1K pages · `<kind>_gpixels` per 1B pixels ·
+ * `[<kind>_]audio_hours` per 3,600 audio seconds (bare `audio_hours` is kind `audio`).
+ */
+export function feedPriceKeyOf(
+  key: string,
+): { tokenType: string; unit: ModelPriceUnit; divisor: bigint } | null {
+  const audio = /^(?:([a-z0-9_]+?)_)?audio_hours$/.exec(key);
+  if (audio) return { tokenType: audio[1] ?? "audio", unit: "audio_second", divisor: 3600n };
+  const m = /^([a-z0-9_]+?)_(mtok|kcount|mchars|kpages|gpixels)$/.exec(key);
   if (!m) return null;
-  return { tokenType: m[1]!, divisor: m[2] === "mtok" ? 1_000_000n : 1_000n };
+  return { tokenType: m[1]!, ...SUFFIX_UNITS[m[2]!]! };
 }
 
 /** `equals` values at the top of `match` or under its `or`; never patterns. */
@@ -168,16 +199,18 @@ export function parseFeed(text: string): ParsedFeed {
         const prices = new Map<string, ParsedPrice>();
         let tiers: Record<string, unknown> | null = null;
         for (const [key, v] of Object.entries(e.prices)) {
-          const unit = tokenTypeOf(key);
+          const unit = feedPriceKeyOf(key);
           if (!unit || unit.tokenType.length > 100) {
             summary.skippedUnits++;
             continue;
           }
           const text = v instanceof JsonNumber ? v.text : v.base.text;
-          if (!(v instanceof JsonNumber)) (tiers ??= {})[unit.tokenType] = tiersAsText(v);
+          // Token tiers keep their kind as the key (as before 0524); other units the feed key.
+          if (!(v instanceof JsonNumber))
+            (tiers ??= {})[unit.unit === "token" ? unit.tokenType : key] = tiersAsText(v);
           try {
             const { value, rounded } = majorTextToMinorFixed12(text);
-            prices.set(unit.tokenType, { value, divisor: unit.divisor, rounded });
+            prices.set(priceKey(unit.tokenType, unit.unit), { ...unit, value, rounded });
           } catch {
             invalid = true;
           }
@@ -200,7 +233,7 @@ export function parseFeed(text: string): ParsedFeed {
                 ? -1
                 : 1,
       );
-      // Nothing we bill (only hours, pages or characters): not a list model.
+      // No price in a unit we know: not a list model.
       if (!entries.some((e) => e.prices.size > 0)) continue;
       summary.models++;
       models.push({

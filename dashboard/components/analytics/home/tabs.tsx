@@ -1,7 +1,10 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 import { useNavPending } from "@/components/navigation/nav-pending";
 
 export type HomeTab = "overview" | "recurring" | "collections" | "credits" | "usage" | "sales";
@@ -49,8 +52,29 @@ export function HomeTabs({
     return `/businesses/${biz}${q ? `?${q}` : ""}`;
   };
 
+  // On a phone the strip scrolls sideways; keep the current tab in view.
+  const navRef = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    const nav = navRef.current;
+    const el = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !el) return;
+    const end = el.offsetLeft + el.offsetWidth;
+    if (el.offsetLeft < nav.scrollLeft) nav.scrollLeft = el.offsetLeft - 4;
+    else if (end > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = end - nav.clientWidth + 4;
+  }, [shown]);
+
   return (
-    <nav aria-label="Views" className={`${SEGMENT_TRACK} mb-6`}>
+    // One row that scrolls, never two rows in the track. The pill measures in scroll space
+    // (SegmentIndicator adds scrollLeft), so it rides along.
+    <nav
+      ref={navRef}
+      aria-label="Views"
+      className={cn(
+        SEGMENT_TRACK,
+        "mb-6 scrollbar-none flex-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden",
+      )}
+    >
+      <SegmentIndicator />
       {HOME_TABS.filter((t) => !visible || visible.includes(t.id) || t.id === active).map((t) => (
         <Link
           key={t.id}

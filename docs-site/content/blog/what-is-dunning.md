@@ -2,7 +2,7 @@
 title: "What is dunning? How subscription businesses recover failed payments"
 seoTitle: "What is dunning? Meaning and process"
 description: "Dunning is how a business recovers a failed or overdue payment. Learn how subscription dunning works: retries, soft and hard declines, and emails."
-date: "2026-11-02"
+date: "2026-10-08"
 category: Failed payments
 type: Explainer
 draft: false

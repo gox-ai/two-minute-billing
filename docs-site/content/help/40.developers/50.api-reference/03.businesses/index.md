@@ -33,6 +33,7 @@ Each business has a **live mode and a test mode**: two business ids, created tog
 | `GET` | [`/v1/businesses/{biz}/team_alert_recipients`](/help/developers/api-reference/businesses/list-team-alert-recipients-and-their-confirmatio) | List team alert recipients and their confirmation state |
 | `POST` | [`/v1/businesses/{biz}/team_alert_recipients/resend`](/help/developers/api-reference/businesses/send-the-confirmation-email-to-a-pending-team-al) | Send the confirmation email to a pending team alert recipient again |
 | `DELETE` | [`/v1/businesses/{biz}/test_data`](/help/developers/api-reference/businesses/delete-test-data) | Delete test data |
+| `POST` | [`/v1/businesses/{biz}/test_data/reset`](/help/developers/api-reference/businesses/reset-a-test-business) | Reset a test business |
 | `GET` | [`/v1/businesses/{biz}/test_limits`](/help/developers/api-reference/businesses/get-the-customer-and-subscription-limits-of-a-te) | Get the customer and subscription limits of a test business |
 | `POST` | [`/v1/businesses/{biz}/test_mode`](/help/developers/api-reference/businesses/open-the-test-mode-of-a-business) | Open the test mode of a business |
 | `GET` | [`/v1/businesses/{biz}/time_travel`](/help/developers/api-reference/businesses/get-time-travel-status) | Get Time Travel status |
@@ -42,4 +43,10 @@ Each business has a **live mode and a test mode**: two business ids, created tog
 | `GET` | [`/v1/businesses/{biz}/transfer_configurations`](/help/developers/api-reference/businesses/list-past-configuration-transfers) | List past configuration transfers, newest first |
 | `POST` | [`/v1/businesses/{biz}/transfer_configurations`](/help/developers/api-reference/businesses/run-a-configuration-transfer-to-another-business) | Run a configuration transfer to another business |
 | `GET` | [`/v1/businesses/{biz}/transfer_configurations/{job}`](/help/developers/api-reference/businesses/get-a-transfer-configuration-job) | Get a transfer configuration job |
+| `POST` | [`/v1/businesses/{biz}/transfer_configurations/{job}/apply`](/help/developers/api-reference/businesses/start-the-copy-of-a-planned-transfer) | Start the copy of a planned transfer |
+| `POST` | [`/v1/businesses/{biz}/transfer_configurations/{job}/cancel`](/help/developers/api-reference/businesses/stop-a-transfer-run) | Stop a transfer run |
+| `GET` | [`/v1/businesses/{biz}/transfer_configurations/{job}/items`](/help/developers/api-reference/businesses/list-the-items-of-an-async-transfer-run) | List the items of an async transfer run |
+| `POST` | [`/v1/businesses/{biz}/transfer_configurations/{job}/items`](/help/developers/api-reference/businesses/leave-items-out-of-a-planned-transfer) | Leave items out of a planned transfer, or put them back |
+| `POST` | [`/v1/businesses/{biz}/transfer_configurations/{job}/retry`](/help/developers/api-reference/businesses/retry-the-failed-items-of-a-transfer-run) | Retry the failed items of a transfer run |
+| `POST` | [`/v1/businesses/{biz}/transfer_configurations/plans`](/help/developers/api-reference/businesses/build-a-transfer-plan) | Build a transfer plan |
 | `POST` | [`/v1/businesses/{biz}/transfer_configurations/preview`](/help/developers/api-reference/businesses/preview-a-configuration-transfer) | Preview a configuration transfer, field by field |

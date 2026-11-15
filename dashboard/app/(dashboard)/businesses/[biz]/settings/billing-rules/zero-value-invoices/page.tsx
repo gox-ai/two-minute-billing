@@ -9,8 +9,9 @@ import {
   SettingsPage,
   SettingsSummary,
 } from "@/components/settings/settings-layout";
+import { couponBillingRules, ZERO_INVOICE_PAID_LABELS } from "@/lib/billing-rules";
 import { saveZeroValueInvoicesAction } from "../../actions";
-import { ChoiceRow } from "../_parts/rows";
+import { ChoiceRow, type Choice } from "../_parts/rows";
 import { FormIds, ruleCrumbs } from "../_parts/shared";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,29 @@ const OPTIONS = [
     label: "Finalize, do not send",
     consequence:
       "We finalize the invoice as paid and keep it in the invoice list and the customer portal. We do not send the invoice email. Webhooks still go out.",
+  },
+];
+
+// `zero_invoice_paid_event`: one-off = a one-time purchase, a manual or API invoice, a credit
+// purchase or an automatic top-up. An ad-hoc charge is not one-off, also with no subscription.
+const PAID_EVENT: Choice[] = [
+  {
+    value: "never",
+    label: ZERO_INVOICE_PAID_LABELS.never,
+    consequence:
+      "We send no invoice_paid event for an invoice with a total of zero. The invoice_generated event still goes out.",
+  },
+  {
+    value: "one_off",
+    label: ZERO_INVOICE_PAID_LABELS.one_off,
+    consequence:
+      "We send invoice_paid with an amount of 0 for a one-time purchase, a manual invoice, a credit purchase or an automatic top-up. We do not send it for other invoices, for example a renewal.",
+  },
+  {
+    value: "all",
+    label: ZERO_INVOICE_PAID_LABELS.all,
+    consequence:
+      "We send invoice_paid with an amount of 0 for each invoice with a total of zero, also for renewals and plan changes.",
   },
 ];
 
@@ -59,12 +83,13 @@ export default async function ZeroValueInvoicesSettings({
       ? "finalize_no_send"
       : "finalize_and_send";
   const emailsOn = b.email_config?.enabled === true;
+  const paidEvent = couponBillingRules(b).zero_invoice_paid_event;
 
   return (
     <SettingsPage
       title="Zero-value invoices"
       crumbs={ruleCrumbs(biz, "Zero-value invoices")}
-      description="What we do with an invoice whose total is zero, for example after a 100% discount or on a free plan."
+      description="What we do with an invoice whose total is zero, for example after a 100% discount or on a free plan, and which webhooks we send for it."
     >
       <ActionForm action={saveZeroValueInvoicesAction}>
         <FormIds biz={biz} version={b.resource_version} />
@@ -77,6 +102,7 @@ export default async function ZeroValueInvoicesSettings({
                   value: OPTIONS.find((o) => o.value === mode)!.label,
                 },
                 { label: "Billing emails", value: emailsOn ? "On" : "Off" },
+                { label: "invoice_paid event", value: ZERO_INVOICE_PAID_LABELS[paidEvent] },
               ]}
             />
           }
@@ -104,6 +130,15 @@ export default async function ZeroValueInvoicesSettings({
               }
               defaultValue={mode}
               options={OPTIONS}
+            />
+          </SettingsCard>
+          <SettingsCard title="Webhooks" meta="invoice_paid">
+            <ChoiceRow
+              name="zero_invoice_paid_event"
+              label="Send invoice_paid for a total of zero"
+              help="For webhooks and integrations that start work when an invoice is paid."
+              defaultValue={paidEvent}
+              options={PAID_EVENT}
             />
           </SettingsCard>
         </SettingsColumns>

@@ -2,9 +2,8 @@
 
 import { useDefaultState } from "@/lib/use-default-state";
 import { Input } from "@/components/ui/input";
-import { RadioField } from "@/components/ui/radio-group";
 import { SettingRow } from "@/components/settings/settings-layout";
-import { leadDaysLine } from "./copy";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 
 /**
  * A reminder kind with a second option beside lead days: Off, or (card expiry) the expiry
@@ -14,7 +13,6 @@ export function TimingRow({
   kind,
   label,
   help,
-  target,
   otherLabel,
   otherConsequence,
   value,
@@ -23,11 +21,10 @@ export function TimingRow({
   kind: string;
   label: string;
   help: string;
-  /** What the reminder comes before ("the due date"). */
-  target: string;
   /** The option that is not lead days: "Off" or "In the month the card expires". */
   otherLabel: string;
-  otherConsequence: string;
+  /** Only where it adds to the label. */
+  otherConsequence?: string;
   /** The stored lead days; null = the other option is in use. */
   value: number[] | null;
   /** Shown in the field when the other option is in use. */
@@ -36,52 +33,40 @@ export function TimingRow({
   const [mode, setMode] = useDefaultState(value ? "days" : "other");
   const [text, setText] = useDefaultState((value ?? suggested).join(", "));
   const name = `lead_days_${kind}`;
-  const days = text
-    .split(",")
-    .map((v) => Number(v.trim()))
-    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 90);
   return (
     <SettingRow
       label={label}
+      htmlFor={`timing_${kind}`}
       help={help}
       errorFor={name}
+      placement="end"
       control={
-        <div className="flex flex-col gap-3">
-          <RadioField
+        <div className="flex flex-col items-end gap-2">
+          <SelectAnswer
             name={`timing_${kind}`}
             ariaLabel={label}
             value={mode}
             onValueChange={setMode}
-            className="grid-cols-1 sm:grid-cols-2"
             options={[
               { value: "other", label: otherLabel },
               { value: "days", label: "Days before" },
             ]}
           />
           {mode === "days" ? (
-            <span className="inline-flex items-center gap-2">
-              <Input
-                id={name}
-                name={name}
-                aria-label={`${label}: days before`}
-                inputMode="numeric"
-                required
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                className="w-32 tabular-nums"
-              />
-              <span className="text-sm text-muted-foreground">days before</span>
-            </span>
+            <Input
+              id={name}
+              name={name}
+              aria-label={`${label}: days before`}
+              inputMode="numeric"
+              required
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              className="w-30 tabular-nums"
+            />
           ) : null}
         </div>
       }
-      consequence={
-        mode === "other"
-          ? otherConsequence
-          : days.length
-            ? `We send a reminder ${leadDaysLine(days)} before ${target}.`
-            : undefined
-      }
+      consequence={mode === "other" ? otherConsequence : undefined}
     />
   );
 }

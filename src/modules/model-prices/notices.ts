@@ -17,6 +17,8 @@ import { resolveMailer } from "@/modules/emails/mailer-resolver";
 import { escapeHtml } from "@/modules/emails/sanitize";
 import { rowsOf } from "@/modules/metering/usage-sql";
 import type { PriceSnapshot } from "@/modules/catalog/pricing";
+import type { MeterPriceListMap } from "@/modules/metering/meters";
+import { LEGACY_UNITS, perUnitText } from "./units";
 
 const log = createLogger("model-prices.notices");
 
@@ -25,6 +27,9 @@ export interface ModelPriceChange {
   provider: string;
   model: string;
   tokenType: string;
+  unit: string;
+  quality: string;
+  resolution: string;
   currency: string;
   modelPriceId: string;
   oldUnitAmountDecimal: string | null;
@@ -42,6 +47,10 @@ export interface ChangeRecord {
   provider: string;
   model: string;
   token_type: string;
+  /** Absent on notices stored before 0524. */
+  unit?: string;
+  quality?: string;
+  resolution?: string;
   currency: string;
   model_price_id: string;
   old_unit_amount_decimal: string | null;
@@ -63,21 +72,18 @@ const CLAIM_MS = 10 * 60_000;
 
 const dec = (v: string | null) => (v == null ? null : formatFixed12(fixed12FromNumeric(v)));
 
-interface PriceListMap {
-  provider?: string;
-  provider_key?: string;
-  model_key?: string;
-  token_type?: string;
-  token_type_key?: string;
-}
-
 interface MappedMeter {
   id: string;
   organization_id: string;
   business_id: string;
   group_by: string[];
-  price_list: PriceListMap;
+  price_list: MeterPriceListMap;
 }
+
+const isLegacyUnit = (u: string) => (LEGACY_UNITS as readonly string[]).includes(u);
+/** A meter with no unit resolves `token`, else `request`; one with a unit only that unit. */
+const unitMatches = (mapUnit: string | undefined, unit: string) =>
+  mapUnit ? mapUnit === unit : isLegacyUnit(unit);
 
 /** Does a rate's match name this combination (only on the keys we know)? */
 function matches(
@@ -157,7 +163,8 @@ export async function recordModelPriceChanges(
       .filter(
         ({ c }) =>
           (!map.provider || map.provider === c.provider) &&
-          (!map.token_type || map.token_type === c.tokenType),
+          (!map.token_type || map.token_type === c.tokenType) &&
+          unitMatches(map.unit, c.unit),
       );
     if (relevant.length === 0) continue;
     const combos = rowsOf<{ m: string; p: string | null; t: string | null }>(
@@ -200,9 +207,10 @@ export async function recordModelPriceChanges(
     provider: string | null;
     model: string;
     token_type: string;
+    unit: string;
   }>(
     await tx.execute(sql`
-      select distinct organization_id, provider, model, token_type from model_cost_overrides
+      select distinct organization_id, provider, model, token_type, unit from model_cost_overrides
       where organization_id = any(array[${sql.join(
         orgs.map((o) => sql`${o}`),
         sql`, `,
@@ -218,6 +226,8 @@ export async function recordModelPriceChanges(
         k.organization_id === org &&
         n.has(k.model) &&
         k.token_type === c.tokenType &&
+        // A unit-less meter costs a `token` or `request` key from either unit's cost row.
+        (k.unit === c.unit || (isLegacyUnit(k.unit) && isLegacyUnit(c.unit))) &&
         (k.provider === null || k.provider === c.provider),
     );
   };
@@ -263,6 +273,9 @@ export async function recordModelPriceChanges(
         provider: c.provider,
         model: c.model,
         token_type: c.tokenType,
+        unit: c.unit,
+        quality: c.quality,
+        resolution: c.resolution,
         currency: c.currency,
         model_price_id: c.modelPriceId,
         old_unit_amount_decimal: dec(c.oldUnitAmountDecimal),
@@ -304,13 +317,21 @@ export async function recordModelPriceChanges(
 
 // ── The email ────────────────────────────────────────────────────────────────
 
-/** Fixed12 minor units per `divisor` → "$3.00 per 1M tokens". USD only (the list currency). */
-export function formatListPrice(unitAmountDecimal: string, divisor: string): string {
+/**
+ * Fixed12 minor units per `divisor` → "$3.00 per 1M tokens". USD only (the list currency).
+ * No unit (a notice stored before 0524) keeps the old wording.
+ */
+export function formatListPrice(unitAmountDecimal: string, divisor: string, unit?: string): string {
   const cents = fixed12FromNumeric(unitAmountDecimal);
   const dollars = formatFixed12(divHalfUp(cents, 100n));
   const [int, frac = ""] = dollars.split(".");
-  const per =
-    divisor === "1000000" ? "per 1M tokens" : divisor === "1000" ? "per 1K" : `per ${divisor}`;
+  const per = unit
+    ? perUnitText(unit, divisor)
+    : divisor === "1000000"
+      ? "per 1M tokens"
+      : divisor === "1000"
+        ? "per 1K"
+        : `per ${divisor}`;
   return `$${int}.${frac.padEnd(2, "0")} ${per}`;
 }
 
@@ -337,11 +358,11 @@ export function renderModelPriceNotice(changes: ChangeRecord[]): {
     "The public price list changed for AI models that your businesses use. The new prices start at the time below. Usage before that time keeps the old price.";
   const rows = changes.map((c) => ({
     model: `${c.provider} ${c.model}`,
-    token: c.token_type,
+    token: [c.token_type, c.quality, c.resolution].filter(Boolean).join(" "),
     old: c.old_unit_amount_decimal
-      ? formatListPrice(c.old_unit_amount_decimal, c.quantity_divisor)
+      ? formatListPrice(c.old_unit_amount_decimal, c.quantity_divisor, c.unit)
       : "No price",
-    now: formatListPrice(c.new_unit_amount_decimal, c.quantity_divisor),
+    now: formatListPrice(c.new_unit_amount_decimal, c.quantity_divisor, c.unit),
     starts: startsText(c.effective_from),
     effect: effectText(c),
   }));

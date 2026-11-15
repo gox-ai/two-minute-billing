@@ -78,7 +78,13 @@ export default async function IntegrationsPage({ params }: { params: Promise<{ b
         </SettingsCard>
       ) : (
         groups.map((g) => (
-          <SettingsCard key={g.key} title={g.title} meta={g.meta || undefined}>
+          // The assistant's map lists each integration from the catalogue (`OPTION_SOURCES`).
+          <SettingsCard
+            key={g.key}
+            title={g.title}
+            meta={g.meta || undefined}
+            data-map-options="integrations"
+          >
             {g.items.map((i) => (
               <SettingsLinkRow
                 key={i.key}

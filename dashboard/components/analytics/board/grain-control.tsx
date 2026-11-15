@@ -4,6 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { useNavPending } from "@/components/navigation/nav-pending";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
+import { cn } from "@/lib/utils";
 import type { BoardOption } from "@/components/reports/board-range-picker";
 
 /**
@@ -13,7 +15,9 @@ import type { BoardOption } from "@/components/reports/board-range-picker";
 export function GrainControl({ grains, grain }: { grains: BoardOption[]; grain: string }) {
   const { navigate } = useNavPending();
   return (
-    <div role="group" aria-label="Grain" className={SEGMENT_TRACK}>
+    // Last in a phone's control row (see BoardSurface): the period and the download go first.
+    <div role="group" aria-label="Grain" className={cn(SEGMENT_TRACK, "max-sm:order-last")}>
+      <SegmentIndicator />
       {grains.map((g) => {
         const on = g.id === grain;
         return (
@@ -26,7 +30,7 @@ export function GrainControl({ grains, grain }: { grains: BoardOption[]; grain: 
               e.preventDefault();
               navigate(g.href, { source: "period" });
             }}
-            className={segmentItem(on, "h-7 px-3 capitalize")}
+            className={segmentItem(on, "h-7 px-3")}
           >
             {g.label}
           </Link>

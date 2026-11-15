@@ -20,12 +20,16 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, RotateCcw } from "lucide-react";
 import { replayGatewayWebhookAction } from "@/app/(dashboard)/businesses/[biz]/gateway_webhooks/actions";
-import { fmtDateTime, fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import type { GatewayWebhook } from "@/lib/api/payments";
 import { Webhook } from "lucide-react";
 import { useBusinessTz } from "@/components/business-tz";
 import { mergeOptions } from "@/lib/filter-options";
-import { gatewayFilterOptions, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
+import {
+  gatewayDisplayName,
+  gatewayFilterOptions,
+  type GatewayCatalogEntry,
+} from "@/components/gateways/gateway-meta";
 import { GatewayLabel } from "@/components/partner-logo";
 
 /** The declared gateways; `mergeOptions` adds anything the data carries beyond them. */
@@ -61,13 +65,6 @@ const DATE_OPS = [
   "in_next",
   "is_present",
 ];
-
-/** Distinct, sorted select options from the loaded rows. */
-function options(values: (string | null | undefined)[]) {
-  return [...new Set(values.filter((v): v is string => !!v))]
-    .sort()
-    .map((v) => ({ value: v, label: v }));
-}
 
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -210,7 +207,11 @@ export function GatewayWebhooksTable({
         accessorKey: "gateway_key",
         header: "Gateway",
         cell: ({ row }) => (
-          <GatewayLabel gatewayKey={row.original.gateway_key} className="text-sm" />
+          <GatewayLabel
+            gatewayKey={row.original.gateway_key}
+            name={gatewayDisplayName(row.original.gateway_key, gatewayCatalog)}
+            className="text-sm"
+          />
         ),
       },
       // Linking each callback to the transaction it affected is what turns a log row
@@ -236,6 +237,7 @@ export function GatewayWebhooksTable({
       {
         id: "type",
         header: "Event type",
+        meta: { grow: true },
         accessorFn: (w) => w.type ?? "—",
         cell: ({ row }) => <span className="font-mono text-xs">{row.original.type ?? "—"}</span>,
       },
@@ -257,7 +259,7 @@ export function GatewayWebhooksTable({
       // suites) — those render as the house blank, not a fabricated 200.
       {
         id: "response_status",
-        header: "Status Code",
+        header: "Status code",
         accessorFn: (w) => w.response_status ?? "",
         cell: ({ row }) => {
           const s = row.original.response_status;
@@ -287,7 +289,7 @@ export function GatewayWebhooksTable({
         accessorKey: "received_at",
         id: "received_at",
         header: "Received",
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.received_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.received_at, tz)}</TextCell>,
       },
       // How long each inbound webhook took ("4269 ms"). We stored `received_at` AND
       // `processed_at` all along and never subtracted them — the drill-in even prints
@@ -312,12 +314,12 @@ export function GatewayWebhooksTable({
     ],
     // `biz` (transaction links) and `tz` (date rendering) are both read above; the
     // old `[]` meant a business/timezone switch reused stale cells.
-    [biz, tz],
+    [biz, tz, gatewayCatalog],
   );
 
   const segments = React.useMemo<ListSegment<GatewayWebhook>[]>(
     () => [
-      { id: "all", label: "All Webhooks" },
+      { id: "all", label: "All webhooks" },
       {
         id: "processed",
         label: "Processed",
@@ -352,7 +354,7 @@ export function GatewayWebhooksTable({
   /** Every column in `GATEWAY_WEBHOOK_FILTERS` (src/modules/gateway/inbound.ts). */
   const filterFields = React.useMemo<ListFilterField<GatewayWebhook>[]>(
     () => [
-      { id: "id", label: "Webhook Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Webhook ID", group: "Identity", serverOps: TEXT_OPS },
       // The transaction this callback moved money on, as its public id (`txn_…`) —
       // resolved once at ingest, see migration 0141.
       { id: "transaction", label: "Transaction", group: "Identity", serverOps: TEXT_OPS },
@@ -409,6 +411,7 @@ export function GatewayWebhooksTable({
         data={rows}
         server={{ total, hasMore, nextCursor, fetchPage }}
         segments={segments}
+        defaultSort={{ id: "received_at", desc: true }}
         filterFields={filterFields}
         /**
          * ⚠ Named views and `?view=` links work here, but an operator's DEFAULT view
@@ -422,7 +425,7 @@ export function GatewayWebhooksTable({
          */
         savedViews={{ entity: "gateway_webhooks", biz }}
         initialFilters={initialFilters}
-        searchPlaceholder="Search for ID / gateway / event type / transaction / URL…"
+        searchPlaceholder="Search by ID, gateway, event type, transaction or URL"
         exportName="gateway-webhooks"
         persistKey={`gateway_webhooks:${biz}`}
         rowMenu={(w) => (
@@ -455,7 +458,9 @@ export function GatewayWebhooksTable({
         onOpenChange={(o) => !o && setDetail(null)}
         title={detail ? `Webhook ${detail.id}` : "Webhook"}
         description={
-          detail ? `${detail.gateway_key} · ${detail.type ?? "unknown event"}` : undefined
+          detail
+            ? `${gatewayDisplayName(detail.gateway_key, gatewayCatalog)} · ${detail.type ?? "unknown event"}`
+            : undefined
         }
       >
         {detail ? (
@@ -465,7 +470,11 @@ export function GatewayWebhooksTable({
                 <StatusChip status={detail.outcome ?? "pending"} />
               </DetailRow>
               <DetailRow label="Gateway">
-                <GatewayLabel gatewayKey={detail.gateway_key} fit />
+                <GatewayLabel
+                  gatewayKey={detail.gateway_key}
+                  name={gatewayDisplayName(detail.gateway_key, gatewayCatalog)}
+                  fit
+                />
               </DetailRow>
               <DetailRow label="Event type">
                 <span className="font-mono text-xs">{detail.type ?? "—"}</span>

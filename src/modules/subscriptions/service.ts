@@ -15,6 +15,7 @@ import { resolvePauseConfig } from "./pause-config";
 import {
   FINAL_PERIOD_CREDIT_OPTION,
   resolveBillingRulesConfig,
+  type CustomerCoupons,
   type PlanCreditCancelAtPeriodEnd,
   type PlanCreditPause,
   type SpecificDateFinalPeriod,
@@ -374,6 +375,11 @@ export interface ActiveDiscountForMrr {
     currency: string | null;
     durationType: string;
   } | null;
+  /** The coupon row's id and `apply_on`, so an item-scoped coupon can be matched to items. */
+  couponId?: string | null;
+  applyOn?: string | null;
+  /** Item-scoped coupon: the indexes of the items it discounts. Unset = the whole amount. */
+  itemIndexes?: number[] | null;
 }
 
 /**
@@ -485,12 +491,14 @@ export function discountsForMrr(rows: ActiveDiscountForMrr[]): Array<{
   percentOffBps: number | null;
   amountOffMinor: bigint | null;
   currency: string | null;
+  itemIndexes?: number[] | null;
 }> {
   const out: Array<{
     kind: string;
     percentOffBps: number | null;
     amountOffMinor: bigint | null;
     currency: string | null;
+    itemIndexes?: number[] | null;
   }> = [];
   for (const r of rows) {
     // Span in billing periods; null = unlimited. `total_periods` is authoritative,
@@ -510,6 +518,7 @@ export function discountsForMrr(rows: ActiveDiscountForMrr[]): Array<{
         percentOffBps: r.coupon.percentOffBps,
         amountOffMinor: r.coupon.amountOffMinor,
         currency: r.coupon.currency,
+        ...(r.itemIndexes != null ? { itemIndexes: r.itemIndexes } : {}),
       });
       continue;
     }
@@ -548,6 +557,111 @@ export function netMrrForDiscounts(
   billingIntervalCount: number,
 ): bigint {
   return applyStagedDiscounts(grossMrr, activeForeverCoupons, (off) =>
+    monthlyNormalizedMinor(off, billingInterval, billingIntervalCount),
+  );
+}
+
+/**
+ * `applyStagedDiscounts` over per-item amounts. A discount with `itemIndexes` reduces only
+ * those items, before the whole-amount ones — the invoice stack's order (item fixed → item
+ * % → whole fixed → whole %). A coupon matching no item takes nothing off.
+ */
+export function netPerItemDiscounts(
+  amounts: bigint[],
+  discounts: Array<{
+    kind: string;
+    percentOffBps: number | null;
+    amountOffMinor: bigint | null;
+    itemIndexes?: number[] | null;
+  }>,
+  fixedOff: (amountOffMinor: bigint) => bigint,
+): bigint {
+  const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
+  const scoped = discounts.filter((d) => d.itemIndexes != null);
+  const whole = discounts.filter((d) => d.itemIndexes == null);
+  const running = amounts.map((a) => (a > 0n ? a : 0n));
+  const staged = [
+    ...scoped.filter((d) => d.kind === "fixed_amount"),
+    ...scoped.filter((d) => d.kind !== "fixed_amount"),
+  ];
+  for (const d of staged) {
+    const idx = d.itemIndexes!.filter((i) => (running[i] ?? 0n) > 0n);
+    if (d.kind === "percentage") {
+      const bps = BigInt(d.percentOffBps ?? 0);
+      for (const i of idx) running[i] = (running[i]! * (10000n - bps) + 5000n) / 10000n;
+    } else if (d.kind === "fixed_amount" && d.amountOffMinor != null) {
+      let off = fixedOff(d.amountOffMinor);
+      for (const i of idx) {
+        const take = off < running[i]! ? off : running[i]!;
+        running[i]! -= take;
+        off -= take;
+      }
+    }
+  }
+  return applyStagedDiscounts(sum(running), whole, fixedOff);
+}
+
+/**
+ * Set `itemIndexes` on each item-scoped coupon in `discounts`, against `items` (in order).
+ * Dynamic import: the coupons module imports this one.
+ */
+async function scopeDiscountsToItems(
+  tx: Tx,
+  businessId: string,
+  discounts: ActiveDiscountForMrr[],
+  items: Array<{
+    productKind: string | null;
+    productPublicId: string | null;
+    pricePublicId: string | null;
+  }>,
+): Promise<ActiveDiscountForMrr[]> {
+  const scopedIds = [
+    ...new Set(
+      discounts
+        .filter((d) => d.applyOn === "each_specified_item" && d.couponId)
+        .map((d) => d.couponId!),
+    ),
+  ];
+  if (scopedIds.length === 0) return discounts;
+  const { couponItemIndexes } = await import("@/modules/coupons/service");
+  const byCoupon = await couponItemIndexes(tx, businessId, scopedIds, items);
+  return discounts.map((d) =>
+    d.applyOn === "each_specified_item" && d.couponId
+      ? { ...d, itemIndexes: byCoupon.get(d.couponId) ?? [] }
+      : d,
+  );
+}
+
+/**
+ * Net MRR of an earning subscription: per item, so an item-scoped coupon nets only against
+ * the items it discounts. `recomputeSubscriptionMrr` stores this; the ops invariant checks
+ * the column against it, so the two cannot drift.
+ */
+export async function netSubscriptionMrr(
+  tx: Tx,
+  businessId: string,
+  items: Array<
+    Parameters<typeof computeSubscriptionMrr>[0][number] & {
+      productKind: string | null;
+      productPublicId: string | null;
+    }
+  >,
+  discounts: ActiveDiscountForMrr[],
+  billingInterval: string,
+  billingIntervalCount: number,
+): Promise<bigint> {
+  const amounts = items.map((i) => computeSubscriptionMrr([i]));
+  const scoped = await scopeDiscountsToItems(
+    tx,
+    businessId,
+    discounts,
+    items.map((i) => ({
+      productKind: i.productKind,
+      productPublicId: i.productPublicId,
+      pricePublicId: i.price.publicId,
+    })),
+  );
+  return netPerItemDiscounts(amounts, discountsForMrr(scoped), (off) =>
     monthlyNormalizedMinor(off, billingInterval, billingIntervalCount),
   );
 }
@@ -610,8 +724,9 @@ export function computeRecurringAmount(input: {
   if (input.status === "cancelled") return null;
   const unit = input.billingPeriodUnit ?? "month";
   const count = input.billingPeriod ?? 1;
-  let gross = 0n;
-  for (const i of input.items) {
+  // Aligned with `input.items`, so a discount's `itemIndexes` address the right item.
+  const amounts = input.items.map(() => 0n);
+  for (const [index, i] of input.items.entries()) {
     const snap = i.snapshot ?? null;
     if ((snap?.type ?? i.price.type) !== "recurring") continue;
     if (isMeteredPrice(snap ?? i.price)) continue;
@@ -625,14 +740,16 @@ export function computeRecurringAmount(input: {
     const interval = snap ? (snap.interval ?? "month") : (i.price.interval ?? "month");
     const intervalCount = snap ? (snap.intervalCount ?? 1) : (i.price.intervalCount ?? 1);
     if (interval !== unit || intervalCount !== count) return null;
-    gross += amount;
+    amounts[index] = amount;
   }
-  return applyStagedDiscounts(gross, discountsForMrr(input.discounts), (off) => off);
+  return netPerItemDiscounts(amounts, discountsForMrr(input.discounts), (off) => off);
 }
 
 // The applied_coupons ⟕ coupons projection the discount rule reads; shared so the MRR
 // recompute and the recurring-amount batch cannot drift apart.
 const activeDiscountColumns = {
+  id: appliedCoupons.id,
+  createdAt: appliedCoupons.createdAt,
   source: appliedCoupons.source,
   remainingPeriods: appliedCoupons.remainingPeriods,
   totalPeriods: appliedCoupons.totalPeriods,
@@ -645,9 +762,13 @@ const activeDiscountColumns = {
   couponAmountOffMinor: coupons.amountOffMinor,
   couponCurrency: coupons.currency,
   couponDurationType: coupons.durationType,
+  couponId: coupons.id,
+  couponApplyOn: coupons.applyOn,
 };
 
 function toActiveDiscountForMrr(r: {
+  id: string;
+  createdAt: Date;
   source: string;
   remainingPeriods: number | null;
   totalPeriods: number | null;
@@ -660,8 +781,14 @@ function toActiveDiscountForMrr(r: {
   couponAmountOffMinor: bigint | null;
   couponCurrency: string | null;
   couponDurationType: string | null;
-}): ActiveDiscountForMrr {
+  couponId: string | null;
+  couponApplyOn: string | null;
+}): OrderedDiscount {
   return {
+    id: r.id,
+    createdAt: r.createdAt,
+    couponId: r.couponId,
+    applyOn: r.couponApplyOn,
     source: r.source,
     remainingPeriods: r.remainingPeriods,
     totalPeriods: r.totalPeriods,
@@ -680,6 +807,107 @@ function toActiveDiscountForMrr(r: {
           }
         : null,
   };
+}
+
+/** An MRR discount with the keys the stack orders by. */
+export type OrderedDiscount = ActiveDiscountForMrr & { id: string; createdAt: Date };
+
+/** The business's `customer_coupons` rule (0520). */
+export async function customerCouponMode(tx: Tx, businessId: string): Promise<CustomerCoupons> {
+  const [b] = await tx
+    .select({ billingRulesConfig: businesses.billingRulesConfig })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  return resolveBillingRulesConfig(b ?? null).customerCoupons;
+}
+
+/**
+ * A subscription's MRR discounts with its customer's coupons merged in (0520). Under
+ * `fallback` the customer's count only when the subscription has no netting discount of
+ * its own. A fixed-amount customer coupon in another currency nets nothing. Ordered by
+ * created_at, id, as the invoice stack orders them.
+ */
+export function withCustomerDiscounts(
+  own: OrderedDiscount[],
+  customer: OrderedDiscount[],
+  mode: CustomerCoupons,
+  currency: string,
+): OrderedDiscount[] {
+  const usable = customer.filter(
+    (d) =>
+      !(
+        d.coupon?.kind === "fixed_amount" &&
+        d.coupon.currency &&
+        d.coupon.currency.toUpperCase() !== currency.toUpperCase()
+      ),
+  );
+  if (usable.length === 0 || (mode === "fallback" && discountsForMrr(own).length > 0)) return own;
+  return [...own, ...usable].sort(
+    (a, b) =>
+      a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
+/**
+ * The active customer coupons (0520) that reach each subscription, keyed by subscription
+ * id, merged with `own` by `withCustomerDiscounts`. Subscriptions whose customer has none
+ * keep `own` untouched.
+ */
+export async function mergeCustomerDiscounts(
+  tx: Tx,
+  filter: { subscriptionIds: string[] } | { businessId: string },
+  own: Map<string, OrderedDiscount[]>,
+): Promise<Map<string, OrderedDiscount[]>> {
+  const ids = "subscriptionIds" in filter ? filter.subscriptionIds : null;
+  if (ids && ids.length === 0) return own;
+  const rows = [];
+  for (let i = 0; i < (ids?.length ?? 1); i += 5000) {
+    rows.push(
+      ...(await tx
+        .select({
+          subscriptionId: subscriptions.id,
+          subCurrency: subscriptions.currency,
+          subBusinessId: subscriptions.businessId,
+          ...activeDiscountColumns,
+        })
+        .from(appliedCoupons)
+        .innerJoin(subscriptions, eq(subscriptions.customerId, appliedCoupons.customerId))
+        .leftJoin(coupons, eq(appliedCoupons.couponId, coupons.id))
+        .where(
+          and(
+            eq(appliedCoupons.scope, "customer"),
+            eq(appliedCoupons.status, "active"),
+            ids
+              ? inArray(subscriptions.id, ids.slice(i, i + 5000))
+              : eq(subscriptions.businessId, (filter as { businessId: string }).businessId),
+          ),
+        )
+        .orderBy(appliedCoupons.createdAt, appliedCoupons.id)),
+    );
+  }
+  if (rows.length === 0) return own;
+  const bySub = new Map<
+    string,
+    { currency: string; businessId: string; list: OrderedDiscount[] }
+  >();
+  for (const r of rows) {
+    const e = bySub.get(r.subscriptionId) ?? {
+      currency: r.subCurrency,
+      businessId: r.subBusinessId,
+      list: [],
+    };
+    e.list.push(toActiveDiscountForMrr(r));
+    bySub.set(r.subscriptionId, e);
+  }
+  const modes = new Map<string, CustomerCoupons>();
+  const out = new Map(own);
+  for (const [subId, e] of bySub) {
+    let mode = modes.get(e.businessId);
+    if (!mode) modes.set(e.businessId, (mode = await customerCouponMode(tx, e.businessId)));
+    out.set(subId, withCustomerDiscounts(own.get(subId) ?? [], e.list, mode, e.currency));
+  }
+  return out;
 }
 
 /**
@@ -708,9 +936,12 @@ export async function recurringAmountsForSubs(
           quantity: subscriptionItems.quantity,
           snapshot: subscriptionItems.priceSnapshot,
           freeQuantity: subscriptionItems.freeQuantity,
+          productKind: products.kind,
+          productPublicId: products.publicId,
         })
         .from(subscriptionItems)
         .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
+        .innerJoin(products, eq(prices.productId, products.id))
         .where(inArray(subscriptionItems.subscriptionId, chunk))),
     );
     discountRows.push(
@@ -725,7 +956,9 @@ export async function recurringAmountsForSubs(
     );
   }
   const items = new Map<string, Parameters<typeof computeRecurringAmount>[0]["items"]>();
+  const itemScope = new Map<string, typeof itemRows>();
   for (const r of itemRows) {
+    itemScope.set(r.subscriptionId, [...(itemScope.get(r.subscriptionId) ?? []), r]);
     const list = items.get(r.subscriptionId) ?? [];
     list.push({
       price: r.price,
@@ -735,14 +968,29 @@ export async function recurringAmountsForSubs(
     });
     items.set(r.subscriptionId, list);
   }
-  const discounts = new Map<string, ActiveDiscountForMrr[]>();
+  const ownDiscounts = new Map<string, OrderedDiscount[]>();
   for (const r of discountRows) {
-    const list = discounts.get(r.subscriptionId) ?? [];
+    if (!r.subscriptionId) continue;
+    const list = ownDiscounts.get(r.subscriptionId) ?? [];
     list.push(toActiveDiscountForMrr(r));
-    discounts.set(r.subscriptionId, list);
+    ownDiscounts.set(r.subscriptionId, list);
   }
+  const discounts = await mergeCustomerDiscounts(tx, { subscriptionIds: ids }, ownDiscounts);
   for (const s of subs) {
     if (s.status === "cancelled") continue;
+    const scope = itemScope.get(s.id) ?? [];
+    const subDiscounts = scope[0]
+      ? await scopeDiscountsToItems(
+          tx,
+          scope[0].price.businessId,
+          discounts.get(s.id) ?? [],
+          scope.map((r) => ({
+            productKind: r.productKind,
+            productPublicId: r.productPublicId,
+            pricePublicId: r.price.publicId,
+          })),
+        )
+      : (discounts.get(s.id) ?? []);
     out.set(
       s.id,
       computeRecurringAmount({
@@ -750,7 +998,7 @@ export async function recurringAmountsForSubs(
         billingPeriodUnit: s.billingPeriodUnit,
         billingPeriod: s.billingPeriod,
         items: items.get(s.id) ?? [],
-        discounts: discounts.get(s.id) ?? [],
+        discounts: subDiscounts,
       }),
     );
   }
@@ -922,13 +1170,13 @@ export async function recomputeSubscriptionMrr(
       quantity: subscriptionItems.quantity,
       snapshot: subscriptionItems.priceSnapshot,
       freeQuantity: subscriptionItems.freeQuantity,
+      productKind: products.kind,
+      productPublicId: products.publicId,
     })
     .from(subscriptionItems)
     .innerJoin(prices, eq(subscriptionItems.priceId, prices.id))
+    .innerJoin(products, eq(prices.productId, products.id))
     .where(eq(subscriptionItems.subscriptionId, subscriptionId));
-  const gross = computeSubscriptionMrr(
-    rows.map((r) => ({ ...r, snapshot: r.snapshot as PriceSnapshot | null })),
-  );
 
   // leftJoin (not innerJoin): MANUAL discounts (source='manual') have no coupon
   // row — and an imported subscription-level `discounts[]` entry lands as one.
@@ -943,9 +1191,17 @@ export async function recomputeSubscriptionMrr(
     // Apply order within a stage: two percentages round per step, so order moves a unit.
     .orderBy(appliedCoupons.createdAt, appliedCoupons.id);
 
-  const net = netMrrForDiscounts(
-    gross,
-    discountsForMrr(activeDiscounts.map(toActiveDiscountForMrr)),
+  // The customer's coupons (0520) net in too, by the business's `customer_coupons` rule.
+  const merged = await mergeCustomerDiscounts(
+    tx,
+    { subscriptionIds: [subscriptionId] },
+    new Map([[subscriptionId, activeDiscounts.map(toActiveDiscountForMrr)]]),
+  );
+  const net = await netSubscriptionMrr(
+    tx,
+    sub.businessId,
+    rows.map((r) => ({ ...r, snapshot: r.snapshot as PriceSnapshot | null })),
+    merged.get(subscriptionId) ?? [],
     sub.billingPeriodUnit ?? "month",
     sub.billingPeriod ?? 1,
   );
@@ -1504,6 +1760,22 @@ export async function createSubscription(input: {
       status,
       occurredAt: now,
     });
+    // The inline rate above is gross of the customer's coupons (0520); restate it when
+    // the customer holds one.
+    if (status !== "in_trial") {
+      const [held] = await tx
+        .select({ id: appliedCoupons.id })
+        .from(appliedCoupons)
+        .where(
+          and(
+            eq(appliedCoupons.customerId, input.customerId),
+            eq(appliedCoupons.scope, "customer"),
+            eq(appliedCoupons.status, "active"),
+          ),
+        )
+        .limit(1);
+      if (held) await recomputeSubscriptionMrr(tx, sub!.id, now);
+    }
     // Meter prices: freeze the rate card, and one live subscription per customer bills a meter.
     await syncMeterBilling(tx, sub!.id);
 
@@ -1737,7 +2009,7 @@ export async function deferFirstPeriodToUnbilledCharges(input: {
   const { grantCurrentCycle } = await import("@/modules/credits/plan-credits");
   await grantCurrentCycle({ organizationId, businessId, subscription });
   const { addAdHocCharge, recurringChargeMinor } = await import("./items");
-  const amountMinor = await recurringChargeMinor(organizationId, subscription.id);
+  const { amountMinor, discounted } = await recurringChargeMinor(organizationId, subscription.id);
   if (amountMinor <= 0n) return { chargeId: null, amountMinor: 0n };
   const r = await addAdHocCharge({
     organizationId,
@@ -1745,6 +2017,7 @@ export async function deferFirstPeriodToUnbilledCharges(input: {
     subscriptionId: subscription.id,
     description: "First period charge (invoiced later)",
     amountMinor: Number(amountMinor),
+    discounted,
     invoiceNow: false,
     now: input.now,
     periodStart: subscription.currentPeriodStart,
@@ -2758,6 +3031,10 @@ export async function deleteSubscription(input: {
   subscriptionId: string;
   now: Date;
 }): Promise<Sub | null> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
   return withTenant(input.organizationId, async (tx) => {
     const [before] = await tx
       .select()
@@ -2833,6 +3110,14 @@ export async function cancelSubscription(input: {
    */
   planCredits?: { onCancelAtPeriodEnd?: PlanCreditCancelAtPeriodEnd };
 }): Promise<Sub> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
+  // A change held for payment ends with the subscription (`pending-change.ts`).
+  await (
+    await import("./pending-change")
+  ).endPendingQuietly(input.organizationId, input.businessId, input.subscriptionId, "cancelled");
   return withTenant(input.organizationId, async (tx) => {
     // On a DAY-ANCHORED business an immediate cancel floors both
     // canceledAt and the (now-ended) term end to the start of the cancel day in the
@@ -3001,8 +3286,14 @@ export async function cancelSubscriptionWithOptions(input: {
 }> {
   const { organizationId, businessId } = input;
   const sub = await getSubscriptionByPublicIdInternal(organizationId, input.subscriptionId);
+  if (sub) await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (!sub) throw new SubscriptionError("Subscription not found");
   if (sub.status === "cancelled") throw new SubscriptionError("Subscription is already cancelled");
+  // A change held for payment ends first, so the cancel credits the term as it stands.
+  // Refused (409) while its payment is in progress.
+  await (
+    await import("./pending-change")
+  ).endPendingForSubscription(organizationId, businessId, sub.id, "cancelled");
 
   // H1 (SET-1..3): fill omitted options from the business billing-rule defaults.
   const [biz] = await withTenant(organizationId, (tx) =>
@@ -3676,6 +3967,14 @@ export async function pauseSubscription(input: {
   /** `plan_credits.on_pause` for this pause only; omitted = the business rule. */
   planCreditsOnPause?: PlanCreditPause;
 }): Promise<Sub> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
+  // A change held for payment ends with the pause (`pending-change.ts`).
+  await (
+    await import("./pending-change")
+  ).endPendingQuietly(input.organizationId, input.businessId, input.subscriptionId, "cancelled");
   return withTenant(input.organizationId, async (tx) => {
     const [current] = await tx
       .select()
@@ -3748,6 +4047,10 @@ export async function reactivateSubscription(input: {
   subscriptionId: string;
   now: Date;
 }): Promise<{ subscription: Sub; billable: boolean }> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
   return withTenant(input.organizationId, async (tx) => {
     const [sub] = await tx
       .select()
@@ -3931,6 +4234,10 @@ export async function reactivateSubscriptionInTerm(input: {
   now: Date;
   billingCycles?: number | null;
 }): Promise<{ subscription: Sub }> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
   return withTenant(input.organizationId, async (tx) => {
     const [sub] = await tx
       .select()
@@ -4016,6 +4323,10 @@ export async function reactivateSubscriptionWithOptions(input: {
   /** Reactivate into a trial ending at this instant (no immediate charge). */
   trialEnd?: Date | null;
 }): Promise<{ subscription: Sub; billable: boolean; isTrial: boolean }> {
+  // A held invoice (usage grace) closes first, on the terms the closed period ran on.
+  await (
+    await import("./renewal")
+  ).closeHeldInvoiceFirst(input.organizationId, input.subscriptionId);
   const { organizationId, businessId, subscriptionId, now } = input;
   return withTenant(organizationId, async (tx) => {
     const [sub] = await tx
@@ -4061,6 +4372,19 @@ export async function reactivateSubscriptionWithOptions(input: {
           billingCycles: it.billingCycles ?? undefined,
         });
       }
+      // CAT-7, as in create: an add-on line with no custom price takes its plan-scoped
+      // differential. Without it a catalog-0 add-on froze at 0 and billed 0 at every renewal.
+      const productIds = [...new Set(resolved.map((i) => i.price.productId))];
+      const kinds = await tx
+        .select({ id: products.id, kind: products.kind })
+        .from(products)
+        .where(and(eq(products.businessId, businessId), inArray(products.id, productIds)));
+      resolved = await applyExplicitDifferentials(tx, {
+        currency: sub.currency,
+        planProductIds: kinds.filter((k) => k.kind === "plan").map((k) => k.id),
+        addonProductIds: new Set(kinds.filter((k) => k.kind === "addon").map((k) => k.id)),
+        items: resolved,
+      });
       const recurring = resolved.find((i) => i.price.type === "recurring");
       if (!recurring)
         throw new SubscriptionError("A subscription needs at least one recurring price");
@@ -4365,6 +4689,7 @@ export async function pauseSubscriptionWithOptions(input: {
 }): Promise<{ subscription: Sub; resumeScheduledAt: Date | null; scheduledChange: string | null }> {
   const { organizationId, businessId } = input;
   const sub = await getSubscriptionByPublicIdInternal(organizationId, input.subscriptionId);
+  if (sub) await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (!sub) throw new SubscriptionError("Subscription not found");
   // A `future` sub hasn't started — pausing it (and resuming it into billing before
   // its start date) is a state hole; cancel-before-start is the only valid stop.
@@ -4546,6 +4871,7 @@ export async function resumeSubscriptionWithOptions(input: {
 }): Promise<{ subscription: Sub; invoice: string | null }> {
   const { organizationId, businessId } = input;
   const sub = await getSubscriptionByPublicIdInternal(organizationId, input.subscriptionId);
+  if (sub) await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (!sub) throw new SubscriptionError("Subscription not found");
   if (sub.status !== "paused")
     throw new SubscriptionError(
@@ -4677,7 +5003,10 @@ export async function resumeSubscriptionWithOptions(input: {
     // Rate the FULL recurring charge for the fresh period from item snapshots — not
     // the monthly-normalized MRR, which would book 1/12 of a yearly sub (review fix).
     const { addAdHocCharge, recurringChargeMinor } = await import("./items");
-    const amount = await recurringChargeMinor(organizationId, resumed.id);
+    const { amountMinor: amount, discounted } = await recurringChargeMinor(
+      organizationId,
+      resumed.id,
+    );
     if (amount > 0n)
       await addAdHocCharge({
         organizationId,
@@ -4685,6 +5014,7 @@ export async function resumeSubscriptionWithOptions(input: {
         subscriptionId: resumed.id,
         description: "Resumed period charge",
         amountMinor: Number(amount),
+        discounted,
         invoiceNow: false,
         now: input.now,
       });
@@ -4871,6 +5201,7 @@ export async function changeTermEnd(input: {
 }): Promise<{ subscription: Sub; prorationInvoice: string | null }> {
   const { organizationId, businessId } = input;
   const sub = await getSubscriptionByPublicIdInternal(organizationId, input.subscriptionId);
+  if (sub) await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (!sub) throw new SubscriptionError("Subscription not found");
   if (sub.status !== "active")
     throw new SubscriptionError(
@@ -4897,6 +5228,10 @@ export async function changeTermEnd(input: {
   if (requireTerm(sub).end.getTime() === input.termEndsAt.getTime()) {
     return { subscription: sub, prorationInvoice: null };
   }
+  // A change held for payment was priced on this term: it ends first (409 while it is paid).
+  await (
+    await import("./pending-change")
+  ).endPendingForSubscription(organizationId, businessId, sub.id, "replaced");
 
   // Settle the money BEFORE moving the boundary (review blocker: they were separate
   // txs in the reverse order, so a crash left the term moved with no charge/credit —
@@ -5019,6 +5354,7 @@ export async function editTrialEnd(input: {
 }): Promise<{ subscription: Sub }> {
   const { organizationId, businessId } = input;
   const sub = await getSubscriptionByPublicIdInternal(organizationId, input.subscriptionId);
+  if (sub) await (await import("./renewal")).closeHeldInvoiceFirst(organizationId, sub.id);
   if (!sub) throw new SubscriptionError("Subscription not found");
   if (sub.status !== "in_trial")
     throw new SubscriptionError(
@@ -5173,6 +5509,7 @@ export async function subscriptionDues(
 ): Promise<DuesSnapshot> {
   const { OPEN_INVOICE_STATUSES } = await import("@/modules/invoicing/status");
   const { paidTotals } = await import("@/modules/invoicing/service");
+  const { notHeldInvoice } = await import("./change-policy");
   return withTenant(organizationId, async (tx) => {
     const open = await tx
       .select({
@@ -5187,6 +5524,8 @@ export async function subscriptionDues(
         and(
           eq(invoicesTable.subscriptionId, subscriptionId),
           inArray(invoicesTable.status, [...OPEN_INVOICE_STATUSES]),
+          // A held change's invoice is `pending_change`, not a due: it is voided unless paid.
+          notHeldInvoice(),
         ),
       );
     // `amount_due_minor` is net of credits only; cash payments are subtracted here, as

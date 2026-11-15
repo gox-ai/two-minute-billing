@@ -31,15 +31,25 @@ import {
 } from "@/lib/api/emails";
 import { BILLING_MODES, isBillingModeId } from "@/lib/billing-mode";
 import { toMinor } from "@/lib/money";
+import { graceMinutesFrom } from "@/lib/usage-grace";
 import { parseDunningForm } from "./dunning/parse";
 import {
   ALLOWANCE_UPGRADES,
   PLAN_CREDIT_CANCEL_AT_PERIOD_ENDS,
   PLAN_CREDIT_DOWNGRADES,
   PLAN_CREDIT_FIRST_WINDOWS,
+  PLAN_CREDIT_GRANT_WHENS,
   PLAN_CREDIT_PAUSES,
+  PLAN_CREDIT_UNPAID_CANCELS,
   PLAN_CREDIT_UPGRADES,
+  PENDING_CHANGE_EXPIRY_HOURS,
+  PENDING_CHANGE_EXPIRY_HOURS_SLOW,
+  ZERO_INVOICE_PAID_EVENTS,
+  MID_TERM_COUPONS,
+  CUSTOMER_COUPONS,
+  netCreditDocumentsFromForm,
   timingRulesFromForm,
+  changedBillingRules,
   type AllowanceResets,
   type BillingRulesPatch,
 } from "@/lib/billing-rules";
@@ -162,6 +172,10 @@ export async function saveGeneralAction(
     tax_registration_number: data.tax_registration_number || null,
     ...(data.invoice_issuer ? { invoice_issuer: data.invoice_issuer } : {}),
     default_tax_code: data.default_tax_code || null,
+    // The VIES switch shares the page's one form; the marker says its row was posted.
+    ...(fd.get("vies_fields") === "1"
+      ? { vies_validation_enabled: bool(fd, "vies_validation_enabled") }
+      : {}),
   };
   const address = {
     line1: data.addr_line1 || null,
@@ -634,6 +648,8 @@ async function patchEmailConfig(
   fields: Partial<EmailConfigDto>,
   fd: FormData,
   label: string,
+  /** Other business fields saved in the same PATCH. */
+  extra?: BusinessSettingsPatch,
 ): Promise<ActionResult> {
   let current: EmailConfigDto | null = null;
   try {
@@ -661,7 +677,7 @@ async function patchEmailConfig(
     merchantUrl: current?.merchantUrl ?? null,
   };
   const merged: EmailConfigDto = { ...base, ...fields };
-  const res = await patch(biz, { email_config: merged }, fd, label);
+  const res = await patch(biz, { ...extra, email_config: merged }, fd, label);
   revalidatePath(`/businesses/${biz}/settings/emails`);
   return res;
 }
@@ -1505,6 +1521,35 @@ export async function saveUpdateSubscriptionAction(
   };
   const rules = billingRulesFromForm(fd);
   if (rules) body.billing_rules_config = rules;
+  // `apply_when_paid`: how long a held change waits, in whole hours.
+  const hours = (key: string, b: { min: number; max: number }) => {
+    const raw = str(fd, key);
+    const n = Number(raw);
+    return raw === "" ? undefined : Number.isInteger(n) && n >= b.min && n <= b.max ? n : null;
+  };
+  const expiry = hours("pending_change_expiry_hours", PENDING_CHANGE_EXPIRY_HOURS);
+  const slow = hours("pending_change_expiry_hours_slow", PENDING_CHANGE_EXPIRY_HOURS_SLOW);
+  if (expiry === null || slow === null)
+    return actionError("Correct the highlighted fields.", {
+      errors: {
+        ...(expiry === null
+          ? {
+              pending_change_expiry_hours: `Enter ${PENDING_CHANGE_EXPIRY_HOURS.min} to ${PENDING_CHANGE_EXPIRY_HOURS.max} whole hours.`,
+            }
+          : {}),
+        ...(slow === null
+          ? {
+              pending_change_expiry_hours_slow: `Enter ${PENDING_CHANGE_EXPIRY_HOURS_SLOW.min} to ${PENDING_CHANGE_EXPIRY_HOURS_SLOW.max} whole hours.`,
+            }
+          : {}),
+      },
+    });
+  if (expiry !== undefined || slow !== undefined)
+    body.billing_rules_config = {
+      ...body.billing_rules_config,
+      ...(expiry !== undefined ? { pending_change_expiry_hours: expiry } : {}),
+      ...(slow !== undefined ? { pending_change_expiry_hours_slow: slow } : {}),
+    };
   return patch(biz, body, fd, "Subscription update settings");
 }
 
@@ -1521,7 +1566,12 @@ function billingRulesFromForm(fd: FormData): BillingRulesPatch | null {
   };
   one("trial_end_action", ["activate", "cancel", "pause"] as const);
   one("specific_date_cancel_final_period", ["full_period", "prorated", "nothing"] as const);
-  one("failed_change_charge", ["start_dunning", "next_renewal"] as const);
+  one("failed_change_charge", [
+    "start_dunning",
+    "next_renewal",
+    "revert",
+    "apply_when_paid",
+  ] as const);
   one("new_customer_auto_collection", ["on", "off"] as const);
   one("mandate_revoked", [
     "follow_dunning",
@@ -1552,6 +1602,8 @@ function billingRulesFromForm(fd: FormData): BillingRulesPatch | null {
   pcOne("first_window", PLAN_CREDIT_FIRST_WINDOWS);
   pcOne("on_pause", PLAN_CREDIT_PAUSES);
   pcOne("on_cancel_at_period_end", PLAN_CREDIT_CANCEL_AT_PERIOD_ENDS);
+  pcOne("grant_when", PLAN_CREDIT_GRANT_WHENS);
+  pcOne("on_unpaid_cancel", PLAN_CREDIT_UNPAID_CANCELS);
   if (Object.keys(pc).length) out.plan_credits = pc;
   const allowanceUpgrade = str(fd, "al_on_upgrade");
   if (allowanceUpgrade && (ALLOWANCE_UPGRADES as readonly string[]).includes(allowanceUpgrade))
@@ -1565,7 +1617,15 @@ function billingRulesFromForm(fd: FormData): BillingRulesPatch | null {
   one("plan_change_term", ["keep_anchor", "reset_on_upgrade", "reset_on_any_change"] as const);
   one("plan_change_coupons", ["keep", "drop", "keep_if_valid"] as const);
   one("downgrade_credit", ["credit_balance", "refund", "customer_chooses"] as const);
+  Object.assign(out, netCreditDocumentsFromForm(fd));
+  // Only the page that renders the switch posts its marker; other pages leave it alone.
+  if (fd.has("block_downgrade_when_past_due_form"))
+    out.block_downgrade_when_past_due = bool(fd, "block_downgrade_when_past_due");
   one("reactivation_charges", ["invoice_immediately", "add_to_unbilled_charges"] as const);
+  // Coupons on every kind of billing.
+  one("zero_invoice_paid_event", ZERO_INVOICE_PAID_EVENTS);
+  one("mid_term_coupons", MID_TERM_COUPONS);
+  one("customer_coupons", CUSTOMER_COUPONS);
   if (fd.get("required_reasons_form") === "1")
     out.required_reasons = {
       cancel_subscription: fd.get("require_reason_cancel_subscription") != null,
@@ -1586,7 +1646,13 @@ export async function saveBillingRulesAction(
   if (!biz) return actionError("The business ID is missing. Reload the page.");
   const rules = billingRulesFromForm(fd);
   if (!rules) return actionError("We could not save the settings. The form sent no values.");
-  return patch(biz, { billing_rules_config: rules }, fd, "Billing rules");
+  // A failed read sends every posted rule, as before: the engine still drops unchanged ones.
+  const current = await getBusiness(biz).catch(() => null);
+  const changed = current
+    ? changedBillingRules(rules, current.billing_rules_config as Record<string, unknown> | null)
+    : rules;
+  if (Object.keys(changed).length === 0) return actionOk("Billing rules saved");
+  return patch(biz, { billing_rules_config: changed }, fd, "Billing rules");
 }
 
 /**
@@ -1647,6 +1713,17 @@ export async function saveHostedPagesAction(
     return actionError("Correct the highlighted fields.", {
       errors: { max_customer_coupon_codes: "Enter a whole number from 1 to 10." },
     });
+  // Empty = no limit. Posted only while restart is on (the field is hidden, not removed).
+  const restartWindowRaw = str(fd, "restart_window_days").trim();
+  const restartWindow = restartWindowRaw === "" ? null : Number(restartWindowRaw);
+  if (
+    bool(fd, "allow_restart") &&
+    restartWindow != null &&
+    !(Number.isInteger(restartWindow) && restartWindow >= 1 && restartWindow <= 3650)
+  )
+    return actionError("Correct the highlighted fields.", {
+      errors: { restart_window_days: "Enter a whole number from 1 to 3650, or leave it empty." },
+    });
   const requireTerms = bool(fd, "require_terms");
   const termsUrl = strOrNull(fd, "terms_url");
   // The back link leaves the portal: https only (the engine refuses http too).
@@ -1690,6 +1767,16 @@ export async function saveHostedPagesAction(
         cancel_timing: str(fd, "cancel_timing") === "immediately" ? "immediately" : "end_of_term",
         allow_pause_resume: bool(fd, "allow_pause_resume"),
         allow_reactivate: bool(fd, "allow_reactivate"),
+        allow_restart: bool(fd, "allow_restart"),
+        restart_price: str(fd, "restart_price") === "keep" ? "keep" : "current",
+        restart_window_days:
+          restartWindow != null &&
+          Number.isInteger(restartWindow) &&
+          restartWindow >= 1 &&
+          restartWindow <= 3650
+            ? restartWindow
+            : null,
+        restart_open_invoices: str(fd, "restart_open_invoices") === "allow" ? "allow" : "pay_first",
         allow_skip_renewal: allowSkip,
         ...(skipLimitValid ? { skip_renewal_limit: skipLimit } : {}),
         // Rich text from the editor; empty clears it back to the default copy.
@@ -1849,7 +1936,8 @@ export async function saveRoundOffAction(
 
 /**
  * Billing rules → Zero-value invoices. Writes `attachments.invoice_issued.skipZeroSend`, the
- * field the invoice email's own switch writes; the rest of that rule is kept.
+ * field the invoice email's own switch writes (the rest of that rule is kept), and
+ * `billing_rules_config.zero_invoice_paid_event` in the same PATCH.
  */
 export async function saveZeroValueInvoicesAction(
   _prev: ActionResult | null,
@@ -1868,6 +1956,7 @@ export async function saveZeroValueInvoicesAction(
     return actionError("We could not read the current email settings. We saved nothing.");
   }
   const rule = current.invoice_issued ?? { pdf: true, skipZeroPdf: false, skipZeroSend: false };
+  const rules = billingRulesFromForm(fd);
   const res = await patchEmailConfig(
     biz,
     {
@@ -1878,6 +1967,7 @@ export async function saveZeroValueInvoicesAction(
     },
     fd,
     "Zero-value invoices",
+    rules ? { billing_rules_config: rules } : undefined,
   );
   revalidatePath(`/businesses/${biz}/settings/billing-rules`);
   return res;
@@ -2140,8 +2230,8 @@ export async function archivePaymentInstructionAction(
 }
 
 /**
- * Billing rules → Usage close (`usage_close_delay_minutes`, 0–24). The engine closes a
- * period's usage about 6 minutes after it ends plus this wait, and never later than 30.
+ * Billing rules → Usage close (`usage_close_delay_minutes`, 0–43200): the usage grace window.
+ * The renewal runs on time; the invoice of the closed period waits this long (capped per plan).
  */
 export async function saveUsageCloseDelayAction(
   _prev: ActionResult | null,
@@ -2150,11 +2240,20 @@ export async function saveUsageCloseDelayAction(
   await requirePermission("settings:manage", "admin");
   const biz = str(fd, "biz");
   if (!biz) return actionError("The business ID is missing. Reload the page.");
-  const minutes = num(fd, "usage_close_delay_minutes") ?? 0;
-  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 24)
-    return actionError("Enter a wait from 0 to 24 minutes.", {
-      errors: { usage_close_delay_minutes: "0–24" },
-    });
+  // The visible value and unit, scaled here: the client never sends minutes of its own.
+  const minutes = graceMinutesFrom(
+    fd.get("usage_close_delay_value"),
+    fd.get("usage_close_delay_unit"),
+  );
+  if (minutes == null)
+    return actionError(
+      "We could not save the wait. The value is out of range. Correct the highlighted fields.",
+      {
+        errors: {
+          usage_close_delay_value: "Enter a whole number of minutes, hours or days, up to 30 days.",
+        },
+      },
+    );
   return patch(biz, { usage_close_delay_minutes: minutes }, fd, "Usage close");
 }
 

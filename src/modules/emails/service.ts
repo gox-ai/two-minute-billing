@@ -295,6 +295,127 @@ export async function getEmailActivity(
   });
 }
 
+/** One row of the delivery report. `bounced` excludes complaints, which have their own count. */
+export interface EmailReportCounts {
+  delivered: number;
+  not_delivered: number;
+  pending: number;
+  failed: number;
+  bounced: number;
+  complained: number;
+  skipped: number;
+}
+
+export interface EmailDeliveryReport {
+  /** Weeks covered, the current week included. */
+  weeks: number;
+  /** The business time zone the weeks are counted in (Monday to Sunday). */
+  timezone: string;
+  /** The first day of the first week, YYYY-MM-DD. */
+  from: string;
+  /** One row per week, oldest first, weeks with no email included. */
+  weekly: Array<{ week_start: string } & EmailReportCounts>;
+  /** One row per email type that has any email in the period, the busiest first. */
+  by_type: Array<{ type: string } & EmailReportCounts>;
+  totals: EmailReportCounts;
+}
+
+const ZERO_COUNTS: EmailReportCounts = {
+  delivered: 0,
+  not_delivered: 0,
+  pending: 0,
+  failed: 0,
+  bounced: 0,
+  complained: 0,
+  skipped: 0,
+};
+const COUNT_KEYS = Object.keys(ZERO_COUNTS) as Array<keyof EmailReportCounts>;
+
+/**
+ * Delivery counts by week and by email type (Phase 3 delivery report). A message counts in the
+ * week it was queued. A complaint is stored as `bounced` + `bounce_type = complaint` and is
+ * counted only as `complained`. No open or click tracking: we record neither.
+ */
+export async function getEmailDeliveryReport(
+  organizationId: string,
+  businessId: string,
+  weeks = 12,
+): Promise<EmailDeliveryReport | null> {
+  return withTenant(organizationId, async (tx) => {
+    if (!(await assertBusiness(tx, businessId))) return null;
+    const tz = await businessTimezone(tx, businessId);
+    const weekStart = sql`date_trunc('week', now() at time zone ${tz})`;
+    const startLocal = sql`(${weekStart} - make_interval(weeks => ${weeks - 1}))`;
+    const [first] = (await tx.execute(
+      sql`select to_char(${startLocal}, 'YYYY-MM-DD') as "from"`,
+    )) as unknown as Array<{ from: string }>;
+    const from = first!.from;
+    const rows = await tx
+      .select({
+        week: sql<string>`to_char(date_trunc('week', ${emailMessages.createdAt} at time zone ${tz}), 'YYYY-MM-DD')`,
+        type: emailMessages.type,
+        delivered: sql<number>`count(*) filter (
+          where ${emailMessages.status} = 'sent'
+            and ${emailMessages.transport} in ${DELIVERING_TRANSPORTS_SQL})::int`,
+        notDelivered: sql<number>`count(*) filter (
+          where ${emailMessages.status} = 'sent'
+            and (${emailMessages.transport} is null
+                 or ${emailMessages.transport} not in ${DELIVERING_TRANSPORTS_SQL}))::int`,
+        pending: sql<number>`count(*) filter (where ${emailMessages.status} = 'pending')::int`,
+        failed: sql<number>`count(*) filter (where ${emailMessages.status} = 'failed')::int`,
+        bounced: sql<number>`count(*) filter (
+          where ${emailMessages.status} = 'bounced'
+            and ${emailMessages.bounceType} is distinct from 'complaint')::int`,
+        complained: sql<number>`count(*) filter (where ${emailMessages.bounceType} = 'complaint')::int`,
+        skipped: sql<number>`count(*) filter (where ${emailMessages.status} = 'skipped')::int`,
+      })
+      .from(emailMessages)
+      .where(
+        and(
+          eq(emailMessages.businessId, businessId),
+          sql`${emailMessages.createdAt} >= ${startLocal} at time zone ${tz}`,
+        ),
+      )
+      .groupBy(sql`1`, emailMessages.type);
+
+    const add = (into: EmailReportCounts, r: (typeof rows)[number]) => {
+      into.delivered += r.delivered;
+      into.not_delivered += r.notDelivered;
+      into.pending += r.pending;
+      into.failed += r.failed;
+      into.bounced += r.bounced;
+      into.complained += r.complained;
+      into.skipped += r.skipped;
+    };
+    const weekly = new Map<string, EmailReportCounts>();
+    const start = new Date(`${from}T00:00:00Z`);
+    for (let i = 0; i < weeks; i++) {
+      const d = new Date(start.getTime() + i * 7 * 86_400_000);
+      weekly.set(d.toISOString().slice(0, 10), { ...ZERO_COUNTS });
+    }
+    const byType = new Map<string, EmailReportCounts>();
+    const totals = { ...ZERO_COUNTS };
+    for (const r of rows) {
+      const w = weekly.get(r.week);
+      if (w) add(w, r);
+      if (!byType.has(r.type)) byType.set(r.type, { ...ZERO_COUNTS });
+      add(byType.get(r.type)!, r);
+      add(totals, r);
+    }
+    const sum = (c: EmailReportCounts) => COUNT_KEYS.reduce((n, k) => n + c[k], 0);
+    return {
+      weeks,
+      timezone: tz,
+      from,
+      weekly: [...weekly].map(([week_start, c]) => ({ week_start, ...c })),
+      by_type: [...byType]
+        .map(([type, c]) => ({ type, ...c }))
+        .sort((x, y) => sum(y) - sum(x) || x.type.localeCompare(y.type)),
+      totals,
+    };
+  });
+}
+
 /**
  * Re-queue a sent/failed email for delivery on the next tick (status → pending, retry clock reset).
  * `body_removed` when the retention sweep deleted its body: there is nothing left to send.

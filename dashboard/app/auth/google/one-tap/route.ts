@@ -16,6 +16,7 @@ import {
   sessionCookieOptions,
   signupCookieOptions,
 } from "@/lib/auth-cookies";
+import { THEME_COOKIE } from "@/lib/theme-cookie";
 
 /**
  * Google One Tap — the dashboard's half. Two methods on one route, because they are two
@@ -109,5 +110,6 @@ export async function POST(req: Request) {
   }
 
   jar.set(SESSION_COOKIE, json.token, sessionCookieOptions());
+  jar.set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
   return Response.json({ ok: true });
 }

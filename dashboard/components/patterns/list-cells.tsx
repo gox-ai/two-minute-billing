@@ -2,14 +2,16 @@ import * as React from "react";
 import Link from "next/link";
 import { StatusChip } from "@/components/patterns/chip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * The first column of every list — a two-line "<Thing> Info" cell:
+ * The first column of every list — a two-line cell:
  * line 1 = status chip + bold linked name (+ any trailing chips), line 2 = the
  * mono id / email / sub-line.
+ *
+ * Each line has a fixed height (24px, the chip; then 20px), so every row of a list
+ * that leads with this cell is the same height whether or not it carries a chip.
  */
 export function InfoCell({
   status,
@@ -27,16 +29,18 @@ export function InfoCell({
   sub?: React.ReactNode;
   /** Inline nodes after the title (extra chips, info icons). */
   trailing?: React.ReactNode;
-  /** Additional lines under the sub-line. */
+  /** Additional lines under the sub-line. Avoid: a third line breaks the list's row rhythm. */
   extra?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="flex items-center gap-2">
+      <span className="flex h-6 items-center gap-2">
         {status ? <StatusChip status={status} /> : null}
         {href ? (
+          // `data-record-title`: the name glides into the record's title (lib/shared-title.ts).
           <Link
             href={href}
+            data-record-title
             className="text-sm font-semibold text-foreground hover:text-primary hover:underline"
           >
             {title}
@@ -47,18 +51,20 @@ export function InfoCell({
         {trailing}
       </span>
       {sub ? (
-        typeof sub === "string" ? (
-          <span className="font-mono text-xs text-muted-foreground">{sub}</span>
-        ) : (
-          sub
-        )
+        <span className="flex h-5 items-center">
+          {typeof sub === "string" ? (
+            <span className="font-mono text-xs text-muted-foreground">{sub}</span>
+          ) : (
+            sub
+          )}
+        </span>
       ) : null}
       {extra}
     </div>
   );
 }
 
-/** Right-aligned money: amount then muted currency code (`₹10,799.00 INR`). */
+/** Right-aligned money (`₹10,799.00`). The symbol names the currency; a code goes in the column head. */
 export function MoneyCell({
   minor,
   currency,
@@ -71,8 +77,7 @@ export function MoneyCell({
   if (minor == null || !currency) return <Dash />;
   return (
     <span className={cn("text-sm font-medium tabular-nums", className)}>
-      {money(minor, currency)}{" "}
-      <span className="text-xs font-normal text-muted-foreground">{currency}</span>
+      {money(minor, currency)}
     </span>
   );
 }
@@ -91,8 +96,8 @@ export function TextCell({
 }
 
 /**
- * Truncating single-line cell (addresses, long descriptions, error messages); the
- * full text is a tooltip on hover or keyboard focus.
+ * Long free text (descriptions, error messages, subjects). It WRAPS at `width` and is
+ * never cut: a table must not hide part of a value behind an ellipsis.
  */
 export function TruncateCell({
   value,
@@ -108,21 +113,15 @@ export function TruncateCell({
 }) {
   if (!value) return <Dash />;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          tabIndex={0}
-          className={cn(
-            "block truncate text-sm text-muted-foreground outline-none",
-            width,
-            className,
-          )}
-        >
-          {children ?? value}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-sm wrap-anywhere whitespace-normal">{value}</TooltipContent>
-    </Tooltip>
+    <span
+      className={cn(
+        "block text-sm wrap-break-word whitespace-normal text-muted-foreground",
+        width,
+        className,
+      )}
+    >
+      {children ?? value}
+    </span>
   );
 }
 
@@ -143,14 +142,21 @@ export function IdCell({
   href,
   width,
   external,
+  plain,
 }: {
   id?: string | null;
   href?: string;
   width?: string;
   external?: boolean;
+  /** A number such as INV-229: a name, so sans text, not a mono id. */
+  plain?: boolean;
 }) {
   if (!id) return <Dash />;
-  const cls = cn("font-mono text-xs text-muted-foreground", width && `block truncate ${width}`);
+  const cls = cn(
+    plain ? "text-sm whitespace-nowrap" : "font-mono text-xs",
+    "text-muted-foreground",
+    width && `block truncate ${width}`,
+  );
   if (!href)
     return (
       <span className={cls} title={width ? id : undefined}>
@@ -197,7 +203,7 @@ export function PeekBadge({
       <HoverCardTrigger asChild>
         <button
           type="button"
-          className="shrink-0 cursor-default rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="shrink-0 cursor-default rounded-full bg-muted px-1.5 py-px text-xs font-medium text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           {label}
         </button>

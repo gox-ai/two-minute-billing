@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { useThemeStamp } from "@/components/charts/theme-stamp";
 import { EChart } from "@/components/charts/echart";
 import { money, countCompact, pctFromBps, toMajor } from "@/lib/format";
+import { axisMinInterval } from "@/components/charts/axis";
 
 /** A point may have NO value: an unmeasured period is a gap, never a zero. */
 export interface ChartPoint {
@@ -78,6 +79,37 @@ export function washOf(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+/** The first of 1, 2, 2.5, 5 x 10^k that is at least `raw`; never below 1 (values are integers). */
+function niceStep(raw: number) {
+  if (raw <= 1) return 1;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  return ([1, 2, 2.5, 5, 10].find((m) => m * pow >= raw) ?? 10) * pow;
+}
+
+/**
+ * A fitted y-range with headroom below the lowest point, so a drop reads as a drop and not
+ * as a fall to the floor. At least 10% of the data's span sits under the minimum, ticks are
+ * round, and a non-negative series never gets a negative axis.
+ */
+export function fittedRange(values: Array<number | null>) {
+  const v = values.filter((x): x is number => x != null && Number.isFinite(x));
+  if (v.length === 0) return undefined;
+  const lo = Math.min(...v);
+  const hi = Math.max(...v);
+  // A flat series sits mid-plot.
+  const span = hi - lo;
+  const pad = span ? span * 0.1 : Math.max(1, Math.abs(hi) * 0.1);
+  const floor = lo - pad;
+  const ceil = hi + (span ? span * 0.05 : pad);
+  const interval = niceStep((ceil - floor) / 5);
+  const min = Math.floor(floor / interval) * interval;
+  return {
+    min: lo >= 0 ? Math.max(0, min) : min,
+    max: Math.ceil(ceil / interval) * interval,
+    interval,
+  };
+}
+
 /**
  * Filled line/area chart (ECharts) — the metrics-dashboard staple. Props stay
  * serializable (no function props) so a server component can render it directly:
@@ -99,7 +131,7 @@ export function AreaChart({
 }: {
   /** Grow to the parent's height (see `EChart`); `height` becomes the floor. */
   fill?: boolean;
-  /** Fit the y-axis to the data instead of starting it at zero. */
+  /** Fit the y-axis to the data, with headroom (`fittedRange`), instead of starting at zero. */
   fitRange?: boolean;
   data: ChartPoint[];
   height?: number;
@@ -147,6 +179,10 @@ export function AreaChart({
       );
     return measured[measured.length - 1] ?? null;
   }, [data]);
+  const range = React.useMemo(
+    () => (fitRange ? fittedRange(data.map((d) => d.value)) : undefined),
+    [data, fitRange],
+  );
   const option = React.useMemo(
     () => ({
       // Room to breathe: the chart is the centrepiece of a metric page, and a plot pressed
@@ -172,7 +208,7 @@ export function AreaChart({
       },
       yAxis: {
         type: "value",
-        scale: fitRange,
+        ...(range ?? { scale: fitRange, minInterval: axisMinInterval(kind, currency) }),
         splitLine: { lineStyle: { color: GRID } },
         axisLabel: { color: LABEL, fontSize: 12, formatter: (v: number) => axis(v) },
       },
@@ -217,7 +253,21 @@ export function AreaChart({
         },
       ],
     }),
-    [data, full, axis, emphasizeLast, labelInterval, fitRange, LINE, GRID, LABEL, lastMeasured],
+    [
+      data,
+      full,
+      axis,
+      emphasizeLast,
+      labelInterval,
+      range,
+      fitRange,
+      kind,
+      currency,
+      LINE,
+      GRID,
+      LABEL,
+      lastMeasured,
+    ],
   );
 
   return <EChart option={option} height={height} fill={fill} />;

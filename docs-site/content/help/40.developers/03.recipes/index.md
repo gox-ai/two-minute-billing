@@ -1,6 +1,6 @@
 ---
 title: Recipes
-description: "Task-based walkthroughs for the billing API: trials, usage-based billing, usage events, AI tokens, prepaid credits, spend limits and automatic top-up, plan changes, coupons, one-time purchases, dunning, India GST and mandates."
+description: "Task-based walkthroughs for the billing API: trials, usage-based billing, usage events, AI tokens, prepaid credits, credits in your own unit, spend limits and automatic top-up, plan changes, coupons, one-time purchases, dunning, India GST and mandates."
 seo:
   title: "Billing API recipes and walkthroughs"
 navigation: false
@@ -16,6 +16,7 @@ checked against the API by an automated test in our repository.
 - [Meter usage events](/help/developers/recipes/meter-usage-events) — send events keyed by your own ids, count them with meters, bill a rate card.
 - [Bill AI tokens](/help/developers/recipes/bill-ai-tokens) — a rate per model and token type, or the model price list with a markup on the list price or on your cost, and your margin.
 - [Prepaid AI credits](/help/developers/recipes/prepaid-ai-credits) — credit units, credit packs and plan credits, an access check and holds before each call.
+- [Credits in your own unit](/help/developers/recipes/credits-in-your-own-unit) — credits with no money value, a credit cost on each meter, a 402 when the credit is used up, and hourly settlement.
 - [Spend limits and automatic top-up](/help/developers/recipes/spend-limits-and-auto-top-up) — spend limits per customer or user, alerts, credit runway, automatic top-up, early usage invoices and a usage widget.
 - [Plan changes](/help/developers/recipes/plan-changes) — upgrades, downgrades and proration.
 - [Coupons](/help/developers/recipes/coupons) — reusable coupons, code sets and one-off discounts.

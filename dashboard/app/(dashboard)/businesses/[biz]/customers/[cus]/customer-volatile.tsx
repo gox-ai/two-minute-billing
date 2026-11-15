@@ -21,6 +21,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { StatusChip, Chip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { EmptyState } from "@/components/states";
 import { PaymentMethodRow } from "@/components/payments/payment-method-row";
 import { RefreshButton } from "@/components/refresh-button";
@@ -46,7 +47,8 @@ import { sendAdhocEmailAction } from "../../emails/actions";
 import { createPortalLinkAction } from "./actions";
 import { SecretLinkButton } from "@/components/patterns/secret-link-button";
 import { detachPaymentMethodAction } from "@/app/actions";
-import { money, fmtDate, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import type { Invoice, PaymentMethod, Subscription, SubscriptionItem } from "@/lib/api";
 import { refreshCustomerVolatileAction, type CustomerVolatileData } from "./refresh-action";
 
@@ -302,7 +304,12 @@ export function CustomerFigures({
   const open = openInvoices(invoices).length;
   const mrr = Object.entries(customer.mrr ?? {}).filter(([, v]) => v > 0);
   const next = billable(subs)[0];
-  const nextAmount = next ? renewalEstimates[next.id]?.total_minor : undefined;
+  // What the customer will be charged: the renewal total less the credit it will use.
+  const nextEstimate = next ? renewalEstimates[next.id] : undefined;
+  const nextAmount = nextEstimate
+    ? (nextEstimate.amount_due_minor ?? nextEstimate.total_minor)
+    : undefined;
+  const nextCredit = nextEstimate?.credits_applied_minor ?? 0;
   const refundable =
     customer.balances?.find((b) => b.currency_code === txnCurrency)?.refundable_credits ?? 0;
   const revenue = customer.lifetime_revenue ?? [];
@@ -336,7 +343,12 @@ export function CustomerFigures({
         value={next && nextAmount != null ? money(nextAmount, next.currency) : "—"}
         note={
           next?.next_billing_at
-            ? `${fmtDate(next.next_billing_at, tz)} · ${planOf(next)?.product_name ?? next.id}`
+            ? [
+                fmtDate(next.next_billing_at, tz),
+                nextCredit > 0
+                  ? `after ${money(nextCredit, next.currency)} credit`
+                  : (planOf(next)?.product_name ?? next.id),
+              ].join(" · ")
             : "No upcoming payment"
         }
         href={next ? `/businesses/${biz}/subscriptions/${next.id}?from=customer` : undefined}
@@ -344,14 +356,20 @@ export function CustomerFigures({
       <FigureTile
         label="Lifetime revenue"
         icon={TrendingUp}
-        featured
+        featured={(mainRevenue?.amount_minor ?? 0) > 0 || otherRevenue.length > 0}
         value={money(mainRevenue?.amount_minor ?? 0, mainRevenue?.currency ?? txnCurrency)}
         note={
-          otherRevenue.length
-            ? `+ ${joinMoney(otherRevenue.map((r): [string, number] => [r.currency, r.amount_minor]))}`
-            : mainRevenue?.first_paid_at
-              ? `Paid since ${fmtDate(mainRevenue.first_paid_at, tz)} · net of refunds`
-              : "Nothing collected yet"
+          otherRevenue.length ? (
+            `+ ${joinMoney(otherRevenue.map((r): [string, number] => [r.currency, r.amount_minor]))}`
+          ) : mainRevenue?.first_paid_at ? (
+            <>
+              Paid since{" "}
+              <span className="whitespace-nowrap">{fmtDate(mainRevenue.first_paid_at, tz)}</span> ·
+              net of refunds
+            </>
+          ) : (
+            "Nothing collected yet"
+          )
         }
       />
     </FigureTiles>
@@ -406,12 +424,14 @@ export function CustomerSubscriptionsCard({
           {extra.length ? (
             <div className="text-xs wrap-anywhere text-muted-foreground">{extra.join(" · ")}</div>
           ) : null}
-          <div className="font-mono text-xs wrap-anywhere text-muted-foreground">{s.id}</div>
+          <div className="flex min-w-0 text-muted-foreground">
+            <MiddleEllipsis value={s.id} className="text-xs" />
+          </div>
         </TableCell>
         <TableCell>
           <StatusChip status={s.status} />
         </TableCell>
-        <TableCell>
+        <TableCell className="whitespace-nowrap">
           {plan ? (
             <>
               <span>{money(plan.unit_price_minor ?? 0, s.currency)}</span>
@@ -460,7 +480,7 @@ export function CustomerSubscriptionsCard({
     <TableHeader>
       <TableRow>
         <TableHead className="pl-5">Subscription</TableHead>
-        <TableHead>Status</TableHead>
+        <TableHead phone="aside">Status</TableHead>
         <TableHead>Plan amount</TableHead>
         <TableHead className="text-right">MRR</TableHead>
         <TableHead>Next billing</TableHead>
@@ -503,7 +523,7 @@ export function CustomerSubscriptionsCard({
         <>
           {/* ONE fixed-layout table: widths come from the colgroup, never from the rows,
               so showing cancelled rows adds height without moving a column. */}
-          <Table className="table-fixed max-lg:min-w-3xl">
+          <Table phone="stack" className="table-fixed max-lg:min-w-3xl">
             <colgroup>
               {/* At the 684px card (1024 viewport) a date and "non renewing" still fit whole. */}
               <col className="w-[19.5%]" />

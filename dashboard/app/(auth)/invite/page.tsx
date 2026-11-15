@@ -44,7 +44,7 @@ export default async function AcceptInvitePage({
       <Card>
         <CardHeader className="text-center">
           <CardTitle className="text-xl">
-            {google ? "Complete your account" : "Choose your password"}
+            <h1>{google ? "Complete your account" : "Choose your password"}</h1>
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             {google
@@ -114,7 +114,7 @@ export default async function AcceptInvitePage({
                 none — the address Google asserts is what resolves the invited user.
               */}
               <Button asChild variant="outline" className="w-full">
-                <a href="/auth/google/start">
+                <a data-document-link href="/auth/google/start">
                   <img
                     src="/web_neutral_rd_na@2x.png"
                     alt=""

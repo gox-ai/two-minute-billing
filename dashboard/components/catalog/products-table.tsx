@@ -6,6 +6,7 @@ import { DataTable } from "@/components/data-table";
 import {
   ListPage,
   createAction,
+  lowerNoun,
   type ListFilterField,
   type ListSegment,
   type ListPageHeader,
@@ -13,7 +14,7 @@ import {
 import { InfoCell, TextCell } from "@/components/patterns/list-cells";
 import { ProductRowMenu } from "@/components/catalog/product-row-menu";
 import { EmptyState } from "@/components/states";
-import { fmtDateShort } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { Package } from "lucide-react";
 import type { Product, ProductGroup } from "@/lib/api";
 import { useBusinessTz } from "@/components/business-tz";
@@ -60,7 +61,7 @@ function useProductColumns({ biz, hideKind, groups = [] }: ProductColumnOpts) {
           ]),
       {
         id: "group",
-        header: "Product Group",
+        header: "Product group",
         accessorFn: (p) => p.product_group ?? "",
         cell: ({ row }) => (
           <span className="block max-w-80 text-sm wrap-anywhere">
@@ -75,7 +76,7 @@ function useProductColumns({ biz, hideKind, groups = [] }: ProductColumnOpts) {
         header: "Last modified",
         cell: ({ row }) => {
           const d = row.original.updated_at ?? row.original.created_at;
-          return <TextCell>{d ? fmtDateShort(d, tz) : null}</TextCell>;
+          return <TextCell>{d ? fmtDate(d, tz) : null}</TextCell>;
         },
       },
     ],
@@ -100,7 +101,7 @@ export function ProductsTable({
     <DataTable
       columns={columns}
       data={rows}
-      searchPlaceholder="Search for ID / Name…"
+      searchPlaceholder="Search by ID or name"
       countLabel="Products"
       exportName="products"
       columnChooser
@@ -161,7 +162,7 @@ export function ProductsListPage({
 
   const segments = React.useMemo<ListSegment<Product>[]>(
     () => [
-      { id: "all", label: `All ${entity.plural}` },
+      { id: "all", label: `All ${lowerNoun(entity.plural)}` },
       { id: "active", label: "Active", match: (p) => p.active },
       { id: "archived", label: "Archived", match: (p) => !p.active },
       // Metered items price off usage, so they are the ones whose invoices depend on
@@ -183,16 +184,16 @@ export function ProductsListPage({
       // wording needs, and only this field is searchable by it.
       {
         id: "external_name",
-        label: "External Name",
+        label: "External name",
         group: "Identity",
         value: (p) => p.external_name,
       },
-      { id: "id", label: `${entity.singular} Id`, group: "Identity", value: (p) => p.id },
+      { id: "id", label: `${entity.singular} ID`, group: "Identity", value: (p) => p.id },
       { id: "description", label: "Description", group: "Other", value: (p) => p.description },
       { id: "active", label: "Active", type: "boolean", group: "Status", value: (p) => p.active },
       {
         id: "product_group",
-        label: "Product Group",
+        label: "Product group",
         type: "select",
         group: "Configuration",
         options: options(
@@ -203,7 +204,7 @@ export function ProductsListPage({
       },
       {
         id: "unit_of_measure",
-        label: "Unit of Measure",
+        label: "Unit of measure",
         group: "Configuration",
         value: (p) => p.unit_of_measure,
       },
@@ -238,7 +239,7 @@ export function ProductsListPage({
       // `is empty` is the useful question here — see the Product type.
       {
         id: "tax_code",
-        label: "Tax Code (HSN/SAC)",
+        label: "Tax code (HSN/SAC)",
         group: "Tax",
         hint: "If empty, the business default applies",
         value: (p) => p.tax_code,
@@ -252,7 +253,7 @@ export function ProductsListPage({
       },
       {
         id: "created_at",
-        label: "Created At",
+        label: "Created at",
         type: "date",
         group: "Dates",
         value: (p) => p.created_at,
@@ -278,7 +279,7 @@ export function ProductsListPage({
       createAction={createAction(entity.singular, createHref)}
       importSlot={importSlot}
       topBarExtras={topBarExtras}
-      searchPlaceholder="Search for ID / Name…"
+      searchPlaceholder="Search by ID or name"
       exportName={kind === "plan" ? "plans" : kind === "addon" ? "addons" : "charges"}
       persistKey={`${kind}s:${biz}`}
       rowHref={(p) => `/businesses/${biz}/catalog/products/${p.id}`}

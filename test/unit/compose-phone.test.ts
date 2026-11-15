@@ -4,6 +4,7 @@ import {
   composePhone,
   dialForCountry,
   isValidComposedPhone,
+  splitIntl,
   type PhoneCountry,
 } from "../../dashboard/lib/phone";
 
@@ -71,5 +72,27 @@ describe("dialForCountry — a number typed before the country still posts", () 
 
   it("follows the country while no number is typed", () => {
     expect(dialForCountry("44", false, "91")).toBe("91");
+  });
+});
+
+describe("splitIntl — an autofilled international number files its code in the picker", () => {
+  const world = [
+    ...countries,
+    country("IN", "91", "[6-9]\\d{9}", [10]),
+    country("US", "1", "[2-9]\\d{9}", [10]),
+  ];
+  it.each([
+    ["+91 98765 43210", "91", "9876543210"],
+    ["+14155550123", "1", "4155550123"],
+    ["0044 20 7946 0958", "44", "2079460958"],
+    ["+44 (20) 7946-0958", "44", "2079460958"],
+  ])("%j → +%s %s", (typed, dial, national) => {
+    expect(splitIntl(typed, world)).toEqual({ dial, national });
+  });
+
+  it("leaves a national number and a half-typed one alone", () => {
+    expect(splitIntl("9876543210", world)).toBeNull();
+    expect(splitIntl("+4", world)).toBeNull();
+    expect(composePhone("91", "9876543210", world)).toBe("+919876543210");
   });
 });

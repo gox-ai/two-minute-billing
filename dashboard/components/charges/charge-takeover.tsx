@@ -8,7 +8,8 @@ import { SubFormFrame, FooterFigure, ShortLabel } from "@/components/subscriptio
 import { SummaryCard } from "@/components/catalog/form-kit";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtRange } from "@/lib/format-date";
 import { useDisplayTz } from "@/components/business-tz";
 
 /**
@@ -141,8 +142,8 @@ export function ChargeFrame({
                     )}
                     {d.quantity && d.quantity > 1 ? <span>× {d.quantity}</span> : null}
                     {d.periodStart && d.periodEnd ? (
-                      <span>
-                        {fmtDate(d.periodStart, tz)} → {fmtDate(d.periodEnd, tz)}
+                      <span className="whitespace-nowrap">
+                        {fmtRange(d.periodStart, d.periodEnd, tz)}
                       </span>
                     ) : null}
                   </div>

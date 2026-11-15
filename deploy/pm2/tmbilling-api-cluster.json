@@ -49,6 +49,12 @@
   ],
   "instances": 2,
   "wait_ready": false,
+  "_comment_listen_timeout": [
+    "How long a rolling reload waits for the new instance to LISTEN before stopping the old one.",
+    "pm2's default is 3 s; the API boots in ~10 s on production, so both old instances were",
+    "stopped before either new one listened: 29 of 102 requests refused, 3.9 s (2026-11-08)."
+  ],
+  "listen_timeout": 60000,
   "kill_timeout": 10000,
   "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
   "_comment_switching": [

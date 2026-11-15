@@ -2,7 +2,7 @@
 title: "Net revenue retention (NRR): formula, examples and NRR vs GRR"
 seoTitle: "Net revenue retention (NRR) formula"
 description: "Net revenue retention (NRR) shows how much recurring revenue your existing customers keep paying. Learn the formula, NRR vs GRR, and monthly vs annual NRR."
-date: "2026-11-02"
+date: "2026-10-22"
 category: Revenue metrics
 type: Guide
 draft: false

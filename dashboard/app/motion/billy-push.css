@@ -1,0 +1,135 @@
+/* Billy's panel shares the screen (owner decision 2026-11-11). Owned by
+   components/assistant/assistant-dock.tsx; tokens from globals.css only.
+
+   `--billy-w` on <html> is the panel's width, set only by lib/billy-width.ts (the head
+   script, then the dock on resize, rail toggle and drag). The panel and <main>'s margin
+   both read it, so they cannot disagree. `data-billy-push` says the page keeps at least
+   776px beside it (the narrowest desktop layout); there the open panel takes its width from
+   <main> instead of covering the page. Elsewhere it floats over the page.
+
+   Docked, open and close are one move: the panel and <main>'s edge travel together (below). */
+:root[data-billy-open][data-billy-push] .app-rail ~ main {
+  margin-inline-end: var(--billy-w);
+}
+/* The bubble is hidden while the panel is open: its gutter goes back to the page. */
+:root[data-billy-open][data-billy-push] [data-main-column] {
+  --main-pe: 2.5rem;
+}
+:root[data-billy-open][data-billy-push] aside[data-assistant-panel][data-box="dock"] {
+  background-color: var(--card);
+  box-shadow: none;
+}
+
+/* While the resize handle is dragged: one cursor, no text selection, and the width follows
+   the pointer with nothing easing behind it. */
+:root[data-billy-resizing],
+:root[data-billy-resizing] * {
+  cursor: col-resize;
+  user-select: none;
+}
+:root[data-billy-resizing] :is(aside[data-assistant-panel], .app-rail ~ main) {
+  transition: none;
+}
+/* A list keeps the layout it has until the page settles (lib/use-list-layout.ts), past its
+   breakpoint. */
+:root:is([data-billy-resizing], [data-billy-moving])
+  [data-list-layout="table"]
+  > [data-slot="table-container"],
+:root:is([data-billy-resizing], [data-billy-moving]) [data-list-layout="phone"] > ul {
+  display: block;
+}
+
+/* Below 1024px the bubble slides out while the page scrolls down and comes back on the way
+   up (launcher.tsx sets the inline `translate`). Exits run on the shorter duration. */
+button.billy-bubble {
+  transition:
+    box-shadow var(--dur) var(--ease-out),
+    scale var(--dur-fast) var(--ease-spring),
+    translate var(--dur) var(--ease-glide);
+}
+button.billy-bubble[data-tucked] {
+  pointer-events: none;
+  transition-duration: var(--dur), var(--dur-fast), var(--dur-out);
+}
+
+/* The docked move (billy-morph.ts `billyMoving`). The panel slides from the edge while
+   <main>'s edge eases to meet it: one duration, one curve, so the page makes room as the
+   panel arrives and takes it back as the panel leaves. Measured on Home, a list and
+   Analytics: no frame over 17ms. */
+:root[data-billy-moving] .app-rail ~ main {
+  transition: margin-inline-end var(--dur-dock) var(--ease-out);
+}
+/* Under a morph (billy-morph.ts) the page is live: its edge eases on the shape's clock. */
+:root[data-billy-morph] .app-rail ~ main {
+  transition: margin-inline-end var(--dur-morph) var(--ease-glide);
+}
+aside[data-assistant-panel][data-entry="dock"] {
+  animation: billy-dock-in var(--dur-dock) var(--ease-out) both;
+}
+aside[data-assistant-panel][data-entry="dock"][data-state="closed"] {
+  animation: billy-dock-out var(--dur-dock) var(--ease-out) forwards;
+}
+:root[data-billy-moving] aside[data-assistant-panel] {
+  transition: box-shadow var(--dur-dock) var(--ease-out);
+}
+@keyframes billy-dock-in {
+  from {
+    translate: 100% 0;
+  }
+}
+@keyframes billy-dock-out {
+  to {
+    translate: 100% 0;
+  }
+}
+
+/* The floating window: a compact card on one corner of the page area (lib/billy-corner.ts).
+   It rises from its corner and settles back into it; the bubble is under that corner. */
+aside[data-assistant-panel][data-entry="float"] {
+  animation: billy-float-in var(--dur-pop) var(--ease-out) both;
+}
+aside[data-assistant-panel][data-entry="float"][data-state="closed"] {
+  animation: billy-float-out var(--dur-pop-out) var(--ease-out) forwards;
+}
+@keyframes billy-float-in {
+  from {
+    opacity: 0;
+    scale: 0.95;
+  }
+}
+@keyframes billy-float-out {
+  to {
+    opacity: 0;
+    scale: 0.95;
+  }
+}
+/* The bare header is the handle. */
+aside[data-assistant-panel][data-box="float"] > header {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+aside[data-assistant-panel][data-dragging] > header {
+  cursor: grabbing;
+}
+
+/* The window wears the bubble's ring all the way round, so the bubble, the window and the
+   side panel's edge are one family and a morph between them never changes skin. */
+aside[data-assistant-panel].billy-window {
+  border: 2px solid transparent;
+  background-image:
+    linear-gradient(var(--card), var(--card)),
+    linear-gradient(
+      110deg,
+      var(--billy-1),
+      var(--billy-2),
+      var(--billy-3),
+      var(--billy-2),
+      var(--billy-1)
+    );
+  background-origin: padding-box, border-box;
+  background-clip: padding-box, border-box;
+  background-size:
+    100% 100%,
+    300% 100%;
+}

@@ -54,17 +54,15 @@ export default async function NewGatewayPage({
       crumbs={crumbs}
       description="Select the provider. Then connect the account with its credentials."
     >
-      <div className="max-w-4xl">
-        <GatewayCreateForm
-          biz={biz}
-          catalog={catalog}
-          businessLivemode={b.livemode}
-          businessCurrencies={b.currencies ?? null}
-          currencyOptions={businessCurrencyOptions(b)}
-          action={createGatewayAccountAction}
-          initialGateway={typeof gateway === "string" ? gateway : null}
-        />
-      </div>
+      <GatewayCreateForm
+        biz={biz}
+        catalog={catalog}
+        businessLivemode={b.livemode}
+        businessCurrencies={b.currencies ?? null}
+        currencyOptions={businessCurrencyOptions(b)}
+        action={createGatewayAccountAction}
+        initialGateway={typeof gateway === "string" ? gateway : null}
+      />
     </SettingsPage>
   );
 }

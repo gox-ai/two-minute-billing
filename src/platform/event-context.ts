@@ -27,7 +27,9 @@ export type EventSource =
   | "scheduled_job"
   | "migration"
   | "system"
-  | "hubspot";
+  | "hubspot"
+  /** A change the member confirmed in the assistant (actor = the member). */
+  | "assistant";
 
 export interface EventContext {
   source: EventSource;
@@ -101,6 +103,8 @@ export function currentChannel(): Channel | null {
     case "hubspot":
       return "api";
     case "dashboard":
+    // A change the member confirmed in the assistant: still a person in our UI.
+    case "assistant":
       return "dashboard";
     case "migration":
       return "import";

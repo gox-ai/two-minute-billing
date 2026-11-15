@@ -33,6 +33,9 @@ import {
 import { createContact } from "@/modules/customers/contacts";
 import { upsertTemplate } from "@/modules/emails/template-service";
 import { startTimeTravel } from "@/modules/time-travel/service";
+import { runDunningPass } from "@/modules/subscriptions/dunning";
+import { MAX_ATTEMPTS } from "@/modules/subscriptions/dunning-schedule";
+import { runInvoiceDueTransitions } from "@/modules/invoicing/due";
 import { runWithClockScope } from "@/platform/clock";
 import { asTeamMembers } from "./lib/team-addresses";
 
@@ -615,6 +618,118 @@ setMailer(null);
   );
   const rows = await rowsFor(a.orgId, a.bizId);
   ok("opted-out customer: nothing enqueued", rows.length === 0, rows.map((r) => r.type).join(","));
+}
+
+// ---- Case 12: a declined automatic charge mails "payment failed", never "past due" ----
+// 9995 declines with insufficient funds: retriable, so the invoice enters dunning.
+{
+  const d = await setupBiz(true, {}, "tok_4000000000009995");
+  const types = async () => (await rowsFor(d.orgId, d.bizId)).map((r) => r.type);
+  const rows = await rowsFor(d.orgId, d.bizId);
+  console.log("  a decline enqueued:", rows.map((r) => r.type).join(", "));
+  const failed = rows.filter((r) => r.type === "payment_failed");
+  ok("a declined charge sends exactly one Payment failed", failed.length === 1, await types());
+  ok("…and no Invoice overdue", !rows.some((r) => r.type === "invoice_overdue"), await types());
+  ok(
+    "…naming the next attempt, with a button to pay or change the method",
+    /Next attempt: \S/.test(failed[0]?.bodyText ?? "") &&
+      /Pay now: \S/.test(failed[0]?.bodyText ?? ""),
+    failed[0]?.bodyText.slice(-300),
+  );
+  const [inv] = await withTenant(d.orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.businessId, d.bizId)),
+  );
+  const dueEvents = await withTenant(d.orgId, (tx) =>
+    tx
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.businessId, d.bizId), eq(events.type, "invoice_payment_due"))),
+  );
+  ok("…while invoice_payment_due still reaches webhooks", dueEvents.length === 1, dueEvents.length);
+
+  // Run the ladder out. Every retry mails Payment failed; the end mails the cancellation.
+  const subStatus = async () =>
+    (
+      await withTenant(d.orgId, (tx) =>
+        tx
+          .select({ status: subscriptions.status })
+          .from(subscriptions)
+          .where(eq(subscriptions.id, inv!.subscriptionId!)),
+      )
+    )[0]?.status;
+  for (let i = 0; i < MAX_ATTEMPTS + 2 && (await subStatus()) !== "cancelled"; i++) {
+    await systemDb
+      .update(invoices)
+      .set({ nextAttemptAt: new Date(Date.now() - 60_000) })
+      .where(eq(invoices.id, inv!.id));
+    await runWithClockScope({ onlyBusinessId: d.bizId }, () => runDunningPass(new Date()));
+  }
+  const [end] = await withTenant(d.orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.id, inv!.id)),
+  );
+  const all = await rowsFor(d.orgId, d.bizId);
+  console.log("  the whole ladder enqueued:", all.map((r) => r.type).join(", "));
+  const fails = all
+    .filter((r) => r.type === "payment_failed")
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1));
+  ok(
+    "dunning ran out and cancelled the subscription",
+    end?.status === "not_paid" && (await subStatus()) === "cancelled",
+    `${end?.status} / ${await subStatus()}`,
+  );
+  ok(
+    "one Payment failed per attempt",
+    fails.length === end?.attemptCount,
+    `${fails.length} mails / ${end?.attemptCount} attempts`,
+  );
+  ok(
+    "…and only the last one promises no further attempt",
+    fails.slice(0, -1).every((r) => r.bodyText.includes("Next attempt: ")) &&
+      !fails.at(-1)?.bodyText.includes("Next attempt: "),
+    fails.map((r) => r.bodyText.includes("Next attempt: ")),
+  );
+  ok(
+    "the end of dunning sends one Subscription canceled for nonpayment",
+    all.filter((r) => r.type === "subscription_canceled_nonpayment").length === 1,
+    all.map((r) => r.type),
+  );
+  ok(
+    "no Invoice overdue at any point of the ladder",
+    !all.some((r) => r.type === "invoice_overdue"),
+    all.map((r) => r.type),
+  );
+}
+
+// ---- Case 13: Payment failed switched off → a decline sends nothing ----
+// Invoice overdue stays on, but it is not a stand-in: the decline is not an overdue invoice.
+{
+  const d = await setupBiz(true, { types: { payment_failed: false } }, "tok_4000000000009995");
+  const rows = await rowsFor(d.orgId, d.bizId);
+  ok(
+    "with Payment failed off, a decline mails neither Payment failed nor Invoice overdue",
+    !rows.some((r) => r.type === "payment_failed" || r.type === "invoice_overdue"),
+    rows.map((r) => r.type),
+  );
+}
+
+// ---- Case 14: an invoice the customer pays themselves, past its due date → Invoice overdue ----
+{
+  const d = await setupBiz(true, {}, "tok_4242", 5000, undefined, "off");
+  await runWithClockScope({ onlyBusinessId: d.bizId }, () =>
+    runInvoiceDueTransitions(new Date(Date.now() + 2 * 86_400_000)),
+  );
+  const rows = await rowsFor(d.orgId, d.bizId);
+  const overdue = rows.filter((r) => r.type === "invoice_overdue");
+  ok(
+    "a manual-collection invoice past its due date sends one Invoice overdue",
+    overdue.length === 1 && /past due/.test(overdue[0]!.subject),
+    rows.map((r) => `${r.type}: ${r.subject}`),
+  );
+  ok(
+    "…with no Payment failed, because nothing was charged",
+    !rows.some((r) => r.type === "payment_failed"),
+    rows.map((r) => r.type),
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

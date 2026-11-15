@@ -1,5 +1,6 @@
 "use client";
 
+import { observeSettledResize } from "@/lib/settled-resize";
 import * as React from "react";
 import Link from "next/link";
 import {
@@ -38,6 +39,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 import type { DashboardVisibility, ReportDashboard } from "@/lib/dashboards-api";
 
 /**
@@ -200,9 +202,7 @@ export function BoardTabs({
       );
     };
     recompute();
-    const ro = new ResizeObserver(recompute);
-    ro.observe(strip);
-    return () => ro.disconnect();
+    return observeSettledResize(strip, recompute);
   }, [entries, selectedId]);
 
   const shown = visible ? entries.filter((e) => visible.has(e.d.id)) : entries;
@@ -284,6 +284,7 @@ export function BoardTabs({
           aria-label="Dashboards"
           className={cn(SEGMENT_TRACK, "min-w-0 flex-nowrap overflow-hidden")}
         >
+          <SegmentIndicator />
           {withDividers(shown, tab)}
           {folded.length > 0 ? (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
@@ -397,9 +398,25 @@ export function BoardTabs({
             <MoreHorizontal className="size-4" />
           </Button>
         ) : null}
-        <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="max-sm:hidden"
+          onClick={() => setCreateOpen(true)}
+        >
           <Plus className="size-3.5" />
           Create dashboard
+        </Button>
+        {/* Icon only on a phone, so it shares the row with the tabs. */}
+        <Button
+          variant="outline"
+          size="icon-sm"
+          className="sm:hidden"
+          aria-label="Create dashboard"
+          title="Create dashboard"
+          onClick={() => setCreateOpen(true)}
+        >
+          <Plus className="size-4" />
         </Button>
       </div>
 
@@ -518,7 +535,7 @@ function CreateDashboardDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={() => void submit()} disabled={!name.trim() || saving}>
@@ -603,7 +620,7 @@ function ManageDashboardsDialog({
             {mine.length === 0 ? (
               <p className="text-sm text-muted-foreground">You have not saved one yet.</p>
             ) : (
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y rounded-xl border">
                 {mine.map((d) => (
                   <li key={d.id} className="flex flex-wrap items-center gap-2 p-2.5">
                     {editing === d.id ? (
@@ -714,7 +731,7 @@ function ManageDashboardsDialog({
               <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Shared with the organization
               </h3>
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y rounded-xl border">
                 {shared.map((d) => (
                   <li key={d.id} className="flex flex-wrap items-center gap-2 p-2.5">
                     <span className="flex-1 truncate text-sm font-medium">{d.name}</span>

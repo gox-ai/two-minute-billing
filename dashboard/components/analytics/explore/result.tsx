@@ -183,6 +183,7 @@ export function ExploreResult({
                         reportedIn,
                       )}
                       last={i === rows.length - 1}
+                      turn={i}
                     />
                   ))}
                 </div>

@@ -352,8 +352,6 @@ const mfaLoginBody = z.object({
 const requireMfaBody = z.object({ enabled: z.boolean() }).strict();
 const sessionPolicyBody = z
   .object({
-    session_idle_minutes: z.number().int().positive().nullable(),
-    session_absolute_ttl_hours: z.number().int().positive().nullable(),
     mfa_required_roles: z.array(z.string().max(32)).max(10).nullable(),
   })
   .strict();
@@ -2008,7 +2006,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         // Turning it on needs the caller's own 2FA; the card says so before they try.
         caller_has_two_factor: (await mfaStatus(actor.userId)).confirmed,
         caller_role: actor.role,
-        // The org's own session policy (0482) and the installation limits it can only tighten.
+        // The org's 2FA roles (0482), and the installation's session limits for display.
         ...policyView(await organizationSessionPolicy(actor.organizationId)),
         deployment: {
           session_idle_minutes: config.SESSION_IDLE_MINUTES,
@@ -2058,9 +2056,9 @@ export async function registerAuthRoutes(app: FastifyInstance) {
   );
 
   /**
-   * The organization's session policy (0482): idle timeout, session lifetime, roles that must
-   * use 2FA. Each field null = the installation value. Stricter only (400 otherwise); a role
-   * list with the caller's own role needs the caller's 2FA (409). Sets values, so no
+   * The organization's session policy (0482): the roles that must use 2FA, added to the
+   * installation's. The idle timeout and lifetime are the installation's only. An unknown role
+   * is a 400; a role list with the caller's own role needs the caller's 2FA (409). Sets values, so no
    * Idempotency-Key, like the toggle above.
    */
   app.post(
@@ -2081,11 +2079,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
           organizationId: actor.organizationId,
           actorUserId: actor.userId,
           actorRole: actor.role,
-          policy: {
-            sessionIdleMinutes: p.data.session_idle_minutes,
-            sessionAbsoluteTtlHours: p.data.session_absolute_ttl_hours,
-            mfaRequiredRoles: p.data.mfa_required_roles,
-          },
+          policy: { mfaRequiredRoles: p.data.mfa_required_roles },
         });
         return reply.code(200).send({
           object: "organization_session_policy",
@@ -2185,7 +2179,10 @@ function publicTrustedBrowser(b: TrustedBrowserSummary) {
  * has locked out, with the same 403 `/v1/*` answers. The allowlist (me, logout, mfa/*, sessions,
  * organizations, profile, trusted browsers) is every route that does not call this.
  */
-async function refusedByOrgTwoFactor(actor: AuthedUser, reply: FastifyReply): Promise<boolean> {
+export async function refusedByOrgTwoFactor(
+  actor: AuthedUser,
+  reply: FastifyReply,
+): Promise<boolean> {
   const s = await standingInOrganization(actor.userId, actor.organizationId);
   if (!s.blocked) return false;
   reply.code(403).send({

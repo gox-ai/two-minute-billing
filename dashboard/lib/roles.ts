@@ -92,8 +92,29 @@ export function keyAccessSummary(k: {
   permissions?: Record<string, "read" | "write"> | null;
 }): string {
   if (!k.permissions) return k.scope === "read" ? "Read only" : "Read and write";
-  const entries = Object.entries(k.permissions);
-  return `Custom: ${entries.map(([r, a]) => `${resourceLabel(r)} (${a === "write" ? "write" : "read"})`).join(", ")}`;
+  return `Custom: ${keyAccessEntries(k)
+    .map((e) => `${e.label} (${e.access})`)
+    .join(", ")}`;
+}
+
+/** Short form for a table cell: "Full access", "Read only" or "Custom · N resources". */
+export function keyAccessLabel(k: {
+  scope?: string;
+  permissions?: Record<string, "read" | "write"> | null;
+}): string {
+  if (!k.permissions) return k.scope === "read" ? "Read only" : "Full access";
+  const n = Object.keys(k.permissions).length;
+  return `Custom · ${n} ${n === 1 ? "resource" : "resources"}`;
+}
+
+/** One line per resource on a custom key, for the detail beside the short label. */
+export function keyAccessEntries(k: {
+  permissions?: Record<string, "read" | "write"> | null;
+}): { label: string; access: "read" | "write" }[] {
+  return Object.entries(k.permissions ?? {}).map(([r, a]) => ({
+    label: resourceLabel(r),
+    access: a === "write" ? "write" : "read",
+  }));
 }
 
 /** A role a member may be given: fixed (`owner`…) or custom (`role_…`). */

@@ -108,34 +108,9 @@ export default async function TransactionsPage({
   const gatewayCatalog = await getGatewayCatalogOrEmpty();
   return (
     <>
-      <PageHeader
-        title="Transactions"
-        breadcrumbs={[{ label: name, href: `/businesses/${biz}` }, { label: "Transactions" }]}
-        description={
-          needsAttention > 0
-            ? `${needsAttention} transaction${needsAttention === 1 ? "" : "s"} need${needsAttention === 1 ? "s" : ""} an operator verdict`
-            : undefined
-        }
-      />
-
-      <DashboardTabs
-        basePath={`/businesses/${biz}/transactions`}
-        search={search}
-        listLabel="All Transactions"
-        active={tab}
-      />
-
-      {/* The list renders on BOTH tabs; the Dashboard tab only ADDS this block
-          above it. */}
-      {analyticsError ? (
-        <ErrorState
-          className="mb-6"
-          title="We could not load the payments dashboard"
-          description={<span className="font-mono text-xs">{analyticsError}</span>}
-        />
-      ) : null}
-      {analytics ? <PaymentsAnalyticsBlock data={analytics} config={ANALYTICS} /> : null}
-
+      {/* The list draws the page header, so its count and Refresh sit beside the title as
+          on every other list. The tabs and the Dashboard tab's block go between the header
+          and the list; the list renders on BOTH tabs. */}
       {/* The list chrome stays visible at zero rows — the table owns its empty state. */}
       {/* `?status=failed`, `?type=refund`, … used to be ignored by the list, which
           held its filter state internally — the URL claimed a filter and the table
@@ -143,6 +118,33 @@ export default async function TransactionsPage({
           analytics dimension and the list has no matching filter field (the row's
           payment method is an object, not a filterable column). */}
       <TransactionsTable
+        page={{
+          title: "Transactions",
+          breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Transactions" }],
+          description:
+            needsAttention > 0
+              ? `${needsAttention} transaction${needsAttention === 1 ? "" : "s"} need${needsAttention === 1 ? "s" : ""} an operator verdict`
+              : undefined,
+          refreshesPage: true,
+          notice: (
+            <>
+              <DashboardTabs
+                basePath={`/businesses/${biz}/transactions`}
+                search={search}
+                listLabel="All transactions"
+                active={tab}
+              />
+              {analyticsError ? (
+                <ErrorState
+                  className="mb-6"
+                  title="We could not load the payments dashboard"
+                  description={<span className="font-mono text-xs">{analyticsError}</span>}
+                />
+              ) : null}
+              {analytics ? <PaymentsAnalyticsBlock data={analytics} config={ANALYTICS} /> : null}
+            </>
+          ),
+        }}
         gatewayCatalog={gatewayCatalog}
         biz={biz}
         livemode={livemode}

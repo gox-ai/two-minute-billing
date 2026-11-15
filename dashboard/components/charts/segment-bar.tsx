@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 
 /**
  * Parts of a whole as one bar. Each part's width is its real share; a part of nothing is not
@@ -21,11 +22,11 @@ export function SegmentBar({
       {whole > 0
         ? parts
             .filter((p) => p.value > 0)
-            .map((p) => (
+            .map((p, i) => (
               <span
-                key={p.key}
-                className={cn("anim-grow h-full", p.fill)}
-                style={{ width: `${(p.value / whole) * 100}%` }}
+                key={`${p.key}:${drawKey([p.value, whole])}`}
+                className={cn(BAR_GROW, "h-full", p.fill)}
+                style={barStyle((p.value / whole) * 100, i)}
               />
             ))
         : null}

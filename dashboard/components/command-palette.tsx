@@ -20,12 +20,15 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { Kbd } from "@/components/ui/kbd";
 import { StatusChip } from "@/components/patterns/chip";
 import { useDisplayTz } from "@/components/business-tz";
 import { cn } from "@/lib/utils";
-import { fmtDate, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { businessNavTargets } from "@/lib/business-nav";
 import { CREATE_PAGES, PALETTE_PAGES } from "@/lib/palette-pages";
+import { matches, orgBusinessPages } from "@/lib/palette-search";
 import {
   clearRecent,
   readRecent,
@@ -151,16 +154,6 @@ const INTERVAL_SHORT: Record<string, string> = { day: "day", week: "wk", month: 
 const TERMINAL = new Set(["cancelled", "canceled", "expired"]);
 const UNPAID = new Set(["payment_due", "not_paid", "posted", "pending", "open"]);
 
-/** Every whitespace-separated token of `q` appears somewhere in `hay`. */
-function matches(q: string, ...hay: Array<string | null | undefined>): boolean {
-  const text = hay.filter(Boolean).join(" ").toLowerCase();
-  return q
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((t) => text.includes(t));
-}
-
 function ago(at: number): string {
   const m = Math.round((Date.now() - at) / 60000);
   if (m < 1) return "opened just now";
@@ -168,14 +161,6 @@ function ago(at: number): string {
   const h = Math.round(m / 60);
   if (h < 24) return `opened ${h}h ago`;
   return `opened ${Math.round(h / 24)}d ago`;
-}
-
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-md border bg-card px-1.5 font-sans text-xs font-semibold text-muted-foreground">
-      {children}
-    </kbd>
-  );
 }
 
 /** The rail's search row — opens the global palette. Looks like a field because it acts like one. */
@@ -189,7 +174,7 @@ export function GoToRow({ className }: { className?: string }) {
       aria-label={label}
       title={label}
       className={cn(
-        "nav-row flex h-9 w-full items-center gap-2 rounded-lg border border-sidebar-border bg-sidebar px-2.5 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+        "nav-row flex h-9 w-full items-center gap-2 rounded-md border border-sidebar-border bg-sidebar px-2.5 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
         className,
       )}
     >
@@ -198,12 +183,10 @@ export function GoToRow({ className }: { className?: string }) {
           aria-label still names both keys. */}
       <span className="nav-label min-w-0 flex-1 truncate text-left">Search</span>
       {keys ? (
-        <kbd
-          data-collapse="hide"
-          className="shrink-0 rounded-md border border-sidebar-border px-1.5 font-sans text-xs whitespace-nowrap text-muted-foreground"
-        >
-          {keys}
-        </kbd>
+        // No key hint below 640px: a phone has no keyboard.
+        <Kbd mod data-collapse="hide" className="max-sm:hidden">
+          K
+        </Kbd>
       ) : null}
     </button>
   );
@@ -218,13 +201,13 @@ interface Row {
 }
 
 const ITEM =
-  "gap-3 rounded-lg px-2.5 py-2 data-[selected=true]:bg-info-soft data-[selected=true]:text-foreground";
+  "gap-3 rounded-md px-2.5 py-2 data-[selected=true]:bg-info-soft data-[selected=true]:text-foreground";
 
 function GroupHeading({ title, right }: { title: string; right?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="tracking-wider uppercase">{title}</span>
-      {right ? <span className="ms-auto font-medium normal-case">{right}</span> : null}
+      <span>{title}</span>
+      {right ? <span className="ms-auto font-medium">{right}</span> : null}
     </div>
   );
 }
@@ -263,16 +246,19 @@ function RecordRow({
       className={cn("group/row", ITEM)}
     >
       <Tile icon={icon} tone={tone} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{label}</div>
-        {detail ? <div className="truncate text-xs text-muted-foreground">{detail}</div> : null}
-      </div>
-      {right ? (
-        <div className="flex shrink-0 items-center gap-2.5 text-sm whitespace-nowrap text-muted-foreground tabular-nums">
-          {right}
+      {/* On a phone the facts go under the name, so a number is never cut short. */}
+      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 sm:flex-1">
+          <div className="truncate text-sm font-medium">{label}</div>
+          {detail ? <div className="truncate text-xs text-muted-foreground">{detail}</div> : null}
         </div>
-      ) : null}
-      <CornerDownLeft className="invisible size-4 text-primary group-data-[selected=true]/row:visible" />
+        {right ? (
+          <div className="flex shrink-0 items-center gap-2.5 text-sm whitespace-nowrap text-muted-foreground tabular-nums">
+            {right}
+          </div>
+        ) : null}
+      </div>
+      <CornerDownLeft className="invisible size-4 text-primary group-data-[selected=true]/row:visible max-sm:hidden" />
     </CommandItem>
   );
 }
@@ -305,7 +291,7 @@ function PageRow({
 const GRID =
   "[&_[cmdk-group-items]]:grid [&_[cmdk-group-items]]:gap-x-2 sm:[&_[cmdk-group-items]]:grid-cols-2";
 const GROUP =
-  "px-2 pt-1.5 pb-1 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-1.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground";
+  "px-2 pt-1.5 pb-1 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-1.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-normal [&_[cmdk-group-heading]]:text-muted-foreground";
 
 /**
  * Global ⌘K palette. Inside a business: recent records, create actions and pages before
@@ -315,10 +301,13 @@ const GROUP =
 export function CommandPalette({
   actions,
   businesses = [],
+  ask,
 }: {
   actions: CommandAction[];
   /** Loaded by the layout for the sidebar; reused here so ⌘K can jump between businesses. */
   businesses?: BizRef[];
+  /** Offer to send the typed text to the assistant, as the first row inside a business. */
+  ask?: { name: string; icon: React.ReactNode; onAsk: (question: string) => void };
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -689,6 +678,27 @@ export function CommandPalette({
       </CommandGroup>
     ) : null;
 
+  // Whatever is typed, the first row offers to ask the assistant (an exact id still opens first).
+  const askRow =
+    ask && typing ? (
+      <CommandGroup className={GROUP}>
+        <CommandItem
+          value={reg({ value: "ask:assistant" }).value}
+          onSelect={() => {
+            onOpenChange(false);
+            ask.onAsk(q);
+          }}
+          className={cn("group/row billy-launch", ITEM)}
+        >
+          <span className="flex size-7.5 shrink-0 items-center justify-center">{ask.icon}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+            Ask {ask.name}: “{q}”
+          </span>
+          <CornerDownLeft className="invisible size-4 text-primary group-data-[selected=true]/row:visible" />
+        </CommandItem>
+      </CommandGroup>
+    ) : null;
+
   const shownRecords = hits
     ? (show("customers") ? hits.customers.length : 0) +
       (show("subscriptions") ? hits.subscriptions.length : 0) +
@@ -800,25 +810,29 @@ export function CommandPalette({
               (p) => p.scope === "org" && matches(q, p.label, p.section, ...(p.keywords ?? [])),
             )
           : [],
-        // A business page per business, matched on the page AND optionally the business's
-        // name ("dunning acme"). Capped: an org with many businesses must not flood the list.
-        businessPages: q
-          ? businesses
-              .flatMap((b) =>
-                PALETTE_PAGES.filter((p) => p.scope === "biz")
-                  .filter(
-                    (p) =>
-                      matches(q, p.label, p.section, b.name, ...(p.keywords ?? [])) &&
-                      // At least one word must name the PAGE, or typing a business's name
-                      // alone would list every one of its settings pages.
-                      q
-                        .split(/\s+/)
-                        .some((t) => matches(t, p.label, p.section, ...(p.keywords ?? []))),
-                  )
-                  .map((p) => ({ biz: b, page: p })),
-              )
-              .slice(0, 8)
-          : [],
+        // Each business's pages, its main ones (Customers, Invoices, …) first, matched on the
+        // page and optionally the business's name ("dunning acme"). A test twin is the same
+        // business in its other mode, so it is not listed twice.
+        businessPages: orgBusinessPages(
+          q,
+          businesses.filter(
+            (b) => !(b.liveBusinessId && businesses.some((x) => x.id === b.liveBusinessId)),
+          ),
+          (b) => [
+            ...businessNavTargets({
+              biz: b.id,
+              perms: { ops: true, manager: true, admin: true },
+              testMode: true,
+            }),
+            ...PALETTE_PAGES.filter((p) => p.scope === "biz").map((p) => ({
+              href: `/businesses/${b.id}${p.path}`,
+              label: p.label,
+              section: p.section,
+              keywords: p.keywords,
+              icon: undefined,
+            })),
+          ],
+        ),
         groups: Array.from(
           actions
             .filter((a) => matches(q, a.label, ...(a.keywords ?? [])))
@@ -860,7 +874,7 @@ export function CommandPalette({
                 key={a.id}
                 value={reg({ value: `action:${a.id}`, href: a.href }).value}
                 onSelect={() => pick({ value: a.id, href: a.href, run: a.onSelect })}
-                className={ITEM}
+                className={cn(ITEM, a.id === "assistant" && "billy-launch font-semibold")}
               >
                 {a.icon}
                 <span className="text-sm">{a.label}</span>
@@ -887,19 +901,16 @@ export function CommandPalette({
             className={cn(GROUP, GRID)}
             heading={<GroupHeading title="In a business" />}
           >
-            {orgRows.businessPages.map(({ biz: b, page: p }) => {
-              const href = `/businesses/${b.id}${p.path}`;
-              return (
-                <PageRow
-                  key={href}
-                  row={reg({ value: `page:${href}`, href })}
-                  onPick={pick}
-                  icon={null}
-                  label={p.label}
-                  section={b.name}
-                />
-              );
-            })}
+            {orgRows.businessPages.map(({ page: p, scope, title }) => (
+              <PageRow
+                key={p.href}
+                row={reg({ value: `page:${p.href}`, href: p.href })}
+                onPick={pick}
+                icon={p.icon ?? null}
+                label={title}
+                section={scope}
+              />
+            ))}
           </CommandGroup>
         ) : null}
       </>
@@ -909,7 +920,7 @@ export function CommandPalette({
   // cmdk keeps its highlight on a row that is still mounted, so async record groups
   // landing ABOVE the pages would leave a page highlighted. Re-home to the first row.
   const listRef = React.useRef<HTMLDivElement>(null);
-  const signature = Array.from(hrefs.keys()).join("|");
+  const signature = [ask && typing ? "ask" : "", ...hrefs.keys()].join("|");
   React.useEffect(() => {
     const first = listRef.current?.querySelector("[cmdk-item]");
     setSelected(first?.getAttribute("data-value") ?? "");
@@ -938,6 +949,8 @@ export function CommandPalette({
       title="Quick search"
       description="Search records and jump to pages"
       size="lg"
+      // Anchored at the top, not centred: the box must not jump as the result count changes.
+      className="top-[12vh] translate-y-0"
       commandProps={{
         shouldFilter: false,
         value: selected,
@@ -964,12 +977,12 @@ export function CommandPalette({
                 {current.name} · {current.livemode === "live" ? "Live" : "Test"}
               </span>
             ) : null}
-            <Kbd>esc</Kbd>
           </>
         }
       />
       {typing ? (
-        <div className="flex items-center gap-1.5 overflow-x-auto border-b px-4 py-2.5">
+        // Scrolls sideways on a phone, with no visible bar.
+        <div className="flex scrollbar-none items-center gap-1.5 overflow-x-auto border-b px-4 py-2.5 [&::-webkit-scrollbar]:hidden">
           {FILTERS.map((f) => {
             const n = counts[f];
             return (
@@ -1001,10 +1014,14 @@ export function CommandPalette({
         {idle}
         {typing ? (
           nothing ? (
-            noMatches
+            <>
+              {askRow}
+              {noMatches}
+            </>
           ) : (
             <>
               {idRow}
+              {askRow}
               {searching && !hits ? (
                 <div className="px-5 py-3 text-sm text-muted-foreground">Searching…</div>
               ) : null}
@@ -1022,7 +1039,7 @@ export function CommandPalette({
           <Kbd>↵</Kbd> open
         </span>
         <span className="hidden items-center gap-1 sm:inline-flex">
-          <Kbd>⌘</Kbd> <Kbd>↵</Kbd> open in new tab
+          <Kbd mod>↵</Kbd> open in new tab
         </span>
         <span className="ms-auto inline-flex items-center gap-1">
           <Kbd>esc</Kbd> close

@@ -5,7 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Field } from "@/components/form/field";
 import { Combobox } from "@/components/ui/combobox";
 import type { Country } from "@/lib/countries";
-import { composePhone, dialForCountry, isValidComposedPhone, splitPhone } from "@/lib/phone";
+import {
+  composePhone,
+  dialForCountry,
+  isValidComposedPhone,
+  splitIntl,
+  splitPhone,
+} from "@/lib/phone";
 import { useDefaultState } from "@/lib/use-default-state";
 
 /**
@@ -37,6 +43,7 @@ export function PhoneField({
   help,
   required,
   className,
+  autoComplete = "tel",
 }: {
   name: string;
   label?: React.ReactNode;
@@ -46,6 +53,8 @@ export function PhoneField({
   help?: React.ReactNode;
   required?: boolean;
   className?: string;
+  /** `tel`: autofill gives the whole number with its code, which `splitIntl` files. */
+  autoComplete?: string;
 }) {
   const initial = React.useMemo(
     () => splitPhone(defaultValue, countries),
@@ -143,10 +152,15 @@ export function PhoneField({
           <Input
             id={name}
             type="tel"
+            inputMode="tel"
             value={national}
             onChange={(e) => {
               touched.current = true;
-              setNational(e.target.value);
+              const split = splitIntl(e.target.value, countries);
+              if (split) {
+                setDial(split.dial);
+                setNational(split.national);
+              } else setNational(e.target.value);
             }}
             maxLength={20}
             // `required` belongs on THIS input, not just on the label. The posted value is the
@@ -155,7 +169,7 @@ export function PhoneField({
             // enforces. This input is unnamed, which does not matter: validation applies to the
             // control, not to whether it posts.
             required={required}
-            autoComplete="tel-national"
+            autoComplete={autoComplete}
             /* NO EXAMPLE NUMBER. This said "98765 43210" — an Indian mobile — in a
                primitive the operator dashboard, checkout and the buyer portal all share,
                so a US or EU merchant's customers were shown a format their own number

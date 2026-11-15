@@ -1,56 +1,72 @@
 "use client";
 
-// Client because every row carries its own <ActionForm>, and the filters are local state.
+// Client because the drafts, filters and open groups are local state.
 
 import * as React from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { enumLabel, plural } from "@/lib/labels";
+import { fmtDate } from "@/lib/format-date";
+import { useDisplayTz } from "@/components/business-tz";
+import { partnerName } from "@/components/partner-logo";
+import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { TableSearch } from "@/components/table-search";
 import { Chip } from "@/components/patterns/chip";
-import { More, SettingsCard } from "@/components/settings/settings-layout";
+import { Pager, useLocalPages } from "@/components/patterns/pager";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
+import { More, SettingsCard, SettingsSaveBar } from "@/components/settings/settings-layout";
 import { SettingSwitch } from "@/components/settings/setting-switch";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import type { DeclineRule, DeclineRuleList, DeclineCodeOverride } from "@/lib/api/decline-rules";
 import {
-  setDeclineRuleAction,
-  resetDeclineRuleAction,
-  setDeclineCodeAction,
-  resetDeclineCodeAction,
+  saveDeclineRulesAction,
+  type DeclineChanges,
 } from "@/app/(dashboard)/businesses/[biz]/settings/decline-rules/actions";
 
 /**
  * Every gateway decline we recognise, and what this business has decided about it.
  *
- * Three columns exist rather than one because a merchant needs to see that they changed
- * something, and what it was before: `Built in` is ours, `Retry` and `Tell the customer`
- * are what the engine will actually do, and a row that differs is marked. A screen showing
- * only the outcome could not honestly offer the reset this page's DELETE exists for.
+ * 872 rules under 33 codes. Families are collapsed groups (the first open); inside a
+ * family each code is one row with the code-level answer, and its gateway rules open
+ * on demand, ten to a page. Nothing commits on change: every edit is a draft and the
+ * page has one Save, in the sticky bar with the count of pending changes.
  */
-/**
- * A dotted identifier with break points at its own segment boundaries.
- *
- * `wrap-anywhere` is load-bearing on these cells and must stay (see the note at
- * the rule id: `break-word` does not reduce min-content width, so the id forced
- * 432px into a 352px box). But "anywhere" is also where it broke —
- * `stripe.table.payment_intent_authenti / cation_failure` on screen at 1600px.
- *
- * `<wbr />` adds PREFERRED break opportunities. The browser takes a normal break
- * when one is in range and only falls back to an arbitrary position when none is,
- * so the min-content reduction is unchanged and the breaks land after the dots
- * and underscores instead of inside a word.
- */
-function BreakableId({ value, className }: { value: string; className?: string }) {
+
+type Tri = "" | "yes" | "no";
+type CodeDraft = { retriable: Tri; exposed_to_payer: Tri };
+type RuleDraft = { reset: true } | { retriable: boolean; exposed_to_payer: boolean };
+
+const RULES_PER_PAGE = 10;
+
+const FIELD: Record<string, string> = {
+  code: "Error code",
+  decline_code: "Decline code",
+  message: "Message",
+  category: "Category",
+  network_message: "Network message",
+  recommendation_code: "Advice code",
+};
+
+const gatewayLabel = (g: string) => partnerName(g) ?? enumLabel(g);
+const cur = (v: boolean | null | undefined): Tri => (v == null ? "" : v ? "yes" : "no");
+const answer = (retriable: boolean, exposed: boolean) =>
+  `${retriable ? "retry" : "do not retry"}, ${exposed ? "show the reason" : "keep the reason internal"}`;
+
+/** A snake_case gateway code reads as words; anything else stays as the gateway wrote it. */
+function ruleTitle(r: DeclineRule): string {
+  const { field, op, value } = r.matches;
+  const f = FIELD[field] ?? enumLabel(field);
+  if (op === "contains") return `${f} contains “${value}”`;
+  if (op === "matches") return `${f} matches “${value}”`;
+  return /[a-z]/i.test(value) && /^[\w-]+$/.test(value) ? enumLabel(value) : `${f} ${value}`;
+}
+
+/** Breaks only after a dot or an underscore, never inside a word. */
+function SegmentedId({ value, className }: { value: string; className?: string }) {
   const parts = value.split(/(?<=[._])/);
   return (
-    <span className={className}>
+    <span className={cn("font-mono", className)}>
       {parts.map((part, i) => (
         <React.Fragment key={i}>
           {part}
@@ -65,475 +81,546 @@ export function DeclineRuleTable({ biz, list }: { biz: string; list: DeclineRule
   const [gateway, setGateway] = React.useState("");
   const [family, setFamily] = React.useState("");
   const [changedOnly, setChangedOnly] = React.useState(false);
-  /**
-   * SETTLED search text, never the keystroke.
-   *
-   * `q` used to be bound to the input in this component, alongside 81 rendered
-   * rules — so every character re-rendered all of them to produce a table that
-   * had not changed. Measured, production build: ~20ms of synchronous work per
-   * keystroke at 67 visible rows, 2ms at one. The rows were the cost.
-   *
-   * `useDeferredValue` was tried first and MEASURED NOT TO HELP (still ~20ms): it
-   * spares the second filter pass, but the component re-renders either way and
-   * reconciling the rows is what costs. Keeping the volatile state in `TableSearch`
-   * — below this component in the tree — is what actually fixes it, and it is the
-   * same shape `DataTable` uses, so both searches now behave alike.
-   */
-  const [q, setQ] = React.useState("");
   const [configurableOnly, setConfigurableOnly] = React.useState(false);
+  // Settled search text from `TableSearch`, so typing does not re-render every row.
+  const [q, setQ] = React.useState("");
+  const [codeDrafts, setCodeDrafts] = React.useState<Record<string, CodeDraft>>({});
+  const [ruleDrafts, setRuleDrafts] = React.useState<Record<string, RuleDraft>>({});
+  const [openFamilies, setOpenFamilies] = React.useState<Set<string> | null>(null);
+
   const codeOverrides = React.useMemo(
     () => new Map((list.code_overrides ?? []).map((c) => [c.code, c])),
     [list.code_overrides],
   );
 
-  const groupsMap = new Map<string, typeof list.data>();
-  const LABEL: Record<string, string> = {
-    stripe: "Stripe",
-    paypal: "PayPal",
-    razorpay: "RazorPay",
-  };
-  /**
-   * The taxonomy's axis (stage 4). Derived from the rows for the same reason the gateway
-   * list is: a family with nothing behind it is a filter that empties the table, which is
-   * the same defect as a control that does nothing.
-   */
+  const gatewayOptions = [
+    { value: "", label: "All gateways" },
+    ...Array.from(new Set(list.data.map((r) => r.gateway)))
+      .sort((a, b) => gatewayLabel(a).localeCompare(gatewayLabel(b)))
+      .map((g) => ({
+        value: g,
+        label: `${gatewayLabel(g)} (${list.data.filter((r) => r.gateway === g).length})`,
+      })),
+  ];
   const familyOptions = [
     { value: "", label: "All families" },
     ...Array.from(new Set(list.data.map((r) => r.family)))
       .sort()
       .map((f) => ({
         value: f,
-        label: `${f.replace(/_/g, " ")} · ${list.data.filter((r) => r.family === f).length}`,
+        label: `${enumLabel(f)} (${list.data.filter((r) => r.family === f).length})`,
       })),
   ];
 
-  const gatewayOptions = [
-    { value: "", label: "All gateways" },
-    ...Array.from(new Set(list.data.map((r) => r.gateway)))
-      .sort()
-      .map((g) => ({
-        value: g,
-        label: `${LABEL[g] ?? g} (${list.data.filter((r) => r.gateway === g).length})`,
-      })),
-  ];
-
+  const needle = q.trim().toLowerCase();
   const rows = list.data.filter((r) => {
     if (gateway && r.gateway !== gateway) return false;
-    if (changedOnly && !r.override) return false;
-    if (configurableOnly && !r.overridable) return false;
     if (family && r.family !== family) return false;
-    if (!q) return true;
-    const hay = `${r.id} ${r.code} ${r.matches.value}`.toLowerCase();
-    return hay.includes(q.toLowerCase());
+    if (changedOnly && !r.override && !ruleDrafts[r.id]) return false;
+    if (configurableOnly && !r.overridable) return false;
+    if (!needle) return true;
+    return `${r.id} ${r.code} ${enumLabel(r.code)} ${r.matches.value} ${ruleTitle(r)}`
+      .toLowerCase()
+      .includes(needle);
   });
 
+  // family → code → rules, each level in a stable alphabetical order.
+  const families = new Map<string, Map<string, DeclineRule[]>>();
   for (const r of rows) {
-    const g = groupsMap.get(r.code);
-    if (g) g.push(r);
-    else groupsMap.set(r.code, [r]);
+    const codes = families.get(r.family) ?? new Map<string, DeclineRule[]>();
+    families.set(r.family, codes);
+    const rs = codes.get(r.code) ?? [];
+    codes.set(r.code, rs);
+    rs.push(r);
   }
-  // Alphabetical by canonical code: a stable order a merchant can scan twice and find the
-  // same thing, rather than one that shifts as rules are added.
-  const groups = Array.from(groupsMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+  const familyList = Array.from(families.entries()).sort(([a], [b]) =>
+    enumLabel(a).localeCompare(enumLabel(b)),
+  );
+  // Until the user opens or closes one, the first group is open.
+  const isOpen = (f: string, i: number) =>
+    !!needle || !!family || (openFamilies ? openFamilies.has(f) : i === 0);
+  const toggle = (f: string) =>
+    setOpenFamilies((prev) => {
+      const next = new Set(prev ?? [familyList[0]?.[0] ?? ""]);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      return next;
+    });
+
+  const allRules = React.useMemo(() => {
+    const m = new Map<string, DeclineRule[]>();
+    for (const r of list.data) m.set(r.code, [...(m.get(r.code) ?? []), r]);
+    return m;
+  }, [list.data]);
+
+  const setCode = (code: string, part: keyof CodeDraft, v: string) =>
+    setCodeDrafts((prev) => {
+      const saved = codeOverrides.get(code);
+      const base = prev[code] ?? {
+        retriable: cur(saved?.retriable),
+        exposed_to_payer: cur(saved?.exposed_to_payer),
+      };
+      const next = { ...base, [part]: v as Tri };
+      const out = { ...prev };
+      if (
+        next.retriable === cur(saved?.retriable) &&
+        next.exposed_to_payer === cur(saved?.exposed_to_payer)
+      )
+        delete out[code];
+      else out[code] = next;
+      return out;
+    });
+
+  const setRule = (r: DeclineRule, draft: RuleDraft | null) =>
+    setRuleDrafts((prev) => {
+      const out = { ...prev };
+      const same =
+        draft &&
+        !("reset" in draft) &&
+        draft.retriable === r.effective.retriable &&
+        draft.exposed_to_payer === r.effective.exposed_to_payer;
+      if (!draft || same) delete out[r.id];
+      else out[r.id] = draft;
+      return out;
+    });
+
+  const changes: DeclineChanges = {
+    codes: Object.entries(codeDrafts).map(([code, d]) => ({ code, ...d })),
+    rules: Object.entries(ruleDrafts).map(([rule, d]) =>
+      "reset" in d ? { rule, reset: true as const } : { rule, ...d },
+    ),
+  };
+  const dirty = changes.codes.length + changes.rules.length;
+  const discard = () => {
+    setCodeDrafts({});
+    setRuleDrafts({});
+  };
 
   const configurable = list.data.filter((r) => r.overridable).length;
   const changedCount = list.data.filter((r) => r.override).length;
+  const codeCount = new Set(list.data.map((r) => r.code)).size;
 
   return (
-    <SettingsCard
-      title="Payment errors"
-      meta={`${list.data.length} rules · ${configurable} configurable · ${changedCount} changed`}
-    >
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <More label="How Retry and Tell the customer work">
-          <span className="flex flex-col gap-2">
-            <span>
-              <strong className="text-foreground">Retry</strong> sets whether a failure goes back to
-              the dunning schedule. Off makes it a hard decline. We do not retry, and if the error
-              is about the payment method, we mark the method as invalid. On gives a temporary fault
-              one more chance.
+    <ActionForm action={saveDeclineRulesAction} onSuccess={discard} className="flex flex-col gap-5">
+      <input type="hidden" name="biz" value={biz} />
+      <input type="hidden" name="changes" value={JSON.stringify(changes)} />
+      <SettingsCard
+        title="Payment errors"
+        meta={`${plural(list.data.length, "rule")} · ${plural(codeCount, "code")} · ${configurable} configurable · ${changedCount} changed`}
+      >
+        <div className="flex flex-col gap-4 px-5 py-4">
+          <More label="How Retry and Tell the customer work">
+            <span className="flex flex-col gap-2">
+              <span>
+                <strong className="text-foreground">Retry</strong> sets whether a failure goes back
+                to the dunning schedule. Off makes it a hard decline. We do not retry, and if the
+                error is about the payment method, we mark the method as invalid. On gives a
+                temporary fault one more chance.
+              </span>
+              <span>
+                <strong className="text-foreground">Tell the customer</strong> sets whether the
+                reason appears in the payment failure email. Some errors describe a problem that the
+                payer can correct, for example an expired card or a bank decline. Other errors
+                describe a fault on our side. If we name those errors, the customer cannot do
+                anything about them.
+              </span>
+              <span>
+                An answer for a code applies to all its gateway rules, except rules with their own
+                answer. Rules that you do not change use the default answer.
+              </span>
             </span>
-            <span>
-              <strong className="text-foreground">Tell the customer</strong> sets whether the reason
-              appears in the payment failure email. Some errors describe a problem that the payer
-              can correct, for example an expired card or a bank decline. Other errors describe a
-              fault on our side. If we name those errors, the customer cannot do anything about
-              them.
-            </span>
-            <span>
-              A row that you change affects only this business. A code-level answer applies to all
-              rules for the code, except rules with their own answer. Rules that you do not change
-              use the built-in answer.
-            </span>
-          </span>
-        </More>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="w-full sm:w-48">
-            <SelectField
-              name="gateway"
-              value={gateway}
-              onValueChange={setGateway}
-              ariaLabel="Filter by gateway"
-              // Derived from the rows: a gateway with no rules behind it would empty the table.
-              options={gatewayOptions}
-              className="w-full"
+          </More>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
+              <label
+                htmlFor="decline-gateway"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Gateway
+              </label>
+              <SelectField
+                id="decline-gateway"
+                value={gateway}
+                onValueChange={setGateway}
+                options={gatewayOptions}
+                size="sm"
+                className="w-full sm:w-52"
+              />
+            </div>
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
+              <label htmlFor="decline-family" className="text-xs font-medium text-muted-foreground">
+                Error family
+              </label>
+              <SelectField
+                id="decline-family"
+                value={family}
+                onValueChange={setFamily}
+                options={familyOptions}
+                size="sm"
+                className="w-full sm:w-60"
+              />
+            </div>
+            <TableSearch
+              className="relative w-full sm:w-72"
+              placeholder="Search a code or an error"
+              ariaLabel="Search payment errors"
+              debounceMs={200}
+              onSettled={setQ}
             />
+            <div className="flex h-8 items-center gap-4">
+              <SettingSwitch
+                checked={changedOnly}
+                onCheckedChange={setChangedOnly}
+                label="Show only rules this business has changed"
+                text="Changed only"
+              />
+              <SettingSwitch
+                checked={configurableOnly}
+                onCheckedChange={setConfigurableOnly}
+                label="Show only rules this business can change"
+                text="Configurable only"
+              />
+            </div>
           </div>
-          <div className="w-full sm:w-56">
-            <SelectField
-              name="family"
-              value={family}
-              onValueChange={setFamily}
-              ariaLabel="Filter by error family"
-              options={familyOptions}
-              className="w-full"
-            />
-          </div>
-          <TableSearch
-            className="relative w-full sm:w-72"
-            placeholder="Search a code or an error id"
-            ariaLabel="Search decline rules"
-            debounceMs={200}
-            onSettled={setQ}
-          />
-          <SettingSwitch
-            checked={changedOnly}
-            onCheckedChange={setChangedOnly}
-            label="Show only rules this business has changed"
-            text="Changed only"
-          />
-          <SettingSwitch
-            checked={configurableOnly}
-            onCheckedChange={setConfigurableOnly}
-            label="Show only codes this business can change"
-            text="Configurable only"
-          />
-          <span className="text-xs text-muted-foreground sm:ml-auto">
-            {rows.length} of {list.data.length} shown
-          </span>
         </div>
-      </div>
 
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="h-11 px-4">Rule</TableHead>
-              <TableHead className="h-11 px-4">Matches, and what the customer reads</TableHead>
-              <TableHead className="h-11 px-4">Behavior</TableHead>
-              {/*
-                No standing "Built in" column. It duplicated the Behaviour cell on every
-                unchanged row — 79 of 81 — while pushing Reset off the right edge of a
-                1600px viewport. A built-in answer is only worth a column's width where it
-                DIFFERS, so it moved into the changed rows themselves.
-              */}
-              {/* Visible, not sr-only. The cells under it carry the built-in answer,
-                  who changed it and when, and Reset — real content under a header that
-                  read as an empty column to everyone not using a screen reader. */}
-              <TableHead className="h-11 px-4">Set by</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="px-4 py-3 text-sm text-muted-foreground">
-                  No rule matches those filters.
-                </TableCell>
-              </TableRow>
-            ) : (
-              /**
-               * Grouped by the CANONICAL code, which is the thing that actually decides
-               * behaviour — several gateway spellings collapse onto one answer, and a flat
-               * list of 81 hides that. It is also the axis a merchant reasons on.
-               */
-              groups.map(([code, rules]) => (
-                <React.Fragment key={code}>
-                  <CodeHeader
-                    biz={biz}
-                    code={code}
-                    rules={rules}
-                    override={codeOverrides.get(code) ?? null}
-                  />
-                  {rules.map((r) => (
-                    <Row key={r.id} biz={biz} rule={r} />
-                  ))}
-                </React.Fragment>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-    </SettingsCard>
+        {familyList.length === 0 ? (
+          <p className="m-0 border-t px-5 py-4 text-sm text-muted-foreground">
+            No payment error matches these filters.
+          </p>
+        ) : (
+          <div className="divide-y border-t">
+            {familyList.map(([fam, codes], i) => {
+              const open = isOpen(fam, i);
+              const ruleCount = Array.from(codes.values()).reduce((n, rs) => n + rs.length, 0);
+              const pending =
+                Array.from(codes.keys()).filter((c) => codeDrafts[c]).length +
+                Array.from(codes.values())
+                  .flat()
+                  .filter((r) => ruleDrafts[r.id]).length;
+              const panel = `decline-family-${fam}`;
+              return (
+                <section key={fam}>
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={panel}
+                    onClick={() => toggle(fam)}
+                    className="flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+                  >
+                    {open ? (
+                      <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="text-sm font-medium">{enumLabel(fam)}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {plural(codes.size, "code")} · {plural(ruleCount, "rule")}
+                    </span>
+                    {pending > 0 ? (
+                      <Chip tone="blue" className="ml-auto">
+                        {plural(pending, "unsaved change")}
+                      </Chip>
+                    ) : null}
+                  </button>
+                  {open ? (
+                    <div id={panel} className="divide-y border-t bg-muted/20">
+                      {Array.from(codes.entries())
+                        .sort(([a], [b]) => enumLabel(a).localeCompare(enumLabel(b)))
+                        .map(([code, rules]) => (
+                          <CodeBlock
+                            key={code}
+                            code={code}
+                            rules={rules}
+                            allRules={allRules.get(code) ?? rules}
+                            override={codeOverrides.get(code) ?? null}
+                            draft={codeDrafts[code]}
+                            onCode={(part, v) => setCode(code, part, v)}
+                            ruleDrafts={ruleDrafts}
+                            onRule={setRule}
+                            expand={!!needle}
+                          />
+                        ))}
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+        )}
+      </SettingsCard>
+      <SettingsSaveBar
+        disabled={dirty === 0}
+        note={
+          dirty === 0
+            ? "No unsaved changes."
+            : `${plural(dirty, "unsaved change")}. A change applies to new payment failures after you save.`
+        }
+      >
+        {dirty > 0 ? (
+          <Button type="button" variant="outline" onClick={discard}>
+            Discard
+          </Button>
+        ) : null}
+      </SettingsSaveBar>
+    </ActionForm>
   );
 }
 
 /**
- * The code-level setting: one answer for every rule that means the same thing.
- *
- * It matters because the rules under a code are gateway spellings of one fact — a
- * merchant who decides "we do not retry an expired card" means it for all of them, and
- * setting six rows by hand invites getting five right.
- *
- * A rule with its own setting is NOT touched by this: narrower wins, and the row below
- * says so, so nobody has to discover it by watching a decline behave unexpectedly.
+ * One code: its label, the code-level answer, and its gateway rules behind a disclosure.
+ * A rule with its own answer is not touched by the code-level one (narrower wins).
  */
-function CodeHeader({
-  biz,
+function CodeBlock({
   code,
   rules,
+  allRules,
   override,
+  draft,
+  onCode,
+  ruleDrafts,
+  onRule,
+  expand,
 }: {
-  biz: string;
   code: string;
+  /** The rules under this code that pass the filters. */
   rules: DeclineRule[];
+  allRules: DeclineRule[];
   override: DeclineCodeOverride | null;
+  draft: CodeDraft | undefined;
+  onCode: (part: keyof CodeDraft, v: string) => void;
+  ruleDrafts: Record<string, RuleDraft>;
+  onRule: (r: DeclineRule, d: RuleDraft | null) => void;
+  /** Open the rule list, e.g. while a search is active. */
+  expand: boolean;
 }) {
-  const individually = rules.filter((r) => r.override?.level === "rule").length;
+  const [showRules, setShowRules] = React.useState(false);
+  const open = expand || showRules;
+  const { rows: page, pager } = useLocalPages(rules, RULES_PER_PAGE);
+  const individually = allRules.filter((r) => r.override?.level === "rule").length;
 
-  /**
-   * The built-in answer under this code, shown as text rather than as the control's state.
-   *
-   * It is text because the rules under a code do not always agree — `mandate_expired` has a
-   * PayPal rule that does not retry sitting beside five Stripe codes that do. A switch would
-   * have to pick one of those to display and would then be showing an answer the engine does
-   * not give.
-   */
-  const retr = new Set(rules.map((r) => r.built_in.retriable));
-  const exp = new Set(rules.map((r) => r.built_in.exposed_to_payer));
-  const builtIn =
-    retr.size > 1 || exp.size > 1
-      ? "these rules differ"
-      : `${rules[0]!.built_in.retriable ? "retries" : "no retry"}, ${
-          rules[0]!.built_in.exposed_to_payer ? "reason shown" : "reason internal"
-        }`;
+  // Text, not a control state: the rules under one code do not always agree.
+  const retr = new Set(allRules.map((r) => r.built_in.retriable));
+  const exp = new Set(allRules.map((r) => r.built_in.exposed_to_payer));
+  const mixed = retr.size > 1 || exp.size > 1;
+  const builtRetry =
+    mixed && retr.size > 1
+      ? "each rule decides"
+      : allRules[0]!.built_in.retriable
+        ? "retry"
+        : "do not retry";
+  const builtTell =
+    mixed && exp.size > 1
+      ? "each rule decides"
+      : allRules[0]!.built_in.exposed_to_payer
+        ? "show the reason"
+        : "keep it internal";
 
-  /**
-   * Three states, not two: "leave it alone" is a real answer and the common one, so the
-   * control has to be able to express it. A pair of switches could not — they would have to
-   * start somewhere, and whatever they started at would be a setting the merchant never made
-   * staring back at them as though they had.
-   */
-  const tri = (yes: string, no: string) => [
-    { value: "", label: "Leave as they are" },
-    { value: "yes", label: yes },
-    { value: "no", label: no },
-  ];
-  const cur = (v: boolean | null | undefined) => (v == null ? "" : v ? "yes" : "no");
+  const retriable = draft?.retriable ?? cur(override?.retriable);
+  const exposed = draft?.exposed_to_payer ?? cur(override?.exposed_to_payer);
+  const label = enumLabel(code);
+  const list = `decline-code-${code}`;
 
   return (
-    <TableRow className="bg-muted">
-      <TableCell colSpan={4} className="px-4 py-3.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="font-mono text-xs font-medium text-foreground">{code}</span>
-          {/* The namespaced id, so a merchant recognises the family their error history
-              was already filed under. The flat code stays first because it is what our
-              API returns and what is stored. */}
-          <span className="font-mono text-xs text-muted-foreground">{rules[0]!.error_id}</span>
-          <span className="text-xs text-muted-foreground">
-            {rules.length} {rules.length === 1 ? "rule" : "rules"} &middot; built in: {builtIn}
+    <div className="bg-card">
+      <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:gap-8">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{label}</span>
+            {override ? <Chip tone="blue">Set for the code</Chip> : null}
+            {draft ? <Chip tone="tan">Unsaved</Chip> : null}
           </span>
-          {override ? <Chip tone="blue">Set for the code</Chip> : null}
-          {individually > 0 ? (
-            /* A code-level setting does NOT reach a rule that has its own — narrower wins.
-               Said here because the alternative is discovering it from a decline. */
-            <span className="text-xs text-muted-foreground">
-              {individually} set individually and {individually === 1 ? "keeps its" : "keep their"}{" "}
-              own answer
-            </span>
-          ) : null}
-
-          <div className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-2">
-            {/* `key` on the saved values so the selects re-read their defaults after a save
-                or a clear; without it React keeps the old uncontrolled state and the row
-                shows what it held before the click. */}
-            <ActionForm
-              key={`${code}:${override?.updated_at ?? "none"}`}
-              action={setDeclineCodeAction}
-            >
-              <input type="hidden" name="biz" value={biz} />
-              <input type="hidden" name="code" value={code} />
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
-                <SelectField
-                  name="retriable"
-                  size="sm"
-                  className="w-44"
-                  defaultValue={cur(override?.retriable)}
-                  options={tri("Retry", "Do not retry")}
-                  ariaLabel={`Retries for every rule with the code ${code}`}
-                />
-                <SelectField
-                  name="exposed_to_payer"
-                  size="sm"
-                  className="w-52"
-                  defaultValue={cur(override?.exposed_to_payer)}
-                  options={tri("Tell the customer", "Keep internal")}
-                  ariaLabel={`Whether the customer is told the reason for the code ${code}`}
-                />
-                <SubmitButton size="sm" variant="outline">
-                  Apply to all
-                </SubmitButton>
-              </div>
-            </ActionForm>
-            {override ? (
-              <ActionForm action={resetDeclineCodeAction}>
-                <input type="hidden" name="biz" value={biz} />
-                <input type="hidden" name="code" value={code} />
-                <SubmitButton size="sm" variant="ghost">
-                  Clear
-                </SubmitButton>
-              </ActionForm>
-            ) : null}
+          <span className="text-xs text-muted-foreground">
+            <span className="font-mono" title={allRules[0]!.error_id}>
+              {code}
+            </span>{" "}
+            · {plural(allRules.length, "gateway rule")}
+            {individually > 0 ? ` · ${individually} with their own answer` : ""}
+          </span>
+        </div>
+        <div className="flex shrink-0 flex-col gap-1 sm:items-end">
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <label htmlFor={`${list}-retry`} className="text-xs text-muted-foreground">
+              Retry
+            </label>
+            <SelectAnswer
+              id={`${list}-retry`}
+              value={retriable}
+              onValueChange={(v) => onCode("retriable", v)}
+              ariaLabel={`Retry for ${label}`}
+              options={[
+                { value: "", label: `Default: ${builtRetry}` },
+                { value: "yes", label: "Retry" },
+                { value: "no", label: "Do not retry" },
+              ]}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <label htmlFor={`${list}-tell`} className="text-xs text-muted-foreground">
+              Tell the customer
+            </label>
+            <SelectAnswer
+              id={`${list}-tell`}
+              value={exposed}
+              onValueChange={(v) => onCode("exposed_to_payer", v)}
+              ariaLabel={`Tell the customer the reason for ${label}`}
+              options={[
+                { value: "", label: `Default: ${builtTell}` },
+                { value: "yes", label: "Show the reason" },
+                { value: "no", label: "Keep it internal" },
+              ]}
+            />
           </div>
         </div>
-      </TableCell>
-    </TableRow>
+      </div>
+      {rules.length > 0 ? (
+        <div className="px-5 pb-3">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={list}
+            onClick={() => setShowRules((v) => !v)}
+            disabled={expand}
+            className="inline-flex items-center gap-1 text-sm text-primary hover:underline disabled:no-underline disabled:opacity-100"
+          >
+            {open ? (
+              <ChevronDown aria-hidden className="size-4" />
+            ) : (
+              <ChevronRight aria-hidden className="size-4" />
+            )}
+            {open ? "Hide" : "Show"} {plural(rules.length, "gateway rule")}
+          </button>
+        </div>
+      ) : null}
+      {open && rules.length > 0 ? (
+        <div id={list} className="mx-5 mb-4 overflow-hidden rounded-xl border">
+          <ul className="m-0 list-none divide-y p-0">
+            {page.map((r) => (
+              <RuleRow
+                key={r.id}
+                rule={r}
+                override={override}
+                draft={ruleDrafts[r.id]}
+                onRule={onRule}
+              />
+            ))}
+          </ul>
+          <Pager pager={pager} className="px-4" />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function Row({ biz, rule }: { biz: string; rule: DeclineRule }) {
-  const changed = rule.override != null;
+function RuleRow({
+  rule,
+  override,
+  draft,
+  onRule,
+}: {
+  rule: DeclineRule;
+  override: DeclineCodeOverride | null;
+  draft: RuleDraft | undefined;
+  onRule: (r: DeclineRule, d: RuleDraft | null) => void;
+}) {
+  const tz = useDisplayTz();
+  const resetting = !!draft && "reset" in draft;
+  // After a reset the code-level answer applies where there is one, else the built-in one.
+  const fallback = {
+    retriable: override?.retriable ?? rule.built_in.retriable,
+    exposed_to_payer: override?.exposed_to_payer ?? rule.built_in.exposed_to_payer,
+  };
+  const shown =
+    draft && !("reset" in draft)
+      ? draft
+      : resetting
+        ? fallback
+        : {
+            retriable: rule.effective.retriable,
+            exposed_to_payer: rule.effective.exposed_to_payer,
+          };
+  const own = rule.override?.level === "rule";
+  const title = ruleTitle(rule);
+  const eqCode = rule.matches.op === "eq" && title === enumLabel(rule.matches.value);
+
   return (
-    <TableRow>
-      <TableCell className="px-4 py-3 align-top">
-        <div className="flex max-w-[22rem] min-w-0 flex-col items-start gap-1 whitespace-normal">
-          {/*
-            `wrap-anywhere`, not `wrap-break-word`. They look interchangeable and are not:
-            `overflow-wrap: break-word` breaks LINES but does not reduce a flex item's
-            min-content width, so `razorpay.code.card_mandate_current_cycle_allowed_debit_exceeds`
-            still forced 432px inside a 352px box. `anywhere` reduces min-content too, which
-            is the property that actually makes it fit.
-          */}
-          <BreakableId value={rule.id} className="font-mono text-xs wrap-anywhere" />
-          <span className="text-xs text-muted-foreground">&rarr; {rule.code}</span>
-          {/* A changed row must be findable at a glance. "Changed" needs no action, so it
-              stays quiet rather than taking a fill. */}
-          {changed ? <Chip tone="blue">Changed</Chip> : null}
-          {/* Not "Not configurable" any more: no RULE names this code, but the code-level
-              control above the group does reach it, and the engine honours it. */}
-          {!rule.overridable ? <Chip tone="gray">Set by code only</Chip> : null}
-        </div>
-      </TableCell>
-
-      <TableCell className="px-4 py-3 align-top">
-        {/*
-          `whitespace-normal` because `TableCell` ships `whitespace-nowrap` — right for a
-          column of amounts, wrong for prose and 44-character rule ids. Without it the text
-          sat on ONE line 18px tall holding 767px of content inside a 416px box: clipped,
-          and invisible unless you measured, because the rows on screen happened to be short.
-
-          A max-width is the ONLY width lever once a table overflows its wrapper: with
-          `table-layout: auto` every column otherwise collapses to its content width, and
-          `stripe.code.payment_intent_payment_attempt_failed` is content 44 characters
-          wide. Without this the table ran past the right edge and took the Reset column
-          with it.
-        */}
-        <div className="flex max-w-[26rem] min-w-0 flex-col gap-1.5 whitespace-normal">
-          <span className="font-mono text-xs wrap-anywhere">
-            {rule.matches.field} {rule.matches.op} <BreakableId value={rule.matches.value} />
-          </span>
-          {/*
-            The sentence itself, because a merchant deciding whether to tell the customer
-            has to be able to READ what the customer would be told. We already had this
-            copy and only offered a toggle over it, which is asking someone to choose blind.
-
-            NOT `max-w-prose` on the span: 65ch is ~700px, wider than this cell's own 26rem,
-            so it forced the column open and clipped it — measured at 779px of content in a
-            466px box. The parent already sets the measure; a second, larger one only fights
-            it. (And the comment belongs HERE: a JSX comment cannot be the first thing
-            inside a ternary branch, which is how I broke this file a moment ago.)
-          */}
-          {rule.effective.message ? (
-            <span className="text-xs text-muted-foreground">
-              {rule.effective.exposed_to_payer ? "" : "Internal: "}
-              {rule.effective.message}
-            </span>
+    <li className="flex flex-col gap-2 bg-card px-4 py-3 sm:flex-row sm:items-start sm:gap-6">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-sm">{title}</span>
+          {own && !resetting ? <Chip tone="blue">Changed</Chip> : null}
+          {draft ? <Chip tone="tan">{resetting ? "Reset on save" : "Unsaved"}</Chip> : null}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {gatewayLabel(rule.gateway)}
+          {eqCode ? (
+            <>
+              {" · "}
+              <SegmentedId value={rule.matches.value} />
+            </>
           ) : null}
-        </div>
-      </TableCell>
-
-      {/*
-        Both switches and Save live in ONE cell, and the form with them.
-        A <form> is not valid inside <tr>, and `display: contents` only hides that from
-        the eye — React still hydrates invalid markup, and the browser may relocate the
-        element. One cell keeps the markup honest and the row's controls together.
-      */}
-      <TableCell className="px-4 py-3 align-top">
+        </span>
+        {rule.effective.message ? (
+          <span className="text-xs text-muted-foreground">
+            {rule.effective.exposed_to_payer ? "The customer reads: " : "Internal: "}
+            {rule.effective.message}
+          </span>
+        ) : null}
+        {own && rule.override ? (
+          <span className="text-xs text-muted-foreground">
+            Default: {answer(rule.built_in.retriable, rule.built_in.exposed_to_payer)}
+            {rule.override.updated_by ? ` · ${rule.override.updated_by}` : ""}
+            {rule.override.updated_at ? ` · ${fmtDate(rule.override.updated_at, tz)}` : ""}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 sm:justify-end">
         {!rule.overridable ? (
-          /**
-           * No rule names this code, so there is no id a rule-level override could point
-           * at and a PATCH aimed here would 404. The lever is the code-level control on
-           * the group above, which the engine does honour — so the row shows its answer
-           * and points at where to change it, rather than offering a control that fails.
-           */
+          // No rule names this gateway code, so only the code-level answer above reaches it.
           <span className="text-sm text-muted-foreground">
-            {rule.effective.retriable ? "Retries" : "No retry"} &middot;{" "}
-            {rule.effective.exposed_to_payer ? "reason shown" : "reason internal"}
+            {answer(rule.effective.retriable, rule.effective.exposed_to_payer)} · set by the code
           </span>
         ) : (
-          <ActionForm action={setDeclineRuleAction}>
-            <input type="hidden" name="biz" value={biz} />
-            <input type="hidden" name="rule" value={rule.id} />
-            {/* Two switches and Save. This used to fit on ONE line at 1600px; since the
-              row padding came up to match the other lists (px-4 py-3, as DataTable
-              renders) Save drops to a second line, which is the right way to spend the
-              width. `xl:flex-nowrap` buys the line back and is deliberately NOT used: it
-              squeezes the Rule column until identifiers break mid-token
-              (`stripe.code.authentication_requi / red`), and a broken identifier is
-              harder to scan than a wrapped control group. */}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <SettingSwitch
-                name="retriable"
-                defaultChecked={rule.effective.retriable}
-                label={`Retry after ${rule.id}`}
-                text="Retry"
+          <>
+            <span className="inline-flex items-center gap-2 text-sm">
+              <ToggleAnswer
+                checked={shown.retriable}
+                disabled={resetting}
+                onCheckedChange={(v) =>
+                  onRule(rule, { retriable: v, exposed_to_payer: shown.exposed_to_payer })
+                }
+                label={`Retry after ${title} (${gatewayLabel(rule.gateway)})`}
               />
-              <SettingSwitch
-                name="exposed_to_payer"
-                defaultChecked={rule.effective.exposed_to_payer}
-                label={`Show the reason to the customer for ${rule.id}`}
-                text="Tell customer"
-              />
-              {/* `outline`, not the filled primary. There are 49 configurable rules on
-                this page and each one carries its own Save, so a filled button here
-                puts 82 page-primary actions on screen and none of them means anything.
-                A per-row commit is a row-level control; the page's primary action is
-                the family-level "Apply to all" above it. */}
-              <SubmitButton size="sm" variant="outline">
-                Save
-              </SubmitButton>
-            </div>
-          </ActionForm>
-        )}
-      </TableCell>
-
-      <TableCell className="px-4 py-3 align-top">
-        {changed ? (
-          <div className="flex flex-col items-start gap-1">
-            {/* Who to ask about a setting that surprised somebody. */}
-            {/* What it was, shown only where it differs — the whole reason the standing
-                column went away. */}
-            <span className="text-xs text-muted-foreground">
-              Built in: {rule.built_in.retriable ? "retries" : "no retry"},{" "}
-              {rule.built_in.exposed_to_payer ? "reason shown" : "reason internal"}
+              <span aria-hidden>Retry</span>
             </span>
-            {rule.override?.updated_by || rule.override?.updated_at ? (
-              <span className="text-xs text-muted-foreground">
-                {rule.override.updated_by ?? "Changed"}
-                {rule.override.updated_at
-                  ? ` · ${new Date(rule.override.updated_at).toLocaleDateString()}`
-                  : ""}
-              </span>
-            ) : null}
-            <ActionForm action={resetDeclineRuleAction}>
-              <input type="hidden" name="biz" value={biz} />
-              <input type="hidden" name="rule" value={rule.id} />
-              <SubmitButton size="sm" variant="ghost">
+            <span className="inline-flex items-center gap-2 text-sm">
+              <ToggleAnswer
+                checked={shown.exposed_to_payer}
+                disabled={resetting}
+                onCheckedChange={(v) =>
+                  onRule(rule, { retriable: shown.retriable, exposed_to_payer: v })
+                }
+                label={`Tell the customer the reason for ${title} (${gatewayLabel(rule.gateway)})`}
+              />
+              <span aria-hidden>Tell customer</span>
+            </span>
+            {draft ? (
+              <Button type="button" size="sm" variant="ghost" onClick={() => onRule(rule, null)}>
+                Undo
+              </Button>
+            ) : own ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => onRule(rule, { reset: true })}
+              >
                 Reset
-              </SubmitButton>
-            </ActionForm>
-          </div>
-        ) : null}
-      </TableCell>
-    </TableRow>
+              </Button>
+            ) : null}
+          </>
+        )}
+      </div>
+    </li>
   );
 }

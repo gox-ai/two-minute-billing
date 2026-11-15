@@ -22,9 +22,6 @@ import {
   taxRegions,
   taxStateRegistrations,
 } from "@db/schema";
-import { isEncryptedWithCurrentKey } from "@/platform/secrets";
-import { readSmtpPassword, writeSmtpPassword } from "@/modules/emails/smtp-config";
-import { readSesSecret, writeSesSecret } from "@/modules/emails/ses-config";
 import { resolveInvoiceCustomization } from "@/modules/invoicing/customization";
 
 export type Biz = typeof businesses.$inferSelect;
@@ -200,6 +197,8 @@ export interface PairPlan {
   override: boolean;
   sections: SectionPlan[];
   blockers: Blocker[];
+  /** Shown, never blocking. */
+  warnings: Blocker[];
   /** The destination's catalog, coupons and taxes are deleted first (test destinations only). */
   wipe: boolean;
   patch: Patch;
@@ -208,44 +207,6 @@ export interface PairPlan {
   taxChanges: number;
   renameDefaultProfile: { id: string; from: string; to: string } | null;
   digest: string;
-}
-
-// ── secrets ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * The destination's next envelope for one secret. Same plaintext → keep the destination's
- * ciphertext (a re-run changes nothing). Otherwise the source's envelope is copied: the
- * cipher has no AAD or business binding, so it decrypts for any business. An envelope
- * under a rotation-fallback key is re-encrypted under the current one.
- */
-function nextSecret(
-  label: string,
-  srcEnc: string | null,
-  destEnc: string | null,
-  read: (e: string) => string | null,
-  write: (plain: string) => string,
-  blockers: Sink,
-): { next: string | null; note: string } {
-  if (!srcEnc) return { next: null, note: destEnc ? "remove" : "none" };
-  let srcPlain: string | null;
-  try {
-    srcPlain = read(srcEnc);
-  } catch {
-    srcPlain = null;
-  }
-  if (srcPlain == null) {
-    blockers.push(`We could not read the source's ${label}. Enter it again on the source.`);
-    return { next: destEnc, note: "unreadable" };
-  }
-  let destPlain: string | null = null;
-  try {
-    destPlain = destEnc ? read(destEnc) : null;
-  } catch {
-    destPlain = null;
-  }
-  if (destPlain === srcPlain) return { next: destEnc, note: "same" };
-  if (isEncryptedWithCurrentKey(srcEnc)) return { next: srcEnc, note: "copy" };
-  return { next: write(srcPlain), note: "re-encrypt" };
 }
 
 // ── tax ──────────────────────────────────────────────────────────────────────────────────
@@ -447,7 +408,7 @@ async function checkNumbering(
   const peers = await tx
     .select({
       id: businesses.id,
-      publicId: businesses.publicId,
+      name: businesses.name,
       invoicePrefix: businesses.invoicePrefix,
       creditNotePrefix: businesses.creditNotePrefix,
     })
@@ -464,7 +425,7 @@ async function checkNumbering(
     const theirs = kind === "invoice" ? p.invoicePrefix : p.creditNotePrefix;
     if (bare(theirs) === bare(prefix)) {
       blockers.push(
-        `The ${label} ${prefix} is already in use by ${p.publicId}. Use a different prefix.`,
+        `The ${label} ${prefix} is already in use by the business "${p.name}". Use a different prefix.`,
       );
       return;
     }
@@ -566,6 +527,7 @@ export async function buildPairPlan(
     override,
     sections: [],
     blockers: [],
+    warnings: [],
     wipe,
     patch: {},
     auditBefore: {},
@@ -762,32 +724,29 @@ export async function buildPairPlan(
       if (Object.keys(email).length === 0) email = null;
     }
     addField(sec, "emailConfig", dest.emailConfig, email);
-    addField(sec, "smtpConfig", dest.smtpConfig, src.smtpConfig);
-    addField(sec, "sesConfig", dest.sesConfig, src.sesConfig);
-    const smtp = nextSecret(
-      "SMTP password",
-      src.smtpCredentialsEnc,
-      dest.smtpCredentialsEnc,
-      readSmtpPassword,
-      writeSmtpPassword,
-      sink("email_sending"),
-    );
-    addField(sec, "smtpCredentialsEnc", dest.smtpCredentialsEnc, smtp.next, {
-      srcEnc: src.smtpCredentialsEnc,
-      note: smtp.note,
-    });
-    const ses = nextSecret(
-      "SES secret key",
-      src.sesCredentialsEnc,
-      dest.sesCredentialsEnc,
-      readSesSecret,
-      writeSesSecret,
-      sink("email_sending"),
-    );
-    addField(sec, "sesCredentialsEnc", dest.sesCredentialsEnc, ses.next, {
-      srcEnc: src.sesCredentialsEnc,
-      note: ses.note,
-    });
+    // Secrets are never copied. A copied transport the destination has no credential for
+    // cannot send: refused for a live destination; a test one gets it switched off, because an
+    // enabled transport without a credential breaks businesses_*_config_ck.
+    for (const [column, label, cfg, destEnc] of [
+      ["smtpConfig", "SMTP password", src.smtpConfig, dest.smtpCredentialsEnc],
+      ["sesConfig", "Amazon SES secret key", src.sesConfig, dest.sesCredentialsEnc],
+    ] as const) {
+      let to: unknown = cfg;
+      if (obj(cfg)?.enabled === true && !destEnc) {
+        if (live)
+          sink("email_sending").push(
+            `The destination has no ${label}. Secrets are not copied. Enter it in the email settings of the destination first, or leave out Email sending.`,
+          );
+        else {
+          plan.warnings.push({
+            section: "email_sending",
+            message: `The destination has no ${label}. Secrets are not copied, so this transport is copied switched off. Enter the ${label} in the email settings of the destination, then switch it on.`,
+          });
+          to = { ...obj(cfg), enabled: false };
+        }
+      }
+      addField(sec, column, dest[column], to);
+    }
     plan.sections.push(sec);
   }
 
@@ -825,6 +784,7 @@ export function serializePairPlan(plan: PairPlan) {
     destination_livemode: plan.destination.livemode,
     clear_first: plan.wipe,
     blockers: plan.blockers,
+    warnings: plan.warnings,
     sections: plan.sections.map((s) => ({
       section: s.section,
       status: s.status,

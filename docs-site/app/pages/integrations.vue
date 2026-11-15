@@ -283,7 +283,6 @@ useMarketingSeo({
                 class="flex items-center gap-1 text-sm font-medium text-primary"
               >
                 Payments and routing
-                <UIcon name="i-lucide-arrow-up-right" class="size-4" />
               </NuxtLink>
             </div>
             <p class="mt-1 text-sm text-muted">
@@ -327,7 +326,6 @@ useMarketingSeo({
                 <span class="flex min-h-6 items-center gap-1.5 font-semibold text-highlighted">
                   <PartnerLogo v-if="i.logo" :name="i.logo" :area="900" :max-width="140" />
                   <template v-else>{{ i.name }}</template>
-                  <UIcon name="i-lucide-arrow-up-right" class="size-4 text-muted" />
                 </span>
                 <span class="mt-1 block text-sm text-muted">{{ i.body }}</span>
               </span>

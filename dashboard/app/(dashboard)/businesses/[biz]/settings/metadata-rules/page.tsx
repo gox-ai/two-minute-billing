@@ -6,7 +6,7 @@ import {
   type MetadataKeyRule,
   type MetadataRuleSettings,
 } from "@/lib/api/metadata-rules";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
 import {
   Table,
   TableBody,
@@ -175,7 +175,7 @@ export default async function MetadataRulesSettings({
                       </TableCell>
                       <TableCell>
                         {r.archived ? (
-                          <Badge variant="outline">Archived</Badge>
+                          <Chip>Archived</Chip>
                         ) : (
                           <span className="text-sm text-muted-foreground">Active</span>
                         )}

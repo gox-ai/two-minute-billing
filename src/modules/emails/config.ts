@@ -68,6 +68,8 @@ export type EmailType =
   | "credit_note_applied"
   // ── subscription lifecycle (event-driven) ──
   | "subscription_activated"
+  // A cancelled subscription started again (portal restart, restart link, operator).
+  | "subscription_reactivated"
   | "subscription_changed"
   | "subscription_renewed"
   | "subscription_paused"
@@ -129,6 +131,8 @@ export type EmailType =
   | "payment_request"
   | "payment_method_request"
   | "credit_note_sent"
+  // A link that restarts an ended subscription through a pay-first checkout.
+  | "subscription_restart"
   // ── system: sent only by the engine, on the customer's own request ──
   // The portal sign-in code (storefront Phase 4). Never an automatic toggle, never ad hoc.
   | "portal_sign_in_code";
@@ -154,6 +158,7 @@ export const EMAIL_TYPES: readonly EmailType[] = [
   "credit_note_issued",
   "credit_note_applied",
   "subscription_activated",
+  "subscription_reactivated",
   "subscription_changed",
   "subscription_renewed",
   "subscription_paused",
@@ -184,6 +189,7 @@ export const EMAIL_TYPES: readonly EmailType[] = [
   "payment_request",
   "payment_method_request",
   "credit_note_sent",
+  "subscription_restart",
   "portal_sign_in_code",
 ];
 
@@ -200,6 +206,7 @@ export const ADHOC_EMAIL_TYPES: readonly EmailType[] = [
   "payment_request",
   "payment_method_request",
   "credit_note_sent",
+  "subscription_restart",
 ];
 
 /** The engine-fired types — the ones the per-type opt-in toggles actually govern. */
@@ -292,10 +299,12 @@ export const EMAIL_AUDIENCE: Record<EmailType, "billing" | "account"> = {
   card_expired: "billing",
   payment_method_invalid: "billing",
   payment_method_request: "billing",
+  subscription_restart: "account",
   mandate_expired: "billing",
   subscription_canceled_nonpayment: "account",
   portal_sign_in_code: "account",
   subscription_activated: "account",
+  subscription_reactivated: "account",
   subscription_changed: "account",
   subscription_renewed: "account",
   subscription_paused: "account",
@@ -519,12 +528,24 @@ export function applySubjectPrefix(cfg: EmailConfig, subject: string): string {
 
 /**
  * Off until the business switches them on: mail about a purchase the customer did not make,
- * and spend-limit notices the business may already send itself.
+ * spend-limit notices the business may already send itself, and the welcome-back email, which
+ * existing businesses never sent (a business a person creates starts with it on).
  */
 export const OPT_IN_EMAIL_TYPES: readonly EmailType[] = [
   "checkout_reminder",
   "spend_limit_reached",
+  "subscription_reactivated",
 ];
+
+/**
+ * Written into `email_config` when a person creates a business: the opt-in emails we
+ * recommend. Sending stays off (`enabled` unset) until they switch email on, as today.
+ */
+export function initialEmailConfig(creator: {
+  hasOperator?: boolean;
+}): Record<string, unknown> | undefined {
+  return creator.hasOperator === true ? { types: { subscription_reactivated: true } } : undefined;
+}
 
 /** A specific email type is sent only when emails are enabled AND not turned off for that type. */
 export function isEmailTypeEnabled(cfg: EmailConfig, type: EmailType): boolean {

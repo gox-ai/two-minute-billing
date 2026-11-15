@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { withTenant, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
-import { normalizeStateCode, requireStateCode } from "@/platform/geo";
+import { normalizeStateCode, requireStateCode, subdivisionName } from "@/platform/geo";
 import {
   businesses,
   taxProfiles,
@@ -631,7 +631,9 @@ export function taxComponentLabel(name: string, rateBps: number): string {
  * half-up note in `taxMinorFor`.
  */
 function componentTaxMinor(baseMinor: bigint, rateBps: number): bigint {
-  return (baseMinor * BigInt(rateBps) + 5000n) / 10000n;
+  // Sign-symmetric, as `computeInvoiceTax` rounds a credit line.
+  const r = BigInt(rateBps);
+  return baseMinor >= 0n ? (baseMinor * r + 5000n) / 10000n : -((-baseMinor * r + 5000n) / 10000n);
 }
 
 /**
@@ -650,7 +652,8 @@ function componentTotalsFor(
       : null;
   return resolution.components.map((c) =>
     bases
-      ? bases.reduce((s, b) => s + (b > 0n ? componentTaxMinor(b, c.rateBps) : 0n), 0n)
+      ? // A credit line's base is negative and takes negative tax, as on the invoice.
+        bases.reduce((s, b) => s + componentTaxMinor(b, c.rateBps), 0n)
       : componentTaxMinor(baseMinor, c.rateBps),
   );
 }
@@ -720,7 +723,8 @@ export function inclusiveTaxMinorFor(
 ): bigint {
   const r = BigInt(resolution.totalRateBps);
   if (grossMinor <= 0n || r <= 0n) return 0n;
-  const out = (b: bigint) => (b > 0n ? (b * r) / (10000n + r) : 0n);
+  // Floored on the magnitude and re-signed, as `computeInvoiceTax` backs out a credit line.
+  const out = (b: bigint) => (b >= 0n ? (b * r) / (10000n + r) : -((-b * r) / (10000n + r)));
   const bases =
     resolution.rounding === "per_line" && lineAmounts && lineAmounts.length > 1
       ? perLineBases(lineAmounts, grossMinor)
@@ -1332,6 +1336,8 @@ export async function upsertTaxStateRegistration(input: {
     // show the region-wide number instead and nobody would know why.
     const stateCode = requireStateCode(region.country, input.stateCode);
     if (!stateCode) throw new TaxError("state_code is required for a state registration");
+    // No name given (the home state at GST setup, an API call without one): the known name.
+    const stateName = input.stateName ?? subdivisionName(region.country, stateCode);
     const [row] = await tx
       .insert(taxStateRegistrations)
       .values({
@@ -1340,13 +1346,13 @@ export async function upsertTaxStateRegistration(input: {
         taxRegionId: region.id,
         publicId: publicId("txs"),
         stateCode,
-        stateName: input.stateName ?? null,
+        stateName,
         registrationNumber: input.registrationNumber ?? null,
       })
       .onConflictDoUpdate({
         target: [taxStateRegistrations.taxRegionId, taxStateRegistrations.stateCode],
         set: {
-          stateName: input.stateName ?? null,
+          stateName,
           registrationNumber: input.registrationNumber ?? null,
           updatedAt: sql`now()`,
         },

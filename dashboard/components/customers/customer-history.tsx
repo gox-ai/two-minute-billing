@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { plural } from "@/lib/labels";
 import * as React from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -12,7 +14,8 @@ import {
 } from "@/components/ui/table";
 import { StatusChip } from "@/components/patterns/chip";
 import { creditNoteChipStatus } from "@/lib/credit-note-status";
-import { money, fmtDate, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import type { Invoice, CreditNote } from "@/lib/api";
 import type { Transaction } from "@/lib/api/payments";
 import type { EventRecord } from "@/lib/api/developer";
@@ -69,8 +72,8 @@ export function CustomerHistory({
       <TabsList className="flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
         <TabsTrigger value="invoices">Invoices{count(invoices)}</TabsTrigger>
         <TabsTrigger value="transactions">Transactions{count(transactions)}</TabsTrigger>
-        <TabsTrigger value="credit-notes">Credit Notes{count(creditNotes)}</TabsTrigger>
-        <TabsTrigger value="emails">Email Logs{count(emails)}</TabsTrigger>
+        <TabsTrigger value="credit-notes">Credit notes{count(creditNotes)}</TabsTrigger>
+        <TabsTrigger value="emails">Email logs{count(emails)}</TabsTrigger>
         {events ? <TabsTrigger value="events">Events{count(events)}</TabsTrigger> : null}
       </TabsList>
 
@@ -80,7 +83,7 @@ export function CustomerHistory({
         ) : (
           <>
             {/* Fixed widths, like Transactions: the id truncates instead of scrolling. */}
-            <Table className="table-fixed max-lg:min-w-2xl">
+            <Table phone="stack" className="table-fixed [--phone-row-x:0] max-lg:min-w-2xl">
               <colgroup>
                 <col />
                 <col className="w-[20%]" />
@@ -94,20 +97,22 @@ export function CustomerHistory({
                   <TableHead>Status</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Created on</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead phone="aside" className="text-right">
+                    Total
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {inv.rows.map((i) => (
                   <TableRow key={i.id}>
                     <TableCell>
-                      <a
+                      <Link
                         href={`/businesses/${biz}/invoices/${i.id}`}
                         title={i.id}
                         className="block truncate font-mono text-xs text-primary hover:underline"
                       >
                         {i.number ?? i.id}
-                      </a>
+                      </Link>
                     </TableCell>
                     <TableCell>
                       <StatusChip status={i.status} />
@@ -133,7 +138,7 @@ export function CustomerHistory({
           <>
             {/* Fixed widths, like Email Logs: long ids truncate and dates wrap inside
                 their column; the gateway sits under the type. */}
-            <Table className="table-fixed max-lg:min-w-2xl">
+            <Table phone="stack" className="table-fixed [--phone-row-x:0] max-lg:min-w-2xl">
               <colgroup>
                 <col />
                 <col className="w-[17%]" />
@@ -148,20 +153,22 @@ export function CustomerHistory({
                   <TableHead>Occurred on</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead phone="aside" className="text-right">
+                    Amount
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {txn.rows.map((t) => (
                   <TableRow key={t.id}>
                     <TableCell>
-                      <a
+                      <Link
                         href={`/businesses/${biz}/transactions/${t.id}`}
                         title={t.id}
                         className="block truncate font-mono text-xs text-primary hover:underline"
                       >
                         {t.id}
-                      </a>
+                      </Link>
                     </TableCell>
                     <TableCell className="whitespace-normal">
                       {t.occurred_at
@@ -199,14 +206,16 @@ export function CustomerHistory({
           <Empty>No credit note history.</Empty>
         ) : (
           <>
-            <Table>
+            <Table phone="stack" className="[--phone-row-x:0]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Credit note</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Invoice</TableHead>
                   <TableHead>Created on</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead phone="aside" className="text-right">
+                    Total
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -217,25 +226,25 @@ export function CustomerHistory({
                       notes a customer holds were visible here but not reachable, and the
                       CN list has no customer filter to get there instead. */}
                     <TableCell>
-                      <a
+                      <Link
                         href={`/businesses/${biz}/credit_notes/${c.id}`}
                         title={c.id}
                         className="font-mono text-xs text-primary hover:underline"
                       >
                         {c.number ?? c.id}
-                      </a>
+                      </Link>
                     </TableCell>
                     <TableCell>
                       <StatusChip status={creditNoteChipStatus(c)} />
                     </TableCell>
                     <TableCell>
-                      <a
+                      <Link
                         href={`/businesses/${biz}/invoices/${c.invoice}`}
                         title={c.invoice}
                         className="font-mono text-xs text-primary hover:underline"
                       >
                         {c.invoice_number ?? c.invoice}
-                      </a>
+                      </Link>
                     </TableCell>
                     <TableCell>{fmtDate(c.created_at, tz)}</TableCell>
                     <TableCell className="text-right tabular-nums">
@@ -262,7 +271,7 @@ export function CustomerHistory({
             {/* Fixed widths, so a long subject, address or error wraps or truncates
                 inside its column instead of scrolling the table sideways. The address
                 sits under the subject: it is the customer's own on nearly every row. */}
-            <Table className="table-fixed">
+            <Table phone="stack" className="table-fixed [--phone-row-x:0]">
               <colgroup>
                 <col className="w-[18%]" />
                 <col />
@@ -276,7 +285,7 @@ export function CustomerHistory({
                   <TableHead>Subject</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Sent on</TableHead>
-                  <TableHead>
+                  <TableHead phone="aside">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
@@ -303,7 +312,7 @@ export function CustomerHistory({
                         <StatusChip status={m.status} />
                         {m.attempts > 1 ? (
                           <span className="text-xs whitespace-nowrap text-muted-foreground">
-                            {m.attempts} attempts
+                            {plural(m.attempts, "attempt")}
                           </span>
                         ) : null}
                       </div>
@@ -341,7 +350,7 @@ export function CustomerHistory({
           ) : (
             <>
               {/* Fixed widths, like Email Logs: ids truncate, event types and dates wrap. */}
-              <Table className="table-fixed">
+              <Table phone="stack" className="table-fixed [--phone-row-x:0]">
                 <colgroup>
                   <col />
                   <col className="w-[28%]" />
@@ -365,13 +374,13 @@ export function CustomerHistory({
                   {evt.rows.map((e) => (
                     <TableRow key={e.id}>
                       <TableCell>
-                        <a
+                        <Link
                           href={`/businesses/${biz}/events/${e.id}`}
                           title={e.id}
                           className="block truncate font-mono text-xs text-primary hover:underline"
                         >
                           {e.id}
-                        </a>
+                        </Link>
                       </TableCell>
                       <TableCell className="wrap-anywhere whitespace-normal">{e.type}</TableCell>
                       {multiResource ? (

@@ -20,6 +20,14 @@ import { LIMITS } from "@/lib/limits";
 import { inviteAction } from "@/app/auth-actions";
 import type { RoleOption } from "@/lib/roles";
 
+/** The fixed roles' names; their values are lower-case ids. */
+const ROLE_NAME: Record<string, string> = {
+  admin: "Admin",
+  manager: "Manager",
+  ops: "Ops",
+  developer: "Developer",
+};
+
 /** What each role can reach. Reference material, so it sits where the question is asked. */
 const ROLE_ACCESS: Array<[string, string]> = [
   ["admin", "Everything, including team management"],
@@ -69,7 +77,7 @@ export function InviteDialog({ roleOptions }: { roleOptions: RoleOption[] }) {
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
       <DialogTrigger asChild>
-        <Button>
+        <Button size="sm">
           <Plus className="size-4" />
           Invite member
         </Button>
@@ -103,7 +111,7 @@ export function InviteDialog({ roleOptions }: { roleOptions: RoleOption[] }) {
           <Field name="name" label="Name" help="Optional. They can set it later.">
             <Input
               name="name"
-              placeholder="Jane Doe"
+              placeholder="Priya Raman"
               maxLength={LIMITS.name}
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -115,10 +123,10 @@ export function InviteDialog({ roleOptions }: { roleOptions: RoleOption[] }) {
               defaultValue={
                 offered.some((r) => r.value === "manager") ? "manager" : (offered[0]?.value ?? "")
               }
-              className="w-56"
+              className="w-full"
               options={offered.map((r) => ({
                 value: r.value,
-                label: r.custom ? `${r.label} (custom)` : r.label,
+                label: r.custom ? `${r.label} (custom)` : (ROLE_NAME[r.value] ?? r.label),
               }))}
             />
           </Field>
@@ -131,14 +139,14 @@ export function InviteDialog({ roleOptions }: { roleOptions: RoleOption[] }) {
             {ROLE_ACCESS.filter(([role]) => offered.some((r) => r.value === role)).map(
               ([role, access]) => (
                 <div key={role} className="flex gap-2">
-                  <dt className="w-20 shrink-0 font-medium">{role}</dt>
+                  <dt className="w-20 shrink-0 font-medium">{ROLE_NAME[role]}</dt>
                   <dd className="text-muted-foreground">{access}</dd>
                 </div>
               ),
             )}
             {offered.some((r) => r.custom) ? (
               <div className="flex gap-2">
-                <dt className="w-20 shrink-0 font-medium">custom</dt>
+                <dt className="w-20 shrink-0 font-medium">Custom</dt>
                 <dd className="text-muted-foreground">The permissions set in Team → Roles</dd>
               </div>
             ) : null}

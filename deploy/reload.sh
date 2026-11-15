@@ -35,8 +35,9 @@
 # verb you type — measured at 784 connection-refused replies through one reload (2.4s to boot
 # past loadGeoReference, 3.6s to drain). `deploy/pm2/tmbilling-api-cluster.json` is the opt-in
 # that makes it a real rolling handover (measured: 2277 requests, 0 failures); this script uses
-# `reload` throughout so that switching needs no change here. Until then, not reloading a
-# process at all when nothing it runs changed is what removes the gap.
+# `reload` throughout so that switching needs no change here. The dashboard gets no gap from its
+# standby (tmbilling-dashboard-b, nginx `backup`), refreshed before 4101 restarts. Each deploy
+# probes both and prints any failed requests: deploy/README.md § Zero-downtime reloads.
 
 set -Eeuo pipefail
 
@@ -44,10 +45,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 # shellcheck source=lib/pm2-node.sh
 . "$REPO/deploy/lib/pm2-node.sh"
+# shellcheck source=lib/downtime-probe.sh
+. "$REPO/deploy/lib/downtime-probe.sh"
 use_stable_node
 
 API=tmbilling-api
 DASH=tmbilling-dashboard
+DASH_B=tmbilling-dashboard-b   # the standby nginx falls back to while 4101 restarts
 WORKER=tmbilling-worker
 
 # ── options ──────────────────────────────────────────────────────────────────────
@@ -55,6 +59,7 @@ DRY=0; FORCE_ALL=0; ONLY=""; REF=""; PULL=1; SINCE=""
 SKIP_INSTALL=0; SKIP_BUILD=0; SKIP_MIGRATE=0; ALLOW_DIRTY=0
 
 usage() { sed -n '3,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+ORIG_ARGS=("$@")   # for the re-exec after a pull that changed this script
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -240,9 +245,9 @@ if [ -n "$daemon_pid" ] && ! grep -q "pm2-$(id -un)\.service" "/proc/$daemon_pid
 fi
 SNAP_BEFORE=$(pm2_snapshot) || die "could not read the pm2 process list"
 # 2026-10-22: the API's recorded node had been deleted, so its reload started nothing.
-require_live_node deploy/pm2 "$API" "$DASH" "$WORKER" || die "a pm2 app points at a deleted node — repair it as shown above"
+require_live_node deploy/pm2 "$API" "$DASH" "$DASH_B" "$WORKER" || die "a pm2 app points at a deleted node — repair it as shown above"
 MISSING=()
-for app in "$API" "$DASH" "$WORKER"; do
+for app in "$API" "$DASH" "$DASH_B" "$WORKER"; do
   id=$(snap_field "$SNAP_BEFORE" "$app" 2); st=$(snap_field "$SNAP_BEFORE" "$app" 4)
   if [ -z "$id" ]; then MISSING+=("$app"); warn "$app is not registered with pm2 — it will be STARTED from its config (that mints a new pm2 id)"
   else info "$(printf '%-22s id=%-3s pid=%-8s %s' "$app" "$id" "$(snap_field "$SNAP_BEFORE" "$app" 3)" "$st")"
@@ -253,7 +258,8 @@ done
 API_HOST=$(cfg_env "$API" HOST 127.0.0.1);        API_PORT=$(cfg_env "$API" PORT 4001)
 WRK_HOST=$(cfg_env "$WORKER" WORKER_HEALTH_HOST 127.0.0.1); WRK_PORT=$(cfg_env "$WORKER" WORKER_HEALTH_PORT 4002)
 DASH_PORT=$(cfg_port_arg "$DASH" 4101)
-dim "probes: api http://$API_HOST:$API_PORT/readyz · dashboard http://127.0.0.1:$DASH_PORT/ · worker http://$WRK_HOST:$WRK_PORT/readyz"
+DASH_B_PORT=$(cfg_port_arg "$DASH_B" 4102)
+dim "probes: api http://$API_HOST:$API_PORT/readyz · dashboard http://127.0.0.1:$DASH_PORT/ (standby :$DASH_B_PORT) · worker http://$WRK_HOST:$WRK_PORT/readyz"
 
 # The hosts for the through-nginx check. Never hard-coded: this file ships, the hostnames do not.
 NGINX_DOMAIN=${DEPLOY_CHECK_DOMAIN:-}
@@ -341,6 +347,14 @@ if [ "$PULL" = 1 ]; then
     dim "would fast-forward to $(git log -1 --format='%h %s' FETCH_HEAD)"
   else
     git merge --ff-only FETCH_HEAD || die "cannot fast-forward $BRANCH onto origin/$REF — the box has diverged; resolve by hand"
+    # Bash has already read this file, so a pull that changes it would run the OLD steps on the
+    # new code (2026-11-08: the dashboard standby shipped and was never started). Re-run the new
+    # script on the same range; it re-takes the lock on fd 9.
+    if [ -z "${RELOAD_REEXEC:-}" ] && ! git diff --quiet "$ROLLBACK_TO" HEAD -- deploy/reload.sh deploy/lib; then
+      info "deploy/reload.sh changed in this pull — re-running the new version"
+      RELOAD_REEXEC=1 exec bash "$REPO/deploy/reload.sh" --no-pull --since "$ROLLBACK_TO" \
+        ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+    fi
   fi
 else
   step "Skipping pull (--no-pull)"
@@ -414,7 +428,7 @@ services_for() { # path → the processes that run this file
     src/*|db/*|drizzle.config.ts|tsconfig.json)    echo api; echo worker ;;
     package.json|pnpm-lock.yaml|pnpm-workspace.yaml) echo api; echo dashboard; echo worker ;;
     deploy/pm2/tmbilling-api.json|deploy/pm2/tmbilling-api-cluster.json) echo api ;;
-    deploy/pm2/tmbilling-dashboard.json)           echo dashboard ;;
+    deploy/pm2/tmbilling-dashboard.json|deploy/pm2/tmbilling-dashboard-b.json) echo dashboard ;;
     deploy/pm2/tmbilling-worker.json|deploy/pm2/tmbilling-worker-cluster.json) echo worker ;;
     # Loaded by both cluster configs at startup; the fork configs never read it.
     deploy/pm2/tsx-preload.mjs)                    echo api; echo worker ;;
@@ -604,6 +618,34 @@ reload_one() { # name
   fi
 }
 
+# Copy a build without its compile cache (~190MB, build-time only). A real copy, not hardlinks:
+# Next writes into its distDir at runtime, and a shared inode would leak that into the other.
+copy_build() { # src dst
+  rm -rf "$2" && mkdir -p "$2"
+  tar -C "$1" --exclude=./cache -cf - . | tar -C "$2" -xf -
+}
+# Add the outgoing build's static chunks (no overwrite), then drop any older than 7 days.
+carry_static() { # old new
+  [ -d "$1/static" ] && [ -d "$2/static" ] || return 0
+  # tar, not `cp -n`: coreutils 9.2 made a skipped file a failure, 9.3 undid it.
+  { tar -C "$1/static" -cf - . | tar -C "$2/static" --skip-old-files -xf -; } || warn "could not carry the previous build's chunks — open tabs may 404 a chunk until reloaded"
+  find "$2/static" -type f -mtime +7 -delete 2>/dev/null || true
+  find "$2/static" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+}
+
+PROBING=0
+if [ "$RELOAD_API" = 1 ] || [ "$RELOAD_DASH" = 1 ]; then
+  targets=("api=http://$API_HOST:$API_PORT/healthz")
+  if [ -n "$NGINX_DOMAIN" ]; then
+    targets+=("dashboard=https://app.$NGINX_DOMAIN/login=-k --resolve app.$NGINX_DOMAIN:443:127.0.0.1")
+  else
+    # Direct to 4101 bypasses nginx's fallback to the standby, so this one shows 4101's own gap.
+    targets+=("dash-4101=http://127.0.0.1:$DASH_PORT/login")
+  fi
+  probe_start "${targets[@]}"; PROBING=1
+  trap 'probe_stop' EXIT
+fi
+
 RELOADED=()
 
 if [ "$RELOAD_API" = 1 ]; then
@@ -615,11 +657,30 @@ if [ "$RELOAD_API" = 1 ]; then
 fi
 
 if [ "$RELOAD_DASH" = 1 ]; then
-  step "Reload $DASH"
+  # The standby first: it is idle (nginx's `backup`), so restarting it costs nobody anything. Then
+  # 4101, during whose restart nginx sends every request to the standby, already on the new build.
+  # Each serves its OWN copy of the build, so neither ever reads the other's files mid-swap.
+  step "Reload $DASH_B (standby, :$DASH_B_PORT), then $DASH (:$DASH_PORT)"
+  if [ -d dashboard/.next.staging ]; then
+    # A tab opened before the deploy still asks for the old build's chunks; keep a week of them.
+    carry_static dashboard/.next dashboard/.next.staging
+    info "copying the new build to the standby (dashboard/.next-b)"
+    copy_build dashboard/.next.staging dashboard/.next-b.new
+    rm -rf dashboard/.next-b && mv dashboard/.next-b.new dashboard/.next-b
+  elif [ ! -f dashboard/.next-b/BUILD_ID ] && [ -f dashboard/.next/BUILD_ID ]; then
+    info "the standby has no build yet — copying the live one"
+    copy_build dashboard/.next dashboard/.next-b.new
+    rm -rf dashboard/.next-b && mv dashboard/.next-b.new dashboard/.next-b
+  fi
+  reload_one "$DASH_B"
+  wait_ready "http://127.0.0.1:$DASH_B_PORT/" "" 90 "$DASH_B" \
+    || die "$DASH_B (the standby) did not answer. $DASH was NOT touched and still serves the old build. Check: pm2 logs $DASH_B --lines 80 --nostream."
+  RELOADED+=("$DASH_B")
+
   if [ -d dashboard/.next.staging ]; then
     # Two renames, immediately before the reload: from here until the new server is up the old
-    # one is reading the new build's files by path, and that window is what this ordering
-    # exists to keep down to milliseconds instead of the length of a build.
+    # one is reading the new build's files by path. nginx sends new requests to the standby
+    # as soon as 4101 refuses, but keep this window to milliseconds all the same.
     info "swapping in the new build (previous one kept as dashboard/.next.prev)"
     rm -rf dashboard/.next.prev
     if [ -d dashboard/.next ]; then mv dashboard/.next dashboard/.next.prev; fi
@@ -627,8 +688,16 @@ if [ "$RELOAD_DASH" = 1 ]; then
   fi
   reload_one "$DASH"
   wait_ready "http://127.0.0.1:$DASH_PORT/" "" 90 "$DASH" \
-    || die "$DASH did not answer. Check: pm2 logs $DASH --lines 80 --nostream. The worker was NOT touched."
+    || die "$DASH did not answer. nginx is serving from the standby ($DASH_B) meanwhile. Check: pm2 logs $DASH --lines 80 --nostream. The worker was NOT touched."
   RELOADED+=("$DASH")
+fi
+
+# Users see the API and the dashboard; the worker's reload is invisible to them (and can take
+# 30 min to drain), so the probe covers only the steps above.
+if [ "$PROBING" = 1 ]; then
+  probe_stop
+  step "Downtime seen by callers during the reload"
+  probe_report || warn "requests failed during the reload (above). The API needs cluster mode and the dashboard its standby + nginx upstream: deploy/README.md § Zero-downtime reloads."
 fi
 
 if [ "$RELOAD_WORKER" = 1 ]; then
@@ -648,7 +717,7 @@ fi
 # ── prove the invariants rather than assume them ─────────────────────────────────
 step "Verify"
 SNAP_AFTER=$(pm2_snapshot)
-for app in "$API" "$DASH" "$WORKER"; do
+for app in "$API" "$DASH" "$DASH_B" "$WORKER"; do
   before_ids=$(snap_ids "$SNAP_BEFORE" "$app");  after_ids=$(snap_ids "$SNAP_AFTER" "$app")
   before_pids=$(snap_pids "$SNAP_BEFORE" "$app"); after_pids=$(snap_pids "$SNAP_AFTER" "$app")
   count=$(snap_count "$SNAP_AFTER" "$app")

@@ -1,10 +1,21 @@
+import type { ReactNode } from "react";
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Ticket } from "lucide-react";
-import { listBusinesses, listCouponSets, listProducts, listSubscriptions } from "@/lib/api";
+import {
+  listBusinesses,
+  listCouponSets,
+  listPrices,
+  listProducts,
+  listSubscriptions,
+} from "@/lib/api";
+import { priceLabel } from "@/lib/coupon-scope";
 import { getCoupon } from "@/lib/api/coupons";
 import { getCouponStats, listCouponRedemptions } from "@/lib/api/catalog-stats";
 import { requirePermission } from "@/lib/session";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,23 +81,20 @@ export default async function CouponDetailPage({
   try {
     [businesses, coupon] = await Promise.all([listBusinesses(), getCoupon(biz, cpn)]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Coupon" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="coupon"
+          back={{ label: "View coupons", href: `/businesses/${biz}/catalog/coupons` }}
+          retry
         />
       </>
     );
   }
-  if (!coupon) {
-    return (
-      <>
-        <PageHeader title="Coupon" />
-        <ErrorState description={`We could not find the coupon ${cpn}.`} />
-      </>
-    );
-  }
+  if (!coupon) notFound();
 
   const bizName = businesses.data.find((b) => b.id === biz)?.name ?? biz;
   // Dates render in the business timezone, not UTC — the engine's term
@@ -101,7 +109,8 @@ export default async function CouponDetailPage({
 
   // Everything below is supporting detail: each read degrades on its own so a failure
   // never takes the coupon itself down with it.
-  const [products, subs, sets, stats, redemptions] = await Promise.all([
+  const pricesNamed = (coupon.item_constraints ?? []).some((k) => k.price_ids?.length);
+  const [products, subs, sets, stats, redemptions, prices] = await Promise.all([
     listProducts(biz).catch(() => null),
     listSubscriptions(biz, undefined, {
       limit: HISTORY_PAGE,
@@ -110,18 +119,24 @@ export default async function CouponDetailPage({
     listCouponSets(biz).catch(() => null),
     getCouponStats(biz, coupon.id).catch(() => null),
     listCouponRedemptions(biz, coupon.id, { limit: HISTORY_PAGE }).catch(() => null),
+    pricesNamed ? listPrices(biz).catch(() => null) : null,
   ]);
   // Names for the ids a `specific` constraint stores; the raw id still says what the scope is.
-  const productNames: Record<string, string> = Object.fromEntries(
-    (products?.data ?? []).map((p) => [p.id, p.name]),
-  );
+  const productNames: Record<string, string> = {
+    ...Object.fromEntries((products?.data ?? []).map((p) => [p.id, p.name])),
+    ...Object.fromEntries(
+      (prices?.data ?? []).map((pr) => [
+        pr.id,
+        priceLabel(pr.id, prices!.data, products?.data ?? []),
+      ]),
+    ),
+  };
   // Sets carry the parent coupon's CODE.
   const couponSets = (sets?.data ?? []).filter((s) => s.coupon === coupon.code);
   // `item_constraints` is null unless apply_on is each_specified_item — the only mode in
   // which the engine consults them, so the rows are hidden rather than shown as vacuous.
   const scoped = coupon.apply_on === "each_specified_item";
-  const perCustomer = (coupon as { max_redemptions_per_customer?: number | null })
-    .max_redemptions_per_customer;
+  const perCustomer = coupon.max_redemptions_per_customer;
   const hasMetadata = Boolean(coupon.metadata && Object.keys(coupon.metadata).length);
   // Net of credit notes; a fully credited currency still shows (as 0) beside its gross.
   const grossBy = new Map((stats?.discount_gross ?? []).map((g) => [g.currency, g.amount_minor]));
@@ -144,7 +159,7 @@ export default async function CouponDetailPage({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: "Coupons", href: listHref },
           { label: title },
         ]}
@@ -201,153 +216,170 @@ export default async function CouponDetailPage({
       </FigureTiles>
 
       <Zone title="Coupon">
+        {/* Cards here take their own height: a two-row card beside a long one ends where
+            its content ends. */}
         <Row span="6/6">
-          <RecordCard title="Discount details">
-            <Facts
-              rows={[
-                {
-                  label: "Discount",
-                  value: <span className="font-medium">{discountLabel(coupon)}</span>,
-                },
-                coupon.currency ? { label: "Currency", value: coupon.currency } : null,
-                {
-                  label: "Apply on",
-                  value: coupon.apply_on
-                    ? (APPLY_ON_LABEL[coupon.apply_on] ?? coupon.apply_on)
-                    : "Invoice amount",
-                },
-              ]}
-            />
-            {scoped ? (
-              <dl className="mt-2 grid grid-cols-[40%_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-                {ITEM_KINDS.map((k) => (
-                  <CouponScopeRow
-                    key={k}
-                    facts
-                    kind={k}
-                    constraint={coupon.item_constraints?.find((c) => c.item_kind === k)}
-                    names={productNames}
-                    // The engine refuses a scope change once redeemed.
-                    changeHref={
-                      coupon.times_redeemed === 0 ? `${editHref}#item-constraints` : undefined
-                    }
-                  />
-                ))}
-              </dl>
-            ) : null}
-          </RecordCard>
+          <OwnHeight>
+            <RecordCard title="Discount details">
+              <Facts
+                rows={[
+                  {
+                    label: "Discount",
+                    value: <span className="font-medium">{discountLabel(coupon)}</span>,
+                  },
+                  coupon.currency ? { label: "Currency", value: coupon.currency } : null,
+                  {
+                    label: "Apply on",
+                    value: coupon.apply_on
+                      ? (APPLY_ON_LABEL[coupon.apply_on] ?? coupon.apply_on)
+                      : "Invoice amount",
+                  },
+                ]}
+              />
+              {scoped ? (
+                <dl className="mt-2 grid grid-cols-[40%_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+                  {ITEM_KINDS.map((k) => (
+                    <CouponScopeRow
+                      key={k}
+                      facts
+                      kind={k}
+                      constraint={coupon.item_constraints?.find((c) => c.item_kind === k)}
+                      names={productNames}
+                      // The engine refuses a scope change once redeemed.
+                      changeHref={
+                        coupon.times_redeemed === 0 ? `${editHref}#item-constraints` : undefined
+                      }
+                    />
+                  ))}
+                </dl>
+              ) : null}
+            </RecordCard>
+          </OwnHeight>
 
-          <RecordCard
-            title="Details"
-            actions={
-              <Link href={editHref} className="text-primary hover:underline">
-                Edit
-              </Link>
-            }
-          >
-            <Facts
-              rows={[
-                { label: "Status", value: <StatusChip status={status} /> },
-                { label: "Invoice name", value: coupon.invoice_name || "—" },
-                { label: "Duration", value: durationLabel(coupon) },
-                {
-                  label: "Max redemptions",
-                  value: coupon.max_redemptions ?? "Unlimited",
-                },
-                perCustomer !== undefined
-                  ? { label: "Max per customer", value: perCustomer ?? "Unlimited" }
-                  : null,
-                {
-                  label: "Valid from",
-                  value: coupon.valid_from ? fmtDate(coupon.valid_from, tz) : "—",
-                },
-                {
-                  label: "Valid till",
-                  value: coupon.redeem_by ? fmtDate(coupon.redeem_by, tz) : "Forever",
-                },
-                coupon.created_at
-                  ? { label: "Created", value: fmtDate(coupon.created_at, tz) }
-                  : null,
-                {
-                  label: "JSON Meta Data",
-                  value: (
-                    <span className="flex flex-wrap items-baseline gap-2">
-                      {hasMetadata ? (
-                        <span className="font-mono text-xs break-all">
-                          {JSON.stringify(coupon.metadata)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                      <EditMetadataDialog
-                        action={updateCouponMetadataAction}
-                        hidden={{ biz, cpn: coupon.id }}
-                        metadata={coupon.metadata}
-                      />
-                    </span>
-                  ),
-                },
-              ]}
-            />
-          </RecordCard>
+          <OwnHeight>
+            <RecordCard
+              title="Details"
+              actions={
+                <Link href={editHref} className="text-primary hover:underline">
+                  Edit
+                </Link>
+              }
+            >
+              <Facts
+                rows={[
+                  { label: "Status", value: <StatusChip status={status} /> },
+                  { label: "Invoice name", value: coupon.invoice_name || "—" },
+                  { label: "Duration", value: durationLabel(coupon) },
+                  {
+                    label: "Max redemptions",
+                    value: coupon.max_redemptions ?? "Unlimited",
+                  },
+                  perCustomer !== undefined
+                    ? { label: "Max per customer", value: perCustomer ?? "Unlimited" }
+                    : null,
+                  perCustomer != null
+                    ? {
+                        label: "Count redemptions per customer by",
+                        value: coupon.per_customer_limit_by === "email" ? "Email" : "Customer",
+                      }
+                    : null,
+                  {
+                    label: "Valid from",
+                    value: coupon.valid_from ? fmtDate(coupon.valid_from, tz) : "—",
+                  },
+                  {
+                    label: "Valid till",
+                    value: coupon.redeem_by ? fmtDate(coupon.redeem_by, tz) : "Forever",
+                  },
+                  coupon.created_at
+                    ? { label: "Created", value: fmtDate(coupon.created_at, tz) }
+                    : null,
+                  {
+                    label: "JSON metadata",
+                    value: (
+                      <span className="flex flex-wrap items-baseline gap-2">
+                        {hasMetadata ? (
+                          <span className="font-mono text-xs break-all">
+                            {JSON.stringify(coupon.metadata)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                        <EditMetadataDialog
+                          action={updateCouponMetadataAction}
+                          hidden={{ biz, cpn: coupon.id }}
+                          metadata={coupon.metadata}
+                        />
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </RecordCard>
+          </OwnHeight>
         </Row>
 
         <Row span="8/4">
-          <CouponSubscriptionsCard
-            biz={biz}
-            source={cursorSource(subs, "subscriptions", undefined, [couponFilter])}
-            viewAllHref={subscriptionsHref}
-          />
+          <OwnHeight>
+            <CouponSubscriptionsCard
+              biz={biz}
+              source={cursorSource(subs, "subscriptions", undefined, [couponFilter])}
+              viewAllHref={subscriptionsHref}
+            />
+          </OwnHeight>
           {/* No "New coupon set" here: generating a set is a dialog on the Coupon sets
               list, not a component this page can place. */}
-          <RecordCard
-            id="coupon-sets"
-            title="Coupon sets"
-            meta={couponSets.length ? `${couponSets.length}` : undefined}
-            flush={couponSets.length > 0}
-          >
-            {couponSets.length === 0 ? (
-              <EmptyState
-                icon={<Ticket />}
-                title="No coupon sets"
-                description="No coupon set uses this coupon as its parent."
-              />
-            ) : (
-              <Table className="table-fixed max-lg:min-w-0">
-                <colgroup>
-                  {/* A 360px side card: the heads must fit whole, the set name truncates. */}
-                  <col className="w-[46%]" />
-                  <col className="w-[24%]" />
-                  <col className="w-[30%]" />
-                </colgroup>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-5">Set</TableHead>
-                    <TableHead className="text-right">Codes</TableHead>
-                    <TableHead className="pr-5 text-right">Redeemed</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {couponSets.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="pl-5">
-                        <Link
-                          href={`/businesses/${biz}/catalog/coupon_sets/${s.id}`}
-                          className="block truncate text-primary hover:underline"
-                        >
-                          {s.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{s.total_count}</TableCell>
-                      <TableCell className="pr-5 text-right tabular-nums">
-                        {s.redeemed_count}
-                      </TableCell>
+          <OwnHeight>
+            <RecordCard
+              id="coupon-sets"
+              title="Coupon sets"
+              meta={couponSets.length ? `${couponSets.length}` : undefined}
+              flush={couponSets.length > 0}
+            >
+              {couponSets.length === 0 ? (
+                <EmptyState
+                  compact
+                  icon={<Ticket />}
+                  title="No coupon sets"
+                  description="No coupon set uses this coupon as its parent."
+                />
+              ) : (
+                <Table className="table-fixed max-lg:min-w-0">
+                  <colgroup>
+                    {/* A 360px side card: the heads must fit whole, the set name truncates. */}
+                    <col className="w-[46%]" />
+                    <col className="w-[24%]" />
+                    <col className="w-[30%]" />
+                  </colgroup>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-5">Set</TableHead>
+                      <TableHead className="text-right">Codes</TableHead>
+                      <TableHead className="pr-5 text-right">Redeemed</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </RecordCard>
+                  </TableHeader>
+                  <TableBody>
+                    {couponSets.map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell className="pl-5">
+                          <Link
+                            href={`/businesses/${biz}/catalog/coupon_sets/${s.id}`}
+                            className="block truncate text-primary hover:underline"
+                          >
+                            {s.name}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{s.total_count}</TableCell>
+                        <TableCell className="pr-5 text-right tabular-nums">
+                          {s.redeemed_count}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </RecordCard>
+          </OwnHeight>
         </Row>
 
         {redemptions ? (
@@ -382,4 +414,9 @@ export default async function CouponDetailPage({
       </Zone>
     </div>
   );
+}
+
+/** A Row cell that keeps its card's own height instead of the row's (Row stretches cells). */
+function OwnHeight({ children }: { children: ReactNode }) {
+  return <div className="flex min-w-0 flex-col self-start">{children}</div>;
 }

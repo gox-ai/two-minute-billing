@@ -12,16 +12,16 @@ import {
 import { InfoCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusBadge } from "@/components/status-badge";
 import { Chip } from "@/components/patterns/chip";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/states";
-import { fmtDateShort } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { Plug } from "lucide-react";
+import { RowMenu, copyIdItem } from "@/components/patterns/row-menu";
 import {
   gatewayDisplayName,
   gatewayEntry,
   type GatewayCatalogEntry,
 } from "@/components/gateways/gateway-meta";
-import { LOGO_SIZE, PartnerLogo } from "@/components/partner-logo";
+import { LOGO_SIZE, PartnerLogo, hasPartnerLogo } from "@/components/partner-logo";
 import type { GatewayAccount } from "@/lib/api/gateways";
 import { useBusinessTz } from "@/components/business-tz";
 
@@ -53,32 +53,31 @@ export function GatewaysTable({
         id: "gateway",
         header: "Gateway",
         accessorFn: (g) => `${gatewayDisplayName(g.gateway_key, catalog)} ${g.label}`,
-        cell: ({ row }) => (
-          <div className="flex items-center gap-3">
-            <PartnerLogo
-              brand={row.original.gateway_key}
-              name={gatewayDisplayName(row.original.gateway_key, catalog)}
-              {...LOGO_SIZE.row}
-            />
-            <InfoCell
-              title={<span className="block max-w-80 wrap-anywhere">{row.original.label}</span>}
-              href={`/businesses/${biz}/settings/gateways/${row.original.id}`}
-              trailing={
-                defaultId && row.original.id === defaultId ? (
-                  <Badge variant="outline" className="border-primary/40 text-primary">
-                    Default
-                  </Badge>
-                ) : null
-              }
-              sub={
-                <span className="text-xs text-muted-foreground">
-                  {gatewayDisplayName(row.original.gateway_key, catalog)}
-                  <span className="ml-2 font-mono text-xs">{row.original.id}</span>
-                </span>
-              }
-            />
-          </div>
-        ),
+        cell: ({ row }) => {
+          const name = gatewayDisplayName(row.original.gateway_key, catalog);
+          const logo = hasPartnerLogo(row.original.gateway_key);
+          return (
+            <div className="flex items-center gap-3">
+              {logo ? (
+                <PartnerLogo brand={row.original.gateway_key} name={name} {...LOGO_SIZE.row} />
+              ) : null}
+              <InfoCell
+                title={<span className="block max-w-80 wrap-anywhere">{row.original.label}</span>}
+                href={`/businesses/${biz}/settings/gateways/${row.original.id}`}
+                trailing={
+                  defaultId && row.original.id === defaultId ? (
+                    <Chip tone="blue">Default</Chip>
+                  ) : null
+                }
+                sub={
+                  row.original.label !== name ? (
+                    <span className="text-xs text-muted-foreground">{name}</span>
+                  ) : undefined
+                }
+              />
+            </div>
+          );
+        },
       },
       {
         id: "mode",
@@ -119,7 +118,7 @@ export function GatewaysTable({
         accessorKey: "created_at",
         id: "created_at",
         header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDate(row.original.created_at, tz)}</TextCell>,
       },
     ],
     [biz, catalog, defaultId, tz],
@@ -127,7 +126,7 @@ export function GatewaysTable({
 
   const segments = React.useMemo<ListSegment<GatewayAccount>[]>(
     () => [
-      { id: "all", label: "All Gateway Accounts" },
+      { id: "all", label: "All gateway accounts" },
       { id: "live", label: "Live", match: (g) => !!g.livemode },
       { id: "test", label: "Test", match: (g) => !g.livemode },
       { id: "active", label: "Active", match: (g) => g.status === "active" },
@@ -139,7 +138,7 @@ export function GatewaysTable({
       // (verifies by webhook id) — those report their state on the account page.
       {
         id: "no_webhook_secret",
-        label: "Webhook Secret Missing",
+        label: "Webhook secret missing",
         match: (g) => {
           const owner = gatewayEntry(catalog, g.gateway_key)?.webhook_secret;
           return (
@@ -254,8 +253,21 @@ export function GatewaysTable({
       }
       exportName="gateway-accounts"
       persistKey="gateways"
-      searchPlaceholder="Search gateways…"
+      searchPlaceholder="Search by name or gateway"
       rowHref={(g) => `/businesses/${biz}/settings/gateways/${g.id}`}
+      rowMenu={(g) => (
+        <RowMenu
+          label={g.label}
+          groups={[
+            {
+              items: [
+                { label: "Open", href: `/businesses/${biz}/settings/gateways/${g.id}` },
+                copyIdItem("gateway account", g.id),
+              ],
+            },
+          ]}
+        />
+      )}
       emptyState={
         <EmptyState
           icon={<Plug />}

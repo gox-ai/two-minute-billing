@@ -28,7 +28,7 @@ export function SubscriptionFormLoading({ cards = [1, 3, 4, 2] }: { cards?: numb
         <Skeleton className="h-7 w-56" />
         <Skeleton className="h-3.5 w-80 max-w-full" />
       </div>
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           {cards.map((rows, i) => (
             <CardBones key={i} rows={rows} />

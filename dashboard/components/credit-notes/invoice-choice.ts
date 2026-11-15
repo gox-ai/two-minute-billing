@@ -21,8 +21,17 @@ export interface PickInvoice {
   amount_due_minor?: number | null;
   /** Credit grants applied, before and after tax. Their share of a credit goes back to them. */
   grant_credits_minor?: number;
+  /** The invoice has lines, and all of them are usage that credits paid. */
+  only_credit_usage?: boolean;
   /** `creditable_minor`: the most a credit note can still credit on the line. */
-  lines: Array<{ id: string; description: string; amount_minor: number; creditable_minor: number }>;
+  lines: Array<{
+    id: string;
+    description: string;
+    amount_minor: number;
+    creditable_minor: number;
+    /** A credit pack line: the maximum with the full refund, used credits included. */
+    pack_full_creditable_minor?: number;
+  }>;
 }
 
 /**

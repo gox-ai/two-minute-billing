@@ -1,4 +1,8 @@
+import { Fragment } from "react";
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import { invoiceRefundAccount } from "@/lib/api/gateways";
+import { AssistantRecordLabel } from "@/components/assistant/assistant-context";
 import { VoidInvoiceDialog } from "@/components/invoices/void-invoice-dialog";
 import { billingRules, shortfallWriteOffLimit } from "@/lib/billing-rules";
 import { RecordVisit } from "@/components/record-visit";
@@ -13,6 +17,7 @@ import {
   money,
   fmtDate,
   fmtDateTime,
+  fmtRange,
 } from "@/lib/api";
 import { invoiceContactName } from "@/lib/names";
 import Link from "next/link";
@@ -61,12 +66,14 @@ import {
 import { requirePermission, allows } from "@/lib/session";
 import { CollectInvoiceDialog } from "@/components/invoices/collect-invoice-dialog";
 import { Chip, StatusChip, IdChip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { creditNoteChipStatus } from "@/lib/credit-note-status";
 import {
   RecordCrumbs,
   RecordHeader,
   Zone,
   Row,
+  Stack,
   RecordCard,
   Facts,
 } from "@/components/patterns/record-page";
@@ -124,10 +131,13 @@ export default async function InvoiceDetail({
     inv = await getInvoice(biz, invId);
     [businesses, creditNotes] = await Promise.all([listBusinesses(), listCreditNotes(biz, invId)]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <ErrorState
-        title="We could not load the invoice"
-        description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+        error={e}
+        thing="invoice"
+        back={{ label: "View invoices", href: `/businesses/${biz}/invoices` }}
+        retry
       />
     );
   }
@@ -240,7 +250,10 @@ export default async function InvoiceDetail({
   const promotionalDiscount = inv.promotional_discount_minor ?? 0;
   // Tax / discount / round-off are synthetic lines: they become named totals rows
   // rather than item rows (see splitInvoiceLines).
-  const { items, adjustments, hasLineDiscounts } = splitInvoiceLines(inv.lines);
+  // Usage that credits paid is information, as on the PDF: its own block, no amount.
+  const { items, adjustments, information, hasLineDiscounts } = splitInvoiceLines(inv.lines);
+  // With that block, the first cell of the row holds two cards.
+  const LinesCell = information.length > 0 ? Stack : Fragment;
   // Tax inside tax-inclusive lines: on the invoice but not a line of its own.
   const includedTax =
     (inv.tax_minor ?? 0) -
@@ -342,6 +355,7 @@ export default async function InvoiceDetail({
     created_at: inv.created_at ?? null,
     due_date: inv.due_date ?? null,
     currency: inv.currency,
+    usage_closes_at: inv.usage_closes_at ?? null,
   };
 
   // While money is owed the payments card leads: it is what the invoice needs next.
@@ -393,9 +407,9 @@ export default async function InvoiceDetail({
                   <TableCell className="pl-5">
                     <Link
                       href={`/businesses/${biz}/credit_notes/${cn.id}`}
-                      className="font-mono text-xs wrap-anywhere text-primary hover:underline"
+                      className="text-sm font-medium whitespace-nowrap text-primary hover:underline"
                     >
-                      {cn.id}
+                      {cn.number ?? cn.id}
                     </Link>
                   </TableCell>
                   <TableCell className="capitalize">{cn.credit_method}</TableCell>
@@ -417,7 +431,7 @@ export default async function InvoiceDetail({
                 </TableRow>
               ))}
             >
-              <Table className="table-fixed max-lg:min-w-2xl">
+              <Table phone="stack" className="table-fixed max-lg:min-w-2xl">
                 <colgroup>
                   {/* At the 672px floor a status chip and a date still fit whole. */}
                   <col className="w-[20%]" />
@@ -432,7 +446,9 @@ export default async function InvoiceDetail({
                     <TableHead className="pl-5">ID</TableHead>
                     <TableHead>Method</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead phone="aside" className="text-right">
+                      Total
+                    </TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead className="pr-5">Created</TableHead>
                   </TableRow>
@@ -479,8 +495,11 @@ export default async function InvoiceDetail({
           chips={
             <>
               <InvoiceStatusChips archival={caps.archival} />
+              {/* Neutral: what kind of invoice it is, not something to act on. */}
               {inv.purpose === "usage_interim" ? (
-                <Chip tone="blue">Interim usage invoice</Chip>
+                <Chip>Interim usage invoice</Chip>
+              ) : inv.purpose === "late_usage" ? (
+                <Chip>Late usage</Chip>
               ) : null}
             </>
           }
@@ -500,8 +519,29 @@ export default async function InvoiceDetail({
           ]}
           actions={
             <>
-              <Button asChild>
-                <a href={pdfHref}>
+              <AssistantRecordLabel
+                id={inv.id}
+                label={inv.number ?? inv.id}
+                state={
+                  inv.status === "paid"
+                    ? "paid"
+                    : caps.open
+                      ? inv.dunning_status
+                        ? "in_dunning"
+                        : "unpaid"
+                      : undefined
+                }
+              />
+              {/* One filled action: while the invoice is owed, that is Collect payment. */}
+              <Button
+                asChild
+                variant={
+                  caps.canCollect && (inv.status === "payment_due" || inv.status === "not_paid")
+                    ? "outline"
+                    : "default"
+                }
+              >
+                <a data-document-link href={pdfHref}>
                   <FileDown className="size-4" /> Download PDF
                 </a>
               </Button>
@@ -524,8 +564,10 @@ export default async function InvoiceDetail({
                     />
                   ) : null}
                   {caps.canRegenerate ? <RegenerateInvoiceButton biz={biz} inv={inv.id} /> : null}
-                  {/* Offered only with an address to prefill; without one the send fails. */}
-                  {inv.customer_email ? (
+                  {/* Offered only with an address to prefill; without one the send fails. A
+                      pending invoice is not final (a held renewal waits for late usage): the
+                      engine refuses to send it. */}
+                  {inv.customer_email && inv.status !== "pending" ? (
                     <SendEmailDialog
                       types={ADHOC_TYPES_FOR.invoice}
                       defaultTo={inv.customer_email}
@@ -691,180 +733,216 @@ export default async function InvoiceDetail({
 
         <Zone title="Invoice">
           <Row span="8/4">
-            <RecordCard id="lines" title="Line items" flush={items.length > 0}>
-              {/* The reverse-charge / SEZ / export note as frozen onto the invoice. */}
-              {inv.tax_note ? (
-                <Alert tone="info" className={items.length > 0 ? "m-5 mb-0" : "mb-4"}>
-                  {inv.tax_note}
-                </Alert>
-              ) : null}
-              {items.length === 0 ? (
-                <EmptyState
-                  title="No line items"
-                  description={
-                    caps.pending
-                      ? "Recurring lines show here as the period accrues. We add usage when you close the invoice."
-                      : undefined
-                  }
-                />
-              ) : (
-                <>
-                  {/* Below sm only Items and Amount stay; the per-unit figures move under
-                      the description. */}
-                  <Table className="table-fixed max-lg:min-w-0">
-                    <colgroup>
-                      <col />
-                      <col className="hidden w-20 sm:table-column" />
-                      <col className="hidden w-28 sm:table-column" />
-                      {hasLineDiscounts ? <col className="hidden w-28 sm:table-column" /> : null}
-                      <col className="w-32 sm:w-36" />
-                    </colgroup>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="pl-5">Items</TableHead>
-                        <TableHead className="hidden text-right sm:table-cell">Units</TableHead>
-                        <TableHead className="hidden text-right sm:table-cell">
-                          Unit price
-                        </TableHead>
-                        {/* Only when a line was discounted: Subtotal is NET of these, so
-                            without the column the items would outsum it unexplained. */}
-                        {hasLineDiscounts ? (
+            <LinesCell>
+              <RecordCard id="lines" title="Line items" flush={items.length > 0}>
+                {/* The reverse-charge / SEZ / export note as frozen onto the invoice. */}
+                {inv.tax_note ? (
+                  <Alert tone="info" className={items.length > 0 ? "m-5 mb-0" : "mb-4"}>
+                    {inv.tax_note}
+                  </Alert>
+                ) : null}
+                {items.length === 0 ? (
+                  information.length > 0 ? (
+                    // Only usage that credits paid: the card below lists it.
+                    <EmptyState
+                      compact
+                      title="No charges"
+                      description="This invoice has only usage paid with credits."
+                    />
+                  ) : (
+                    <EmptyState
+                      title="No line items"
+                      description={
+                        caps.pending
+                          ? "Recurring lines show here as the period accrues. We add usage when you close the invoice."
+                          : undefined
+                      }
+                    />
+                  )
+                ) : (
+                  <>
+                    {/* Below sm only Items and Amount stay; the per-unit figures move under
+                        the description. */}
+                    <Table className="table-fixed max-lg:min-w-0">
+                      <colgroup>
+                        <col />
+                        <col className="hidden w-20 sm:table-column" />
+                        <col className="hidden w-28 sm:table-column" />
+                        {hasLineDiscounts ? <col className="hidden w-28 sm:table-column" /> : null}
+                        <col className="w-32 sm:w-36" />
+                      </colgroup>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="pl-5">Items</TableHead>
+                          <TableHead className="hidden text-right sm:table-cell">Units</TableHead>
                           <TableHead className="hidden text-right sm:table-cell">
-                            Discount
+                            Unit price
                           </TableHead>
-                        ) : null}
-                        <TableHead className="pr-5 text-right">
-                          Amount<span className="hidden sm:inline"> ({inv.currency})</span>
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {items.map((l) => (
-                        <TableRow key={l.id}>
-                          <TableCell className="pl-5 whitespace-normal">
-                            <span className="flex flex-col gap-0.5">
-                              {/* No link to the line's price: its route needs the product
-                                  id, which `lines[]` does not carry. */}
-                              <span className="text-sm font-medium wrap-anywhere">
-                                {l.description}
-                              </span>
-                              <span className="text-xs text-muted-foreground capitalize">
-                                {l.kind.replace(/_/g, " ")}
-                                {l.period_start
-                                  ? ` · ${fmtDate(l.period_start, tz)} – ${fmtDate(l.period_end, tz)}`
-                                  : ""}
-                              </span>
-                              {ratingRows(l.rating, (m) => money(m, inv.currency)).map((row) => (
-                                <span
-                                  key={row}
-                                  className="text-xs text-muted-foreground tabular-nums"
-                                >
-                                  {row}
-                                </span>
-                              ))}
-                              {l.cumulative_minor != null && l.billed_before_minor != null ? (
-                                <span className="text-xs text-muted-foreground tabular-nums">
-                                  Usage to date {money(l.cumulative_minor, inv.currency)} · billed
-                                  before {money(l.billed_before_minor, inv.currency)} · this invoice{" "}
-                                  {money(l.amount_minor, inv.currency)}
-                                </span>
-                              ) : null}
-                              {l.rating?.meter ? (
-                                <PriceSourcePopover
-                                  line={l}
-                                  currency={inv.currency}
-                                  tz={tz}
-                                  showCost={canSeeCost}
-                                />
-                              ) : null}
-                              <span className="text-xs text-muted-foreground tabular-nums sm:hidden">
-                                {lineQuantity(l)} × {lineUnitPrice(l, inv.currency)}
-                                {(l.item_level_discount_minor ?? 0) > 0
-                                  ? ` · −${money(l.item_level_discount_minor ?? 0, inv.currency)} discount`
-                                  : ""}
-                              </span>
-                            </span>
-                          </TableCell>
-                          {/* The decimal fields carry a meter line's truth; older rows fall back. */}
-                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                            {lineQuantity(l)}
-                          </TableCell>
-                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                            {lineUnitPrice(l, inv.currency)}
-                          </TableCell>
+                          {/* Only when a line was discounted: Subtotal is NET of these, so
+                              without the column the items would outsum it unexplained. */}
                           {hasLineDiscounts ? (
-                            <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
-                              {/* A dash, not a zero: not discounted at all. Same as the PDF. */}
-                              {(l.item_level_discount_minor ?? 0) === 0
-                                ? "—"
-                                : `−${money(l.item_level_discount_minor ?? 0, inv.currency)}`}
-                            </TableCell>
+                            <TableHead className="hidden text-right sm:table-cell">
+                              Discount
+                            </TableHead>
                           ) : null}
-                          {/* NET of the item-level discount, as on the PDF, so Σ Amount IS
-                              Subtotal. The document-level part has its own ladder row. */}
-                          <TableCell className="pr-5 text-right font-medium tabular-nums">
-                            {money(
-                              l.amount_minor - (l.item_level_discount_minor ?? 0),
-                              inv.currency,
-                            )}
-                          </TableCell>
+                          <TableHead className="pr-5 text-right">
+                            Amount<span className="hidden sm:inline"> ({inv.currency})</span>
+                          </TableHead>
                         </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {items.map((l) => (
+                          <TableRow key={l.id}>
+                            <TableCell className="pl-5 whitespace-normal">
+                              <span className="flex flex-col gap-0.5">
+                                {/* No link to the line's price: its route needs the product
+                                    id, which `lines[]` does not carry. */}
+                                <span className="text-sm font-medium wrap-anywhere">
+                                  {l.description}
+                                </span>
+                                <span className="text-xs text-muted-foreground capitalize">
+                                  {l.kind.replace(/_/g, " ")}
+                                  {l.period_start ? (
+                                    <>
+                                      {" "}
+                                      ·{" "}
+                                      <span className="whitespace-nowrap">
+                                        {fmtRange(l.period_start, l.period_end, tz)}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    ""
+                                  )}
+                                </span>
+                                {ratingRows(l.rating, (m) => money(m, inv.currency)).map((row) => (
+                                  <span
+                                    key={row}
+                                    className="text-xs text-muted-foreground tabular-nums"
+                                  >
+                                    {row}
+                                  </span>
+                                ))}
+                                {l.cumulative_minor != null && l.billed_before_minor != null ? (
+                                  <span className="text-xs text-muted-foreground tabular-nums">
+                                    Usage to date {money(l.cumulative_minor, inv.currency)} · billed
+                                    before {money(l.billed_before_minor, inv.currency)} · this
+                                    invoice {money(l.amount_minor, inv.currency)}
+                                  </span>
+                                ) : null}
+                                {l.rating?.meter ? (
+                                  <PriceSourcePopover
+                                    line={l}
+                                    currency={inv.currency}
+                                    tz={tz}
+                                    showCost={canSeeCost}
+                                  />
+                                ) : null}
+                                <span className="text-xs text-muted-foreground tabular-nums sm:hidden">
+                                  {lineQuantity(l)} × {lineUnitPrice(l, inv.currency)}
+                                  {(l.item_level_discount_minor ?? 0) > 0
+                                    ? ` · −${money(l.item_level_discount_minor ?? 0, inv.currency)} discount`
+                                    : ""}
+                                </span>
+                              </span>
+                            </TableCell>
+                            {/* The decimal fields carry a meter line's truth; older rows fall back. */}
+                            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                              {lineQuantity(l)}
+                            </TableCell>
+                            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                              {lineUnitPrice(l, inv.currency)}
+                            </TableCell>
+                            {hasLineDiscounts ? (
+                              <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
+                                {/* A dash, not a zero: not discounted at all. Same as the PDF. */}
+                                {(l.item_level_discount_minor ?? 0) === 0
+                                  ? "—"
+                                  : `−${money(l.item_level_discount_minor ?? 0, inv.currency)}`}
+                              </TableCell>
+                            ) : null}
+                            {/* NET of the item-level discount, as on the PDF, so Σ Amount IS
+                                Subtotal. The document-level part has its own ladder row. */}
+                            <TableCell className="pr-5 text-right font-medium tabular-nums">
+                              {money(
+                                l.amount_minor - (l.item_level_discount_minor ?? 0),
+                                inv.currency,
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {/* Totals ladder: Subtotal → each named adjustment → Total → what reduced
+                        the collectible → Amount due. Every row is a real engine figure. */}
+                    <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm">
+                      <div className="flex justify-between gap-8">
+                        <span className="text-muted-foreground">Subtotal</span>
+                        <span className="tabular-nums">
+                          {money(inv.subtotal_minor ?? 0, inv.currency)}
+                        </span>
+                      </div>
+                      {/* Promotional credit is applied BEFORE tax, so it sits above Total. */}
+                      {promotionalDiscount > 0 ? (
+                        <div className="flex justify-between gap-8">
+                          <span className="text-muted-foreground">Promotional Credits</span>
+                          <span className="tabular-nums">
+                            {money(-promotionalDiscount, inv.currency)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {/* Credit grants applied before tax lower the tax base, so they sit above Total too. */}
+                      {(inv.grant_credits_pre_tax_minor ?? 0) > 0 ? (
+                        <div className="flex justify-between gap-8">
+                          <span className="text-muted-foreground">Credit grants, before tax</span>
+                          <span className="tabular-nums">
+                            {money(-(inv.grant_credits_pre_tax_minor ?? 0), inv.currency)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {adjustments.map((a) => (
+                        <div key={a.id} className="flex justify-between gap-8">
+                          <span className="text-muted-foreground">{a.label}</span>
+                          <span className="tabular-nums">{money(a.amountMinor, inv.currency)}</span>
+                        </div>
                       ))}
-                    </TableBody>
-                  </Table>
-                  {/* Totals ladder: Subtotal → each named adjustment → Total → what reduced
-                      the collectible → Amount due. Every row is a real engine figure. */}
-                  <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm">
-                    <div className="flex justify-between gap-8">
-                      <span className="text-muted-foreground">Subtotal</span>
-                      <span className="tabular-nums">
-                        {money(inv.subtotal_minor ?? 0, inv.currency)}
-                      </span>
+                      <div className="flex justify-between gap-8 border-t pt-1 font-semibold">
+                        <span>Total</span>
+                        <span className="tabular-nums">{money(inv.total_minor, inv.currency)}</span>
+                      </div>
+                      {includedTax > 0 ? (
+                        <div className="flex justify-between gap-8 text-muted-foreground">
+                          <span>Tax included in the total</span>
+                          <span className="tabular-nums">{money(includedTax, inv.currency)}</span>
+                        </div>
+                      ) : null}
+                      {/* Below Total: these reduce what is COLLECTIBLE (volatile). */}
+                      <InvoiceAmountLadderTail
+                        currency={inv.currency}
+                        open={caps.open}
+                        grantPostTaxMinor={inv.grant_credits_post_tax_minor ?? 0}
+                      />
                     </div>
-                    {/* Promotional credit is applied BEFORE tax, so it sits above Total. */}
-                    {promotionalDiscount > 0 ? (
-                      <div className="flex justify-between gap-8">
-                        <span className="text-muted-foreground">Promotional Credits</span>
-                        <span className="tabular-nums">
-                          {money(-promotionalDiscount, inv.currency)}
-                        </span>
-                      </div>
-                    ) : null}
-                    {/* Credit grants applied before tax lower the tax base, so they sit above Total too. */}
-                    {(inv.grant_credits_pre_tax_minor ?? 0) > 0 ? (
-                      <div className="flex justify-between gap-8">
-                        <span className="text-muted-foreground">Credit grants, before tax</span>
-                        <span className="tabular-nums">
-                          {money(-(inv.grant_credits_pre_tax_minor ?? 0), inv.currency)}
-                        </span>
-                      </div>
-                    ) : null}
-                    {adjustments.map((a) => (
-                      <div key={a.id} className="flex justify-between gap-8">
-                        <span className="text-muted-foreground">{a.label}</span>
-                        <span className="tabular-nums">{money(a.amountMinor, inv.currency)}</span>
+                  </>
+                )}
+              </RecordCard>
+              {information.length > 0 ? (
+                <RecordCard id="credit-usage" title="Usage paid with credits">
+                  <div className="flex flex-col gap-3 text-sm">
+                    {information.map((l) => (
+                      <div key={l.id} className="flex flex-col gap-0.5">
+                        <p className="m-0 wrap-anywhere">{l.description}</p>
+                        {/* When the usage arrived: not the invoice's billing period. */}
+                        {l.period_start ? (
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {fmtRange(l.period_start, l.period_end, tz)}
+                          </span>
+                        ) : null}
                       </div>
                     ))}
-                    <div className="flex justify-between gap-8 border-t pt-1 font-semibold">
-                      <span>Total</span>
-                      <span className="tabular-nums">{money(inv.total_minor, inv.currency)}</span>
-                    </div>
-                    {includedTax > 0 ? (
-                      <div className="flex justify-between gap-8 text-muted-foreground">
-                        <span>Tax included in the total</span>
-                        <span className="tabular-nums">{money(includedTax, inv.currency)}</span>
-                      </div>
-                    ) : null}
-                    {/* Below Total: these reduce what is COLLECTIBLE (volatile). */}
-                    <InvoiceAmountLadderTail
-                      currency={inv.currency}
-                      open={caps.open}
-                      grantPostTaxMinor={inv.grant_credits_post_tax_minor ?? 0}
-                    />
                   </div>
-                </>
-              )}
-            </RecordCard>
+                </RecordCard>
+              ) : null}
+            </LinesCell>
 
             <RecordCard id="details" title="Invoice details">
               <Facts
@@ -874,14 +952,9 @@ export default async function InvoiceDetail({
                     value: inv.customer ? (
                       <Link
                         href={`/businesses/${biz}/customers/${inv.customer}`}
-                        className="text-primary hover:underline"
+                        className="flex max-w-full min-w-0 text-primary hover:underline"
                       >
-                        <span className="block">{holderName ?? inv.customer}</span>
-                        {holderName ? (
-                          <span className="block font-mono text-xs text-muted-foreground">
-                            {inv.customer}
-                          </span>
-                        ) : null}
+                        {holderName ?? <MiddleEllipsis value={inv.customer} className="text-xs" />}
                       </Link>
                     ) : (
                       "—"
@@ -892,9 +965,9 @@ export default async function InvoiceDetail({
                     value: inv.subscription ? (
                       <Link
                         href={`/businesses/${biz}/subscriptions/${inv.subscription}`}
-                        className="font-mono text-xs text-primary hover:underline"
+                        className="flex max-w-full min-w-0 text-primary hover:underline"
                       >
-                        {inv.subscription}
+                        <MiddleEllipsis value={inv.subscription} className="text-xs" />
                       </Link>
                     ) : (
                       "—"
@@ -904,9 +977,13 @@ export default async function InvoiceDetail({
                   {
                     label: "Billing period",
                     value:
-                      inv.period_start || inv.period_end
-                        ? `${fmtDate(inv.period_start, tz)} → ${fmtDate(inv.period_end, tz)}`
-                        : "—",
+                      inv.period_start || inv.period_end ? (
+                        <span className="whitespace-nowrap">
+                          {fmtRange(inv.period_start, inv.period_end, tz)}
+                        </span>
+                      ) : (
+                        "—"
+                      ),
                   },
                   inv.due_date ? { label: "Due date", value: fmtDate(inv.due_date, tz) } : null,
                   inv.expected_payment_date
@@ -1080,7 +1157,7 @@ export default async function InvoiceDetail({
                   const empty = lines.length === 0 && !contactName;
                   return (
                     // Each address in its own well, so the two read as a pair of panels.
-                    <div key={label} className="min-w-0 rounded-lg border bg-muted/30 px-4 py-3.5">
+                    <div key={label} className="min-w-0 rounded-xl border bg-muted/30 px-4 py-3.5">
                       <div className="mb-1.5 flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-muted-foreground">{label}</span>
                         {!empty && !isSnapshot ? (

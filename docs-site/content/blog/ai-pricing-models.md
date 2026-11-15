@@ -2,7 +2,7 @@
 title: "AI pricing models: how to price an AI product"
 seoTitle: "AI pricing models: how to price AI"
 description: "AI pricing models compared: per seat, per token, credits and per outcome. Work out list-plus vs cost-plus markup, rate cards and mid-month price changes."
-date: "2026-11-02"
+date: "2026-11-05"
 category: Pricing and proration
 type: Guide
 draft: false

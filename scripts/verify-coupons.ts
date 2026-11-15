@@ -16,7 +16,7 @@ import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
-import { createSubscription } from "@/modules/subscriptions/service";
+import { createSubscription, recomputeSubscriptionMrr } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod, createInvoiceFromLines } from "@/modules/invoicing/service";
 import { estimateRenewal } from "@/modules/subscriptions/estimate";
 import {
@@ -24,8 +24,12 @@ import {
   applyCouponToSubscription,
   applyManualDiscount,
   removeDiscount,
+  peekCouponCodes,
   CouponError,
+  assertCouponCodeMatchesAnItem,
+  updateCoupon,
 } from "@/modules/coupons/service";
+import { changeSubscription } from "@/modules/subscriptions/proration";
 import { createFlatTaxRate } from "@/modules/tax/service";
 import {
   invoices,
@@ -34,6 +38,9 @@ import {
   invoiceLineItems,
   invoiceLineDiscounts,
   appliedCoupons,
+  subscriptionItems,
+  coupons,
+  auditLogs,
 } from "@db/schema";
 
 const org = await createOrganization({ name: "Coupon Org" });
@@ -746,7 +753,7 @@ const checks: Array<[string, boolean]> = [];
     ac.remainingPeriods === 1 && ac.status === "active",
   ]);
 
-  // The /discount route asks for an item match: a coupon scoped to items the subscription
+  // Every apply checks the items by default: a coupon scoped to items the subscription
   // does not have is refused instead of sitting "active" and discounting nothing.
   await createCoupon({
     organizationId: orgId,
@@ -766,7 +773,6 @@ const checks: Array<[string, boolean]> = [];
       subscriptionId: created.subscription.id,
       code: "ADDON10",
       now: new Date(),
-      requireItemMatch: true,
     });
   } catch (e) {
     noMatchRefused = e instanceof CouponError && /applies to none of the items/.test(e.message);
@@ -790,7 +796,6 @@ const checks: Array<[string, boolean]> = [];
       subscriptionId: planSub.id,
       code: "ITEM15",
       now: new Date(),
-      requireItemMatch: true,
     });
     planMatchOk = true;
   } catch {
@@ -839,6 +844,151 @@ const checks: Array<[string, boolean]> = [];
   );
 }
 
+// ── Billing-period limit (0516): a yearly-only coupon ─────────────────────────
+{
+  const annual = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Annual" });
+  const yearPrice = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: annual.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 120000,
+    interval: "year",
+  });
+  await createCoupon({
+    organizationId: orgId,
+    businessId: biz.id,
+    code: "YEARLY50",
+    kind: "percentage",
+    percentOffBps: 5000,
+    durationType: "forever",
+    applyOn: "each_specified_item",
+    itemConstraints: [
+      {
+        itemKind: "plan",
+        constraintType: "all",
+        billingPeriods: [{ interval: "year", intervalCount: 1 }],
+      },
+    ],
+  });
+  // Monthly subscription: the coupon matches no item, so the /discount path refuses it.
+  const monthlySub = await mkCustomerSub("monthly-period@a.com");
+  let monthlyRefused = false;
+  try {
+    await applyCouponToSubscription({
+      organizationId: orgId,
+      businessId: biz.id,
+      subscriptionId: monthlySub.id,
+      code: "YEARLY50",
+      now: new Date(),
+    });
+  } catch (e) {
+    monthlyRefused = e instanceof CouponError && /applies to none of the items/.test(e.message);
+  }
+  // Yearly subscription: applies, and the invoice is half price.
+  const yc = await createCustomer({
+    organizationId: orgId,
+    businessId: biz.id,
+    email: "yearly-period@a.com",
+  });
+  await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: biz.id,
+    customer: yc,
+    token: "tok_4242",
+  });
+  const ys = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: yc.id,
+    now: new Date(),
+    items: [{ price: yearPrice, quantity: 1 }],
+  });
+  await applyCouponToSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscriptionId: ys.subscription.id,
+    code: "YEARLY50",
+    now: new Date(),
+  });
+  const ysFresh = await withTenant(
+    orgId,
+    async (tx) =>
+      (
+        await tx
+          .select()
+          .from(subscriptions)
+          .where(eq(subscriptions.id, ys.subscription.id))
+          .limit(1)
+      )[0]!,
+  );
+  const { invoice: yInv } = await billSubscriptionPeriod({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscription: ysFresh,
+    periodStart: ysFresh.currentPeriodStart!,
+    periodEnd: ysFresh.currentPeriodEnd!,
+  });
+  // Signup estimate path: a monthly line gets nothing, a yearly line gets 50%.
+  const peek = (pricePublicId: string, amount: bigint) =>
+    withTenant(orgId, (tx) =>
+      peekCouponCodes(
+        tx,
+        orgId,
+        biz.id,
+        ["YEARLY50"],
+        [
+          {
+            index: 0,
+            amountMinor: amount,
+            productKind: "plan",
+            productPublicId: "x",
+            pricePublicId,
+          },
+        ],
+      ),
+    );
+  const peekMonthly = await peek(price.publicId, 10000n);
+  const peekYearly = await peek(yearPrice.publicId, 120000n);
+  let chargeRefused = false;
+  try {
+    await createCoupon({
+      organizationId: orgId,
+      businessId: biz.id,
+      code: "CHARGEYEAR",
+      kind: "percentage",
+      percentOffBps: 1000,
+      durationType: "once",
+      applyOn: "each_specified_item",
+      itemConstraints: [
+        {
+          itemKind: "charge",
+          constraintType: "all",
+          billingPeriods: [{ interval: "year", intervalCount: 1 }],
+        },
+      ],
+    });
+  } catch (e) {
+    chargeRefused = e instanceof CouponError && /plans and addons only/.test(e.message);
+  }
+  console.log(
+    `billing period: monthlyRefused=${monthlyRefused} yearlyTotal=${yInv.totalMinor} ` +
+      `peekMonthly=${peekMonthly.totalMinor} peekYearly=${peekYearly.totalMinor} chargeRefused=${chargeRefused}`,
+  );
+  checks.push(
+    ["billing period: a yearly-only coupon is refused on a monthly subscription", monthlyRefused],
+    [
+      "billing period: …and takes 50% off a yearly invoice (120000 → 60000)",
+      yInv.totalMinor === 60000n,
+    ],
+    ["billing period: the signup estimate skips a monthly line", peekMonthly.totalMinor === 0n],
+    ["billing period: …and discounts a yearly line", peekYearly.totalMinor === 60000n],
+    ["billing period: refused on one-time charges", chargeRefused],
+  );
+}
+
 // 7) ledger balances per transaction (every txn nets to zero — invariant).
 /**
  * PER (transaction, CURRENCY) — grouping on `transaction_id` alone was wrong in BOTH
@@ -862,6 +1012,295 @@ const checks: Array<[string, boolean]> = [];
  * would also stop it noticing an imbalance created anywhere else, which is a real
  * trade-off and not a tidy-up (see docs/PROGRESS.md).
  */
+// ── Item match on every path: a coupon for another plan version ──────────────
+{
+  const next = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Pro Next" });
+  const nextPrice = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: next.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 10000,
+    interval: "month",
+  });
+  await createCoupon({
+    organizationId: orgId,
+    businessId: biz.id,
+    code: "NEXTONLY",
+    kind: "percentage",
+    percentOffBps: 5000,
+    durationType: "forever",
+    applyOn: "each_specified_item",
+    itemConstraints: [
+      { itemKind: "plan", constraintType: "specific", productIds: [next.publicId] },
+    ],
+  });
+  const refusedBy = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      return false;
+    } catch (e) {
+      const ok = e instanceof CouponError && /applies to none of the items/.test(e.message);
+      if (!ok) console.log(`    ↳ refused with something else: ${(e as Error).message}`);
+      return ok;
+    }
+  };
+  const attached = (subId: string) =>
+    withTenant(orgId, (tx) =>
+      tx.select().from(appliedCoupons).where(eq(appliedCoupons.subscriptionId, subId)),
+    );
+  const planItem = async (subId: string) =>
+    (
+      await withTenant(orgId, (tx) =>
+        tx.select().from(subscriptionItems).where(eq(subscriptionItems.subscriptionId, subId)),
+      )
+    )[0]!;
+
+  // A signup's requested prices are checked before the subscription exists.
+  checks.push(
+    [
+      "item match: signup pre-check refuses a coupon for another plan",
+      await refusedBy(() =>
+        assertCouponCodeMatchesAnItem({
+          organizationId: orgId,
+          businessId: biz.id,
+          code: "NEXTONLY",
+          items: { priceIds: [price.id], addonsMayFollow: true },
+        }),
+      ),
+    ],
+    [
+      "item match: signup pre-check passes an add-on coupon (mandatory add-ons may follow)",
+      !(await refusedBy(() =>
+        assertCouponCodeMatchesAnItem({
+          organizationId: orgId,
+          businessId: biz.id,
+          code: "ADDON10",
+          items: { priceIds: [price.id], addonsMayFollow: true },
+        }),
+      )),
+    ],
+  );
+
+  // Plain apply on the old plan: refused, nothing attached.
+  const oldSub = await mkCustomerSub("old-version@a.com");
+  checks.push(
+    [
+      "item match: a coupon for another plan is refused on apply",
+      await refusedBy(() =>
+        applyCouponToSubscription({
+          organizationId: orgId,
+          businessId: biz.id,
+          subscriptionId: oldSub.id,
+          code: "NEXTONLY",
+          now: new Date(),
+        }),
+      ),
+    ],
+    ["item match: …and nothing is attached", (await attached(oldSub.id)).length === 0],
+  );
+
+  // A plan change TO the coupon's plan carries it: checked against the post-change items.
+  const moveSub = await mkCustomerSub("move-version@a.com");
+  let moved = true;
+  try {
+    await changeSubscription({
+      organizationId: orgId,
+      businessId: biz.id,
+      subscriptionId: moveSub.id,
+      now: new Date(),
+      changes: [{ itemId: (await planItem(moveSub.id)).publicId, newPriceId: nextPrice.publicId }],
+      couponCode: "NEXTONLY",
+    });
+  } catch (e) {
+    console.log(`    ↳ plan change with NEXTONLY threw: ${(e as Error).message}`);
+    moved = false;
+  }
+  checks.push(
+    ["item match: a plan change to the coupon's plan applies it", moved],
+    ["item match: …and the coupon is attached", (await attached(moveSub.id)).length === 1],
+  );
+  const mrrOf = async (subId: string) =>
+    (
+      await withTenant(orgId, (tx) =>
+        tx
+          .select({ mrr: subscriptions.mrr })
+          .from(subscriptions)
+          .where(eq(subscriptions.id, subId)),
+      )
+    )[0]!.mrr;
+  checks.push([
+    "item match: MRR nets the plan coupon (10000 → 5000)",
+    (await mrrOf(moveSub.id)) === 5000n,
+  ]);
+
+  // MRR nets an item-scoped coupon only against items it covers: a row that matches no
+  // item (attached before every path checked) leaves MRR at list price.
+  const strandedSub = await mkCustomerSub("stranded-version@a.com");
+  const [nextOnly] = await withTenant(orgId, (tx) =>
+    tx.select().from(coupons).where(eq(coupons.code, "NEXTONLY")),
+  );
+  await withTenant(orgId, async (tx) => {
+    await tx.insert(appliedCoupons).values({
+      organizationId: orgId,
+      businessId: biz.id,
+      couponId: nextOnly!.id,
+      subscriptionId: strandedSub.id,
+      customerId: strandedSub.customerId,
+      publicId: `disc_strand${Date.now()}`,
+      status: "active",
+      remainingPeriods: null,
+      totalPeriods: null,
+    });
+    await recomputeSubscriptionMrr(tx, strandedSub.id);
+  });
+  checks.push([
+    "item match: MRR ignores a coupon that matches no item (stays 10000)",
+    (await mrrOf(strandedSub.id)) === 10000n,
+  ]);
+
+  // Redeemed NEXTONLY grows to cover the old plan: the stranded holder's MRR is restated.
+  await updateCoupon({
+    organizationId: orgId,
+    businessId: biz.id,
+    couponPublicId: "NEXTONLY",
+    itemConstraints: [
+      {
+        itemKind: "plan",
+        constraintType: "specific",
+        productIds: [next.publicId, product.publicId],
+      },
+    ],
+  });
+  checks.push([
+    "redeemed: a wider scope restates the holder's MRR (10000 → 5000)",
+    (await mrrOf(strandedSub.id)) === 5000n,
+  ]);
+  // The scope lives outside the coupon row, so the audit row must carry it.
+  const [audit] = await withTenant(orgId, (tx) =>
+    tx
+      .select({ before: auditLogs.before, after: auditLogs.after })
+      .from(auditLogs)
+      .where(eq(auditLogs.resourceId, "NEXTONLY"))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(1),
+  );
+  const scopeIds = (side: unknown) =>
+    (
+      (side as { item_constraints?: Array<{ product_ids: string[] }> } | null)?.item_constraints ??
+      []
+    ).flatMap((k) => k.product_ids);
+  checks.push([
+    "redeemed: the audit row shows the scope before and after",
+    !scopeIds(audit?.before).includes(product.publicId) &&
+      scopeIds(audit?.after).includes(product.publicId),
+  ]);
+  let narrowRefused = false;
+  try {
+    await updateCoupon({
+      organizationId: orgId,
+      businessId: biz.id,
+      couponPublicId: "NEXTONLY",
+      itemConstraints: [
+        { itemKind: "plan", constraintType: "specific", productIds: [next.publicId] },
+      ],
+    });
+  } catch (e) {
+    narrowRefused = e instanceof CouponError && e.message.includes(`Add back: ${product.publicId}`);
+  }
+  checks.push(["redeemed: removing a product from the scope is refused", narrowRefused]);
+
+  // A move to a plan the coupon does not cover either: refused, nothing moves.
+  const other = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Other" });
+  const otherPrice = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: other.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 10000,
+    interval: "month",
+  });
+  const stuckSub = await mkCustomerSub("stuck-version@a.com");
+  const before = await planItem(stuckSub.id);
+  checks.push([
+    "item match: a move to a plan the coupon does not cover refuses it",
+    await refusedBy(() =>
+      changeSubscription({
+        organizationId: orgId,
+        businessId: biz.id,
+        subscriptionId: stuckSub.id,
+        now: new Date(),
+        changes: [{ itemId: before.publicId, newPriceId: otherPrice.publicId }],
+        couponCode: "NEXTONLY",
+      }),
+    ),
+  ]);
+  const after = await planItem(stuckSub.id);
+  checks.push(
+    [
+      "item match: …the change rolls back (still on the old plan)",
+      after.priceId === before.priceId,
+    ],
+    ["item match: …and nothing is attached", (await attached(stuckSub.id)).length === 0],
+  );
+}
+
+// ── A redeemed coupon: a resend of its stored rules is not a change ──────────
+{
+  // ITEM15 is redeemed above, scoped to every plan.
+  const rename = async (patch: Partial<Parameters<typeof updateCoupon>[0]>) => {
+    try {
+      await updateCoupon({
+        organizationId: orgId,
+        businessId: biz.id,
+        couponPublicId: "ITEM15",
+        name: "Item fifteen",
+        ...patch,
+      });
+      return "saved";
+    } catch (e) {
+      return e instanceof CouponError ? e.message : String(e);
+    }
+  };
+  checks.push(
+    [
+      "redeemed: a rename that resends the same scope and rules saves",
+      (await rename({
+        itemConstraints: [
+          { itemKind: "plan", constraintType: "all" },
+          { itemKind: "addon", constraintType: "none" },
+        ],
+        kind: "percentage",
+        percentOffBps: 1500,
+        applyOn: "each_specified_item",
+      })) === "saved",
+    ],
+    [
+      "redeemed: removing an item from the scope is refused, and names it",
+      /cannot remove them\. Add back: all plans/.test(
+        await rename({ itemConstraints: [{ itemKind: "addon", constraintType: "all" }] }),
+      ),
+    ],
+    [
+      "redeemed: adding an item kind to the scope saves",
+      (await rename({
+        itemConstraints: [
+          { itemKind: "plan", constraintType: "all" },
+          { itemKind: "addon", constraintType: "all" },
+        ],
+      })) === "saved",
+    ],
+    [
+      "redeemed: a real rule change is still refused",
+      /discount is fixed/.test(await rename({ percentOffBps: 2000 })),
+    ],
+  );
+}
+
 const allBalanced = await (async () => {
   const { sql: raw } = await import("drizzle-orm");
   const rows = (await systemDb.execute(

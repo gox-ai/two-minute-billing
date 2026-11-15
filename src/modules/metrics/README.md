@@ -13,7 +13,9 @@ using the business's manual reporting FX rates. Also serves the **Business Home 
 - Per-business metrics: per-currency MRR/ARR/ARPU + subscriber mix + 30-day movement.
 - Converted (`converted`) roll-up to the default currency via `businesses.exchange_rates`, reporting
   currencies without a rate in `missing_rates`.
-- Org-wide roll-up combining per-business metrics by currency.
+- Org-wide roll-up combining per-business metrics by currency. An organization answer from
+  `metric_daily` reads each business at its own local today and sums them (`dayGroups`), so it
+  equals the sum of the business answers at any hour.
 - Business Home analytics: KPIs, bucketed series, subscriptions-by-plan (see § Analytics).
 
 ## Data model
@@ -649,6 +651,44 @@ catalogue moves before it lands. The report's own description says so — a figu
 measured and is not is worse than a missing one.
 
 ## Changelog
+- **2026-11-15** — **An organization reads every business at its own local day.** Org scope read
+  every business as of the lowest of their todays, so whenever the zones straddled midnight
+  (Asia/Kolkata and America/New_York at 20:00 UTC) the business ahead was read at yesterday: org
+  totals lagged its business page by a day and were not the sum of the business answers. Now
+  `resolveAnalytics` groups the businesses by their own today (`dayGroups`); when there is more than
+  one group, each is read over its OWN window (a named window resolved at its own today, the previous
+  window derived from that) and laid onto the label periods by `onLabelPeriods`. The label day
+  (`scopeToday`) is still the lowest today, so every label is a date each business has reached:
+  older points align by local date, and a group period ending after the label day folds into the
+  period that holds it by the measure's rule (flows add, a stock or distinct count takes the later,
+  ratio halves fold by `m.ratio`). So the newest point holds each business's own latest day, never
+  a partial sum, and a stock's `total` is each business at its own today. `range.end` stays the
+  label day (the last point's `t`). FX impact is read per group too (a difference of stocks). A
+  non-additive measure is refused up front, since a one-business group would not refuse alone.
+  Invariant: an additive org figure = Σ business figures (after FX), at any instant. Gate:
+  `verify:metric-daily-tz` §9 (straddling instant + same-date control).
+- **2026-11-13** — Usage margin by customer names the customer as the lists do
+  (`accountHolderNameSql`: first + last, then company, then email; it read the deprecated `name`
+  first). Rows sort by name (else key), case-insensitive, with the "none" row last; they sorted by
+  public id. Response shape unchanged. Gates: `verify:usage-margin`, `verify:cost-margin`.
+- **2026-11-12 (0520)** — MRR merges customer coupons (`mergeCustomerDiscounts` in
+  `loadActiveDiscounts`); a change of the business's `customer_coupons` rule restates the holders'
+  MRR. Gate: `verify:coupons-customer`.
+- **2026-11-09** — **Report routes read the replica when one is set.** The handlers of
+  `/v1/analytics`, `/v1/analytics/query`, `…/analytics`, `…/reports`, `…/reports/:key`,
+  `…/raw_export[/:dataset]`, `…/payments_analytics`, `…/cancellation_analytics`, `…/metrics`,
+  `…/mrr_bridge` and `/v1/metrics` are wrapped in `onReplica` (`platform/db.ts`): every
+  `withTenant` inside runs READ ONLY on `DATABASE_REPLICA_URL`, or on the primary when unset. Jobs
+  that call the same code still read the primary. Report code must not write (feat/pgbouncer-ready).
+- **2026-11-06** — `GET …/mrr_bridge` (`mrr-bridge.ts`): opening MRR (Σ delta before the range),
+  the change by reason over netted movements with the largest per reason (customer, plan, before
+  → after), closing = opening + change. Business-zone days, ≤ 366 days, `reports:view`. Gate:
+  `verify:explain` § B, incl. closing = the business's current MRR (feat/mcp-server).
+- **2026-11-06** — **A cancelled trial's gap stays out of history after reactivation.** A trial
+  cancel books no `churn` movement, so `loadLapses` now also takes a cancelled stretch from the
+  `subscription_canceled` → `subscription_reactivated` events where no churn covers it (ends at
+  `start_date` for the latest reactivation). Before, the recompute counted the subscription active
+  through the gap and the drift scan flagged the stored day. `verify:metric-maintenance` §2c.
 - **2026-11-03** — **A backdated row restates its own day, however old.** The nightly
   `metric_daily_restate` pass also restates any day older than the 35-day trailing window that
   gained a `transactions` or `mrr_movements` row (by `occurred_at`) after the day was stored
@@ -698,7 +738,8 @@ measured and is not is worse than a missing one.
   audit row before the file streams. JSON pages are not audited (one export is many pages).
 - **2026-10-24** — `monthlyRecurringMinor` excludes every metered price (`isMeteredPrice`):
   usage, and a percentage or graduated percentage price with a usage aggregation.
-- **2026-10-24** — **An organization reads every business at the same day.** Org scope cut
+- **2026-10-24** — (Superseded on 2026-11-15: each business is now read at its own day.)
+  **An organization reads every business at the same day.** Org scope cut
   its window on the organization's zone, so once an Asia/Kolkata business had written tomorrow's
   row the last day bucket held that business alone, and the stock total (`last` non-null point)
   read it as the organization's MRR: $3.02K "down 93%" for a true ~$46K. `scopeToday` is now
@@ -1394,3 +1435,6 @@ measured and is not is worse than a missing one.
 - **2026-11-05** — Usage (phase 2): `daily/usage-measures.ts`, source `usage`. `usage_events` (by `meter`, no currency, from `usage_rollups` — every generation is a different batch, so all are summed), `usage_customers` (distinct, per grain), `usage_cost` (full-cost usage lines, by meter), `usage_revenue_retention` (halves: usage revenue now from customers with usage revenue in the equal window before ÷ theirs then). No summed quantity: meters count different things. `revenue_billed` gains a `meter` slice over usage lines (from `rating.meter`; `none` when absent); meter names resolve in splits. Usage preset; presence also counts `usage_events`. Gate: `verify:metric-usage` (10).
 - **2026-11-05** — One-time sales (phase 3): `daily/order-measures.ts`, source `orders`; the order rule is `daily/order-predicate.ts` `isOrder` (billed, no subscription, a one-time line that is not a credit pack), shared with the customer filters and segment facts. `orders`, `order_revenue` (by `product`, before tax, net of discounts), `order_refunds`, `average_order_value` (ratio sum/sum), `buyers`, `returning_buyers`, `returning_buyer_rate` (per grain). Presence of one-time sales is `orders`, not one-time revenue: a setup fee on a subscription is not a sale. One-time sales preset. Gate: `verify:metric-orders` (13).
 - **2026-11-05** — Mixed businesses (phase 4): `billed_customers` and `revenue_per_customer` (halves `count`, so only the money half converts), per grain, in the invoice group. Presets: a business without subscriptions lists its model presets first, so Dashboards opens on one. Business Home: presence is its own small batch (the Overview batch is near the 48 cap); with no subscriptions in 90 days but another model, the Overview headline is revenue-led and the subscription-only cards and the Recurring tab are not drawn.
+- **2026-11-11** — Bulk fill: the cached transaction answered the forward book's item read (`recurringAmountsForSubs`, joins `products`) with the old plan superset, so a fill through today on a live book threw (`reading 'businessId'`) — the timezone recompute and `restateMetricsFrom` both fill through today. The plan shortcut is removed (its read has been one raw `= any(...)` statement since D4.5), and the re-rating shortcut now matches its exact SQL, not the tables it names. Gate: `verify:metric-daily-tz` §10 runs `recomputeMetricDailyForBusiness` on a live book and compares today's forward rows to a plain compute.
+- **2026-11-11** — Payments analytics: an offline transaction has no vaulted method, so its payment-method key is its gateway key (`offline_wire` → "Offline wire"), the row the gateway breakdown shows, not "Unknown". The method filter uses the same key. `verify:payments-analytics` checks both.
+- **2026-11-13** — Usage margin `scope=all` and `group_by=plan` (`usage-margin.ts`; `scope=billed` is the default and its query is unchanged). Cost only = `usage_cost_daily` rows (metering's daily cost fold) that (a) no usage line of a non-voided invoice of the customer covers for that meter (line window overlaps the day) and (b) no live subscription will bill (the meter's `customer_meter_billing` owner is not cancelled, has a price on the meter from an item created before the day ended, and `usage_through` is before the day's end). Both are read at query time, so a void or a new invoice moves a day by itself. A partly covered day counts as billed. By customer and plan `total_revenue_minor` is every revenue line (`recurring`, `proration`, `usage`, `one_time`; the line rule the report always used: amount − discount − credit notes − inclusive tax, on finalized non-voided invoices by `finalized_at`; `revenue_billed`'s line set, also net of credit notes); by meter and model it is every usage line. `plan_fee_minor` (recurring and proration lines of plan products) and `subscribers` (customers with a subscription on the plan live in the range). Plan = `plan-of.ts` rule, now also a lateral join (`planProductJoin`). `metric_daily_restate` also restates the cost fold. Cover: `verify:cost-margin`.

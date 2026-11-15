@@ -110,3 +110,20 @@ export function splitPhone(
   const hit = dials.find((d) => digits.startsWith(d));
   return hit ? { dial: hit, national: digits.slice(hit.length) } : { dial: "", national: digits };
 }
+
+/**
+ * A whole international number (`+91 98765 43210`, `0044 20 7946 0958`), as autofill or a
+ * paste gives it, split into dial code + national digits. Null for anything else, and for
+ * a number not yet valid for its code, so typing `+4…` by hand does not jump the picker.
+ */
+export function splitIntl(
+  typed: string,
+  countries: PhoneCountry[],
+): { dial: string; national: string } | null {
+  const raw = typed.trim();
+  const intl = raw.startsWith("+") ? raw : raw.startsWith("00") ? `+${raw.slice(2)}` : null;
+  if (!intl) return null;
+  const { dial, national } = splitPhone(intl, countries);
+  if (!dial || !national) return null;
+  return isValidComposedPhone(`+${dial}${national}`, countries) ? { dial, national } : null;
+}

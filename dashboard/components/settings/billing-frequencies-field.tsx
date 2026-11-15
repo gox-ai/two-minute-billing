@@ -13,12 +13,12 @@ type Freq = { interval: "day" | "week" | "month" | "year"; count: number };
 const STANDARD: Array<Freq & { label: string }> = [
   { interval: "day", count: 1, label: "Daily" },
   { interval: "week", count: 1, label: "Weekly" },
-  { interval: "day", count: 14, label: "14 Days" },
+  { interval: "day", count: 14, label: "Every 14 days" },
   { interval: "month", count: 1, label: "Monthly" },
   { interval: "month", count: 3, label: "Quarterly" },
   { interval: "month", count: 6, label: "Half-yearly" },
   { interval: "year", count: 1, label: "Yearly" },
-  { interval: "year", count: 10, label: "10 Years" },
+  { interval: "year", count: 10, label: "Every 10 years" },
 ];
 
 const key = (f: Freq) => `${f.interval}:${f.count}`;

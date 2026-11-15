@@ -59,6 +59,7 @@ import { AppearanceField } from "@/components/account/appearance-field";
 import { SignOutOthersButton, SignOutSessionButton } from "@/components/account/session-actions";
 import { updateProfileAction } from "./actions";
 import { safeRedirectTo } from "@/lib/redirect-to";
+import { fmtDate } from "@/lib/format-date";
 
 /**
  * Your own account: profile, appearance, and how you sign in (2FA, password, sessions).
@@ -72,8 +73,7 @@ import { safeRedirectTo } from "@/lib/redirect-to";
  * The two-factor card is a list of METHOD rows — passkeys, then the authenticator app — plus the
  * recovery codes. Either method alone keeps 2FA on (0330).
  */
-const day = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const day = (iso: string) => fmtDate(iso, "UTC");
 
 function lastUsed(iso: string | null): string {
   if (!iso) return "never used";
@@ -224,15 +224,7 @@ function TrustedBrowserRow({ b }: { b: TrustedBrowser }) {
 }
 
 /** "8 Oct 2026" for a YYYY-MM-DD day, without a timezone shift. */
-const dayOnly = (d: string) => {
-  const [y, m, dd] = d.split("-").map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-};
+const dayOnly = (d: string) => fmtDate(d, "UTC");
 
 /** One browser: what it is, when it was last used, where and how it signed in. */
 function SessionRow({ s, multiOrg }: { s: AccountSession; multiOrg: boolean }) {
@@ -254,16 +246,6 @@ function SessionRow({ s, multiOrg }: { s: AccountSession; multiOrg: boolean }) {
       placement="end"
       control={s.current ? undefined : <SignOutSessionButton id={s.id} label={device} />}
     />
-  );
-}
-
-/** A group heading between cards — the page has two scopes, you and how you sign in. */
-function SectionHeading({ id, title, sub }: { id: string; title: string; sub: string }) {
-  return (
-    <div id={id} className="flex scroll-mt-4 flex-col gap-0.5 pt-2">
-      <h2 className="m-0 text-lg font-semibold">{title}</h2>
-      <p className="m-0 text-sm text-muted-foreground">{sub}</p>
-    </div>
   );
 }
 
@@ -326,7 +308,7 @@ export default async function AccountPage({
     <SettingsPage
       title="Your account"
       description="Your profile, the appearance of the dashboard, and how you sign in."
-      crumbs={[]}
+      crumbs={[{ label: "Overview", href: "/" }, { label: "Your account" }]}
     >
       {sp.error ? (
         <Alert tone="error" title="The action did not complete">
@@ -442,8 +424,21 @@ export default async function AccountPage({
                 />
               </Field>
               {/* The address is the sign-in identity, so it is shown and never edited here. */}
-              <Field name="email" label="Email address">
-                <Input name="email" value={me.email} readOnly disabled />
+              <Field
+                name="email"
+                label="Email address"
+                help={
+                  <span id="email-note">
+                    You sign in with this address. You cannot change it here.
+                  </span>
+                }
+              >
+                <Input
+                  value={me.email}
+                  readOnly
+                  className="bg-muted/50 text-foreground"
+                  aria-describedby="email-note"
+                />
               </Field>
               <div>
                 <Button type="submit">Save</Button>
@@ -460,12 +455,6 @@ export default async function AccountPage({
         >
           <AppearanceField saved={me.theme ?? null} />
         </SettingsCard>
-
-        <SectionHeading
-          id="security"
-          title="Security"
-          sub="How you sign in, and the browsers where you are signed in."
-        />
 
         <StepUpProvider proof={stepUpProof} windowMinutes={stepUp?.windowMinutes ?? 15}>
           <SettingsCard
@@ -534,7 +523,9 @@ export default async function AccountPage({
                     />
                   </Field>
                   <div className="flex gap-2">
-                    <Button type="submit">{setup.replacing ? "Change app" : "Continue"}</Button>
+                    <Button type="submit" variant="outline">
+                      {setup.replacing ? "Change app" : "Continue"}
+                    </Button>
                   </div>
                 </ActionForm>
                 <form action={cancelMfaSetupAction}>
@@ -574,7 +565,7 @@ export default async function AccountPage({
                     label="Passkey"
                     help="Sign in with your fingerprint, face or screen lock"
                     placement="end"
-                    control={<AddPasskeyButton variant={mfa.confirmed ? "outline" : "default"} />}
+                    control={<AddPasskeyButton variant="outline" />}
                   />
                 ) : (
                   <>
@@ -605,7 +596,7 @@ export default async function AccountPage({
                     <span className="inline-flex items-center gap-1">
                       <AuthenticatorAppButton
                         label={mfa.authenticatorApp ? "Change app" : "Add"}
-                        variant={mfa.authenticatorApp || mfa.confirmed ? "outline" : "default"}
+                        variant="outline"
                       />
                       {/* Alone, removing the app IS turning 2FA off — that is the card's button. */}
                       {mfa.authenticatorApp && mfa.passkeys.length > 0 ? (
@@ -670,7 +661,7 @@ export default async function AccountPage({
                   autoComplete="new-password"
                 />
               </Field>
-              <Button type="submit">
+              <Button type="submit" variant="outline">
                 {me.has_password === false ? "Set password" : "Change password"}
               </Button>
             </ActionForm>

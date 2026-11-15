@@ -73,9 +73,9 @@ export function StorefrontHeader({
   aside,
 }: {
   brand: Brand;
-  /** Tracked micro-label under the name ("Billing portal"). */
+  /** Line under the name ("Billing portal"). Same look as `subtitle`: one header treatment. */
   eyebrow?: string;
-  /** Sentence-case line under the name, when a whole sentence fits better than an eyebrow. */
+  /** Sentence-case line under the name. */
   subtitle?: string;
   aside?: React.ReactNode;
 }) {
@@ -84,6 +84,7 @@ export function StorefrontHeader({
   // logo is the classic branded-header mistake. The name only leads when there is no
   // wordmark to lead with.
   const hasWordmark = Boolean(brand.logo_url);
+  const line = subtitle ?? eyebrow;
   return (
     <>
       {brand.livemode === "test" ? (
@@ -98,12 +99,7 @@ export function StorefrontHeader({
             {hasWordmark ? null : (
               <div className="truncate text-lg font-semibold tracking-tight">{business}</div>
             )}
-            {eyebrow ? (
-              <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-                {eyebrow}
-              </div>
-            ) : null}
-            {subtitle ? <div className="text-sm text-muted-foreground">{subtitle}</div> : null}
+            {line ? <div className="text-sm text-muted-foreground">{line}</div> : null}
           </div>
         </div>
         {/* NOT `hidden sm:block` any more. That hid the whole block below 640px, so on
@@ -293,16 +289,22 @@ export function Steps({
     0,
     steps.findIndex((s) => s.key === current),
   );
+  // On a phone each label sits under its number, so every step keeps its name.
   return (
-    <ol className="flex items-center gap-2 text-xs" aria-label="Progress">
+    <ol className="flex items-start gap-2 text-xs sm:items-center" aria-label="Progress">
       {steps.map((s, i) => {
         const done = i < idx;
         const active = i === idx;
         return (
           <React.Fragment key={s.key}>
-            {i > 0 ? <li aria-hidden className="h-px w-5 shrink-0 bg-border sm:w-8" /> : null}
+            {i > 0 ? (
+              <li
+                aria-hidden
+                className="mt-3 h-px min-w-3 flex-1 bg-border sm:mt-0 sm:w-8 sm:flex-none"
+              />
+            ) : null}
             <li
-              className="flex min-w-0 items-center gap-2"
+              className="flex shrink-0 flex-col items-center gap-1 sm:flex-row sm:gap-2"
               aria-current={active ? "step" : undefined}
             >
               <span
@@ -317,8 +319,8 @@ export function Steps({
               </span>
               <span
                 className={cn(
-                  "truncate",
-                  active ? "font-medium text-foreground" : "hidden text-muted-foreground sm:inline",
+                  "whitespace-nowrap",
+                  active ? "font-medium text-foreground" : "text-muted-foreground",
                 )}
               >
                 {s.label}
@@ -351,7 +353,7 @@ export function Steps({
  */
 export function CommitBar({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border bg-muted/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 rounded-xl border bg-muted/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-start gap-2 text-xs text-muted-foreground">
         <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />
         <span>Your payments are secure and encrypted</span>

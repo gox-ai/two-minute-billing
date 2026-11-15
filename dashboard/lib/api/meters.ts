@@ -10,6 +10,7 @@ import {
   type PagedList,
 } from "@/lib/api";
 import type { MeterAggregation } from "@/lib/meters";
+import type { EventCreditEntry, MeterCreditCost } from "@/lib/meter-credit-cost";
 
 interface List<T> {
   object: "list";
@@ -40,6 +41,8 @@ export interface Meter {
   cost_currency?: string | null;
   /** True once the meter has a counted event or a price: only `name` can change. */
   locked: boolean;
+  /** What one unit of the meter costs in credits of a unit with no money value; null = none. */
+  credit_cost?: MeterCreditCost | null;
   /** Matched events on this meter that no subscription bills. */
   not_billed_event_count?: number | null;
   created_at: string;
@@ -55,6 +58,13 @@ export interface MeterPriceList {
   model_key?: string | null;
   token_type?: string | null;
   token_type_key?: string | null;
+  /** The list unit. Absent: tokens, else requests. */
+  unit?: string | null;
+  /** Price tier: a fixed value or a property name. */
+  quality?: string | null;
+  quality_key?: string | null;
+  resolution?: string | null;
+  resolution_key?: string | null;
 }
 
 export interface MeterWrite {
@@ -101,6 +111,10 @@ export interface UsageEvent {
   flags: string[];
   voided_at: string | null;
   void_reason: string | null;
+  /** Refused for lack of credit: stored, and no usage counts it. */
+  refused_at?: string | null;
+  /** Only on an event that a meter with a credit cost counted: one entry per such meter. */
+  credit?: EventCreditEntry[];
 }
 
 export interface UsageEventInput {
@@ -171,6 +185,15 @@ export async function countMeterEventsLastDay(biz: string, meter: string): Promi
   ).catch(() => null);
   return page?.total ?? null;
 }
+
+export const putMeterCreditCost = (
+  biz: string,
+  meter: string,
+  body: { unit: string; credits_per_unit: string; overrides: MeterCreditCost["overrides"] },
+) => apiWrite(`${b(biz)}/meters/${encodeURIComponent(meter)}/credit_cost`, body, "PUT");
+
+export const deleteMeterCreditCost = (biz: string, meter: string) =>
+  apiWrite(`${b(biz)}/meters/${encodeURIComponent(meter)}/credit_cost`, {}, "DELETE");
 
 export const sendUsageEvent = (biz: string, event: UsageEventInput) =>
   apiWrite(`${b(biz)}/usage_events`, event, "POST");

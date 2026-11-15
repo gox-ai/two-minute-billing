@@ -1,46 +1,28 @@
 import * as React from "react";
-import { NavPendingProvider, PendingContent } from "@/components/navigation/nav-pending";
-import { OrgHomeSkeleton } from "@/components/analytics/org/skeletons";
 import Link from "next/link";
-import { getMe, listBusinesses, listCustomers, money } from "@/lib/api";
+import { NavPendingProvider, PendingContent } from "@/components/navigation/nav-pending";
+import { getMe, listBusinesses, money } from "@/lib/api";
 import {
   queryAnalytics,
   AnalyticsRefused,
-  type AnalyticsQuery,
   type BatchEntry,
-  type AnalyticsResult,
   getSyncedAt,
 } from "@/lib/analytics-api";
-import { measureValueCompact } from "@/components/analytics/format";
-import { pctFromBps } from "@/lib/format";
-import { Grid, Stack, Block } from "@/components/analytics/layout";
+import { Stack } from "@/components/analytics/layout";
 import { CutMenu } from "@/components/analytics/cut-controls";
 import { CurrencyRefusal } from "@/components/analytics/currency-refusal";
 import {
   ok,
   splitByKey,
-  windowChangeBps,
   billedCurrencies,
   excludedBusinesses,
-  type ConvertedResult,
+  windowChangeBps,
 } from "@/components/analytics/org/conversion";
 import { ConversionNote } from "@/components/analytics/org/conversion-note";
-import { OrgPerformance, orgPerformanceQueries } from "@/components/analytics/org/performance";
-import { combineQueueCounts, fetchQueueCounts, queueItems } from "@/lib/attention-queues";
-import { orgTz } from "@/lib/org-tz-server";
-import {
-  AttentionStrip,
-  Headline,
-  seriesChange,
-  trialHalves,
-  type AttentionItem,
-} from "@/components/analytics/home/parts";
-import { ZoneHeading, ZoneMeta } from "@/components/analytics/home/zone";
-import { BusinessRoster, type RosterRow } from "@/components/analytics/org/business-roster";
-import { BusinessCards, BusinessPanel } from "@/components/analytics/org/business-cards";
 import { createBusiness } from "@/app/actions";
 import { requireUser, can, allows } from "@/lib/session";
 import { permissionDef, type PermissionKey } from "@/lib/permissions.generated";
+import { plural } from "@/lib/labels";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SyncedBadge } from "@/components/analytics/synced-badge";
@@ -52,8 +34,15 @@ import { Alert } from "@/components/ui/alert";
 import { CurrencySelect } from "@/components/form/currency-select";
 import { WelcomeFirstBusiness } from "@/components/home/welcome-first-business";
 import { currencyForCountry } from "@/lib/country-currency";
-import { explain } from "@/components/analytics/card-info";
-import { G } from "@/components/analytics/glossary";
+import { OrgTotals, totalsQueries, windowQueries } from "@/components/overview/totals";
+import { ZoneHeading } from "@/components/analytics/home/zone";
+import { orgTz } from "@/lib/org-tz-server";
+import { loadAttention } from "@/components/overview/attention";
+import { AttentionList } from "@/components/overview/attention-list";
+import type { RosterRow } from "@/components/analytics/org/business-roster";
+import { BusinessCards, BusinessPanel } from "@/components/analytics/org/business-cards";
+import { SectionHeading } from "@/components/overview/section-heading";
+import { OverviewSkeleton } from "@/components/overview/overview-skeleton";
 
 export const dynamic = "force-dynamic";
 
@@ -79,11 +68,8 @@ function refusalOf(entry: BatchEntry | undefined): AnalyticsRefused | null {
 }
 
 /**
- * Organization home.
- *
- * One converted portfolio figure, what the conversion had to drop said plainly, which business
- * wants attention today, and then the businesses themselves — **each row in its own currency**.
- * Every analytics figure on the screen comes from ONE batched POST.
+ * Organization overview: the organization's totals (the same figures and conversion as the
+ * Current zone on Metrics), what needs a person today, and the way into each business.
  */
 export default async function Home({
   searchParams,
@@ -94,16 +80,11 @@ export default async function Home({
   const isManager = allows(user, "businesses:create", "manager");
 
   /**
-   * `requirePermission()` sends a role that lacks a permission here as `/?denied=<perm>`, and
-   * nothing read that parameter — so the click simply undid itself and the refusal sat unread
-   * in the URL. Rendered in the error branch below too: a `developer` cannot list businesses
-   * either, so the bounce and the failed fetch arrive together.
+   * `requirePermission()` sends a role that lacks a permission here as `/?denied=<perm>`.
+   * Shown only when the role GENUINELY lacks it: a stale bookmark must not tell an owner they
+   * cannot open a page they can.
    */
   const { denied, currency: currencyParam } = await searchParams;
-  /**
-   * Shown only when the role GENUINELY lacks the permission — the parameter is just a query
-   * string, and a stale bookmark would otherwise tell an owner they cannot open a page they can.
-   */
   const deniedPerm =
     denied && denied in DENIED_AREAS ? (denied as "manager" | "ops" | "developer" | "admin") : null;
   // A custom role is refused by permission key: name the permission.
@@ -144,11 +125,10 @@ export default async function Home({
     );
   }
 
-  // Org-level views are live: test mode lives inside each business, beside its live data.
-  const mode = "live" as const;
-  const visible = businesses.data.filter((b) => b.livemode === mode);
-  // Test businesses created before every business had its own test mode. They have no live
-  // business, so the only way in is from here.
+  // Organization figures are live: test mode lives inside each business, beside its live data.
+  const visible = businesses.data.filter((b) => b.livemode === "live");
+  // Test businesses made before every business had its own test mode. They have no live
+  // business, so this list is the only way in.
   const legacyTest = businesses.data.filter((b) => b.livemode === "test" && !b.live_business_id);
 
   // No business yet: the page's only job is creating the first one.
@@ -165,270 +145,102 @@ export default async function Home({
     );
   }
 
-  /** The currencies the book is actually billed in, most common first — the switcher's options. */
-  const currencies = billedCurrencies(businesses.data);
-
   /**
-   * ONE round trip for every figure on this page.
-   *
-   * The headline asks for no currency, so the engine converts into the organization's base
-   * currency and publishes the rates it used and the ones it could not find. The roster's
-   * split rides the SAME basis, so a row and the headline are the same arithmetic — one
-   * query, not one per currency the book happens to use.
-   *
-   * `range: 30d` on a stock answers two questions at once: the total is the value at the END
-   * of the window (what MRR is now), and each split row's points carry where it started, which
-   * is the 30-day movement the roster shows.
-   */
-  const reporting = currencyParam ? { currency: currencyParam } : {};
-  /**
-   * One business: its figures read like its own Home, so ask for the per-business ones Home
-   * shows. ARPC is a ratio the organization scope refuses, so both name the business.
+   * Two calls, side by side. The totals ask Metrics' Current questions on its basis, so the
+   * two pages agree. The 30-day call carries the movement, churn, trials and the
+   * Performance section, on the 30-day daily window those figures always used.
    */
   const sole = visible.length === 1 ? visible[0]! : null;
-  const soleQueries: AnalyticsQuery[] = sole
-    ? [
-        { key: "sole_cmrr", measure: "cmrr", business: sole.id, ...reporting },
-        {
-          key: "sole_cust_churn",
-          measure: "customer_churn_rate",
-          business: sole.id,
-          range: "30d",
-          grain: "month",
-        },
-        {
-          key: "sole_arpa",
-          measure: "revenue_per_paying_customer",
-          business: sole.id,
-          ...reporting,
-        },
-      ]
-    : [];
-  const queries: AnalyticsQuery[] = [
-    { key: "mrr", measure: "mrr", compare: "previous", ...reporting },
-    { key: "arr", measure: "arr", ...reporting },
-    ...soleQueries,
-    { key: "paying_customers", measure: "paying_customers" },
-    { key: "paying", measure: "paying_subscriptions" },
-    { key: "renewing", measure: "renewing_subscriptions" },
-    ...orgPerformanceQueries(reporting),
-    { key: "at_risk", measure: "mrr_at_risk", ...reporting },
-    { key: "cancel_mrr", measure: "scheduled_cancellation_mrr", split: "horizon", ...reporting },
-
-    {
-      // Subscriptions in dunning, per business — the roster's Dunning column.
-      key: "dunning_by_biz",
-      measure: "dunning_subscriptions",
-      split: "business",
-      split_limit: Math.max(businesses.data.length, 1),
-    },
-    {
-      key: "paying_by_biz",
-      measure: "paying_subscriptions",
-      split: "business",
-      split_limit: Math.max(businesses.data.length, 1),
-    },
-    {
-      key: "mrr_by_biz",
-      measure: "mrr",
-      split: "business",
-      split_limit: Math.max(businesses.data.length, 1),
-      ...reporting,
-    },
-  ];
-
   let batch: BatchEntry[] = [];
+  let windowBatch: BatchEntry[] = [];
   let batchError: string | null = null;
   const syncedAtP = getSyncedAt();
-  try {
-    batch = await queryAnalytics({ range: "30d", grain: "day", queries });
-  } catch (e) {
-    batchError = (e as Error).message;
+  const tzP = orgTz();
+  if (visible.length > 0) {
+    try {
+      [batch, windowBatch] = await Promise.all([
+        queryAnalytics({
+          queries: totalsQueries(businesses.data.length),
+          ...(currencyParam ? { currency: currencyParam } : {}),
+        }),
+        queryAnalytics({
+          range: "30d",
+          grain: "day",
+          queries: windowQueries({
+            businessCount: businesses.data.length,
+            soleBusiness: sole?.id ?? null,
+            currency: currencyParam,
+          }),
+        }),
+      ]);
+    } catch (e) {
+      batchError = (e as Error).message;
+    }
   }
-  const syncedAt = await syncedAtP;
-  const byKey = new Map(batch.map((e) => [e.key, e]));
+  const [syncedAt, tz] = await Promise.all([syncedAtP, tzP]);
+  const answers = new Map(batch.map((e) => [e.key, e]));
+  const windowAnswers = new Map(windowBatch.map((e) => [e.key, e]));
 
-  const mrr: ConvertedResult | null = ok(byKey.get("mrr"));
-  const mrrRefusal = refusalOf(byKey.get("mrr"));
-  const paying = ok(byKey.get("paying"));
-  const renewing = ok(byKey.get("renewing"));
-  const payingByBiz = splitByKey(ok(byKey.get("paying_by_biz")));
-  const dunningByBiz = splitByKey(ok(byKey.get("dunning_by_biz")));
-  /** Businesses exist in this mode, but none has billed anything — nothing to chart or total. */
-  const dormant =
-    visible.length > 0 &&
-    (mrr?.total == null || mrr.total === 0) &&
-    (paying?.total == null || paying.total === 0);
-
-  /**
-   * Per-business MRR on the page's own reporting basis, plus that row's movement.
-   *
-   * Stated in ONE currency, converted, rather than each business's own: minor units across
-   * currencies do not add, so a business billing in three used to render as three figures
-   * joined by a `+` — an arithmetic nobody can do, wrapped over four lines. A business whose
-   * currency has no rate converts to nothing and is named below instead of shown as zero.
-   */
-  const mrrByBizResult = ok(byKey.get("mrr_by_biz"));
-  const mrrByBiz = splitByKey(mrrByBizResult);
-  /** The currency every roster figure is stated in — the same one the headline uses. */
-  const reportingCurrency = mrrByBizResult?.currency ?? mrr?.currency ?? null;
-
-  /** Businesses the converted headline had to leave out, by name — never counted as zero. */
+  const mrr = ok(answers.get("mrr"));
+  const mrrRefusal = refusalOf(answers.get("mrr"));
+  const payingBiz = splitByKey(ok(answers.get("paying_biz")));
+  const dunningBiz = splitByKey(ok(answers.get("dunning_biz")));
+  const payingSubsBiz = splitByKey(ok(windowAnswers.get("paying_by_biz")));
+  const mrrMoveResult = ok(windowAnswers.get("mrr_by_biz"));
+  const mrrMoveBiz = splitByKey(mrrMoveResult);
+  /** The 30-day MRR: the Performance section's basis. */
+  const windowMrr = ok(windowAnswers.get("mrr"));
+  const payingTotal = [...payingBiz.values()].reduce((s, r) => s + (r.total ?? 0), 0);
+  /** Live businesses exist, but none has billed anything yet. */
+  const dormant = visible.length > 0 && !mrr?.total && payingTotal === 0;
+  /** Businesses the conversion left out: named, never counted as zero. */
   const dropped = new Set(excludedBusinesses(visible, mrr?.missing_rates ?? []).map((b) => b.id));
 
-  /** The business holding most of a split — where a cell's link leads. */
-  const topOf = (key: string) => {
-    const split = splitByKey(ok(byKey.get(key)));
-    return (
-      visible
-        .map((b) => ({ b, v: split.get(b.id)?.total ?? 0 }))
-        .filter((r) => r.v > 0)
-        .sort((a, z) => z.v - a.v)[0]?.b ?? null
-    );
-  };
-  const atRisk = ok(byKey.get("at_risk"));
-  const inDunning = [...dunningByBiz.values()].reduce((s, r) => s + (r.total ?? 0), 0);
-  const cancelResult = ok(byKey.get("cancel_mrr"));
-  // Every band, not just the next 30 days: Committed subtracts them all, and the link lists them all.
-  const cancelling = cancelResult?.total ?? 0;
-  const dunningTop = topOf("dunning_by_biz");
+  const attention =
+    visible.length > 0
+      ? await loadAttention({ user, orgName: org.name, orgTz: tz, businesses: visible, answers })
+      : [];
 
-  // Renewing customers who cannot be charged, and those whose card is expiring, per business: the
-  // customers list's own counts through its filters, so each cell and its list agree.
-  const stuckFilter = [{ field: "cannot_be_charged", op: "is", value: "true" }];
-  // Started before the customer counts below so the two run side by side.
-  const queuesP = Promise.all([
-    Promise.all(visible.map(async (b) => ({ biz: b.id, counts: await fetchQueueCounts(b.id) }))),
-    orgTz(),
-  ]).then(([per, tz]) => {
-    const { counts, topBiz } = combineQueueCounts(per);
-    return queueItems(counts, topBiz, tz);
-  });
-  const stuckByBiz = await Promise.all(
-    visible.map(async (b) => {
-      const [all, none, expiring] = await Promise.all([
-        // `exactTotal`: these totals are figures on the tile, not "N rows".
-        listCustomers(b.id, { limit: 1, exactTotal: true, filters: stuckFilter }),
-        listCustomers(b.id, {
-          limit: 1,
-          exactTotal: true,
-          filters: [
-            ...stuckFilter,
-            { field: "payment_method_type", op: "is_present", value: "false" },
-          ],
-        }),
-        listCustomers(b.id, {
-          limit: 1,
-          exactTotal: true,
-          filters: [
-            { field: "payment_method_expiring", op: "is", value: "true" },
-            { field: "renewing", op: "is", value: "true" },
-          ],
-        }),
-      ]).catch(() => [null, null, null] as const);
-      return {
-        b,
-        total: all?.total ?? 0,
-        noMethod: none?.total ?? 0,
-        expiring: expiring?.total ?? 0,
-      };
-    }),
-  );
-  const stuck = stuckByBiz.reduce((s, r) => s + r.total, 0);
-  const stuckNone = stuckByBiz.reduce((s, r) => s + r.noMethod, 0);
-  const stuckTop =
-    [...stuckByBiz].sort((a, z) => z.total - a.total).find((r) => r.total > 0)?.b ?? null;
-  const stuckNote = [
-    stuck - stuckNone > 0 ? `${(stuck - stuckNone).toLocaleString("en")} expired or invalid` : null,
-    stuckNone > 0 ? `${stuckNone.toLocaleString("en")} no method` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  // The same queues as Business Home: three always (an empty one reads a quiet zero and links to
-  // Metrics, a full one to the business holding most of it), up to three more while non-empty.
-  const cards = stuckByBiz.reduce((s, r) => s + r.expiring, 0);
-  const cardsTop =
-    [...stuckByBiz].sort((a, z) => z.expiring - a.expiring).find((r) => r.expiring > 0)?.b ?? null;
-  const atRiskMinor = atRisk?.total ?? 0;
-  const attentionItems: AttentionItem[] = [
-    {
-      key: "at_risk",
-      label: "MRR at risk",
-      value: money(atRiskMinor, atRisk?.currency ?? "USD"),
-      note: inDunning ? `${inDunning.toLocaleString("en")} in dunning` : undefined,
-      href: dunningTop ? `/businesses/${dunningTop.id}/retries` : "/metrics",
-      tone: atRiskMinor > 0 ? "attention" : "neutral",
-      info: G.mrrAtRisk,
-    },
-    {
-      key: "cannot_charge",
-      label: "Cannot be charged",
-      value: stuck.toLocaleString("en"),
-      note: stuckNote || undefined,
-      href: stuckTop
-        ? `/businesses/${stuckTop.id}/customers?filter=cannot_be_charged:is:true`
-        : "/metrics",
-      tone: stuck > 0 ? "attention" : "neutral",
-      info: G.cantBeCharged,
-    },
-    {
-      key: "cards",
-      label: "Cards expiring",
-      value: cards.toLocaleString("en"),
-      note: "next 90 days",
-      href: cardsTop
-        ? `/businesses/${cardsTop.id}/customers?filter=payment_method_expiring:is:true&filter=renewing:is:true`
-        : "/metrics",
-      tone: cards > 0 ? "warning" : "neutral",
-      info: G.cardsExpiring,
-    },
-    ...(await queuesP),
-  ];
-
+  /**
+   * One row per live business for the cards and the roster, as before: MRR and its 30-day
+   * movement on the page's reporting basis, stated in ONE currency, converted. A business
+   * whose currency has no rate converts to nothing and is named, not shown as zero.
+   */
+  const rosterCurrency = mrrMoveResult?.currency ?? windowMrr?.currency ?? null;
   const rows: RosterRow[] = visible.map((b) => {
-    const mrrRow = mrrByBiz.get(b.id);
+    const mrrRow = mrrMoveBiz.get(b.id);
     return {
       id: b.id,
       name: b.name,
       livemode: b.livemode,
       currency: b.default_currency,
       mrrLabel:
-        mrrRow?.total != null && reportingCurrency ? money(mrrRow.total, reportingCurrency) : null,
+        mrrRow?.total != null && rosterCurrency ? money(mrrRow.total, rosterCurrency) : null,
       mrrMinor: mrrRow?.total ?? null,
       changeBps: mrrRow ? windowChangeBps(mrrRow.points) : null,
-      payingSubscriptions: payingByBiz.get(b.id)?.total ?? null,
-      subscriptionsInDunning: dunningByBiz.get(b.id)?.total ?? null,
+      payingSubscriptions: payingSubsBiz.get(b.id)?.total ?? null,
+      subscriptionsInDunning: dunningBiz.get(b.id)?.total ?? null,
       excludedFromRollup: dropped.has(b.id),
       iconUrl: b.icon_url ?? null,
       brandColor: b.brand_color ?? null,
     };
   });
-  /** One business: the organization's totals are its totals, so nothing is combined or compared. */
+  /** One business: the organization's totals are its totals, so its panel holds them. */
   const only = rows.length === 1 ? rows[0]! : null;
-  const arr = ok(byKey.get("arr"));
-  const soleCmrr = ok(byKey.get("sole_cmrr"));
-  const soleArpa = ok(byKey.get("sole_arpa"));
-  const payingCustomers = ok(byKey.get("paying_customers"));
-  /** Links into the only business, the same ones its Home carries. */
-  const subsHref = only ? `/businesses/${only.id}/subscriptions` : null;
-  /** The headline row's fixed 30 days — the same window the Performance zone reads. */
-  const money30 = (key: string) => ok(byKey.get(key))?.total ?? null;
-  const cur = mrr?.currency ?? reportingCurrency ?? "USD";
-  const hTrial = trialHalves(ok(byKey.get("p_trial_conv")));
-  const hTrialConv = money30("p_trial_conv");
-  const hMrrNew = money30("p_new");
-  const hChurned = money30("p_churn");
-  const hMrrChurn = ok(byKey.get("p_churn_rate"));
-  const soleCustChurn = ok(byKey.get("sole_cust_churn"));
+  const panel = only && windowMrr && !dormant ? only : null;
 
-  /**
-   * The reporting currency control. "Converted" is the engine's own default — it sums into the
-   * organization's base currency using the rates on file — and each billed currency is the
-   * un-converted alternative. Every option is a real value of the API's `currency` param.
-   */
+  const totalsProps = {
+    answers,
+    window: windowAnswers,
+    businessCount: visible.length,
+    includedCount: visible.length - dropped.size,
+    soleBusiness: sole?.id ?? null,
+  };
+
+  /** The currencies the book is billed in: the reporting currency control's options. */
+  const currencies = billedCurrencies(businesses.data);
   const currencySwitcher =
-    currencies.length > 1 ? (
+    currencies.length > 1 && !dormant ? (
       <CutMenu
         label="Reporting currency"
         current={currencyParam ?? ""}
@@ -446,8 +258,6 @@ export default async function Home({
 
   const createControl = isManager ? (
     <CreateDialog
-      // Secondary once businesses exist; with none, creating one is the page's only action.
-      triggerVariant={visible.length > 0 ? "outline" : "default"}
       triggerSize="sm"
       triggerLabel="Create business"
       title="Create business"
@@ -475,186 +285,17 @@ export default async function Home({
     </CreateDialog>
   ) : null;
 
-  /**
-   * The four figures. With one business they are that business's, so they sit inside its panel
-   * rather than beside a card repeating them.
-   */
-  const figures = mrr ? (
-    <>
-      <Headline
-        span={3}
-        bare={!!only}
-        label={only ? "MRR" : "Consolidated MRR"}
-        info={
-          only
-            ? explain(G.mrr, G.arr, G.cmrr, G.cancelling)
-            : explain(G.consolidatedMrr, G.businesses, G.cancelling)
-        }
-        change={seriesChange(mrr as unknown as AnalyticsResult, "30 days")}
-        value={measureValueCompact(mrr.total, mrr.unit, mrr.currency)}
-        title={money(mrr.total, mrr.currency ?? "USD")}
-        stats={[
-          only
-            ? {
-                label: "ARR",
-                value:
-                  arr?.total != null
-                    ? measureValueCompact(arr.total, arr.unit, arr.currency)
-                    : null,
-                title: arr?.total != null ? money(arr.total, arr.currency ?? "USD") : undefined,
-              }
-            : {
-                label: "Businesses",
-                value: `${visible.length - dropped.size} of ${visible.length}`,
-              },
-          ...(only
-            ? [
-                {
-                  label: "Committed",
-                  value:
-                    soleCmrr?.total != null
-                      ? measureValueCompact(soleCmrr.total, soleCmrr.unit, soleCmrr.currency)
-                      : null,
-                  title:
-                    soleCmrr?.total != null
-                      ? money(soleCmrr.total, soleCmrr.currency ?? "USD")
-                      : undefined,
-                },
-              ]
-            : []),
-          {
-            label: "Cancelling",
-            href: subsHref ? `${subsHref}?status=non_renewing` : undefined,
-            value:
-              cancelling > 0
-                ? measureValueCompact(cancelling, "money", cancelResult?.currency ?? null)
-                : null,
-            title:
-              cancelling > 0
-                ? `${money(cancelling, cancelResult?.currency ?? "USD")} of MRR booked to cancel`
-                : undefined,
-          },
-        ]}
-      />
-      {/* Customers are the paying unit — ARPC and churn divide by them; subscriptions are the
-        detail beneath. Each business's customer is its own account, so the counts add. */}
-      <Headline
-        span={3}
-        bare={!!only}
-        label="Paying customers"
-        info={explain(G.payingCustomers, only ? G.arpa : null, G.payingSubs, G.renewing)}
-        change={seriesChange(payingCustomers as unknown as AnalyticsResult, "30 days", "count")}
-        value={
-          payingCustomers?.total != null
-            ? measureValueCompact(payingCustomers.total, "count", null)
-            : "—"
-        }
-        stats={[
-          ...(only
-            ? [
-                {
-                  label: "ARPC",
-                  value:
-                    soleArpa?.total != null
-                      ? money(Math.round(soleArpa.total), soleArpa.currency ?? "USD")
-                      : null,
-                },
-              ]
-            : []),
-          {
-            label: "Paying subs",
-            value: paying?.total != null ? paying.total.toLocaleString("en") : null,
-            href: subsHref
-              ? `${subsHref}?filter=status:in:active,non_renewing&filter=mrr:gt:0`
-              : undefined,
-          },
-          {
-            label: "Renewing",
-            value: renewing?.total != null ? renewing.total.toLocaleString("en") : null,
-            href: subsHref ? `${subsHref}?filter=status:is:active&filter=mrr:gt:0` : undefined,
-          },
-        ]}
-      />
-      {/* Customer churn does not add up across businesses, so with several the card leads
-        with MRR churn, which does. */}
-      <Headline
-        span={3}
-        bare={!!only}
-        label={soleCustChurn ? "Churn, 30 days" : "MRR churn, 30 days"}
-        info={
-          soleCustChurn
-            ? explain(G.customerChurn, G.churned, G.mrrChurnRate, G.mrrLost)
-            : explain(G.mrrChurnRate, G.mrrLost)
-        }
-        value={
-          soleCustChurn?.total != null
-            ? pctFromBps(soleCustChurn.total, 1)
-            : hMrrChurn?.total != null
-              ? pctFromBps(hMrrChurn.total, 1)
-              : "—"
-        }
-        stats={[
-          ...(soleCustChurn
-            ? [
-                {
-                  label: "Churned",
-                  value:
-                    soleCustChurn.total_basis === "window" && soleCustChurn.total_numerator != null
-                      ? soleCustChurn.total_numerator.toLocaleString("en")
-                      : null,
-                },
-                {
-                  label: "MRR churn",
-                  value: hMrrChurn?.total == null ? null : pctFromBps(hMrrChurn.total, 1),
-                },
-              ]
-            : []),
-          {
-            label: "MRR lost",
-            value: hChurned == null ? null : measureValueCompact(hChurned, "money", cur),
-            title: hChurned == null ? undefined : money(hChurned, cur),
-          },
-        ]}
-      />
-      <Headline
-        span={3}
-        bare={!!only}
-        label="Trial conversion, 30 days"
-        info={explain(G.trialConversion, G.trialsConverted, G.trialsEnded, G.newMrr30)}
-        value={hTrialConv == null ? "—" : pctFromBps(hTrialConv, 1)}
-        stats={[
-          {
-            label: "Converted",
-            value: hTrial.converted == null ? null : hTrial.converted.toLocaleString("en"),
-          },
-          {
-            label: "Ended",
-            value: hTrial.ended == null ? null : hTrial.ended.toLocaleString("en"),
-          },
-          {
-            label: "New MRR",
-            value: hMrrNew == null ? null : measureValueCompact(hMrrNew, "money", cur),
-            title: hMrrNew == null ? undefined : money(hMrrNew, cur),
-          },
-        ]}
-      />
-    </>
-  ) : null;
+  const listed = visible.length + legacyTest.length;
 
   return (
     <NavPendingProvider>
       <PageHeader
         title={org.name}
-        description={`${visible.length} ${visible.length === 1 ? "business" : "businesses"}`}
+        description={plural(listed, "business", "businesses")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <SyncedBadge syncedAt={syncedAt} />
+            {visible.length > 0 ? <SyncedBadge syncedAt={syncedAt} /> : null}
             {currencySwitcher}
-            {only ? null : (
-              <Button asChild variant="outline" size="sm">
-                <Link href="/metrics">Compare businesses</Link>
-              </Button>
-            )}
             {createControl}
           </div>
         }
@@ -662,80 +303,66 @@ export default async function Home({
 
       {deniedNotice}
 
-      <PendingContent skeleton={<OrgHomeSkeleton />}>
-        {batchError ? (
-          <ErrorState
-            title="We could not read the organization’s figures"
-            description={<span className="font-mono text-xs">{batchError}</span>}
-            className="mb-8"
-          />
-        ) : null}
-
-        {/* No base currency set: the engine refuses a cross-currency total and names the
-          currencies it CAN answer. Its sentence, its options — never a currency we picked. */}
-        {mrrRefusal ? (
-          <div className="mb-8">
-            <CurrencyRefusal refusal={mrrRefusal} hrefFor={(c) => `/?currency=${c}`} />
-          </div>
-        ) : null}
-
+      <PendingContent skeleton={<OverviewSkeleton />}>
         <Stack>
-          {/* The way into a business, before any figure. */}
-          {only && mrr && !dormant ? null : (
-            <>
+          {/* The way into each business: the largest by MRR as cards. One business with
+              revenue is the panel in the totals instead. */}
+          {panel ? null : (
+            <section aria-label="Businesses" className="flex flex-col gap-6">
               <ZoneHeading zone="businesses" />
-              <BusinessCards rows={rows} currency={reportingCurrency} allHref="#businesses" />
-            </>
+              <BusinessCards rows={rows} currency={rosterCurrency} allHref="/metrics" />
+              {dormant ? (
+                <p className="text-sm text-muted-foreground">
+                  Revenue, subscriptions and cash show here after the first live subscription. Open
+                  a business to set up its catalog, or turn on Test mode to try your setup first.
+                </p>
+              ) : null}
+            </section>
           )}
 
-          {/* The portfolio, converted once — every figure from the same batch, so they
-            reconcile. Performance figures are the 30-day window. */}
-          {mrr && dormant ? (
-            <Grid>
-              <Block span={12}>
-                {/* Businesses exist in this mode, but none has billed anyone: four em dashes in a
-                  row read as a broken page. Say what is true and where the figures will come from. */}
-                <div className="flex flex-col items-center gap-3 py-10 text-center">
-                  <span className="text-lg font-semibold">No live billing yet</span>
-                  <p className="max-w-md text-sm text-muted-foreground">
-                    {visible.length === 1
-                      ? `${visible[0]!.name} has not charged a customer yet.`
-                      : `None of these ${visible.length} businesses has charged a customer yet.`}{" "}
-                    Revenue, subscriptions and cash appear here after the first live subscription.
-                    To try your setup first, open a business and turn on Test mode.
-                  </p>
-                </div>
-              </Block>
-            </Grid>
-          ) : mrr ? (
-            <>
-              {only ? (
-                <BusinessPanel row={only}>{figures}</BusinessPanel>
-              ) : (
-                <>
-                  <div className="mt-4">
-                    <ZoneHeading zone="portfolio">
-                      <ZoneMeta>All businesses combined</ZoneMeta>
-                    </ZoneHeading>
-                  </div>
-                  <Grid>{figures}</Grid>
-                </>
-              )}
-              <AttentionStrip items={attentionItems} />
-
-              {/* Performance: the fixed 30-day window this page reads. */}
-              <div className="mt-4">
-                <ZoneHeading zone="performance">
-                  <ZoneMeta>Last 30 days</ZoneMeta>
-                </ZoneHeading>
-              </div>
-              <OrgPerformance
-                batch={batch}
-                mrr={mrr}
-                currency={mrr.currency ?? reportingCurrency ?? "USD"}
-                onlyBiz={only?.id ?? null}
+          {visible.length > 0 ? (
+            <section aria-labelledby="org-totals" className="mt-4 flex flex-col gap-4">
+              <SectionHeading
+                id="org-totals"
+                title="Organization totals"
+                meta="All live businesses"
+                action={
+                  allows(user, "reports:view", "ops")
+                    ? { href: "/metrics", label: "View metrics" }
+                    : undefined
+                }
               />
-            </>
+              {batchError ? (
+                <ErrorState
+                  title="We could not read the organization’s figures"
+                  description={<span className="font-mono text-xs">{batchError}</span>}
+                />
+              ) : null}
+              {/* No base currency: the engine refuses a cross-currency total and names the
+                  currencies it CAN answer. Its sentence, its options. */}
+              {mrrRefusal ? (
+                <CurrencyRefusal refusal={mrrRefusal} hrefFor={(c) => `/?currency=${c}`} />
+              ) : null}
+              {panel ? (
+                /* One business with revenue: its panel heads its own figures, as before. */
+                <BusinessPanel row={panel}>
+                  <OrgTotals {...totalsProps} bare />
+                </BusinessPanel>
+              ) : (
+                <OrgTotals {...totalsProps} />
+              )}
+            </section>
+          ) : null}
+
+          {attention.length > 0 ? (
+            <section aria-labelledby="org-attention" className="mt-4 flex flex-col gap-4">
+              <SectionHeading
+                id="org-attention"
+                title="Needs attention"
+                meta={plural(attention.length, "item")}
+              />
+              <AttentionList rows={attention} />
+            </section>
           ) : null}
 
           {legacyTest.length > 0 ? (
@@ -752,22 +379,10 @@ export default async function Home({
             </Alert>
           ) : null}
 
-          {/* One business is already the panel above; a one-row roster would repeat it. */}
-          {only ? null : (
-            <div id="businesses" className="scroll-mt-6">
-              <Grid>
-                <BusinessRoster rows={rows} mode={mode} />
-              </Grid>
-            </div>
-          )}
-
+          {/* The last line: the basis of the totals, and what the conversion had to leave out. */}
           {mrr ? <ConversionNote result={mrr} businesses={visible} /> : null}
         </Stack>
       </PendingContent>
-
-      {visible.length === 0 && isManager ? (
-        <div className="mt-4 flex justify-center">{createControl}</div>
-      ) : null}
     </NavPendingProvider>
   );
 }

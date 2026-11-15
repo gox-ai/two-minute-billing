@@ -3,8 +3,14 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { Loader2, MoreHorizontal, ShieldCheck, Star, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Alert } from "@/components/ui/alert";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import type { ActionResult } from "@/lib/action-result";
@@ -76,7 +82,7 @@ export function GatewayDetailActions({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" onClick={handleVerify} disabled={verifying}>
+        <Button type="button" variant="outline" onClick={handleVerify} disabled={verifying}>
           {verifying ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           ) : (
@@ -84,7 +90,12 @@ export function GatewayDetailActions({
           )}
           Check credentials
         </Button>
-        <Button variant="outline" onClick={handleSetDefault} disabled={settingDefault || isDefault}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleSetDefault}
+          disabled={settingDefault || isDefault}
+        >
           {settingDefault ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           ) : (
@@ -92,10 +103,20 @@ export function GatewayDetailActions({
           )}
           {isDefault ? "Default gateway" : "Set as default"}
         </Button>
-        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-          <Trash2 className="size-4" aria-hidden />
-          Delete
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="outline" aria-label="More actions">
+              <MoreHorizontal className="size-4" aria-hidden />
+              More
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDelete(true)}>
+              <Trash2 className="size-4" aria-hidden />
+              Delete…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {verifyResult ? <VerifyAlert result={verifyResult} /> : null}

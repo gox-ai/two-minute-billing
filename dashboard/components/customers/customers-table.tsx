@@ -1,6 +1,5 @@
 "use client";
 
-import { PaletteSearchHint } from "@/components/palette-hints";
 import * as React from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
@@ -18,7 +17,8 @@ import { AddonPeek, MoreSubscriptionsPeek } from "@/components/subscriptions/sub
 import { addonItems, planItem } from "@/lib/subscription-plan";
 import { CustomerRowMenu } from "@/components/customers/customer-row-menu";
 import { EmptyState } from "@/components/states";
-import { money, fmtDate, fmtDateTimeShort } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { Users } from "lucide-react";
 import type { Customer, Subscription, TaxTreatment } from "@/lib/api";
@@ -209,10 +209,10 @@ const OPTIONAL_TEXT_COLUMNS: Array<
   ["phone", "Phone", (c) => c.phone ?? ""],
   ["country", "Country", (c, countryName) => countryName(c.address?.country)],
   ["currency", "Currency", (c) => c.effective_currency ?? c.currency ?? ""],
-  ["auto_collection", "Auto Collection", (c) => (c.auto_collection === "off" ? "Off" : "On")],
-  ["net_term_days", "Net Terms", (c) => (c.net_term_days ? `${c.net_term_days} days` : "")],
+  ["auto_collection", "Auto collection", (c) => (c.auto_collection === "off" ? "Off" : "On")],
+  ["net_term_days", "Net terms", (c) => (c.net_term_days ? `${c.net_term_days} days` : "")],
   ["locale", "Language", (c) => c.locale ?? ""],
-  ["tax_exempt", "Tax Exempt", (c) => (c.tax_exempt ? "Yes" : "No")],
+  ["tax_exempt", "Tax exempt", (c) => (c.tax_exempt ? "Yes" : "No")],
 ];
 
 /** The ids of every optional column, so they start hidden. */
@@ -234,6 +234,37 @@ function customFieldText(
 function addressLine(c: Customer): string {
   const a = c.address;
   return a ? [a.line1, a.city, a.state, a.postal_code, a.country].filter(Boolean).join(", ") : "";
+}
+
+/**
+ * The billing address on two lines (street, then city, state, postal code and country), so
+ * it is shown in full at the height of the list's other two-line cells.
+ */
+function AddressCell({
+  customer,
+  countryName,
+}: {
+  customer: Customer;
+  countryName: (code: string | null | undefined) => string;
+}) {
+  const a = customer.address;
+  const street = a ? [a.line1, a.line2].filter(Boolean).join(", ") : "";
+  const place = a
+    ? [[a.city, a.state].filter(Boolean).join(", "), a.postal_code].filter(Boolean).join(" ")
+    : "";
+  const country = a?.country ? countryName(a.country) : "";
+  const second = [place, country].filter(Boolean).join(" · ");
+  if (!street && !second) return <TextCell />;
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span className="flex h-6 items-center text-sm text-muted-foreground">
+        {street || second}
+      </span>
+      {street && second ? (
+        <span className="flex h-5 items-center text-xs text-muted-foreground">{second}</span>
+      ) : null}
+    </span>
+  );
 }
 
 /**
@@ -345,7 +376,7 @@ export function CustomersTable({
     () => [
       {
         id: "name",
-        header: "Customer Info",
+        header: "Customer",
         accessorFn: (c) =>
           [accountHolderName(c) ?? c.id, c.company, c.email, c.id].filter(Boolean).join(" "),
         meta: {
@@ -360,9 +391,9 @@ export function CustomersTable({
           const c = row.original;
           const name = accountHolderName(c) ?? c.id;
           const nameIsId = name === c.id;
-          const showEmail = !!c.email && c.email !== name;
-          // Free text, so bounded — but wrapped at 320px rather than cut off: one
-          // pasted 200-char name must not widen the column past the pane.
+          // Exactly two lines, so every row is one height: the name, then the first of
+          // company, email, phone that does not repeat it (the id when there is none).
+          const second = [c.company, c.email, c.phone].find((v) => !!v && v !== name);
           const line = "block max-w-80 wrap-anywhere text-xs text-muted-foreground";
           return (
             <InfoCell
@@ -372,16 +403,12 @@ export function CustomersTable({
                 </span>
               }
               href={`/businesses/${biz}/customers/${c.id}`}
-              sub={c.company ? <span className={line}>{c.company}</span> : undefined}
-              extra={
-                <>
-                  {showEmail ? <span className={line}>{c.email}</span> : null}
-                  {c.phone ? <span className={line}>{c.phone}</span> : null}
-                  {/* Nothing else identifies the row: show the id under the name. */}
-                  {!nameIsId && !c.company && !showEmail && !c.phone ? (
-                    <span className={cn(line, "font-mono")}>{c.id}</span>
-                  ) : null}
-                </>
+              sub={
+                second ? (
+                  <span className={line}>{second}</span>
+                ) : nameIsId ? undefined : (
+                  <span className={cn(line, "font-mono")}>{c.id}</span>
+                )
               }
             />
           );
@@ -389,7 +416,7 @@ export function CustomersTable({
       },
       {
         id: "subscription",
-        header: "Subscription Info",
+        header: "Subscription",
         enableSorting: false,
         accessorFn: (c) => {
           const sub = primarySubscription(subs[c.id] ?? []);
@@ -404,7 +431,7 @@ export function CustomersTable({
               value: (c) => primarySubscription(subs[c.id] ?? [])?.id ?? "",
             },
             {
-              header: "Subscription Status",
+              header: "Subscription status",
               value: (c) => primarySubscription(subs[c.id] ?? [])?.status ?? "",
             },
             {
@@ -430,17 +457,32 @@ export function CustomersTable({
                   0,
                 )
               : null;
+          const title = (
+            // Same reason as the Customer Info column: a product name is free text.
+            <span
+              className={cn("block max-w-80 wrap-anywhere", !plan?.product_name && "font-mono")}
+            >
+              {plan?.product_name ?? sub.id}
+            </span>
+          );
+          const others = list.filter((s) => s.id !== sub.id);
+          // Nothing for the second line: the table keeps its two-line height, a phone row
+          // shows no empty line.
+          if (sub.status === "cancelled" && addonItems(sub).length === 0 && others.length === 0)
+            return (
+              <div className="flex flex-col gap-0.5">
+                <InfoCell
+                  status={sub.status}
+                  title={title}
+                  href={`/businesses/${biz}/subscriptions/${sub.id}`}
+                />
+                <span aria-hidden className="h-5 [li[data-slot=list-row]_&]:hidden" />
+              </div>
+            );
           return (
             <InfoCell
               status={sub.status}
-              // Same reason as the Customer Info column: a product name is free text.
-              title={
-                <span
-                  className={cn("block max-w-80 wrap-anywhere", !plan?.product_name && "font-mono")}
-                >
-                  {plan?.product_name ?? sub.id}
-                </span>
-              }
+              title={title}
               href={`/businesses/${biz}/subscriptions/${sub.id}`}
               // The two badges name what they count on hover: which addons ride this
               // subscription, and which OTHER subscriptions this customer has — each of
@@ -464,7 +506,7 @@ export function CustomersTable({
                     </span>
                   )}
                   <AddonPeek items={addonItems(sub)} currency={sub.currency} />
-                  <MoreSubscriptionsPeek biz={biz} subs={list.filter((s) => s.id !== sub.id)} />
+                  <MoreSubscriptionsPeek biz={biz} subs={others} />
                 </span>
               }
             />
@@ -474,19 +516,21 @@ export function CustomersTable({
       {
         accessorKey: "created_at",
         id: "created_at",
-        header: "Created At",
+        header: "Created",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.created_at ? fmtDateTimeShort(row.original.created_at, tz) : null}
+            {row.original.created_at ? fmtDateTime(row.original.created_at, tz) : null}
           </TextCell>
         ),
       },
       {
         id: "billing_address",
-        header: "Billing Address",
+        header: "Billing address",
         enableSorting: false,
+        // Two lines a phone row cannot spare; the record page shows it.
+        meta: { phone: "hide" },
         accessorFn: (c) => addressLine(c),
-        cell: ({ row }) => <TruncateCell value={addressLine(row.original)} />,
+        cell: ({ row }) => <AddressCell customer={row.original} countryName={countryName} />,
       },
       // ── Optional columns, hidden until picked in the Columns menu ──────────────
       // Not sortable: the list sorts on the server, by the fields in "Sort by".
@@ -500,12 +544,12 @@ export function CustomersTable({
       })),
       {
         id: "updated_at",
-        header: "Updated At",
+        header: "Updated",
         enableSorting: false,
         accessorFn: (c) => c.updated_at ?? "",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.updated_at ? fmtDateTimeShort(row.original.updated_at, tz) : null}
+            {row.original.updated_at ? fmtDateTime(row.original.updated_at, tz) : null}
           </TextCell>
         ),
       },
@@ -533,27 +577,27 @@ export function CustomersTable({
   // comparison inside the sub-query that gets negated.
   const segments = React.useMemo<ListSegment<Customer>[]>(
     () => [
-      { id: "all", label: "All Customers" },
+      { id: "all", label: "All customers" },
       {
         id: "active",
-        label: "With Active Subscriptions",
+        label: "With active subscriptions",
         filters: [{ field: "subscription_status", op: "is", value: "active" }],
       },
       {
         id: "trial",
-        label: "In Trial",
+        label: "In trial",
         filters: [{ field: "subscription_status", op: "is", value: "in_trial" }],
       },
       {
         id: "no_live_sub",
-        label: "Without a Live Subscription",
+        label: "Without a live subscription",
         // `active` covers non_renewing too (API-only, stored `active`), so a subscription
         // winding down at term end is still counted live here — which is correct.
         filters: [{ field: "subscription_status", op: "not_in", value: "active,in_trial" }],
       },
       {
         id: "unpaid",
-        label: "With Unpaid Invoices",
+        label: "With unpaid invoices",
         // `has_unpaid_invoices` is posted/payment_due/not_paid — deliberately NOT
         // `pending`, which is an invoice still accreting metered lines that nobody has
         // been asked to pay yet (see UNPAID_INVOICE_STATUSES).
@@ -561,26 +605,26 @@ export function CustomersTable({
       },
       {
         id: "no_payment_method",
-        label: "Without a Payment Method",
+        label: "Without a payment method",
         // `is_present=false` on either payment-method field asks "has none at all";
         // `payment_method_type` is the one the service's own comment names.
         filters: [{ field: "payment_method_type", op: "is_present", value: "false" }],
       },
       {
         id: "pm_expiring",
-        label: "Payment Method Expiring or Expired",
+        label: "Payment method expiring or expired",
         // The expiry sweep sets these two statuses, and this is the list an operator
         // works before the renewals fail rather than after.
         filters: [{ field: "payment_method_status", op: "in", value: "expiring,expired" }],
       },
       {
         id: "offline",
-        label: "Auto-collection Off",
+        label: "Auto-collection off",
         filters: [{ field: "auto_collection", op: "is", value: "off" }],
       },
       {
         id: "tax_exempt",
-        label: "Tax Exempt",
+        label: "Tax exempt",
         filters: [{ field: "tax_exempt", op: "is", value: "true" }],
       },
     ],
@@ -609,7 +653,7 @@ export function CustomersTable({
   const filterFields = React.useMemo<ListFilterField<Customer>[]>(
     () => [
       // ── Identity ─────────────────────────────────────────────────────────────
-      { id: "id", label: "Customer Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Customer ID", group: "Identity", serverOps: TEXT_OPS },
       // The DERIVED holder name, matching the Customer Info column — the engine filters
       // `accountHolderNameSql`, not the deprecated `name` column, so filtering by the
       // name on screen cannot return an empty page. The three components below are for
@@ -621,14 +665,14 @@ export function CustomersTable({
         serverOps: TEXT_OPS,
         keywords: "customer full name",
       },
-      { id: "first_name", label: "First Name", group: "Identity", serverOps: TEXT_OPS },
-      { id: "last_name", label: "Last Name", group: "Identity", serverOps: TEXT_OPS },
+      { id: "first_name", label: "First name", group: "Identity", serverOps: TEXT_OPS },
+      { id: "last_name", label: "Last name", group: "Identity", serverOps: TEXT_OPS },
       { id: "company", label: "Company", group: "Identity", serverOps: TEXT_OPS },
       { id: "email", label: "Email", group: "Identity", serverOps: TEXT_OPS },
       { id: "phone", label: "Phone", group: "Identity", serverOps: TEXT_OPS },
       {
         id: "locale",
-        label: "Preferred Language",
+        label: "Preferred language",
         group: "Identity",
         // `text`, not a select: a locale is `en-US`, and the question asked of it is
         // `starts_with=en` ("everyone we mail in English"), which no option list answers.
@@ -640,7 +684,7 @@ export function CustomersTable({
       // ── Status ───────────────────────────────────────────────────────────────
       {
         id: "invoice_status",
-        label: "Invoice Status",
+        label: "Invoice status",
         type: "text",
         group: "Status",
         serverOps: SET_OPS,
@@ -649,7 +693,7 @@ export function CustomersTable({
       },
       {
         id: "has_unpaid_invoices",
-        label: "Has Unpaid Invoices",
+        label: "Has unpaid invoices",
         type: "boolean",
         group: "Status",
         // `bool` kind on the engine: the status set is fixed inside the sub-query and the
@@ -660,7 +704,7 @@ export function CustomersTable({
       },
       {
         id: "pii_cleared",
-        label: "Personal Data Cleared",
+        label: "Personal data cleared",
         type: "select",
         options: PII_CLEARED_OPTIONS,
         group: "Status",
@@ -671,7 +715,7 @@ export function CustomersTable({
       // ── Subscriptions ────────────────────────────────────────────────────────
       {
         id: "subscription_status",
-        label: "Subscription Status",
+        label: "Subscription status",
         type: "select",
         options: SUBSCRIPTION_STATUS_OPTIONS,
         group: "Subscriptions",
@@ -687,7 +731,7 @@ export function CustomersTable({
        */
       {
         id: "subscription_count",
-        label: "Subscription Count",
+        label: "Subscription count",
         type: "number",
         group: "Subscriptions",
         serverOps: NUMBER_OPS,
@@ -699,7 +743,7 @@ export function CustomersTable({
       // ── Payment ──────────────────────────────────────────────────────────────
       {
         id: "payment_method_count",
-        label: "Payment Method Count",
+        label: "Payment method count",
         type: "number",
         group: "Payment",
         serverOps: NUMBER_OPS,
@@ -708,7 +752,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_type",
-        label: "Payment Method Type",
+        label: "Payment method type",
         type: "select",
         options: PAYMENT_METHOD_TYPE_OPTIONS,
         group: "Payment",
@@ -718,7 +762,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_status",
-        label: "Payment Method Status",
+        label: "Payment method status",
         type: "select",
         options: PAYMENT_METHOD_STATUS_OPTIONS,
         group: "Payment",
@@ -739,7 +783,7 @@ export function CustomersTable({
        */
       {
         id: "primary_payment_method_type",
-        label: "Primary Payment Method",
+        label: "Primary payment method",
         type: "select",
         options: PAYMENT_METHOD_TYPE_OPTIONS,
         group: "Payment",
@@ -749,7 +793,7 @@ export function CustomersTable({
       },
       {
         id: "backup_payment_method_type",
-        label: "Backup Payment Method",
+        label: "Backup payment method",
         type: "select",
         options: PAYMENT_METHOD_TYPE_OPTIONS,
         group: "Payment",
@@ -759,7 +803,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_role",
-        label: "Payment Method Role",
+        label: "Payment method role",
         type: "select",
         options: PAYMENT_METHOD_ROLE_OPTIONS,
         group: "Payment",
@@ -767,7 +811,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_gateway",
-        label: "Payment Method Gateway",
+        label: "Payment method gateway",
         type: "select",
         options: gatewayFilterOptions(gatewayCatalog),
         group: "Payment",
@@ -776,7 +820,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_gateway_account",
-        label: "Gateway Account",
+        label: "Gateway account",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -785,7 +829,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_id",
-        label: "Payment Method Id",
+        label: "Payment method ID",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -793,7 +837,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_brand",
-        label: "Card Type",
+        label: "Card type",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -801,7 +845,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_last4",
-        label: "Card/Account Last 4",
+        label: "Card/account last 4",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -809,7 +853,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_exp_month",
-        label: "Month of Expiry",
+        label: "Month of expiry",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -819,7 +863,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_exp_year",
-        label: "Year of Expiry",
+        label: "Year of expiry",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -827,35 +871,35 @@ export function CustomersTable({
       },
       {
         id: "paying",
-        label: "Paying Customer",
+        label: "Paying customer",
         type: "boolean",
         group: "Payment",
         serverOps: BOOL_OPS,
       },
       {
         id: "renewing",
-        label: "Renewing Customer",
+        label: "Renewing customer",
         type: "boolean",
         group: "Payment",
         serverOps: BOOL_OPS,
       },
       {
         id: "cannot_be_charged",
-        label: "Cannot Be Charged",
+        label: "Cannot be charged",
         type: "boolean",
         group: "Payment",
         serverOps: BOOL_OPS,
       },
       {
         id: "payment_method_expiring",
-        label: "Card Expiring in 90 Days",
+        label: "Card expiring in 90 days",
         type: "boolean",
         group: "Payment",
         serverOps: BOOL_OPS,
       },
       {
         id: "payment_method_issuer_country",
-        label: "Issuing Country",
+        label: "Issuing country",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -863,7 +907,7 @@ export function CustomersTable({
       },
       {
         id: "payment_method_sub_type",
-        label: "Bank Account Type",
+        label: "Bank account type",
         type: "text",
         group: "Payment",
         serverOps: SET_OPS,
@@ -873,7 +917,7 @@ export function CustomersTable({
       // ── Billing ──────────────────────────────────────────────────────────────
       {
         id: "currency",
-        label: "Preferred Currency",
+        label: "Preferred currency",
         type: "text",
         // Open vocabulary: which currencies a business bills in is its own choice, so
         // this stays derived from the rows.
@@ -893,7 +937,7 @@ export function CustomersTable({
       },
       {
         id: "net_term_days",
-        label: "Net Term Days",
+        label: "Net term days",
         type: "number",
         group: "Billing",
         serverOps: NUMBER_OPS,
@@ -902,7 +946,7 @@ export function CustomersTable({
       },
       {
         id: "billing_date",
-        label: "Billing Date",
+        label: "Billing date",
         type: "number",
         group: "Billing",
         serverOps: NUMBER_OPS,
@@ -911,14 +955,14 @@ export function CustomersTable({
       },
       {
         id: "billing_date_mode",
-        label: "Billing Date Mode",
+        label: "Billing date mode",
         type: "select",
         options: BILLING_DATE_MODE_OPTIONS,
         group: "Billing",
         serverOps: ENUM_OPS,
         keywords: "anchor using defaults manually set",
       },
-      { id: "invoice_notes", label: "Invoice Notes", group: "Billing", serverOps: TEXT_OPS },
+      { id: "invoice_notes", label: "Invoice notes", group: "Billing", serverOps: TEXT_OPS },
 
       // ── Address (the BILLING address, serialized under `address`) ────────────
       {
@@ -937,9 +981,9 @@ export function CustomersTable({
         keywords: "billing address country",
         hint: DERIVED_HINT,
       },
-      { id: "address_line1", label: "Address Line 1", group: "Address", serverOps: TEXT_OPS },
-      { id: "address_line2", label: "Address Line 2", group: "Address", serverOps: TEXT_OPS },
-      { id: "address_line3", label: "Address Line 3", group: "Address", serverOps: TEXT_OPS },
+      { id: "address_line1", label: "Address line 1", group: "Address", serverOps: TEXT_OPS },
+      { id: "address_line2", label: "Address line 2", group: "Address", serverOps: TEXT_OPS },
+      { id: "address_line3", label: "Address line 3", group: "Address", serverOps: TEXT_OPS },
       { id: "address_city", label: "City", group: "Address", serverOps: TEXT_OPS },
       {
         id: "address_state",
@@ -950,7 +994,7 @@ export function CustomersTable({
       },
       {
         id: "address_state_code",
-        label: "State Code",
+        label: "State code",
         type: "text",
         // `enum` on the engine (it is the canonical subdivision code the tax engine
         // resolves place of supply on), so no substring operators. The fixed list is
@@ -964,7 +1008,7 @@ export function CustomersTable({
       },
       {
         id: "address_postal_code",
-        label: "Postal Code",
+        label: "Postal code",
         group: "Address",
         serverOps: TEXT_OPS,
         keywords: "zip pin postcode",
@@ -973,35 +1017,35 @@ export function CustomersTable({
       // first/last/company/phone above, which is why the engine filters both.
       {
         id: "address_first_name",
-        label: "Billing First Name",
+        label: "Billing first name",
         group: "Address",
         serverOps: TEXT_OPS,
       },
       {
         id: "address_last_name",
-        label: "Billing Last Name",
+        label: "Billing last name",
         group: "Address",
         serverOps: TEXT_OPS,
       },
-      { id: "address_company", label: "Billing Company", group: "Address", serverOps: TEXT_OPS },
-      { id: "address_phone", label: "Billing Phone", group: "Address", serverOps: TEXT_OPS },
+      { id: "address_company", label: "Billing company", group: "Address", serverOps: TEXT_OPS },
+      { id: "address_phone", label: "Billing phone", group: "Address", serverOps: TEXT_OPS },
 
       // ── Shipping address (one jsonb blob; the engine extracts each key) ──────
       {
         id: "shipping_address_city",
-        label: "Shipping City",
+        label: "Shipping city",
         group: "Shipping address",
         serverOps: TEXT_OPS,
       },
       {
         id: "shipping_address_state",
-        label: "Shipping State",
+        label: "Shipping state",
         group: "Shipping address",
         serverOps: TEXT_OPS,
       },
       {
         id: "shipping_address_country",
-        label: "Shipping Country",
+        label: "Shipping country",
         type: "select",
         options: mergeOptions(
           countryOptions,
@@ -1013,17 +1057,17 @@ export function CustomersTable({
       },
       {
         id: "shipping_address_postal_code",
-        label: "Shipping Postal Code",
+        label: "Shipping postal code",
         group: "Shipping address",
         serverOps: TEXT_OPS,
         keywords: "zip pin postcode",
       },
 
       // ── Tax ──────────────────────────────────────────────────────────────────
-      { id: "tax_exempt", label: "Tax Exempt", type: "boolean", group: "Tax", serverOps: BOOL_OPS },
+      { id: "tax_exempt", label: "Tax exempt", type: "boolean", group: "Tax", serverOps: BOOL_OPS },
       {
         id: "tax_treatment",
-        label: "Tax Treatment",
+        label: "Tax treatment",
         type: "select",
         options: TAX_TREATMENT_OPTIONS,
         group: "Tax",
@@ -1032,7 +1076,7 @@ export function CustomersTable({
       },
       {
         id: "tax_registration_number",
-        label: "Tax Registration Number",
+        label: "Tax registration number",
         group: "Tax",
         serverOps: TEXT_OPS,
         keywords: "gstin gst registration",
@@ -1041,14 +1085,14 @@ export function CustomersTable({
       },
       {
         id: "vat_number",
-        label: "VAT Number",
+        label: "VAT number",
         group: "Tax",
         serverOps: TEXT_OPS,
         hint: "The separate EU/VIES id, with its own validation lifecycle",
       },
       {
         id: "vat_number_status",
-        label: "VAT Number Status",
+        label: "VAT number status",
         type: "select",
         options: VAT_NUMBER_STATUS_OPTIONS,
         group: "Tax",
@@ -1056,7 +1100,7 @@ export function CustomersTable({
       },
       {
         id: "vat_validated_at",
-        label: "VAT Validated At",
+        label: "VAT validated at",
         type: "date",
         group: "Tax",
         serverOps: DATE_OPS,
@@ -1064,7 +1108,7 @@ export function CustomersTable({
       },
       {
         id: "withholding_rate_bps",
-        label: "Withholding Rate (%)",
+        label: "Withholding rate (%)",
         // `money`, not `number`: the column is basis points and the exponent is 2 for
         // every row, so the operator types 10 and the filter sends 1000. Typing bps is
         // how "withholding over 10%" becomes a filter set 100x wrong.
@@ -1077,8 +1121,8 @@ export function CustomersTable({
       },
 
       // ── Dates ────────────────────────────────────────────────────────────────
-      { id: "created_at", label: "Created At", type: "date", group: "Dates", serverOps: DATE_OPS },
-      { id: "updated_at", label: "Updated At", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "updated_at", label: "Updated", type: "date", group: "Dates", serverOps: DATE_OPS },
 
       // ── Custom fields ────────────────────────────────────────────────────────
       // Last and in their own group, because unlike everything above these are not
@@ -1108,15 +1152,14 @@ export function CustomersTable({
       ]}
       // Sort ids are the API's sortable fields (see CUSTOMER_SORT_FIELDS).
       sortOptions={[
-        { id: "created_at", label: "Created At" },
+        { id: "created_at", label: "Created" },
         { id: "name", label: "Name" },
         { id: "email", label: "Email" },
         { id: "company", label: "Company" },
       ]}
       createAction={createAction("Customer", `/businesses/${biz}/customers/new`)}
       importAction={importAction("Customers", undefined, "CSV import is not configured yet")}
-      searchPlaceholder="Search for ID / Name / Email / Company…"
-      searchHint={<PaletteSearchHint />}
+      searchPlaceholder="Search by ID, name, email or company"
       exportName="customers"
       persistKey={`customers:${biz}`}
       enableSelection
@@ -1126,7 +1169,7 @@ export function CustomersTable({
         <EmptyState
           icon={<Users />}
           title="No customers"
-          description="No customers match this view, filter or search."
+          description="There are no customers in this view."
         />
       }
     />

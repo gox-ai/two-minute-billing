@@ -187,6 +187,8 @@ async function freshSub(subId: string) {
     subscriptionId: sub.id,
     code: "ADDONONLY",
     now: new Date(),
+    // The apply now refuses this; rows attached before it did still exist and must not burn.
+    skipItemMatch: true,
   });
   const fresh = (
     await withTenant(orgId, (tx) =>

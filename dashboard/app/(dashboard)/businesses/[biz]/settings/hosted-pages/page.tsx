@@ -54,6 +54,15 @@ export default async function HostedPagesSettings({
     cancelTiming: sc?.cancel_timing === "immediately" ? "immediately" : "end_of_term",
     pauseResume: sc?.allow_pause_resume === true,
     reactivate: sc?.allow_reactivate === true,
+    restart: sc?.allow_restart === true,
+    restartPrice: sc?.restart_price === "keep" ? "keep" : "current",
+    restartWindowDays:
+      Number.isInteger(sc?.restart_window_days) &&
+      sc!.restart_window_days! >= 1 &&
+      sc!.restart_window_days! <= 3650
+        ? sc!.restart_window_days!
+        : null,
+    restartOpenInvoices: sc?.restart_open_invoices === "allow" ? "allow" : "pay_first",
     skipRenewal: sc?.allow_skip_renewal === true,
     skipRenewalLimit:
       Number.isInteger(sc?.skip_renewal_limit) &&
@@ -179,6 +188,7 @@ function summaryItems(d: HostedPagesDefaults) {
         [d.pauseResume, "pause and resume"],
         [d.skipRenewal, `skip up to ${d.skipRenewalLimit} renewals in 12 months`],
         [d.reactivate, "undo a cancellation"],
+        [d.restart, "restart an ended subscription"],
       ]),
     },
     {

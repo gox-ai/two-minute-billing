@@ -64,6 +64,7 @@ import {
   appliedTaxes,
 } from "@db/schema";
 import { creditNoteTaxShare, type CreditedLineTax } from "./note-tax";
+import { creditNoteTaxTotal, itemsStatedAsTax } from "./tax-items";
 import { lineCreditableAmounts, packNetOf, type LineCreditable } from "./line-cap";
 import { formatMoney } from "@/platform/currency";
 import {
@@ -194,6 +195,12 @@ export interface CreditNoteItemInput {
    */
   periodStart?: Date | null;
   periodEnd?: Date | null;
+  /**
+   * `credit_note_items.kind`, the invoice line vocabulary. `"tax"` marks the tax a note
+   * reverses as its own item, so renderers state it in the tax rows (`tax-items.ts`).
+   * Omit for a supply line: it stays NULL, as every item did before.
+   */
+  kind?: "tax" | null;
 }
 
 /**
@@ -263,6 +270,12 @@ async function resolveCreditedLines(
   );
 }
 
+type PackVoid = {
+  pack: NonNullable<LineCreditable["pack"]>;
+  netMinor: bigint;
+  packRefund?: "full";
+};
+
 /**
  * Refuse an item that credits more of its line than the line has left — see
  * `./line-cap.ts`. Items for one line are summed. Call before the note's insert, under
@@ -272,7 +285,8 @@ async function assertLineCaps(
   tx: Tx,
   inv: { id: string; businessId: string; priceType: string | null; currency: string },
   items: readonly CreditNoteItemInput[],
-): Promise<Array<{ pack: NonNullable<LineCreditable["pack"]>; netMinor: bigint }>> {
+  packRefund?: "full",
+): Promise<PackVoid[]> {
   const asked = new Map<string, bigint>();
   for (const i of items)
     if (i.invoiceLineItemPublicId)
@@ -283,8 +297,8 @@ async function assertLineCaps(
   if (asked.size === 0) return [];
   // `asked` counts as credited, so a supply line and its tax line in ONE note are
   // netted against each other too.
-  const caps = await lineCreditableAmounts(tx, inv, [...asked.keys()], asked);
-  const packVoids: Array<{ pack: NonNullable<LineCreditable["pack"]>; netMinor: bigint }> = [];
+  const caps = await lineCreditableAmounts(tx, inv, [...asked.keys()], asked, { packRefund });
+  const packVoids: PackVoid[] = [];
   for (const [pid, amount] of asked) {
     const cap = caps.get(pid);
     // A line not on this invoice is refused by `resolveCreditedLines`.
@@ -299,7 +313,23 @@ async function assertLineCaps(
   for (const [pid, amount] of asked) {
     const cap = caps.get(pid);
     if (cap?.pack)
-      packVoids.push({ pack: cap.pack, netMinor: packNetOf(amount, cap.valueMinor, cap.pack) });
+      packVoids.push({
+        pack: cap.pack,
+        netMinor: packNetOf(amount, cap.valueMinor, cap.pack, packRefund),
+        ...(packRefund ? { packRefund } : {}),
+      });
+  }
+  if (packRefund === "full") {
+    const { fullPackRefundRefusal } = await import("@/modules/credits/pack-refund");
+    const refusal = await fullPackRefundRefusal(tx, {
+      packs: [...asked].flatMap(([pid, amount]) => {
+        const cap = caps.get(pid);
+        return cap?.pack
+          ? [{ pack: cap.pack, amountMinor: amount, valueMinor: cap.valueMinor }]
+          : [];
+      }),
+    });
+    if (refusal) throw new CreditNoteError(refusal);
   }
   return packVoids;
 }
@@ -307,17 +337,25 @@ async function assertLineCaps(
 /** Void the units a note's pack-line items take back (G3 §3.8, Ex 5). After the note's insert. */
 async function voidPackLines(
   tx: Tx,
-  packVoids: Array<{ pack: NonNullable<LineCreditable["pack"]>; netMinor: bigint }>,
+  packVoids: PackVoid[],
   creditNotePublicId: string,
 ): Promise<void> {
   if (packVoids.length === 0) return;
-  const { voidPackUnitsForCreditNote } = await import("@/modules/credits/service");
+  const { voidPackUnitsForCreditNote, CreditConflictError } =
+    await import("@/modules/credits/service");
   for (const v of packVoids)
-    await voidPackUnitsForCreditNote(tx, {
-      pack: v.pack,
-      netMinor: v.netMinor,
-      creditNotePublicId,
-    });
+    try {
+      await voidPackUnitsForCreditNote(tx, {
+        pack: v.pack,
+        netMinor: v.netMinor,
+        creditNotePublicId,
+        ...(v.packRefund ? { packRefund: v.packRefund } : {}),
+      });
+    } catch (e) {
+      // Usage spent the pack's credits after the cap was read: refuse the whole note.
+      if (e instanceof CreditConflictError) throw new CreditNoteError(e.message);
+      throw e;
+    }
 }
 
 /**
@@ -567,6 +605,11 @@ export async function issueAdjustmentCreditNote(input: {
   items: CreditNoteItemInput[];
   reasonCode?: string;
   reason?: string;
+  /**
+   * A credit pack line credited in full, used credits too (0529). Stored on the note. In a unit
+   * with no rate the used credits are drawn again from other grants first (0530).
+   */
+  packRefund?: "full";
   /** Note to the customer (0309). */
   customerNotes?: string;
   /**
@@ -668,7 +711,9 @@ export async function issueAdjustmentCreditNote(input: {
       );
     // Pre-tax items (`taxAtInvoiceRate`) are spread by the engine over the whole invoice,
     // not sized to one line, so only tax-inclusive items meet the per-line cap.
-    const packVoids = input.taxAtInvoiceRate ? [] : await assertLineCaps(tx, inv, input.items);
+    const packVoids = input.taxAtInvoiceRate
+      ? []
+      : await assertLineCaps(tx, inv, input.items, input.packRefund);
 
     const [cn] = await tx
       .insert(creditNotes)
@@ -684,6 +729,7 @@ export async function issueAdjustmentCreditNote(input: {
         status: "adjusted",
         channel: currentChannel(),
         reasonCode: input.reasonCode ?? null,
+        packRefund: input.packRefund ?? null,
         subtotalMinor: input.subtotalMinor ?? null,
         totalMinor: total,
         allocatedMinor: total,
@@ -730,6 +776,7 @@ export async function issueAdjustmentCreditNote(input: {
           // giving us half a window, and half a window is not the source line's window.
           periodStart: it.periodStart ?? src?.periodStart ?? null,
           periodEnd: it.periodEnd ?? src?.periodEnd ?? null,
+          kind: it.kind ?? null,
         };
       }),
     );
@@ -1255,6 +1302,8 @@ export async function issueRefundableCreditNote(input: {
   customerNotes?: string;
   /** See `issueAdjustmentCreditNote.tx` — join the caller's transaction. */
   tx?: Tx | null;
+  /** See `issueAdjustmentCreditNote.packRefund`. */
+  packRefund?: "full";
 }): Promise<CreditNote> {
   const { organizationId, businessId } = input;
   if (input.items.length === 0) throw new CreditNoteError("A credit note needs at least one item");
@@ -1338,13 +1387,14 @@ export async function issueRefundableCreditNote(input: {
         reasonCode: input.reasonCode,
         reason: input.reason,
         ...(input.customerNotes ? { customerNotes: input.customerNotes } : {}),
+        ...(input.packRefund ? { packRefund: input.packRefund } : {}),
       });
       return cn;
     }
 
     // The whole request meets the per-line caps; the cash items below are re-checked.
     if (input.items.some((i) => i.invoiceLineItemPublicId))
-      await assertLineCaps(tx, inv, input.items);
+      await assertLineCaps(tx, inv, input.items, input.packRefund);
     const { restoreGrantDraws } = await import("@/modules/credits/service");
     const returned = await restoreGrantDraws(tx, {
       organizationId,
@@ -1387,6 +1437,7 @@ export async function issueRefundableCreditNote(input: {
       reasonCode: input.reasonCode,
       reason: input.reason,
       ...(input.customerNotes ? { customerNotes: input.customerNotes } : {}),
+      ...(input.packRefund ? { packRefund: input.packRefund } : {}),
     });
   });
 }
@@ -1427,6 +1478,8 @@ export async function createRefundableCreditNote(
     reasonCode?: string;
     reason?: string;
     customerNotes?: string;
+    /** See `issueAdjustmentCreditNote.packRefund`. */
+    packRefund?: "full";
     /**
      * `sub_total` (0186): the GROSS reversal this note documents, before any slice
      * was routed back to a credit bucket. The note's own items are the CASHABLE lines, so
@@ -1477,7 +1530,7 @@ export async function createRefundableCreditNote(
       .from(invoices)
       .where(eq(invoices.id, input.invoiceId))
       .limit(1);
-    if (inv) packVoids = await assertLineCaps(tx, inv, input.items);
+    if (inv) packVoids = await assertLineCaps(tx, inv, input.items, input.packRefund);
   }
   // A ZERO-CASHABLE note is a real document (CN-188: gross 4189900, all of it
   // returned to promotional credit, total 0) and opens with nothing available, so it
@@ -1500,6 +1553,7 @@ export async function createRefundableCreditNote(
       status: total > 0n ? "refund_due" : "refunded",
       channel: currentChannel(),
       reasonCode: input.reasonCode ?? null,
+      packRefund: input.packRefund ?? null,
       subtotalMinor: input.subtotalMinor ?? null,
       totalMinor: total,
       allocatedMinor: 0n,
@@ -1534,6 +1588,7 @@ export async function createRefundableCreditNote(
           // adjustment note would; only where the money lands differs.
           periodStart: it.periodStart ?? src?.periodStart ?? null,
           periodEnd: it.periodEnd ?? src?.periodEnd ?? null,
+          kind: it.kind ?? null,
         };
       }),
     );
@@ -2547,12 +2602,17 @@ export async function getCreditNoteDetail(
     // same scan the payout itself walks (`gatewayRefundableForInvoice`) so the
     // control the dashboard offers and the payout that follows cannot disagree.
     const gatewayRefundable = await gatewayRefundableForInvoice(tx, row.cn.invoiceId);
+    // The same rule the PDF applies, so the page leaves the same items out of its lines.
+    const taxItemIds = new Set(
+      [...itemsStatedAsTax(items, creditNoteTaxTotal(row.cn, discounts))].map((it) => it.id),
+    );
     return {
       view: {
         note: row.cn,
         invoicePublicId: row.invPid,
         invoiceNumber: row.invNumber,
         items,
+        taxItemIds,
         customerPublicId: row.cusPid ?? null,
         customerName: accountHolderName({
           firstName: row.cusFirstName,
@@ -3151,19 +3211,13 @@ async function payOutRefundsPayable(input: {
     } catch (e) {
       // Gateway declined / unavailable — leave the payable outstanding (retriable
       // by sweepOutstandingCnPayouts). Loud: a silent catch made stranded payables
-      // operationally invisible (G review). refundPayment() already records a
-      // failed `refund` transaction + `refund_failed` event for provider-side
-      // declines and unresolved-provider errors — this ALSO emits a CN-scoped
-      // event so a payout leg failure is durable/visible from the credit note's
-      // own timeline (the dashboard surfaces refund_due CNs from here), not just
-      // console-only.
+      // operationally invisible.
       const message = e instanceof Error ? e.message : "CN payout leg failed";
       log.error(e, { stage: "cn_payout_leg", payment: p.publicId });
       lastError = message;
-      // RefundError legs were already recorded by refundPayment (failed refund
-      // transaction stamped with the CN). Raw provider throws (e.g. Stripe SDK
-      // exceptions like insufficient balance) were NOT — record them here so the
-      // decline + its reason show up on the CN's own timeline.
+      // A RefundError never needs its transaction booked here: refundPayment booked the
+      // gateway refusal itself, or refused before calling the gateway. Only a raw provider
+      // throw (e.g. a Stripe SDK error) arrives unrecorded.
       if (!(e instanceof RefundError)) {
         try {
           const [pay] = await withTenant(organizationId, (tx) =>
@@ -3190,33 +3244,28 @@ async function payOutRefundsPayable(input: {
           log.error(recordErr, { event: "cn_payout_transaction_not_recorded" });
         }
       }
-      /**
-       * The `refund` key is what makes this enrichable. `resourceTypeOf("refund_failed")`
-       * is `refund` and `deriveResourceId` reads `data.refund`; with the id sitting at the
-       * TOP level instead, `buildEventContent` returned before its switch and the event
-       * shipped with no invoice, no customer and no subscription — a refund failure a
-       * consumer could not attribute to anyone.
-       *
-       * It carries `invoice` rather than relying on its own id: the minted `re_…` names a
-       * refund that does not exist (the refund FAILED), so no loader can resolve it, while
-       * the invoice ref enriches invoice → customer → subscription in one hop.
-       *
-       * The flat keys stay exactly as they were. Consumers read `data.id` / `data.payment`
-       * today, and this event is live — the key is added, nothing is moved.
-       */
+      // refundPayment already emitted this refusal's one `refund_failed` event.
+      if (e instanceof RefundError && e.eventEmitted) continue;
+      // `refund.invoice` is what enrichment follows to the customer and subscription: the
+      // minted `re_…` names a refund that never existed, so nothing can load it.
       const failedRefundId = publicId("re");
-      const refundInvoice = await withTenant(organizationId, (tx) =>
-        loadInvoicePublicId(tx, input.invoiceId),
-      );
-      await withTenant(organizationId, (tx) =>
-        emitEvent(tx, {
+      await withTenant(organizationId, async (tx) => {
+        const refundInvoice = await loadInvoicePublicId(tx, input.invoiceId);
+        const [note] = input.creditNoteId
+          ? await tx
+              .select({ publicId: creditNotes.publicId })
+              .from(creditNotes)
+              .where(eq(creditNotes.id, input.creditNoteId))
+              .limit(1)
+          : [];
+        await emitEvent(tx, {
           organizationId,
           businessId,
           type: "refund_failed",
           data: {
             id: failedRefundId,
             payment: p.publicId,
-            credit_note: input.creditNoteId ?? null,
+            credit_note: note?.publicId ?? null,
             amount_minor: Number(amt),
             currency: input.currency,
             reason: message,
@@ -3226,8 +3275,8 @@ async function payOutRefundsPayable(input: {
               invoice: refundInvoice,
             },
           },
-        }),
-      );
+        });
+      });
     }
   }
   // What the gateway ACTUALLY reversed during this call. `attributed` is reported only
@@ -3502,9 +3551,11 @@ export async function voidCreditNote(input: {
   organizationId: string;
   businessId: string;
   creditNotePublicId: string;
+  /** Void inside this transaction instead of a new one. */
+  tx?: Tx;
 }): Promise<CreditNote> {
   const { organizationId, businessId } = input;
-  return withTenant(organizationId, async (tx) => {
+  return withTenantTx(organizationId, input.tx, async (tx) => {
     const [stale] = await tx
       .select({ customerId: creditNotes.customerId })
       .from(creditNotes)

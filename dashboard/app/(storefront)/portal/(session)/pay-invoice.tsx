@@ -1,12 +1,19 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { openRazorpayCheckout, type RazorpayCheckoutDescriptor } from "@/lib/razorpay-checkout";
 import { formPostTargetIsSafe, openGatewaySdk, submitFormPost } from "@/lib/gateway-sdk";
-import { PaymentDialog, StripeIntentForm, refusalMessage } from "../../payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  RefusalAlert,
+  StripeIntentForm,
+  refusalMessage,
+} from "../../payment-dialog";
 import { portalPayInvoiceAction, portalPayGatewaysAction } from "./actions";
 import type { PortalMe } from "@/lib/portal-api";
 import { accountHolderName } from "@/lib/names";
@@ -19,6 +26,10 @@ import {
 } from "@/lib/pending-payment";
 import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
 import { PaymentMark } from "@/components/brand/payment-mark";
+import { money } from "@/lib/format";
+
+/** A new Pay now try on an invoice (`detail`: its id). */
+const PAY_RETRY_EVENT = "tmb:pay-retry";
 
 /** One row of the Pay now chooser: a provider's own sheet, or Apple Pay on its hosted page. */
 type PayChoice = { key: string; gateway: string; wallet?: "apple_pay"; label: string };
@@ -51,18 +62,34 @@ function applePayReady(): boolean {
 export function PayInvoiceButton({
   invoice,
   currency,
+  amountMinor,
   me,
   scope,
   focus = false,
+  variant = "default",
+  refusalSlot,
+  size = "sm",
 }: {
   invoice: string;
   /** THIS invoice's currency — which provider can take it is a per-invoice question. */
   currency: string;
+  /** What is due on it now: the button and the chooser name it. */
+  amountMinor: number;
+  /** `outline` where a filled "Pay" for the same money is already on screen. */
+  variant?: "default" | "outline";
   me: PortalMe;
   /** Non-secret per-buyer key for the redirect stash — the customer's public id. */
   scope: string;
   /** A "pay this invoice" link (Phase 4b) landed here: bring the button into view and focus it. */
   focus?: boolean;
+  /**
+   * The id of an element the page renders on its own line beside this button (an invoice
+   * row's action slot is sized for buttons). A refusal is shown there. Without it, the
+   * refusal takes a full line after the button in its flex-wrap row.
+   */
+  refusalSlot?: string;
+  /** `default` beside a full-height button (the amount-due card), so the two match. */
+  size?: "sm" | "default";
 }) {
   const btnRef = React.useRef<HTMLButtonElement>(null);
   React.useEffect(() => {
@@ -71,6 +98,24 @@ export function PayInvoiceButton({
     btnRef.current?.focus();
   }, [focus]);
   const [busy, setBusy] = React.useState(false);
+  /**
+   * The last refusal, shown beside the button and kept until the next try. A toast went by
+   * itself after the gateway's sheet had closed, and the invoice then looked unchanged.
+   */
+  const [refusal, setRefusal] = React.useState<string | null>(null);
+  const [slot, setSlot] = React.useState<HTMLElement | null>(null);
+  // The same invoice has a Pay button in the balance card and in its row: a new try on
+  // either one replaces the old refusal on both.
+  React.useEffect(() => {
+    const clear = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === invoice) setRefusal(null);
+    };
+    window.addEventListener(PAY_RETRY_EVENT, clear);
+    return () => window.removeEventListener(PAY_RETRY_EVENT, clear);
+  }, [invoice]);
+  React.useEffect(() => {
+    setSlot(refusalSlot ? document.getElementById(refusalSlot) : null);
+  }, [refusalSlot]);
   // A payment the buyer just approved for this invoice: no second "Pay now" while it settles.
   const [processing, setProcessing] = React.useState(false);
   React.useEffect(() => {
@@ -119,11 +164,24 @@ export function PayInvoiceButton({
     router.refresh();
   };
 
+  /** The gateway's or the engine's words, kept whole, then the next step unless they say one. */
+  const refuse = (reason: string) =>
+    setRefusal(
+      refusalMessage(
+        "We could not take your payment.",
+        reason,
+        /try again|add a card|contact|do not pay/i.test(reason)
+          ? ""
+          : `Select Pay ${money(amountMinor, currency)} to try again, or use a different payment method.`,
+      ).trim(),
+    );
+
   /**
    * Ask first, but only when there is something to ask. The list is fetched on click,
    * not with the page: it is per-invoice and most buyers never need it.
    */
   const startPay = async () => {
+    window.dispatchEvent(new CustomEvent(PAY_RETRY_EVENT, { detail: invoice }));
     setBusy(true);
     const listed = await portalPayGatewaysAction(currency);
     // A failed lookup must not block the payment — with one match the router resolves it
@@ -167,21 +225,21 @@ export function PayInvoiceButton({
         undefined,
         wallet,
       );
-      if (!res.ok) return void toast.error(res.error);
+      if (!res.ok) return void refuse(res.error);
 
       // Settled outright — an instrument that needed no challenge (a Stripe card the
       // issuer waved through, or credit already covering the balance). Discriminated on
       // `object`: both arms carry a `status`, so that field narrows nothing.
       if (res.result.object !== "invoice_collection") {
-        if (res.result.payment_error) return void toast.error(res.result.payment_error.message);
+        if (res.result.payment_error) return void refuse(res.result.payment_error.message);
         return finish(res.result);
       }
       const pending = res.result;
 
       const action = pending.next_action ?? pending.payment_intent.next_action;
       if (!action)
-        return void toast.error(
-          "We could not confirm the payment. The provider sent no instructions.",
+        return void refuse(
+          "We could not take your payment. The payment provider did not send the next step.",
         );
 
       // RazorPay: the challenge is their embedded modal, opened from this click. It
@@ -189,6 +247,7 @@ export function PayInvoiceButton({
       // flow lives in the client rather than redirecting through the server.
       if (action.mode === "checkout" && action.checkout) {
         const result = await openRazorpayCheckout(action.checkout as RazorpayCheckoutDescriptor, {
+          purpose: "payment",
           businessName: me.business.name,
           // Names what this sheet is FOR. `description` used to be hardcoded to "Save
           // this card for future payments" inside the helper, which is a lie here — the
@@ -206,7 +265,7 @@ export function PayInvoiceButton({
           },
         });
         if (result.status === "dismissed") return;
-        if (result.status === "failed") return void toast.error(result.message);
+        if (result.status === "failed") return void refuse(result.message);
         // Re-post the SAME call carrying the authorized intent; the server consumes it
         // against this invoice.
         const done = await portalPayInvoiceAction(
@@ -214,9 +273,9 @@ export function PayInvoiceButton({
           window.location.origin,
           pending.payment_intent.id,
         );
-        if (!done.ok) return void toast.error(done.error);
+        if (!done.ok) return void refuse(done.error);
         if (done.result.object !== "invoice_collection" && done.result.payment_error) {
-          return void toast.error(done.result.payment_error.message);
+          return void refuse(done.result.payment_error.message);
         }
         return finish(done.result);
       }
@@ -233,12 +292,21 @@ export function PayInvoiceButton({
             name: accountHolderName(me.customer),
             email: me.customer.email,
             contact: me.customer.phone ?? me.customer.address.phone,
+            address: {
+              line1: me.customer.address.line1,
+              city: me.customer.address.city,
+              state: me.customer.address.state,
+              state_code: me.customer.address.state_code,
+              postal_code: me.customer.address.postal_code,
+              country: me.customer.address.country,
+            },
           },
+          confirmLabel: `Pay ${money(amountMinor, currency)}`,
         });
         // Finished on this page: the return leg has nothing to do.
         clearPendingPayment(scope);
         if (result.status === "dismissed") return;
-        if (result.status === "failed") return void toast.error(result.message);
+        if (result.status === "failed") return void refuse(result.message);
         const done = await portalPayInvoiceAction(
           invoice,
           window.location.origin,
@@ -246,9 +314,9 @@ export function PayInvoiceButton({
           undefined,
           result.clientResult,
         );
-        if (!done.ok) return void toast.error(done.error);
+        if (!done.ok) return void refuse(done.error);
         if (done.result.object !== "invoice_collection" && done.result.payment_error) {
-          return void toast.error(done.result.payment_error.message);
+          return void refuse(done.result.payment_error.message);
         }
         return finish(done.result);
       }
@@ -283,8 +351,8 @@ export function PayInvoiceButton({
       // method that redirects to `returnUrl` and finishes in `PaymentReturn`.
       if (action.mode === "client_secret" && action.clientSecret) {
         if (!action.publishableKey) {
-          return void toast.error(
-            "This payment provider is not fully configured. Contact support.",
+          return void refuse(
+            `The payment setup of ${me.business.name} is not complete. Contact ${me.business.name}.`,
           );
         }
         setStripeChallenge({
@@ -296,22 +364,42 @@ export function PayInvoiceButton({
         return;
       }
 
-      toast.error("We cannot confirm this payment method here yet. Add a card instead.");
+      refuse("We cannot confirm this payment method here yet. Add a card instead.");
+    } catch {
+      // A server action that throws (the network) must not leave the button looking untouched.
+      refuse("We could not take your payment. The request did not finish.");
     } finally {
       setBusy(false);
     }
   };
 
+  const amount = money(amountMinor, currency);
   if (processing) return <span className="text-xs text-muted-foreground">Payment processing…</span>;
   return (
     <>
-      <Button ref={btnRef} size="sm" onClick={startPay} disabled={busy}>
-        {busy ? "Paying…" : "Pay now"}
+      {/* No saved card is named: Pay now opens the provider's own form, where the buyer
+          enters the details. It never charges a saved method. */}
+      <Button
+        ref={btnRef}
+        size={size}
+        variant={variant}
+        onClick={startPay}
+        disabled={busy}
+        className="tabular-nums"
+      >
+        {busy ? "Paying…" : `Pay ${amount}`}
       </Button>
+      {refusal ? (
+        slot ? (
+          createPortal(<RefusalAlert message={refusal} />, slot)
+        ) : (
+          <RefusalAlert message={refusal} className="order-last basis-full" />
+        )
+      ) : null}
       <PaymentDialog
         open={choices != null}
         onClose={() => setChoices(null)}
-        title="How do you want to pay?"
+        title={`Pay ${amount}`}
         description="Select how to pay. You enter your details on the secure page of the payment provider."
       >
         {choices ? (
@@ -347,7 +435,7 @@ export function PayInvoiceButton({
                 </div>
               ))}
             </RadioGroup>
-            <div className="flex justify-end gap-2">
+            <PaymentDialogFooter>
               <Button variant="outline" onClick={() => setChoices(null)} disabled={busy}>
                 Cancel
               </Button>
@@ -361,7 +449,7 @@ export function PayInvoiceButton({
               >
                 Continue
               </Button>
-            </div>
+            </PaymentDialogFooter>
           </div>
         ) : null}
       </PaymentDialog>
@@ -407,8 +495,12 @@ export function PayInvoiceButton({
                 );
               clearPendingPayment(scope);
               if (done.result.object !== "invoice_collection" && done.result.payment_error) {
-                // The gateway's own decline, as the buyer would read it on its page.
-                return done.result.payment_error.message;
+                // The gateway's own decline, kept whole, with what failed and the next step.
+                return refusalMessage(
+                  "We could not take your payment.",
+                  done.result.payment_error.message,
+                  "Select Confirm payment to try again, or use a different payment method.",
+                );
               }
               setStripeChallenge(null);
               if (inFlight) markPaymentProcessing(scope, invoice);

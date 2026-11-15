@@ -39,6 +39,10 @@ their payouts through here.
 
 ## Changelog
 
+- **2026-11-12** — A gateway refusal in `refundPayment` emits ONE `refund_failed` event (via
+  `refundFailed`), carrying `refund.invoice`, `credit_note`, `reason` and the flat keys; the thrown
+  `RefundError` is marked `eventEmitted`. The old event had no invoice, so it enriched to no
+  customer, and the credit-note payout emitted a second one for the same refusal.
 - **2026-11-03** — `refundPayment` runs in its own span (`ensureSpan`; a refund inside a
   collection keeps the collection's). The credit-note payout sweep refunds many credit notes
   under one tick trace, so a refund transaction's gateway-log link showed them all.

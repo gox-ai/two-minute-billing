@@ -1317,7 +1317,7 @@ export function offlineDunningDeadline(
  */
 export function offlineDunningApplies(
   config: DunningConfig,
-  ctx: { hasSubscription: boolean; subscriptionStatus?: string | null },
+  ctx: { hasSubscription: boolean; subscriptionStatus?: string | null; purpose?: string | null },
 ): boolean {
   return config.dunOfflineInvoices && dunningAppliesTo(config, ctx);
 }
@@ -1407,9 +1407,11 @@ export function offlineRetryDays(config: DunningConfig): number[] {
  */
 export function dunningAppliesTo(
   config: DunningConfig,
-  ctx: { hasSubscription: boolean; subscriptionStatus?: string | null },
+  ctx: { hasSubscription: boolean; subscriptionStatus?: string | null; purpose?: string | null },
 ): boolean {
   if (!config.enabled) return false;
+  // A late-usage invoice gets one collection attempt and is never dunned.
+  if (ctx.purpose === "late_usage") return false;
   // No subscription behind it → a one-time invoice ("Dunning for one-time invoices").
   if (!ctx.hasSubscription) return config.dunOneTimeInvoices;
   if (

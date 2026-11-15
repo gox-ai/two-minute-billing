@@ -1,4 +1,5 @@
 import {
+  initialEmailConfig,
   MAX_FOOTER_NOTE_CHARS,
   httpUrlOrNull,
   withoutLegacyEmailKeys,
@@ -50,6 +51,7 @@ import { authenticate } from "@/platform/auth";
 import { newApiKeyRefusedFor } from "@/modules/auth/org-two-factor";
 import { idempotency, idempotencyOnSend, idempotentNoStore } from "@/platform/idempotency";
 import { ImageUploadError, MAX_IMAGE_BYTES } from "@/platform/image-upload";
+import { USAGE_GRACE_MAX_MINUTES } from "@/modules/subscriptions/usage-close";
 import {
   type BrandImageOwner,
   ObjectStoreNotConfiguredError,
@@ -114,9 +116,20 @@ import {
   PLAN_CREDIT_FIRST_WINDOWS,
   PLAN_CREDIT_PAUSES,
   PLAN_CREDIT_CANCEL_AT_PERIOD_ENDS,
+  PLAN_CREDIT_GRANT_WHENS,
+  PLAN_CREDIT_UNPAID_CANCELS,
   ALLOWANCE_UPGRADES,
+  ZERO_INVOICE_PAID_EVENTS,
+  MID_TERM_COUPONS,
+  CUSTOMER_COUPONS,
+  MAX_LATE_USAGE_MINIMUM_MINOR,
+  LATE_USAGE_WAIT_HOURS,
+  PENDING_CHANGE_EXPIRY_HOURS,
+  PENDING_CHANGE_EXPIRY_HOURS_SLOW,
+  LATE_USAGE_MIN_INTERVAL_HOURS,
   initialBillingRulesConfig,
   mergeBillingRulesConfig,
+  resolveBillingRulesConfig,
   serializeBillingRules,
 } from "@/modules/subscriptions/billing-rules-config";
 import { creditScopeMissing } from "@/modules/credits/scope";
@@ -130,8 +143,10 @@ import {
   PLAN_CHANGE_COUPONS,
   PLAN_CHANGE_TERMS,
   REACTIVATION_CHARGES,
+  NET_CREDIT_DOCUMENTS,
   resolveLifecycleConfig,
   serializeLifecycleConfig,
+  storedNetCreditDocuments,
 } from "@/modules/subscriptions/lifecycle-config";
 import {
   DECLINED_REFUND_OUTCOMES,
@@ -171,6 +186,9 @@ import { registerPortalCreditRoutes } from "./portal-credit-routes";
 import { registerCheckoutRoutes } from "./checkout-routes";
 import { registerPaymentLinkRoutes } from "./payment-link-routes";
 import { registerMetricsRoutes } from "./metrics-routes";
+import { registerMcpRoutes } from "./mcp-routes";
+import { registerOAuthRoutes } from "./oauth-routes";
+import { registerAssistantRoutes } from "./assistant-routes";
 import { registerAnalyticsRoutes } from "./analytics-routes";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerWebhookRoutes } from "./webhook-routes";
@@ -195,6 +213,8 @@ import { registerCreditHoldRoutes } from "./credit-hold-routes";
 import { registerMeterRoutes } from "./meter-routes";
 import { registerModelPriceRoutes } from "./model-price-routes";
 import { registerCreditRoutes } from "./credits-routes";
+import { registerCreditSettingsRoutes } from "./credit-settings-routes";
+import { registerCreditReportRoutes } from "./credit-report-routes";
 import { registerRateChangePreviewRoutes } from "./rate-change-preview-routes";
 import { registerUsageWidgetRoutes } from "./usage-widget-routes";
 import { registerUsageControlRoutes } from "./usage-control-routes";
@@ -204,6 +224,8 @@ import { permissionDef } from "@/modules/auth/permissions";
 import {
   businessCreditConfigSchema,
   toBusinessCreditConfig,
+  initialCreditConfig,
+  keepInFlightApplies,
 } from "@/modules/credits/customer-settings";
 import { registerListViewRoutes } from "./list-view-routes";
 import { registerReportDashboardRoutes } from "./report-dashboard-routes";
@@ -412,6 +434,13 @@ const invoiceCustomizationSchema = z.object({
       position: z.enum(["bottom_right", "bottom_left"]).optional(),
     })
     .optional(),
+  // Which payment instructions a document prints, and whether they name the customer.
+  payment_instructions: z
+    .object({
+      mode: z.enum(["all", "preferred_offline"]).optional(),
+      personalize: z.boolean().optional(),
+    })
+    .optional(),
   invoice: z
     .object({
       title: z.enum(["invoice", "tax_invoice"]).optional(),
@@ -429,6 +458,7 @@ const invoiceCustomizationSchema = z.object({
       show_status: z.boolean().optional(),
       show_service_period: z.boolean().optional(),
       show_invoice_date: z.boolean().optional(),
+      service_period_basis: z.enum(["invoice_line_dates", "credit_note_date"]).optional(),
       notes: z.string().max(2000).nullable().optional(),
       numbering: numberingSchema,
     })
@@ -583,7 +613,7 @@ const optionalLeadDaysSchema = z
   .max(MAX_OPTIONAL_LEAD_DAYS)
   .refine((v) => new Set(v).size === v.length, "Each lead day must be different.");
 
-const USAGE_CLOSE_DELAY_MESSAGE = "Enter a whole number of minutes from 0 to 24.";
+const USAGE_CLOSE_DELAY_MESSAGE = `Enter a whole number of minutes from 0 to ${USAGE_GRACE_MAX_MINUTES} (30 days).`;
 
 export const updateBusinessBody = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -689,12 +719,12 @@ export const updateBusinessBody = z.object({
     .record(currencyCode, z.number().int().min(0).max(Number.MAX_SAFE_INTEGER))
     .nullable()
     .optional(),
-  // Extra wait (0454) before a period's usage closes; renewal reads it.
+  // The usage grace window (0454, 0523): how long a metered renewal's invoice holds.
   usage_close_delay_minutes: z
     .number(USAGE_CLOSE_DELAY_MESSAGE)
     .int(USAGE_CLOSE_DELAY_MESSAGE)
     .min(0, USAGE_CLOSE_DELAY_MESSAGE)
-    .max(24, USAGE_CLOSE_DELAY_MESSAGE)
+    .max(USAGE_GRACE_MAX_MINUTES, USAGE_CLOSE_DELAY_MESSAGE)
     .optional(),
   /**
    * Credits Flexibility (0219) — whether, and up to how much, REFUNDABLE credits and
@@ -829,6 +859,19 @@ export const updateBusinessBody = z.object({
         })
         .optional(),
       failed_change_charge: z.enum(FAILED_CHANGE_CHARGES).optional(),
+      // `apply_when_paid`: how long a held change waits for its invoice, in hours.
+      pending_change_expiry_hours: z
+        .number()
+        .int()
+        .min(PENDING_CHANGE_EXPIRY_HOURS.min)
+        .max(PENDING_CHANGE_EXPIRY_HOURS.max)
+        .optional(),
+      pending_change_expiry_hours_slow: z
+        .number()
+        .int()
+        .min(PENDING_CHANGE_EXPIRY_HOURS_SLOW.min)
+        .max(PENDING_CHANGE_EXPIRY_HOURS_SLOW.max)
+        .optional(),
       upgrade_proration: z.enum(CHANGE_PRORATIONS).optional(),
       downgrade_proration: z.enum(CHANGE_PRORATIONS).optional(),
       upgrade_gate: z.enum(CHANGE_GATES).optional(),
@@ -842,6 +885,9 @@ export const updateBusinessBody = z.object({
       plan_change_term: z.enum(PLAN_CHANGE_TERMS).optional(),
       plan_change_coupons: z.enum(PLAN_CHANGE_COUPONS).optional(),
       downgrade_credit: z.enum(DOWNGRADE_CREDITS).optional(),
+      // null = not saved: `one_credit_note` applies.
+      net_credit_documents: z.enum(NET_CREDIT_DOCUMENTS).nullable().optional(),
+      block_downgrade_when_past_due: z.boolean().optional(),
       reactivation_charges: z.enum(REACTIVATION_CHARGES).optional(),
       // Collection rules (2.12, 2.15): shortfall write-off per currency, declined refunds.
       partial_payment_write_off: z
@@ -873,9 +919,39 @@ export const updateBusinessBody = z.object({
           first_window: z.enum(PLAN_CREDIT_FIRST_WINDOWS).optional(),
           on_pause: z.enum(PLAN_CREDIT_PAUSES).optional(),
           on_cancel_at_period_end: z.enum(PLAN_CREDIT_CANCEL_AT_PERIOD_ENDS).optional(),
+          grant_when: z.enum(PLAN_CREDIT_GRANT_WHENS).optional(),
+          on_unpaid_cancel: z.enum(PLAN_CREDIT_UNPAID_CANCELS).optional(),
         })
         .optional(),
       allowances: z.object({ on_upgrade: z.enum(ALLOWANCE_UPGRADES).optional() }).optional(),
+      // Coupons on every kind of billing.
+      zero_invoice_paid_event: z.enum(ZERO_INVOICE_PAID_EVENTS).optional(),
+      mid_term_coupons: z.enum(MID_TERM_COUPONS).optional(),
+      customer_coupons: z.enum(CUSTOMER_COUPONS).optional(),
+      // Late usage after a cancellation: one more invoice, by default at most one a day per customer.
+      late_usage_invoices: z
+        .object({
+          enabled: z.boolean().optional(),
+          minimum: z
+            .record(
+              z.string().regex(/^[A-Z]{3}$/, "Use an upper-case three-letter currency code."),
+              z.number().int().min(0).max(MAX_LATE_USAGE_MINIMUM_MINOR),
+            )
+            .optional(),
+          wait_hours: z
+            .number()
+            .int()
+            .min(LATE_USAGE_WAIT_HOURS.min)
+            .max(LATE_USAGE_WAIT_HOURS.max)
+            .optional(),
+          min_interval_hours: z
+            .number()
+            .int()
+            .min(LATE_USAGE_MIN_INTERVAL_HOURS.min)
+            .max(LATE_USAGE_MIN_INTERVAL_HOURS.max)
+            .optional(),
+        })
+        .optional(),
     })
     .nullable()
     .optional(),
@@ -1085,6 +1161,11 @@ export const updateBusinessBody = z.object({
       // resume, trapping a buyer in a state they cannot leave.
       allow_pause_resume: z.boolean().optional(),
       allow_reactivate: z.boolean().optional(),
+      // Restart an ENDED subscription through a checkout that charges the new term first.
+      allow_restart: z.boolean().optional(),
+      restart_price: z.enum(["current", "keep"]).optional(),
+      restart_window_days: z.number().int().min(1).max(3650).nullable().optional(),
+      restart_open_invoices: z.enum(["pay_first", "allow"]).optional(),
       allow_skip_renewal: z.boolean().optional(),
       skip_renewal_limit: z.number().int().min(1).max(12).optional(),
       // Rich text the portal shows when a buyer cannot get in. Sanitised on read by
@@ -1571,6 +1652,8 @@ function serializeBusiness(
     billing_rules_config: {
       ...serializeBillingRules(b),
       ...serializeLifecycleConfig(resolveLifecycleConfig(b)),
+      // Null = not saved (`one_credit_note` applies), as the timing keys report it.
+      net_credit_documents: storedNetCreditDocuments(b),
       ...serializeCollectionRulesConfig(resolveCollectionRulesConfig(b)),
     },
     invoice_rules_config: serializeInvoiceRulesConfig(resolveInvoiceRulesConfig(b)),
@@ -1701,24 +1784,16 @@ export async function registerRoutes(app: FastifyInstance) {
   // API reference: machine-readable spec + interactive docs (both public).
   //
   // `servers` is overridden per DEPLOYMENT rather than baked into the spec module. The
-  // static value there is "http://localhost:4000", which is right for local dev and is
-  // what `sdk:generate` freezes into `sdk/openapi.json` — a build artifact that must stay
-  // deterministic, so it is deliberately NOT config-derived. What a reader of the LIVE
-  // docs needs is different: `servers` is what Scalar builds its "Shell / Curl" client
-  // snippets and its try-it requests from, so serving the local-dev value told everyone
-  // reading the production reference to call localhost. WEBHOOK_BASE_URL is already
-  // defined as "the public base URL this API is reachable at" (the same value
-  // `buildNotificationUrl` hands gateways), and it carries the reverse proxy's path
-  // prefix when there is one.
-  const publicSpec = config.WEBHOOK_BASE_URL
+  // static value there (Cloud, then a local install) is what `sdk:generate` freezes into
+  // `sdk/openapi.json` — a build artifact that must stay deterministic, so it is NOT
+  // config-derived. The LIVE spec names this deployment, because Scalar builds its client
+  // snippets and try-it requests from `servers`. `ADVERTISED_API_URL` is the host developers
+  // should call; without it, `WEBHOOK_BASE_URL` (the base gateways have registered).
+  const advertisedBase = config.ADVERTISED_API_URL ?? config.WEBHOOK_BASE_URL;
+  const publicSpec = advertisedBase
     ? {
         ...openapiDocument,
-        servers: [
-          {
-            url: config.WEBHOOK_BASE_URL.replace(/\/+$/, ""),
-            description: "this deployment",
-          },
-        ],
+        servers: [{ url: advertisedBase.replace(/\/+$/, ""), description: "this deployment" }],
       }
     : openapiDocument;
   // Annotated on first read: the permission registry is complete once the app has booted.
@@ -1734,7 +1809,15 @@ export async function registerRoutes(app: FastifyInstance) {
     "/v1/me",
     { preHandler: [authenticate, noMemberPermission("the caller's own credential")] },
     async (req) => {
-      return serializeOrganization(req.organization!);
+      return {
+        ...serializeOrganization(req.organization!),
+        // Lets an agent check the mode before its first write, instead of trusting a key prefix.
+        credential: {
+          livemode: req.keyLivemode ?? null,
+          kind: req.apiKeyKind ?? null,
+          access: req.apiKeyScope ?? null,
+        },
+      };
     },
   );
 
@@ -1776,6 +1859,10 @@ export async function registerRoutes(app: FastifyInstance) {
         // A business a signed-in person creates starts with the recommended checkout
         // settings; a key (any kind) keeps the engine defaults.
         storefrontConfig: initialStorefrontConfig(req),
+        // A person gets the recommended opt-in emails (welcome back); a key keeps none.
+        emailConfig: initialEmailConfig(req),
+        // A person gets the hold share on parallel holds only; a key keeps it on every hold.
+        creditConfig: initialCreditConfig(req),
       });
       const pairs = await businessPairs(req.organization!.id);
       return reply.code(201).send(serializeBusiness(business, undefined, pairs.get(business.id)));
@@ -2012,7 +2099,12 @@ export async function registerRoutes(app: FastifyInstance) {
           usageCloseDelayMinutes: d.usage_close_delay_minutes,
           creditsFlexibility: d.credits_flexibility,
           ...(d.credit_config !== undefined
-            ? { creditConfig: toBusinessCreditConfig(d.credit_config) }
+            ? {
+                creditConfig: keepInFlightApplies(
+                  toBusinessCreditConfig(d.credit_config),
+                  bizRow?.creditConfig,
+                ),
+              }
             : {}),
           dunningConfig: d.dunning_config,
           mandateConfig: d.mandate_config,
@@ -2070,6 +2162,17 @@ export async function registerRoutes(app: FastifyInstance) {
         return reply.code(404).send({
           error: { type: "invalid_request_error", message: `No such business: ${bizPid}` },
         });
+      // The rule decides how customer coupons net into MRR: restate their holders.
+      if (
+        resolveBillingRulesConfig(bizRow ?? null).customerCoupons !==
+        resolveBillingRulesConfig(b).customerCoupons
+      ) {
+        const { recomputeCustomerCouponMrr } = await import("@/modules/coupons/service");
+        await recomputeCustomerCouponMrr({
+          organizationId: req.organization!.id,
+          businessId: b.id,
+        });
+      }
       // New outside addresses get a confirmation mail; removed ones must confirm again.
       if (d.team_alerts_config !== undefined)
         await syncTeamAlertRecipients({
@@ -3188,6 +3291,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerCheckoutRoutes(app);
   await registerPaymentLinkRoutes(app);
   await registerMetricsRoutes(app);
+  await registerMcpRoutes(app);
+  await registerOAuthRoutes(app);
+  await registerAssistantRoutes(app);
   await registerAnalyticsRoutes(app);
   await registerAuthRoutes(app);
   await registerWebhookRoutes(app);
@@ -3213,6 +3319,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerMeterRoutes(app);
   await registerModelPriceRoutes(app);
   await registerCreditRoutes(app);
+  await registerCreditSettingsRoutes(app);
+  await registerCreditReportRoutes(app);
   await registerRateChangePreviewRoutes(app);
   await registerUsageWidgetRoutes(app);
   await registerUsageControlRoutes(app);

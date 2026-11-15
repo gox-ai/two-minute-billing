@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,7 +22,7 @@ import {
 } from "@/components/ui/command";
 
 /**
- * "Set Differential Pricing" picker: a searchable list of the
+ * "Set differential pricing" picker: a searchable list of the
  * plans this addon/charge applies to. Choosing a plan navigates to the grid for
  * that plan (?plan=). Plans that already carry a differential are tagged so you
  * can tell configured from unconfigured at a glance.
@@ -44,12 +45,13 @@ export function SetDifferentialModal({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm" variant="outline" disabled={plans.length === 0}>
-          + Set Differential Pricing
+          <Plus />
+          Set differential pricing
         </Button>
       </DialogTrigger>
       <DialogContent className="overflow-hidden p-0 sm:max-w-md">
         <DialogHeader className="px-4 pt-4">
-          <DialogTitle>Set Differential Pricing</DialogTitle>
+          <DialogTitle>Set differential pricing</DialogTitle>
           <DialogDescription className="sr-only">
             Select a plan to set plan-specific pricing for this item.
           </DialogDescription>

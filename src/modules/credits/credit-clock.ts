@@ -10,7 +10,21 @@
  *   leaves (a simulated drawdown: that usage is billed later); the rest expires through the
  *   expiry pass once no open invoice window can still draw it.
  */
-import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { scanBusinessFilter } from "@/platform/clock";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { createLogger } from "@/platform/logger";
@@ -18,6 +32,7 @@ import {
   businesses,
   creditGrants,
   events,
+  invoices,
   prices,
   subscriptionItems,
   subscriptions,
@@ -26,11 +41,13 @@ import {
 } from "@db/schema";
 import { lockCustomerBalances } from "@/modules/customers/balances-read";
 import {
+  bookGrantRemainder,
   creditUnitByKey,
   grantRemaining,
   insertCreditGrant,
   recordGrantMovement,
   unitRate,
+  settleOwnUnitFirst,
 } from "./service";
 import { faceMinorFor, stepsForMinor } from "./units";
 import {
@@ -167,6 +184,69 @@ export async function loadLegacyPauses(
   return pauses;
 }
 
+/** How a window grant starts: spendable, held for an unpaid invoice, or not yet. */
+export type GrantStart =
+  | { status: "active" }
+  // `invoiceId: null`: a change grant held for the change invoice, raised after its transaction.
+  | { status: "pending"; invoiceId: string | null }
+  | "wait";
+const ACTIVE_START = { status: "active" } as const;
+/** A term this young may not have its invoice yet. */
+const TERM_INVOICE_WAIT_MS = 3_600_000;
+
+/**
+ * `plan_credits.grant_when: invoice_paid`: a grant of the current term is held while the
+ * term's invoice is unpaid, and waits while that invoice is still to come (the invoice run
+ * names its subscription in `awaitingInvoiceOf`; any other reader waits out a young term).
+ * A term with no invoice has nothing unpaid.
+ */
+export async function planGrantStart(
+  tx: Tx,
+  input: {
+    sub: Pick<SubRow, "id" | "currentPeriodStart" | "currentPeriodEnd">;
+    settings: ResetSettings;
+    now: Date;
+    awaitingInvoiceOf?: string | null;
+  },
+): Promise<GrantStart> {
+  const { sub } = input;
+  if (input.settings.planCredits.grantWhen !== "invoice_paid") return ACTIVE_START;
+  if (!sub.currentPeriodStart || !sub.currentPeriodEnd) return ACTIVE_START;
+  const term = await tx
+    .select({ id: invoices.id, status: invoices.status })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.subscriptionId, sub.id),
+        eq(invoices.periodStart, sub.currentPeriodStart),
+        eq(invoices.periodEnd, sub.currentPeriodEnd),
+        ne(invoices.status, "voided"),
+      ),
+    )
+    .orderBy(asc(invoices.createdAt));
+  const unpaid = term.find((i) => i.status !== "paid");
+  if (unpaid) return { status: "pending", invoiceId: unpaid.id };
+  if (term.length) return ACTIVE_START;
+  if (input.awaitingInvoiceOf === sub.id) return "wait";
+  return input.now.getTime() - sub.currentPeriodStart.getTime() < TERM_INVOICE_WAIT_MS
+    ? "wait"
+    : ACTIVE_START;
+}
+
+const startOr = (s: GrantStart): Exclude<GrantStart, "wait"> => (s === "wait" ? ACTIVE_START : s);
+
+async function changeGrantStart(
+  tx: Tx,
+  sub: SubRow,
+  settings: ResetSettings,
+  now: Date,
+): Promise<Exclude<GrantStart, "wait">> {
+  const s = startOr(await planGrantStart(tx, { sub, settings, now }));
+  return s.status === "active" && settings.planCredits.grantWhen === "invoice_paid"
+    ? { status: "pending", invoiceId: null }
+    : s;
+}
+
 const subStartOf = (sub: SubRow) => sub.startedAt ?? sub.activatedAt ?? sub.createdAt;
 
 async function setCursor(tx: Tx, itemId: string, at: Date | null) {
@@ -182,7 +262,14 @@ async function setCursor(tx: Tx, itemId: string, at: Date | null) {
  */
 export async function advanceItemClock(
   tx: Tx,
-  input: { sub: SubRow; item: ItemRow; price: PriceRow; biz: BizRow; now: Date },
+  input: {
+    sub: SubRow;
+    item: ItemRow;
+    price: PriceRow;
+    biz: BizRow;
+    now: Date;
+    awaitingInvoiceOf?: string | null;
+  },
 ): Promise<{ granted: number; skipped: number }> {
   const { sub, item, price, biz, now } = input;
   const out = { granted: 0, skipped: 0 };
@@ -209,6 +296,7 @@ export async function advanceItemClock(
   if (cursor && cursor.getTime() > now.getTime()) return out; // not due
   let w: ResetWindow = windowAt(reset, cursor ?? now, ctx);
   let next: Date | null = null;
+  let start: GrantStart | undefined;
   for (let i = 0; i < MAX_WINDOWS_PER_RUN; i++) {
     if (w.start.getTime() > now.getTime()) {
       next = w.start;
@@ -225,7 +313,28 @@ export async function advanceItemClock(
       break;
     }
     if (verdict === "grant") {
-      const done = await grantWindow(tx, { sub, item, price, gc, reset, w, ctx, settings, now });
+      start ??= await planGrantStart(tx, {
+        sub,
+        settings,
+        now,
+        awaitingInvoiceOf: input.awaitingInvoiceOf,
+      });
+      if (start === "wait") {
+        next = w.start;
+        break;
+      }
+      const done = await grantWindow(tx, {
+        sub,
+        item,
+        price,
+        gc,
+        reset,
+        w,
+        ctx,
+        settings,
+        now,
+        start,
+      });
       if (done) out.granted++;
     } else out.skipped++;
     if (!w.end) {
@@ -292,6 +401,8 @@ async function grantWindow(
     now: Date;
     /** A plan change: the grant starts here, with this amount rule. */
     change?: { at: Date; rule: "full" | "prorated" };
+    /** Held for an unpaid term invoice (`planGrantStart`). Default: spendable at once. */
+    start?: Exclude<GrantStart, "wait">;
   },
 ): Promise<boolean> {
   const { sub, item, price, gc, reset, w } = input;
@@ -348,6 +459,9 @@ async function grantWindow(
     subscriptionItemId: item.id,
     onExhausted: gc.on_exhausted ?? null,
     metadata: { reset: reset as unknown as Record<string, unknown> },
+    ...(input.start?.status === "pending"
+      ? { status: "pending" as const, invoiceId: input.start.invoiceId }
+      : {}),
   });
   return true;
 }
@@ -398,10 +512,17 @@ async function rollClosing(
       )
       .limit(1);
     if (rolled) continue;
+    if (await settleOwnUnitFirst(tx, g, "rollover")) continue;
     const left = (await grantRemaining(tx, [g.id])).get(g.id)!;
-    const pending = await pendingDraw(tx, sub, g.id, g.currency, w.start);
+    // No rate: money usage draws nothing from the grant, and it rolls in units only.
+    const unrated = !g.unitRated;
+    const pending = unrated ? 0n : await pendingDraw(tx, sub, g.id, g.currency, w.start);
     const rate = unitRate(unit);
-    const pendingUnits = pending >= left.face ? left.units : stepsForMinor(pending, rate);
+    const pendingUnits = unrated
+      ? 0n
+      : pending >= left.face
+        ? left.units
+        : stepsForMinor(pending, rate);
     const leftUnits = left.units - (pendingUnits > left.units ? left.units : pendingUnits);
     const leftFace = left.face - (pending > left.face ? left.face : pending);
     let carry = (leftUnits * BigInt(roll.percent ?? 100)) / 100n;
@@ -409,7 +530,7 @@ async function rollClosing(
     if (carry <= 0n) continue;
     let face = carry === leftUnits ? leftFace : faceMinorFor(carry, rate);
     if (face > leftFace) face = leftFace;
-    if (face <= 0n) continue;
+    if (face <= 0n && !unrated) continue;
     const cycles = roll.expire_after_cycles === undefined ? 1 : roll.expire_after_cycles;
     const expiresAt =
       cycles == null ? null : endAfterWindows(reset, windowAt(reset, w.start, ctx), cycles, ctx);
@@ -450,12 +571,17 @@ async function pendingDraw(
   currency: string,
   asOf: Date,
 ): Promise<bigint> {
-  const { loadBalanceSnapshot, simulateDrawdown, toPlanner } = await import("./balance");
+  const { loadBalanceSnapshot, ratedOnly, simulateDrawdown, toPlanner } = await import("./balance");
   const { ratedUnbilledUsage } = await import("./usage");
   const { sliceUsageLines } = await import("./slices");
   const snap = await loadBalanceSnapshot(tx, { customerId: sub.customerId, currency, now: asOf });
   const usage = await ratedUnbilledUsage(tx, { customerId: sub.customerId, currency, asOf });
-  const sliced = await sliceUsageLines(tx, sub.customerId, usage, snap.grants.map(toPlanner));
+  const sliced = await sliceUsageLines(
+    tx,
+    sub.customerId,
+    usage,
+    ratedOnly(snap.grants).map(toPlanner),
+  );
   return simulateDrawdown(snap.grants, sliced).get(grantId) ?? 0n;
 }
 
@@ -491,7 +617,12 @@ async function dueItems(tx: Tx, customerId: string, now: Date) {
  */
 export async function ensureCreditWindows(
   tx: Tx,
-  input: { customerId: string; now: Date },
+  input: {
+    customerId: string;
+    now: Date;
+    /** The invoice run of this subscription: its term invoice is about to be written. */
+    awaitingInvoiceOf?: string | null;
+  },
 ): Promise<{ granted: number }> {
   const rows = await dueItems(tx, input.customerId, input.now);
   if (!rows.length) return { granted: 0 };
@@ -517,7 +648,14 @@ export async function ensureCreditWindows(
       .limit(1);
     if (!item) continue;
     granted += (
-      await advanceItemClock(tx, { sub: r.sub, item, price: r.price, biz, now: input.now })
+      await advanceItemClock(tx, {
+        sub: r.sub,
+        item,
+        price: r.price,
+        biz,
+        now: input.now,
+        awaitingInvoiceOf: input.awaitingInvoiceOf,
+      })
     ).granted;
   }
   return { granted };
@@ -580,6 +718,8 @@ function monthlyMinor(price: PriceRow, quantity: number): number {
  * business settings, the old price's open window grant ends at the change, and the new price's
  * window that holds the change is granted at once (in full or prorated), or from the next
  * window. A term reset re-grants through the term invoice, so term items are left to it.
+ * A change at the term end takes no credits from either plan: the new price's first window
+ * starts with the new term.
  */
 export async function applyPlanChangeCredits(
   tx: Tx,
@@ -629,41 +769,71 @@ export async function applyPlanChangeCredits(
     if (input.termReset && !newReset && !oldReset) continue;
     const up = monthlyMinor(row.price, row.item.quantity) >= monthlyMinor(old, c.oldQuantity);
     const rule = up ? settings.planCredits.onUpgrade : settings.planCredits.onDowngrade;
+    // A change applied at the term end runs before the renewal, some time after the
+    // boundary. For credits it happens at the boundary.
+    const at =
+      !input.termReset &&
+      sub.currentPeriodEnd &&
+      input.now.getTime() >= sub.currentPeriodEnd.getTime()
+        ? sub.currentPeriodEnd
+        : input.now;
+    // The old price's grants (rollovers apart) that still run at the change.
+    const open = and(
+      eq(creditGrants.subscriptionItemId, row.item.id),
+      eq(creditGrants.source, "plan_cycle"),
+      eq(creditGrants.status, "active"),
+      or(isNull(creditGrants.expiresAt), gt(creditGrants.expiresAt, at)),
+      sql`${creditGrants.sourceRef} not like ${`${row.item.id}:wroll:%`}`,
+      sql`${creditGrants.sourceRef} not like ${`${row.item.id}:rollover:%`}`,
+    );
     if (rule === "next_window") {
       // The old grant runs to its window end; the new price starts at its next window.
+      // A change on a window start with no old grant running (the term end) leaves no
+      // window to wait out: the new price starts at this one.
       if (newReset) {
         const ctx = windowContext(sub, row.item, biz);
-        const w = ctx ? windowAt(newReset, input.now, ctx) : null;
-        await setCursor(tx, row.item.id, w?.end ?? null);
+        const w = ctx ? windowAt(newReset, at, ctx) : null;
+        let next = w?.end ?? null;
+        if (w && w.start.getTime() === at.getTime()) {
+          const [running] = await tx
+            .select({ id: creditGrants.id })
+            .from(creditGrants)
+            .where(open)
+            .limit(1);
+          if (!running) next = w.start;
+        }
+        await setCursor(tx, row.item.id, next);
       }
       continue;
     }
     // The old price's open grant(s) end at the change.
+    const endedByChange = sql`coalesce(${creditGrants.metadata}, '{}'::jsonb) || '{"ended_by_change": true}'::jsonb`;
     await tx
       .update(creditGrants)
-      .set({
-        expiresAt: input.now,
-        metadata: sql`coalesce(${creditGrants.metadata}, '{}'::jsonb) || '{"ended_by_change": true}'::jsonb`,
-      })
-      .where(
-        and(
-          eq(creditGrants.subscriptionItemId, row.item.id),
-          eq(creditGrants.source, "plan_cycle"),
-          eq(creditGrants.status, "active"),
-          lte(creditGrants.effectiveAt, input.now),
-          or(isNull(creditGrants.expiresAt), gt(creditGrants.expiresAt, input.now)),
-          sql`${creditGrants.sourceRef} not like ${`${row.item.id}:wroll:%`}`,
-          sql`${creditGrants.sourceRef} not like ${`${row.item.id}:rollover:%`}`,
-        ),
-      );
+      .set({ expiresAt: at, metadata: endedByChange })
+      .where(and(open, lt(creditGrants.effectiveAt, at)));
+    // A grant that starts at the change instant (a frozen test clock: signup and change at
+    // one simulated time) cannot expire there (`expires_at > effective_at`). It never ran,
+    // so book it out now.
+    const unstarted = await tx
+      .update(creditGrants)
+      .set({ metadata: endedByChange })
+      .where(and(open, eq(creditGrants.effectiveAt, at)))
+      .returning();
+    for (const g of unstarted) await bookGrantRemainder(tx, { grant: g, kind: "expire" });
     if (!newGc || input.termReset) {
-      if (newReset) await setCursor(tx, row.item.id, input.now);
+      if (newReset) await setCursor(tx, row.item.id, at);
       continue;
     }
     const ctx = windowContext(sub, row.item, biz);
     if (!ctx) continue;
     const reset = newReset ?? ({ every: "term" } as Reset);
-    const w = windowAt(reset, input.now, ctx);
+    const w = windowAt(reset, at, ctx);
+    if (newReset && at !== input.now && w.start.getTime() === at.getTime()) {
+      // The term end: the window starts with the new term, and the renewal grants it whole.
+      await setCursor(tx, row.item.id, w.start);
+      continue;
+    }
     await grantWindow(tx, {
       sub,
       item: row.item,
@@ -674,7 +844,11 @@ export async function applyPlanChangeCredits(
       ctx,
       settings,
       now: input.now,
-      change: { at: input.now, rule: rule === "prorated" ? "prorated" : "full" },
+      change: { at, rule: rule === "prorated" ? "prorated" : "full" },
+      // An unpaid term holds the new plan's credits too; there is nothing to wait for here.
+      // `grant_when: invoice_paid`: the grant also waits for the change invoice, which is raised
+      // after this transaction. `settleHeldChangeGrants` links it, or opens the grant.
+      start: await changeGrantStart(tx, sub, settings, input.now),
     });
     await setCursor(tx, row.item.id, newReset ? (w.end ?? NEVER_AGAIN) : null);
   }

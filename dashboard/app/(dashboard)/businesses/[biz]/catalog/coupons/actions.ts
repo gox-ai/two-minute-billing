@@ -21,6 +21,16 @@ const itemConstraintSchema = z.object({
   item_kind: z.enum(["plan", "addon", "charge"]),
   constraint_type: z.enum(["all", "specific", "none"]),
   product_ids: z.array(z.string().min(1).max(100)).optional(),
+  price_ids: z.array(z.string().min(1).max(100)).max(500).optional(),
+  billing_periods: z
+    .array(
+      z.object({
+        interval: z.enum(["day", "week", "month", "year"]),
+        interval_count: z.number().int().min(1).max(365),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 
 /** Parses + validates the item-constraints JSON string built by the "each specified
@@ -69,6 +79,7 @@ const createCouponSchema = z
     duration_in_periods: numberFromForm({ min: 1, message: "Periods must be at least 1" }),
     max_redemptions: numberFromForm({ min: 1, message: "Must be at least 1" }),
     max_redemptions_per_customer: numberFromForm({ min: 1, message: "Must be at least 1" }),
+    per_customer_limit_by: z.enum(["customer", "email"]).optional(),
     redeem_by: optUtcDateTime,
     valid_from: optUtcDateTime,
     apply_on: z.enum(["invoice_amount", "each_specified_item", "none"]).optional(),
@@ -116,6 +127,7 @@ export async function createCouponExtAction(
   if (d.max_redemptions != null) body.max_redemptions = d.max_redemptions;
   if (d.max_redemptions_per_customer != null)
     body.max_redemptions_per_customer = d.max_redemptions_per_customer;
+  if (d.per_customer_limit_by) body.per_customer_limit_by = d.per_customer_limit_by;
   if (d.metadata) body.metadata = d.metadata;
   if (d.redeem_by) body.redeem_by = d.redeem_by;
   if (d.valid_from) body.valid_from = d.valid_from;
@@ -155,6 +167,7 @@ const editCouponSchema = z
     valid_from: optUtcDateTime,
     max_redemptions: numberFromForm({ min: 1, message: "Must be at least 1" }),
     max_redemptions_per_customer: numberFromForm({ min: 1, message: "Must be at least 1" }),
+    per_customer_limit_by: z.enum(["customer", "email"]).optional(),
     metadata: metadataFromForm,
     active: z.enum(["true", "false"]).optional(),
     item_constraints: itemConstraintsFromForm,
@@ -212,6 +225,7 @@ export async function editCouponExtAction(
   if (formData.has("max_redemptions")) body.max_redemptions = d.max_redemptions ?? null;
   if (formData.has("max_redemptions_per_customer"))
     body.max_redemptions_per_customer = d.max_redemptions_per_customer ?? null;
+  if (d.per_customer_limit_by) body.per_customer_limit_by = d.per_customer_limit_by;
   if (formData.get("metadata_present") === "1") body.metadata = d.metadata;
   if (d.active !== undefined) body.active = d.active === "true";
   // Only posted by an each_specified_item coupon's form, and `[]` is a real answer there

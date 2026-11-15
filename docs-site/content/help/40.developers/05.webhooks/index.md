@@ -27,7 +27,7 @@ curl -X POST $TMBILLING_URL/v1/webhook_endpoints \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://api.example.com/hooks/tmbilling",
-    "event_types": ["invoice_paid", "invoice_payment_failed", "subscription_cancelled"]
+    "event_types": ["invoice_paid", "payment_failed", "subscription_canceled"]
   }'
 ```
 
@@ -61,7 +61,7 @@ tmbilling sends a `POST` with this body and nothing else:
 | `occurred_at` | ISO-8601 | When the change happened, which is not always when you received it. |
 | `source` | string | What caused it: the billing clock, an API call, the dashboard, or a provider webhook. |
 | `user` | string or null | Who did it, when a person did. |
-| `content` | object | A full snapshot of the affected resources, not just an id. You can act on most events without fetching anything. |
+| `content` | object | A short summary of the affected resource: its id and status, plus fields named in the [event reference](/help/developers/webhooks/events), such as `amount_minor`. Fetch the resource by id for anything else. |
 
 ## Check the headers
 

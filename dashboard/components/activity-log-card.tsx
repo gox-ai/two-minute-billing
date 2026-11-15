@@ -2,15 +2,21 @@ import Link from "next/link";
 import { listEventsForBusiness } from "@/lib/api/developer";
 import { SectionCard } from "@/components/patterns/section-card";
 import { EmptyState } from "@/components/states";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
 import { fmtDateTime } from "@/lib/api";
 import {
   listAuditLogsForCustomer,
   listAuditLogsForResource,
   type AuditRow,
 } from "@/components/audit/api";
-import { EVENT_TYPE_FOR_ACTION, actionHeadline, actorLabel } from "@/components/audit/labels";
+import {
+  EVENT_TYPE_FOR_ACTION,
+  actionHeadline,
+  actorLabel,
+  sourceByPhrase,
+} from "@/components/audit/labels";
 import { cn } from "@/lib/utils";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { Paged, PagedFooter, PagedItems } from "@/components/patterns/pager";
 
 /** Per stream; the card pages through the merged result. */
@@ -272,18 +278,17 @@ function ActivityItem({ r, tz }: { r: LogRow; tz: string | null }) {
         {/* The source leads the row: it is the first thing that tells you
                     whether a human, an integration or the clock did this. */}
         {r.source ? (
-          <Badge variant="outline" className="mr-2 align-middle text-xs">
-            via {r.source}
-          </Badge>
+          <Chip className="mr-2 align-middle">
+            <span className="first-letter:uppercase">{sourceByPhrase(r.source)}</span>
+          </Chip>
         ) : null}
         <span className="font-medium">{r.noun}</span> <span>{r.verb}</span>
         {r.ref ? (
-          <span className="ml-2 font-mono text-xs wrap-anywhere text-muted-foreground">
-            {r.ref}
-          </span>
+          <MiddleEllipsis value={r.ref} className="ml-2 text-xs text-muted-foreground" />
         ) : null}
       </span>
-      <span className="max-w-full shrink-0 text-right">
+      {/* Under the text on a phone, so it reads as one left-aligned line: time · actor · ip. */}
+      <span className="max-w-full shrink-0 text-right max-sm:text-left max-sm:text-xs max-sm:text-muted-foreground max-sm:[&>span]:inline max-sm:[&>span+span]:before:content-['_·_']">
         <span className="block text-xs text-muted-foreground tabular-nums">
           {fmtDateTime(r.at, tz)}
         </span>

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
+import { CARD_HEAD_ACTIONS, CARD_HEAD_GROW } from "@/components/patterns/record-page";
 
 /**
  * Detail section: small bold heading OUTSIDE the card, then a card body. Give it
@@ -34,10 +35,13 @@ export function SectionCard({
         )}
       >
         {title || actions ? (
-          <div className="flex items-center gap-3 border-b px-5 py-3.5">
-            {title ? <h2 className="text-base font-medium">{title}</h2> : null}
+          // On a phone the title keeps its line; actions that do not fit wrap under it.
+          <div className="flex items-center gap-3 border-b px-5 py-3.5 max-sm:flex-wrap max-sm:gap-y-2">
+            {title ? (
+              <h2 className={cn("text-base font-medium", CARD_HEAD_GROW)}>{title}</h2>
+            ) : null}
             {actions ? (
-              <div className="ml-auto flex items-center gap-3 text-sm">{actions}</div>
+              <div className={cn(CARD_HEAD_ACTIONS, !title && "ml-auto")}>{actions}</div>
             ) : null}
           </div>
         ) : null}
@@ -74,7 +78,7 @@ export function SummaryBox({
   // SectionCard, so a dashed border drew a second border nested in the first. In
   // this system a recessed surface marks "this is derived/secondary".
   return (
-    <div className={cn("rounded-lg bg-muted/50 px-4 py-3 text-sm", className)}>
+    <div className={cn("rounded-xl bg-muted/50 px-4 py-3 text-sm", className)}>
       {title ? <div className="mb-1 font-medium">{title}</div> : null}
       <div className="text-foreground/80">{children}</div>
     </div>

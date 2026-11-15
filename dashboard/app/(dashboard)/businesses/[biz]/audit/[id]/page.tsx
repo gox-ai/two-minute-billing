@@ -1,5 +1,6 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
+import { listBusinesses, isApiNotFound } from "@/lib/api";
 import { requirePermission, allows } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { CopyButton } from "@/components/patterns/copy-button";
@@ -13,10 +14,10 @@ import {
 } from "@/components/patterns/record-page";
 import { PageRefresh } from "@/components/patterns/page-refresh";
 import { ErrorState } from "@/components/states";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { getBusinessAuditRecord } from "@/components/audit/api";
 import { RecordBlock } from "@/components/audit/record-block";
-import { actionHeadline, actorLabel, humaniseAction } from "@/components/audit/labels";
+import { actionHeadline, actionTitle, actorLabel, sourceLabel } from "@/components/audit/labels";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -68,12 +69,15 @@ export default async function AuditLogDetailPage({
       listBusinesses(),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Activity details" />
         <ErrorState
-          title="We could not load this audit entry"
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="audit entry"
+          back={{ label: "View audit log", href: `/businesses/${biz}/audit` }}
+          retry
         />
       </>
     );
@@ -88,7 +92,7 @@ export default async function AuditLogDetailPage({
   // resource when `?source=` named one. Falling back to the primary row's action
   // keeps a bookmarked link (no `source`) titled by what it primarily recorded.
   const lead = record.blocks[0];
-  const title = lead ? humaniseAction(lead.action) : "Audit entry";
+  const title = lead ? actionTitle(lead.action) : "Audit entry";
   const headline = lead ? actionHeadline(lead.action, lead.resource_type) : null;
 
   const actor = actorLabel(record.actor);
@@ -98,7 +102,7 @@ export default async function AuditLogDetailPage({
       <RecordCrumbs
         items={[
           { label: name, href: `/businesses/${biz}` },
-          { label: "Audit Log", href: `/businesses/${biz}/audit` },
+          { label: "Audit log", href: `/businesses/${biz}/audit` },
           { label: title },
         ]}
         right={<PageRefresh />}
@@ -106,7 +110,7 @@ export default async function AuditLogDetailPage({
 
       <RecordHeader
         title={headline ? `${headline.noun} ${headline.verb}` : "Activity details"}
-        chips={<Chip className="font-mono">{record.source}</Chip>}
+        chips={<Chip>{sourceLabel(record.source)}</Chip>}
         facts={[
           // One prose line from the record's own fields; no IP clause when no request was behind it.
           <span key="who">
@@ -150,7 +154,7 @@ export default async function AuditLogDetailPage({
               },
               {
                 label: "Source",
-                value: <Chip className="font-mono">{record.source}</Chip>,
+                value: <Chip>{sourceLabel(record.source)}</Chip>,
               },
               {
                 // Blank means no request behind this action (billing clock, importer, seed).

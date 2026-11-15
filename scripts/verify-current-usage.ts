@@ -545,6 +545,79 @@ async function main() {
     cancelled?.status === "cancelled" &&
       (await usageOf(termEnd.subscription.publicId)).window === null,
   );
+
+  // Usage grace: while the renewal invoice is held, the view reads the current term.
+  const gBiz = await createBusiness({
+    organizationId: orgId,
+    name: "Current Usage Grace Biz",
+    defaultCurrency: "INR",
+    livemode: "test",
+  });
+  await systemDb
+    .update(businesses)
+    .set({ usageCloseDelayMinutes: 180 })
+    .where(eq(businesses.id, gBiz.id));
+  const gCtx = { organizationId: orgId, businessId: gBiz.id };
+  const gProduct = await createProduct({ ...gCtx, name: "API calls", kind: "addon" });
+  const gPrice = await createPrice({
+    ...gCtx,
+    productId: gProduct.id,
+    type: "recurring",
+    model: "usage",
+    usageAggregation: "sum",
+    currency: "INR",
+    amountMinor: 50,
+    interval: "month",
+  });
+  const gCus = await createCustomer({
+    ...gCtx,
+    email: `current-usage-grace-${RUN}@example.com`,
+    autoCollection: "on",
+    address: { country: "IN", stateCode: "TN" },
+  });
+  await vaultPaymentMethod({ ...gCtx, customer: gCus, token: "tok_4242" });
+  await startTimeTravel({ orgId, bizId: gBiz.id, genesisTime: G });
+  const gSub = await createSubscription({
+    ...gCtx,
+    customerId: gCus.id,
+    now: G,
+    items: [{ price: gPrice, quantity: 1 }],
+  });
+  await recordUsage({
+    ...gCtx,
+    subscriptionItemId: gSub.items[0]!.id,
+    quantity: 300,
+    timestamp: D5,
+  });
+  await travelForward({
+    orgId,
+    bizId: gBiz.id,
+    toTime: new Date(FEB.getTime() + 3_600_000),
+    stepDays: 7,
+  });
+  const vg = (
+    await call(
+      "GET",
+      `/v1/businesses/${gBiz.publicId}/subscriptions/${gSub.subscription.publicId}/current_usage`,
+    )
+  ).body;
+  const [gHeld] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(invoices)
+      .where(
+        and(eq(invoices.subscriptionId, gSub.subscription.id), eq(invoices.status, "pending")),
+      ),
+  );
+  ok(
+    "grace: during a hold the view reads the current term, billed by the renewal",
+    gHeld?.holdUntil != null &&
+      vg.window?.start === FEB.toISOString() &&
+      vg.window?.billed_by === "renewal" &&
+      vg.window?.invoice == null &&
+      vg.items?.[0]?.quantity === 0,
+    JSON.stringify([gHeld?.holdUntil, vg.window, vg.items?.[0]]),
+  );
   await app.close();
 }
 

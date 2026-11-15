@@ -43,6 +43,8 @@ Default is off for every business, existing and new — no `initial*Config` entr
 - Time-travelled businesses are excluded from the fan-out.
 
 ## Changelog
+- **2026-11-13** — `sendLargeGrantAlert` takes `amountText` / `alertAboveText` for a free grant in
+  a credit unit with no money rate (`credit_config.unit_grant_limits`): the amounts are in units.
 - **2026-11-03 (0489)** — Module created: overdue, webhook-failure and daily-summary alerts, opt-in
   per business with up to 10 recipients. Gate: `verify:team-alerts`.
 - **2026-11-03 (review)** — Webhook window lags one hour, as the overdue window does: a delivery whose

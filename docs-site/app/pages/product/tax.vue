@@ -203,9 +203,9 @@ useMarketingSeo({
     >
       <MkShot
         src="/product/fragments/invoice-lines"
-        alt="An invoice for a US customer: a discount, then state sales tax on the discounted subtotal"
-        :width="1556"
-        :height="676"
+        alt="An invoice for a US customer: plan and per-seat lines, then state sales tax on the subtotal"
+        :width="1339"
+        :height="778"
       />
     </MkPageZig>
 

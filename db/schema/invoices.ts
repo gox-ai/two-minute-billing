@@ -145,6 +145,9 @@ export const invoices = pgTable(
     // (0370). Request paths (signup, reactivate, resume, regenerate) and the term-end arrears
     // invoice leave it false: they may legitimately share a period_start with it.
     opensPeriod: boolean("opens_period").notNull().default(false),
+    // 0523: a held renewal invoice (usage grace window) finalizes at this instant. Set only on
+    // a `pending` draft written by the renewal; null on every other invoice.
+    holdUntil: timestamp("hold_until", { withTimezone: true }),
     // Net-D payment terms: when payment is due (null = due on issue).
     dueDate: timestamp("due_date", { withTimezone: true }),
     attemptCount: integer("attempt_count").notNull().default(0),
@@ -265,8 +268,8 @@ export const invoices = pgTable(
     // operation raises a fresh charge (the old description-match false-matched on
     // extend→shrink→extend-again). Unique per business (partial index).
     originToken: text("origin_token"),
-    // 0474: usage_interim | credit_purchase (CHECK). NULL = an ordinary invoice.
-    purpose: text("purpose").$type<"usage_interim" | "credit_purchase">(),
+    // 0474: usage_interim | credit_purchase; 0521: late_usage (CHECK). NULL = an ordinary invoice.
+    purpose: text("purpose").$type<"usage_interim" | "credit_purchase" | "late_usage">(),
     // Set while a collection attempt is IN FLIGHT, claimed by conditional UPDATE so
     // exactly one collector proceeds (0162). Several callers reach `collectInvoice` from
     // separate queues — the clock's auto-collection, an operator's manual collect, and
@@ -307,6 +310,9 @@ export const invoices = pgTable(
     index("invoices_usage_interim_idx")
       .on(t.subscriptionId, t.periodStart)
       .where(sql`purpose = 'usage_interim'`),
+    index("invoices_hold_until_idx")
+      .on(t.holdUntil)
+      .where(sql`status = 'pending' AND hold_until IS NOT NULL`),
     uniqueIndex("invoices_origin_token_uq")
       .on(t.businessId, t.originToken)
       .where(sql`origin_token IS NOT NULL`),

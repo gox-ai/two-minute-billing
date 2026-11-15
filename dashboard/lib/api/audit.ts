@@ -25,6 +25,10 @@ export interface AuditLog {
   created_at: string;
   /** Only present on org-level listing (includes the business the log belongs to). */
   business_id?: string | null;
+  /** List routes only: the hosted page when `actor` is a `cosess_…` / `psess_…` session. */
+  channel?: "checkout" | "portal" | null;
+  /** List routes only: the session's customer; null when it has none or was deleted. */
+  actor_customer?: { id: string; name: string | null } | null;
 }
 
 /**

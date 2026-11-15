@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
+import { KeptInput } from "@/components/form/kept-input";
 import { LIMITS } from "@/lib/limits";
 import { googleConfig } from "@/lib/google-oauth";
 import { signupMode } from "@/lib/signup-config";
@@ -105,7 +106,9 @@ export default async function LoginPage({
           {challenge ? (
             <>
               <CardHeader className="space-y-2 text-center">
-                <CardTitle className="text-xl">Complete the sign-in</CardTitle>
+                <CardTitle className="text-xl">
+                  <h1>Complete the sign-in</h1>
+                </CardTitle>
                 {who?.email ? (
                   <div className="flex justify-center">
                     <Chip>
@@ -251,7 +254,9 @@ export default async function LoginPage({
             // The challenge cookie is gone: five minutes passed, or the API refused it.
             <>
               <CardHeader className="text-center">
-                <CardTitle className="text-xl">This sign-in timed out</CardTitle>
+                <CardTitle className="text-xl">
+                  <h1>This sign-in timed out</h1>
+                </CardTitle>
                 <p className="text-sm text-muted-foreground">
                   For your security, the second step stays open for a few minutes only. Sign in
                   again to continue.
@@ -292,7 +297,9 @@ export default async function LoginPage({
       </div>
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Sign in</CardTitle>
+          <CardTitle className="text-xl">
+            <h1>Sign in</h1>
+          </CardTitle>
           <p className="text-sm text-muted-foreground">Welcome back</p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -317,8 +324,10 @@ export default async function LoginPage({
             {/* The destination survives the round trip as a field, so the action
                 redirects there instead of home. Already validated above. */}
             {dest ? <input type="hidden" name={REDIRECT_PARAM} value={dest} /> : null}
+            {/* A failed attempt keeps the email; the password clears. */}
             <Field name="email" label="Email">
-              <Input
+              <KeptInput
+                id="email"
                 name="email"
                 type="email"
                 placeholder="email@example.com"
@@ -341,9 +350,9 @@ export default async function LoginPage({
               Sign in
             </Button>
             <p className="text-center text-sm text-muted-foreground">
-              <a href="/forgot-password" className="text-primary hover:underline">
+              <Link href="/forgot-password" className="text-primary hover:underline">
                 Forgot your password?
-              </a>
+              </Link>
             </p>
           </ActionForm>
 
@@ -387,6 +396,7 @@ export default async function LoginPage({
               */}
               <Button asChild variant="outline" className="w-full">
                 <a
+                  data-document-link
                   href={
                     dest
                       ? `/auth/google/start?${REDIRECT_PARAM}=${encodeURIComponent(dest)}`

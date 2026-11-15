@@ -17,6 +17,9 @@
  * they stay focusable. Hover on the board, or keyboard focus on a button, holds the loop;
  * reduced motion starts paused on the AI pricing still.
  *
+ * The loop opens on the AI margin beat (credit paid, money in the bank), never on an empty
+ * "Nothing yet" frame, and holds it a little longer before the subscription story.
+ *
  * MkIll scales the 1240x668 board to the slot and stacks it below 700px, where the screens
  * drop out and one line of what happened and the rail remain (all CSS, so the server-rendered
  * page is already right). The timeline runs in the browser only.
@@ -25,7 +28,7 @@ import MkIll from "./MkIll.vue";
 import PartnerLogo from "~/components/content/PartnerLogo.vue";
 
 /** The AI pricing margin frame: the still for the server render and for reduced motion. */
-const STILL = "story-3 stg-3 s-ai ai-4 ai-t pt";
+const STILL = "story-3 stg-3 s-ai ai-4 ai-t im pi";
 
 /** One loop of the three stories, as [seconds from loop start, state classes]. The first frame
  * of each story keeps the last story's classes, so the outgoing screen holds while it fades.
@@ -50,7 +53,7 @@ const FRAMES: [number, string | null][] = [
   [5.4, S3 + "stg-2 s-ai ai-3 im pi cu ck c-gen"],
   [5.9, S3 + "stg-2 s-ai ai-4 im pi cu c-ai1"],
   [6.6, S3 + "stg-2 s-ai ai-4 ai-t im pi cu c-ai1"],
-  [8.1, S3 + "stg-3 s-ai ai-4 ai-t im pi cu c-ai1"],
+  [8.1, S3 + "stg-3 s-ai ai-4 ai-t im pi cu cs c-ai1"],
   [9.7, S1 + "stg-1 s-co cu cs c-co0 ai-4 ai-t im pi"],
   [10.0, S1 + "stg-1 s-co co-t cu c-co0"],
   [10.9, S1 + "stg-1 s-co co-t cu c-sub"],
@@ -122,7 +125,11 @@ const stg = computed(() => Number(/stg-(\d)/.exec(state.value)?.[1]));
 /** Paused with the button (or by reduced motion). */
 const paused = ref(false);
 const root = ref<{ $el: HTMLElement } | null>(null);
-let i = 0; // the frame to play from
+/** The frame the loop opens on: the margin beat, the same picture as STILL. */
+const OPEN = FRAMES.findIndex((f) => f[1]?.startsWith(S3 + "stg-3 "));
+/** Extra seconds the opening frame holds, so the first view is a paid state. */
+let openHold = 2.4;
+let i = OPEN; // the frame to play from
 let stale = true; // the screen shows a still, not FRAMES[i]
 let timer: ReturnType<typeof setTimeout> | undefined;
 let visible = false;
@@ -147,10 +154,11 @@ function schedule() {
   timer = setTimeout(
     () => {
       timer = undefined;
+      openHold = 0;
       show(i + 1);
       schedule();
     },
-    (FRAMES[i + 1]![0] - FRAMES[i]![0]) * 1000,
+    (FRAMES[i + 1]![0] - FRAMES[i]![0] + (i === OPEN ? openHold : 0)) * 1000,
   );
 }
 
@@ -158,6 +166,7 @@ function schedule() {
 function pick(n: number) {
   const k = FRAMES.findIndex((f) => f[1]?.startsWith(`story-${n} `));
   const s = STORIES.find((x) => x.n === n)!;
+  openHold = 0;
   if (running()) {
     show(k);
   } else {
@@ -2846,9 +2855,10 @@ body {
 .hx-hc.hx-ip .hx-seg .hx-sgi {
   transform: scale(0.94);
 }
+/* 240px fills MuseLane AI's window to its foot, so no empty band shows under the card. */
 .hx-hc .hx-out {
   display: grid;
-  height: 150px;
+  height: 240px;
   margin: 0 20px 16px;
   border-radius: 10px;
   background: var(--hx-muse-bg);
@@ -2867,10 +2877,10 @@ body {
 .hx-hc .hx-otx {
   display: grid;
   align-content: start;
-  gap: 6px;
-  padding: 12px 14px;
-  font-size: 13px;
-  line-height: 1.45;
+  gap: 8px;
+  padding: 16px 18px;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--hx-fg);
 }
 .hx-hc .hx-otx > p {
@@ -2888,7 +2898,7 @@ body {
 .hx-hc .hx-oim svg {
   display: block;
   width: 100%;
-  height: 150px;
+  height: 240px;
   clip-path: inset(0 0 100% 0);
 }
 .hx-hc.hx-ai-3 .hx-oim svg {

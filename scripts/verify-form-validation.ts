@@ -152,7 +152,7 @@ const ok = (n: string, c: boolean) => checks.push([n, c]);
    * open, create forms, effect-resynced state, non-server seeds (nav, sort, clock), plus
    * the in-flight subscription change form. Convert one, lower this.
    */
-  const SEEDED_BUDGET = 40;
+  const SEEDED_BUDGET = 37;
   const walk = (dir: string, out: string[] = []): string[] => {
     for (const entry of readdirSync(dir)) {
       if (entry === "node_modules" || entry === ".next") continue;

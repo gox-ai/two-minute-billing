@@ -1,5 +1,6 @@
 "use client";
 
+import { enumLabel } from "@/lib/labels";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -25,7 +26,7 @@ import {
 import { EmptyState } from "@/components/states";
 import { InviteDialog } from "@/components/team/invite-dialog";
 import { initials } from "@/components/patterns/record-page";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { useDisplayTz } from "@/components/business-tz";
 import type { TeamMember } from "@/lib/session";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -51,13 +52,9 @@ import {
 /** The value a member's role select holds: the fixed code, or the custom role's id. */
 const roleValue = (m: TeamMember) => (m.role === "custom" ? (m.custom_role?.id ?? "") : m.role);
 
-/** "8 Oct" for a YYYY-MM-DD day, without shifting it through a timezone. */
+/** "8 Oct 2026" for a YYYY-MM-DD day, without shifting it through a timezone. */
 function fmtDueDay(d: string): string {
-  return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  });
+  return fmtDate(d, "UTC");
 }
 
 export function TeamMembersTable({
@@ -166,7 +163,7 @@ export function TeamMembersTable({
 
   return (
     <>
-      <Table>
+      <Table phone="stack">
         <TableHeader>
           <TableRow>
             <TableHead>Member</TableHead>
@@ -174,7 +171,7 @@ export function TeamMembersTable({
             <TableHead>Status</TableHead>
             <TableHead>2FA</TableHead>
             <TableHead>Last sign-in</TableHead>
-            <TableHead className="w-10 text-right" />
+            <TableHead phone="aside" className="w-10 text-right" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -213,7 +210,7 @@ export function TeamMembersTable({
                 */}
                 {m.is_self || !mayTouch(m) ? (
                   <span>
-                    {m.custom_role?.name ?? m.role}
+                    {m.custom_role?.name ?? enumLabel(m.role)}
                     {m.custom_role ? <Chip className="ml-1">Custom</Chip> : null}
                     {m.is_self ? (
                       <span className="text-xs text-muted-foreground"> (you)</span>

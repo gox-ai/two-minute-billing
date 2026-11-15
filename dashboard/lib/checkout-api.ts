@@ -30,6 +30,12 @@ export interface CreditDestination {
 
 export interface CheckoutChangePreview {
   currency: string;
+  /**
+   * This change already waits for payment (`apply_when_paid`): the invoice it waits on, and
+   * when it expires unpaid (ISO). The figures are that invoice's; paying it applies the change.
+   */
+  heldInvoice?: string;
+  heldExpiresAt?: string;
   subtotalMinor: number;
   taxMinor: number;
   /**
@@ -121,6 +127,9 @@ export interface CheckoutChangePreview {
    *  priced by a DIFFERENT calculator (`estimateNewSubscription`); `verify:checkout` asserts
    *  the two agree rather than merging them — see the field's note in checkout/service.ts. */
   nextRenewalTotalMinor?: number;
+  /** When that renewal is raised (ISO), and what it collects after this change's credit. */
+  nextRenewalAt?: string;
+  nextRenewalAmountDueMinor?: number;
   immediateCharge: boolean;
   /**
    * Inside a trial: the ISO instant of the trial-end invoice, and nothing is
@@ -151,14 +160,54 @@ export interface CheckoutNextPayment {
   excludesUsage: boolean;
   /** Covers items this page does not list — everything already on the subscription. */
   includesExistingItems: boolean;
+  /**
+   * The figures above are the REGULAR amount: only coupons that never end are in them.
+   * `intro` is the amount while every coupon applies, true for `periods` periods.
+   */
+  intro?: { totalMinor: number; taxMinor: number; amountDueMinor: number; periods: number };
+  /** Change mode: a discount that ends is not in the regular amount. */
+  limitedDiscountsExcluded?: boolean;
+}
+
+/** mode='create': the first invoice and when the charges fall. */
+export interface CheckoutDueToday {
+  currency: string;
+  /** The plan starts with a free trial: nothing is charged today. */
+  trial: boolean;
+  totalMinor: number;
+  taxMinor: number;
+  amountDueMinor: number;
+  /** The first invoice, itemised as it prints. Absent in a trial. */
+  subtotalMinor?: number;
+  discountMinor?: number;
+  discountLines?: Array<{ label: string; amountMinor: number }>;
+  taxLines?: Array<{ label: string; amountMinor: number }>;
+  trialPeriod?: { count: number; unit: string };
+  /** The last moment of the trial (ISO). */
+  trialEndsAt?: string;
+  /** When the first charge is taken (ISO). */
+  firstChargeAt?: string;
+  /** The first charge; null when it cannot be stated. */
+  firstChargeMinor?: number | null;
+  /** The payment after the first (ISO). */
+  nextChargeAt?: string;
+  /** The first payment at the regular amount (ISO). */
+  regularFrom?: string;
 }
 
 /** One displayed line of the checkout. */
 export interface CheckoutItemView {
+  /** The product's name; the interval is in `amount`. */
   name: string;
   amount: string;
   currency: string;
   quantity: number;
+  /** One unit's price; null when the price has no single rate. Absent on older engines. */
+  unit_amount_minor?: number | null;
+  /** quantity × unit as billed; null when not knowable before usage. */
+  line_total_minor?: number | null;
+  /** "month", "3 months"; null for a one-time item. */
+  interval?: string | null;
   /** plan | addon | charge */
   kind: string;
   /** The product's picture, or null. Absent on older engines. */
@@ -181,6 +230,9 @@ export interface CheckoutView {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    /** The merchant's contact details, for the footer. Null when unset. */
+    support_email?: string | null;
+    website?: string | null;
     /** IANA zone for dates the buyer reads. Pass it to `fmtDate`; null falls back to UTC. */
     timezone: string | null;
   };
@@ -210,21 +262,21 @@ export interface CheckoutView {
    * 'purchase' = one-time items, paid once, no subscription.
    */
   mode: "create" | "change" | "purchase";
+  /** The link names a known customer: their email is fixed. Absent on older servers. */
+  customer_pinned?: boolean;
   /** mode='purchase' only: what is due today and the payment-method choice. */
   purchase?: CheckoutPurchase;
   /** Opened from a payment link: each line and what the buyer may change about it. */
   offer?: { lines: CheckoutOfferLine[] };
   /** mode='create': the first invoice, one-time items and tax included. `trial` = nothing today. */
-  dueToday?: {
-    currency: string;
-    trial: boolean;
-    totalMinor: number;
-    taxMinor: number;
-    amountDueMinor: number;
-  };
+  dueToday?: CheckoutDueToday;
   change?: {
     subscriptionId: string;
     currentPlan: { name: string; amount: string } | null;
+    /** The session asks for the items the subscription already has: nothing changes. */
+    itemsUnchanged?: boolean;
+    /** Set when Confirm will refuse this change (unpaid invoices, or a term-end timing rule). */
+    blocked?: { code: string; message: string } | null;
     /** Items this change drops. Struck-through rows — a removal must be visible. */
     removedItems?: Array<{ name: string; amount: string; quantity: number }>;
     preview?: CheckoutChangePreview;
@@ -396,6 +448,10 @@ export interface CheckoutOfferLine {
   amount: string;
   /** In the order now; 0 = an optional line not chosen. */
   quantity: number;
+  unit_amount_minor?: number | null;
+  /** quantity × unit; null when not chosen or not knowable before usage. */
+  line_total_minor?: number | null;
+  interval?: string | null;
   adjustable: boolean;
   min: number;
   max: number;
@@ -410,7 +466,12 @@ export interface CheckoutPurchase {
   /** The link names a known customer: their email is fixed. */
   customer_pinned: boolean;
   currency: string;
+  /** The lines before any discount. */
   subtotal_minor: number;
+  /** Every coupon's discount: subtotal - discount + tax = total. */
+  discount_minor: number;
+  /** One row per coupon that takes something off. */
+  discounts: Array<{ code: string; label: string; amount_minor: number }>;
   tax_minor: number;
   tax_lines: Array<{ label: string; amount_minor: number }>;
   total_minor: number;
@@ -844,16 +905,18 @@ export const checkoutComplete = async (
 };
 
 /** A public payment link opened: the fresh checkout session it minted for this visitor. */
-export async function openPaymentLink(
-  link: string,
-): Promise<{ ok: true; token: string } | { ok: false; status: number; error: string }> {
+export async function openPaymentLink(link: string): Promise<
+  | { ok: true; token: string }
+  /** `business`: the link's business when the link exists but is refused. */
+  | { ok: false; status: number; error: string; business: string | null }
+> {
   const res = await fetch(`${BASE}/checkout/v1/links/${encodeURIComponent(link)}/open`, {
     method: "POST",
     // The buyer's address chain, so the engine limits per buyer and not per this server.
     headers: { ...(await forwardedFor()) },
     cache: "no-store",
   });
-  let json: { token?: string; error?: { message?: string } } = {};
+  let json: { token?: string; error?: { message?: string }; business?: string | null } = {};
   try {
     json = await res.json();
   } catch {
@@ -864,6 +927,7 @@ export async function openPaymentLink(
     ok: false,
     status: res.status,
     error: json.error?.message ?? "This payment link is not available",
+    business: typeof json.business === "string" ? json.business : null,
   };
 }
 
@@ -872,16 +936,50 @@ export interface PricingPageLink {
   id: string;
   name: string;
   mode: "create" | "purchase";
+  /** The product the link sells; links of one product are its cadences. */
+  product?: { id: string; name: string };
   description: string | null;
   /** That product's picture, or null. */
   image_url?: string | null;
-  price: { amount: string; interval: string | null; interval_count: number };
+  price: {
+    amount: string;
+    currency?: string;
+    amount_minor?: number | null;
+    interval: string | null;
+    interval_count: number;
+    /** `flat`, `per_unit`, or `usage` (any metered model). */
+    model?: string;
+  };
+}
+
+/** A discount the business advertises; `code` is null when buyers cannot enter one. */
+export interface PricingPageOffer {
+  name: string;
+  percent_off: number;
+  /** Billing periods it lasts; null for every period. */
+  periods: number | null;
+  /** Plan intervals it covers; empty for all. */
+  intervals: string[];
+  ends_at: string;
+  /** Last day, `YYYY-MM-DD` in the business's timezone. */
+  ends_on: string;
+  code?: string | null;
 }
 
 export interface PricingPage {
   object: "pricing_page";
-  business: { name: string; livemode: string; logo_url: string | null; brand_color: string | null };
+  business: {
+    name: string;
+    livemode: string;
+    logo_url: string | null;
+    icon_url?: string | null;
+    favicon_url?: string | null;
+    brand_color: string | null;
+    support_email?: string | null;
+    website?: string | null;
+  };
   links: PricingPageLink[];
+  offers?: PricingPageOffer[];
 }
 
 /** A business's public pricing page: the payment links it marked for it. */

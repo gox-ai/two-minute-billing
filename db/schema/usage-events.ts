@@ -108,6 +108,8 @@ export const usageEvents = pgTable(
     matchedAt: timestamp("matched_at", { withTimezone: true }),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
     voidReason: text("void_reason"),
+    /** Refused for credit by the gate (0527): cost, not usage (`countsAsUsage`). */
+    refusedAt: timestamp("refused_at", { withTimezone: true }),
   },
   (t) => [
     primaryKey({ name: "usage_events_pkey", columns: [t.id, t.timestamp] }),
@@ -290,6 +292,8 @@ export const customerMeterBilling = pgTable(
     usageThrough: timestamp("usage_through", { withTimezone: true }),
     cutoffGeneration: bigint("cutoff_generation", { mode: "bigint" }),
     cutoffAt: timestamp("cutoff_at", { withTimezone: true }),
+    /** 0521: the late-usage pass last checked this row and raised nothing (real clock). */
+    lateCheckedAt: timestamp("late_checked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`app_now()`)
       .notNull(),
@@ -304,5 +308,63 @@ export const customerMeterBilling = pgTable(
       .on(t.subscriptionId)
       .where(sql`subscription_id IS NOT NULL`),
     index("customer_meter_billing_meter_idx").on(t.meterId),
+  ],
+);
+
+/**
+ * The daily cost fold (0522): the cost of a customer's usage per business-local day, meter and
+ * group values, by the invoice line's rule (`lineCost`). Derived: restated, never amended. The
+ * margin report reads only the rows no usage invoice line covers (`metrics/usage-margin.ts`).
+ */
+export const usageCostDaily = pgTable(
+  "usage_cost_daily",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    /** The day's local midnight and the next one. */
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    meterId: uuid("meter_id")
+      .notNull()
+      .references(() => meters.id, { onDelete: "cascade" }),
+    groupValues: text("group_values")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** The group value under the meter's model key; '' = none. */
+    model: text("model").notNull().default(""),
+    /** The customer's subscription live that day; null = none. */
+    subscriptionId: uuid("subscription_id").references(() => subscriptions.id, {
+      onDelete: "set null",
+    }),
+    currency: char("currency", { length: 3 }).notNull(),
+    quantity: numeric("quantity").notNull().default("0"),
+    costMinor: bigint("cost_minor", { mode: "bigint" }),
+    /** event | price_list | mixed | partial | none | no_rate (as `invoice_line_items.cost_basis`). */
+    costBasis: text("cost_basis").notNull(),
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("usage_cost_daily_key").on(
+      t.businessId,
+      t.day,
+      t.customerId,
+      t.meterId,
+      t.groupValues,
+      t.currency,
+    ),
+    index("usage_cost_daily_read_idx").on(t.businessId, t.startsAt),
+    index("usage_cost_daily_customer_idx").on(t.customerId, t.meterId, t.startsAt),
   ],
 );

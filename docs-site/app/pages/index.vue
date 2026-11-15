@@ -8,6 +8,7 @@
  * "your payment gateway", because the list will grow.
  */
 import MkFaq from "~/components/marketing/MkFaq.vue";
+import MkShot from "~/components/marketing/MkShot.vue";
 import MkHomeCta from "~/components/marketing/MkHomeCta.vue";
 import MkHomeLifecycle from "~/components/marketing/MkHomeLifecycle.vue";
 import MkIllustration from "~/components/marketing/MkIllustration.vue";
@@ -43,44 +44,25 @@ const offers = computed<SchemaOffer[]>(() =>
       ],
 );
 
-/** Our cheapest monthly price in the build's currency, from the catalogue. */
-const fee = computed(() => {
-  const monthly = (plans.value?.plans ?? []).filter(
-    (p) => p.interval === "month" && p.currency === plans.value?.preferred,
-  );
-  const low = monthly[0]; // the API sorts by amount
-  if (!low) return undefined;
-  return new Intl.NumberFormat(low.currency === "INR" ? "en-IN" : "en", {
-    style: "currency",
-    currency: low.currency,
-    maximumFractionDigits: low.amountMinor % 100 === 0 ? 0 : 2,
-  }).format(low.amountMinor / 100);
-});
-
-/** Four facts a buyer can check, each a link. The gateway count comes from the gateway data. */
-const facts = computed(() => [
+/** Three facts a buyer can check, each a link. The hero already states the price and the Free
+ * band, and the developer band states open source, so none of those repeat here. */
+const facts = [
   {
     title: `${gatewayData.gateways.length} payment gateways`,
     body: "Connect your own account. Your customers pay into it.",
     to: "/integrations",
   },
   {
-    title: "Open source",
-    body: "Under the AGPL-3.0. Read the code on GitHub.",
-    to: repo,
-    external: true,
+    title: "PCI DSS SAQ-A",
+    body: "Card numbers go straight to your gateway. They never reach our servers.",
+    to: "/security",
   },
   {
-    title: fee.value ? `From ${fee.value} a month` : "A flat monthly price",
-    body: "A flat price, with 0% of your revenue.",
+    title: "Every feature on every plan",
+    body: "Your plan sets only how much you bill each month.",
     to: "/pricing",
   },
-  {
-    title: "Free to start",
-    body: `Free while you bill less than ${freeBand.value} a month. No credit card.`,
-    to: signUp,
-  },
-]);
+];
 
 /** The developer band's spec list: what an integration can rely on. */
 const devSpecs = [
@@ -90,25 +72,35 @@ const devSpecs = [
   { k: "Runs on", v: "Node.js and PostgreSQL" },
 ];
 
-const benefits = [
-  { title: "Paid straight to you", body: "The money goes into your own gateway account." },
-  { title: "No share of your revenue", body: "A flat monthly price, however much you bill." },
-  { title: "Open source", body: "Self-host it with all features, or let us run it." },
-];
-
 /** The AI billing band: what the margin story rests on. Each claim is on /solutions/ai-billing. */
 const aiPoints = [
   {
     title: "Model prices that keep up",
-    body: "A dated price list, updated two times a day. Your markup follows it.",
+    body: "A dated price list, checked every hour. Your markup follows it.",
   },
   {
     title: "Credits checked before each call",
-    body: "Prepaid credits collect the money first. 95% of checks answer in under 100 ms.",
+    body: "Prepaid credits collect the money first. Your app checks the balance before each call.",
   },
   {
     title: "Margin per customer",
     body: "Price, model cost and margin by customer, model and meter.",
+  },
+];
+
+/** The assistant band: the three questions a finance lead asks about AI in billing. */
+const billyPoints = [
+  {
+    title: "Every figure checked",
+    body: "Billy finds each number in your data before it shows it to you.",
+  },
+  {
+    title: "Changes that you confirm",
+    body: "Billy prepares a change. Nothing changes until you select Confirm.",
+  },
+  {
+    title: "Included in every plan",
+    body: "Billy use is included each month. Or add your own AI key.",
   },
 ];
 
@@ -349,15 +341,7 @@ useMarketingSeo({
           Bill subscriptions, usage, AI tokens and one-time orders through your own payment gateway
           account. You pay a flat monthly price, not a share of your revenue.
         </p>
-        <UButton
-          :to="signUp"
-          size="xl"
-          trailing-icon="i-lucide-arrow-up-right"
-          class="hp-btn mt-8"
-          :ui="{ trailingIcon: 'size-4.5' }"
-        >
-          Start for free
-        </UButton>
+        <UButton :to="signUp" size="xl" class="hp-btn mt-8">Start for free</UButton>
         <p class="mt-3.5 text-sm text-muted">
           Free while you bill less than {{ freeBand }} a month. No credit card.
         </p>
@@ -367,12 +351,48 @@ useMarketingSeo({
       </UContainer>
     </section>
 
-    <!-- 2. Facts: four checkable facts, each a link -->
+    <!-- 1b. Proof: one plain row of single-colour logos under the hero (user decisions 2026-11-11: these three names and logos are allowed here; no brand name, no body line) -->
+    <section id="proof" aria-labelledby="proof-title">
+      <UContainer class="pt-12 lg:pt-14">
+        <p id="proof-title" class="hp-proof-label">Businesses that bill with us</p>
+        <ul class="hp-logos">
+          <li>
+            <img
+              src="/customers/twominutereports.svg"
+              alt="Two Minute Reports logo"
+              width="1688"
+              height="1708"
+              style="height: 46px"
+            />
+          </li>
+          <li>
+            <img
+              src="/customers/makepassportphoto.png"
+              alt="Make Passport Photo logo"
+              width="316"
+              height="54"
+              style="height: 27px"
+            />
+          </li>
+          <li>
+            <img
+              src="/customers/illustrationsai.png"
+              alt="Illustrations AI logo"
+              width="248"
+              height="39"
+              style="height: 23px"
+            />
+          </li>
+        </ul>
+      </UContainer>
+    </section>
+
+    <!-- 2. Facts: three checkable facts, each a link -->
     <section aria-label="Facts">
-      <UContainer class="pt-16 pb-20 lg:pb-24">
+      <UContainer class="pt-12 pb-20 lg:pt-14 lg:pb-24">
         <ul class="hp-facts">
           <li v-for="f in facts" :key="f.title" class="hp-fact">
-            <ULink :to="f.to" :target="f.external ? '_blank' : undefined" class="hp-fact-title">
+            <ULink :to="f.to" class="hp-fact-title">
               {{ f.title }}<UIcon name="i-lucide-arrow-right" class="size-4 text-primary" />
             </ULink>
             <p class="hp-fact-body">{{ f.body }}</p>
@@ -381,7 +401,26 @@ useMarketingSeo({
       </UContainer>
     </section>
 
-    <!-- 3. Payments: statement left, gateway hub right, three benefits on a ruled line -->
+    <!-- 2b. The real product: one large dashboard capture, page area only -->
+    <section id="dashboard" aria-labelledby="dashboard-title">
+      <UContainer class="pb-16 lg:pb-24">
+        <div class="max-w-[44rem]">
+          <span class="mk-kicker mb-4">The dashboard</span>
+          <h2 id="dashboard-title" class="mk-h2 text-highlighted">
+            MRR, churn and failed payments on one screen
+          </h2>
+        </div>
+        <MkShot
+          class="mt-10"
+          src="/product/home-dashboard"
+          alt="The business home screen: MRR, paying customers, churn, trial conversion, payments at risk and the MRR trend"
+          :width="2400"
+          :height="1421"
+        />
+      </UContainer>
+    </section>
+
+    <!-- 3. Payments: statement left, gateway hub right -->
     <section id="why" class="hp-band">
       <UContainer class="py-16 lg:py-24">
         <div class="flex flex-wrap items-center justify-between gap-12">
@@ -395,12 +434,7 @@ useMarketingSeo({
               Connect the gateway accounts you already have. Two Minute Billing decides what to
               charge and when. Your gateway moves the money, and we never hold it.
             </p>
-            <UButton
-              to="/product/payments"
-              size="xl"
-              trailing-icon="i-lucide-arrow-up-right"
-              class="hp-btn mt-8"
-            >
+            <UButton to="/product/payments" size="xl" class="hp-btn mt-8">
               How payments work
             </UButton>
           </div>
@@ -413,12 +447,6 @@ useMarketingSeo({
             />
           </div>
         </div>
-        <ul class="hp-ruled mt-16 grid gap-8 sm:grid-cols-3">
-          <li v-for="b in benefits" :key="b.title" class="pt-6">
-            <h3 class="text-lg font-medium text-highlighted">{{ b.title }}</h3>
-            <p class="mt-1.5 text-base leading-relaxed text-muted">{{ b.body }}</p>
-          </li>
-        </ul>
       </UContainer>
     </section>
 
@@ -429,19 +457,13 @@ useMarketingSeo({
           <div class="flex min-w-0 flex-[1_1_25rem] flex-col items-start">
             <span class="mk-kicker mb-4">AI billing</span>
             <h2 class="mk-h2 text-highlighted">
-              AI billing that keeps your margin
-              <span class="mk-tone">when model prices change.</span>
+              AI billing that keeps your margin when model prices change
             </h2>
             <p class="hp-body mt-5 max-w-[30rem]">
               Price each model from its list price plus your markup. Sell prepaid credits, check
               them before each call, and see what each customer earns you after model cost.
             </p>
-            <UButton
-              to="/solutions/ai-billing"
-              size="xl"
-              trailing-icon="i-lucide-arrow-up-right"
-              class="hp-btn mt-8"
-            >
+            <UButton to="/solutions/ai-billing" size="xl" class="hp-btn mt-8">
               How AI billing works
             </UButton>
           </div>
@@ -465,10 +487,9 @@ useMarketingSeo({
 
     <!-- 4. Solutions: the heading in its column, four ruled link rows -->
     <section id="solutions">
-      <UContainer class="hp-split py-16 lg:py-24">
+      <UContainer class="hp-split pb-16 lg:pb-24">
         <h2 class="mk-h2 text-highlighted">
-          Subscription billing for SaaS, usage-based, AI and ecommerce businesses.
-          <span class="mk-tone">Select your model to see how it bills.</span>
+          Subscription billing for SaaS, usage&#8209;based, AI and ecommerce businesses
         </h2>
         <ul class="hp-rows">
           <li v-for="s in solutions" :key="s.to">
@@ -513,17 +534,57 @@ useMarketingSeo({
       </UContainer>
     </section>
 
+    <!-- 5b. AI assistant: the statement left, the picture right, three points on a ruled line -->
+    <section id="ai-assistant">
+      <UContainer class="py-16 lg:py-24">
+        <div class="flex flex-wrap items-center justify-between gap-12">
+          <div class="flex min-w-0 flex-[1_1_25rem] flex-col items-start">
+            <span class="mk-kicker mb-4">AI assistant</span>
+            <h2 class="mk-h2 text-highlighted">
+              An AI assistant that answers from your billing data
+            </h2>
+            <p class="hp-body mt-5 max-w-[30rem]">
+              Billy works inside your dashboard. Ask about an invoice, a customer or an MRR change.
+              Billy reads your data with your permissions and links to the screen where you act.
+            </p>
+            <UButton
+              to="/product/ai-assistant"
+              size="xl"
+              color="neutral"
+              variant="outline"
+              class="hp-btn mt-8 bg-default"
+            >
+              How Billy works
+            </UButton>
+          </div>
+          <div class="hp-ill-frame min-w-0 max-w-[37.5rem] flex-[1_1_32rem]">
+            <MkIllustration
+              name="IllHomeBilly"
+              :width="600"
+              :height="460"
+              :phone="{ width: 390, height: 448 }"
+              alt="Billy answers why MRR went up in October: up $2,140 to $38,320, with new subscriptions +$2,860, expansion +$610 and churn −$1,330. Every figure found in your data."
+            />
+          </div>
+        </div>
+        <ul class="hp-ruled mt-16 grid gap-8 sm:grid-cols-3">
+          <li v-for="p in billyPoints" :key="p.title" class="pt-6">
+            <h3 class="text-lg font-medium text-highlighted">{{ p.title }}</h3>
+            <p class="mt-1.5 text-base leading-relaxed text-muted">{{ p.body }}</p>
+          </li>
+        </ul>
+      </UContainer>
+    </section>
+
     <!-- 6. How it works: three unboxed steps on one ruled line -->
     <section id="how">
-      <UContainer class="py-16 lg:py-24">
+      <UContainer class="pb-16 lg:pb-24">
         <div class="flex flex-wrap items-end justify-between gap-6">
           <h2 class="mk-h2 max-w-[40rem] text-highlighted">
-            Connect your own payment gateway, add your plans, then send the first invoice.
+            Connect your own payment gateway, add your plans, then send the first invoice
           </h2>
           <div class="flex flex-wrap items-center gap-6">
-            <UButton :to="signUp" size="xl" trailing-icon="i-lucide-arrow-up-right" class="hp-btn">
-              Start for free
-            </UButton>
+            <UButton :to="signUp" size="xl" class="hp-btn">Start for free</UButton>
             <ULink
               to="/help/getting-started"
               class="inline-flex items-center gap-2 text-[0.9375rem] font-medium text-primary"
@@ -552,8 +613,7 @@ useMarketingSeo({
           <div class="min-w-0">
             <span class="mk-kicker hp-dev-label">Developers</span>
             <h2 class="mk-h2 mt-4 text-white">
-              A subscription billing API for every action in the dashboard.
-              <span class="text-[#93a4bd]">Build billing into your own product.</span>
+              A subscription billing API for every action in the dashboard
             </h2>
             <p class="mt-4 text-[1.0625rem] leading-relaxed text-[#a7b4c9]">
               The engine is open source under the AGPL-3.0. Run it on your own servers, or use our
@@ -584,7 +644,6 @@ useMarketingSeo({
               <UButton
                 to="/help/developers/getting-started/quickstart"
                 size="xl"
-                trailing-icon="i-lucide-arrow-up-right"
                 class="h-12 px-5.5"
               >
                 Quickstart
@@ -625,10 +684,10 @@ useMarketingSeo({
 
 {
   <span class="k">"object"</span>: <span class="s">"invoice"</span>,
-  <span class="k">"number"</span>: <span class="s">"INV-1084"</span>,
+  <span class="k">"number"</span>: <span class="s">"INV-10559"</span>,
   <span class="k">"status"</span>: <span class="s">"paid"</span>,
   <span class="k">"currency"</span>: <span class="s">"USD"</span>,
-  <span class="k">"total_minor"</span>: 8473,
+  <span class="k">"total_minor"</span>: 76582,
   <span class="k">"amount_due_minor"</span>: 0,
   …
 }</pre>
@@ -642,17 +701,9 @@ useMarketingSeo({
       <UContainer class="py-16 lg:py-24">
         <div class="flex flex-wrap items-end justify-between gap-6">
           <h2 class="mk-h2 max-w-[40rem] text-highlighted">
-            Multi-currency prices, trials, credit notes and CRM sync.
-            <span class="mk-tone">In every plan.</span>
+            Multi-currency prices, trials, credit notes and CRM sync
           </h2>
-          <UButton
-            to="/product"
-            color="neutral"
-            variant="outline"
-            size="lg"
-            trailing-icon="i-lucide-arrow-up-right"
-            class="bg-default"
-          >
+          <UButton to="/product" color="neutral" variant="outline" size="lg" class="bg-default">
             Explore all features
           </UButton>
         </div>
@@ -864,12 +915,15 @@ useMarketingSeo({
   gap: 3rem;
   align-items: end;
 }
+/* The screenshot sits right; the API card overlaps only its empty lower-left corner, under
+   the line items, so the invoice's amounts and totals stay in view. */
 .hp-composite {
   position: relative;
-  padding-bottom: 4rem;
+  padding-bottom: 9rem;
 }
 .hp-composite-shot {
   width: 82%;
+  margin-left: auto;
   height: 32.5rem;
   overflow: hidden;
   border-radius: 0.625rem;
@@ -886,7 +940,7 @@ useMarketingSeo({
 }
 .hp-json {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: 0;
   width: 28.75rem;
   max-width: 100%;
@@ -930,17 +984,17 @@ useMarketingSeo({
   }
   .hp-json {
     position: relative;
-    right: auto;
+    left: auto;
     bottom: auto;
     width: auto;
     margin: -3rem 0.75rem 0;
   }
 }
 
-/* Facts: four columns under one rule, split by hairlines; each title is a link. */
+/* Facts: three columns under one rule, split by hairlines; each title is a link. */
 .hp-facts {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding-top: 2rem;
   border-top: 1px solid var(--ui-border);
 }
@@ -972,17 +1026,7 @@ useMarketingSeo({
   line-height: 1.55;
   color: var(--ui-text-muted);
 }
-@media (max-width: 900px) {
-  .hp-facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 1.75rem;
-  }
-  .hp-fact:nth-child(3) {
-    padding-left: 0;
-    border-left: 0;
-  }
-}
-@media (max-width: 520px) {
+@media (max-width: 760px) {
   .hp-facts {
     grid-template-columns: 1fr;
     row-gap: 1.25rem;
@@ -991,5 +1035,35 @@ useMarketingSeo({
     padding: 0;
     border-left: 0;
   }
+}
+.hp-proof-label {
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--ui-text-muted);
+}
+.hp-logos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem 4.5rem;
+  margin-top: 1.5rem;
+}
+.hp-logos img {
+  width: auto;
+  max-width: none;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.hp-logos img:hover {
+  transform: scale(1.08);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hp-logos img {
+    transition: none;
+  }
+}
+/* The marks are dark ink on transparent, so dark mode draws them in white. */
+.dark .hp-logos img {
+  filter: brightness(0) invert(1);
 }
 </style>

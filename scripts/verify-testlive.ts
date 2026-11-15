@@ -377,14 +377,37 @@ const tmOnLive = await app.inject({
 });
 checks.push(["Time Travel refused on a live business", tmOnLive.statusCode === 400]);
 
-// Time travel is destructive and spans a whole business → all-mode key only.
+// A test key may drive Time Travel (agents test renewals with it); a live key may not.
+const tmWithLiveKey = await app.inject({
+  method: "POST",
+  url: `/v1/businesses/${liveBiz.publicId}/time_travel/start`,
+  headers: { ...H(liveKey), "idempotency-key": crypto.randomUUID() },
+  payload: { genesis_time: new Date("2026-01-01T00:00:00.000Z").toISOString() },
+});
+checks.push(["Time Travel refuses a live key", tmWithLiveKey.statusCode === 403]);
 const tmWithTestKey = await app.inject({
   method: "POST",
   url: `/v1/businesses/${testBiz.publicId}/time_travel/start`,
   headers: { ...H(testKey), "idempotency-key": crypto.randomUUID() },
   payload: { genesis_time: new Date("2026-01-01T00:00:00.000Z").toISOString() },
 });
-checks.push(["Time Travel requires an all-mode key", tmWithTestKey.statusCode === 403]);
+checks.push(["Time Travel starts with a test key", tmWithTestKey.statusCode === 201]);
+const tmStopWithTestKey = await app.inject({
+  method: "POST",
+  url: `/v1/businesses/${testBiz.publicId}/time_travel/stop`,
+  headers: { ...H(testKey), "idempotency-key": crypto.randomUUID() },
+  payload: { wipe: false },
+});
+checks.push([
+  "Time Travel stops with a test key, keeping the data",
+  tmStopWithTestKey.statusCode === 200 && tmStopWithTestKey.json().wiped === 0,
+]);
+const meWithTestKey = await app.inject({ method: "GET", url: "/v1/me", headers: H(testKey) });
+checks.push([
+  "/v1/me names the key's mode and kind",
+  meWithTestKey.json().credential?.livemode === "test" &&
+    meWithTestKey.json().credential?.kind === "api",
+]);
 
 // ——— 8) Webhook endpoints carry a partition (0152) ——————————————————————————
 const mkEndpoint = (key: string, body: Record<string, unknown>) =>
@@ -802,7 +825,7 @@ checks.push([
 ]);
 checks.push(["live mode allows any address", await testModeAllows(older!, "customer@example.com")]);
 
-// Delete test data: test-only, all-mode key.
+// Delete test data: test businesses only; test or all-mode key, never a live key.
 const delTestData = (pid: string, key = allKey) =>
   app.inject({
     method: "DELETE",
@@ -814,11 +837,15 @@ checks.push([
   (await delTestData(older!.publicId)).statusCode === 400,
 ]);
 checks.push([
-  "delete test data needs an all-mode key",
-  (await delTestData(lazy.id, testKey)).statusCode === 403,
+  "delete test data refuses a live key",
+  (await delTestData(older!.publicId, liveKey)).statusCode === 403,
 ]);
 checks.push([
-  "delete test data on a test business is 200",
+  "delete test data on a test business is 200 with a test key",
+  (await delTestData(lazy.id, testKey)).statusCode === 200,
+]);
+checks.push([
+  "delete test data on a test business is 200 with an all-mode key",
   (await delTestData(lazy.id)).statusCode === 200,
 ]);
 

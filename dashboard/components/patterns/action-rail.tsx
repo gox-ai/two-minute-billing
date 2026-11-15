@@ -33,7 +33,7 @@ export function ActionRail({
         // Actions first while stacked — the page header already carries identity
         // and status, and a detail page is otherwise a long read to scroll past.
         "order-first",
-        "xl:sticky xl:top-20 xl:order-0 xl:w-60 xl:self-start xl:rounded-none xl:border-0 xl:bg-transparent xl:p-0",
+        "@min-[56.875rem]/main:sticky @min-[56.875rem]/main:top-20 @min-[56.875rem]/main:order-0 @min-[56.875rem]/main:w-60 @min-[56.875rem]/main:self-start @min-[56.875rem]/main:rounded-none @min-[56.875rem]/main:border-0 @min-[56.875rem]/main:bg-transparent @min-[56.875rem]/main:p-0",
         className,
       )}
       style={{ animationDelay: "120ms" }}
@@ -74,7 +74,7 @@ export function ActionGroup({
       {/* Two columns while the rail is a full-width card, so a nine-action group
           is ~5 rows instead of 9 and the content below stays in reach. One
           column again once it is the 240px side rail. */}
-      <div className="grid w-full grid-cols-2 items-start gap-x-4 gap-y-1 text-sm **:max-w-full **:text-left **:whitespace-normal xl:flex xl:flex-col">
+      <div className="grid w-full grid-cols-2 items-start gap-x-4 gap-y-1 text-sm **:max-w-full **:text-left **:whitespace-normal @min-[56.875rem]/main:flex @min-[56.875rem]/main:flex-col">
         {children}
       </div>
     </div>
@@ -88,7 +88,7 @@ export function ActionGroup({
  * bare links, which read as broken wherever the two sat next to each other.
  */
 export const railItemClass =
-  "rounded px-1 py-0.5 text-left text-sm break-words transition-colors hover:underline";
+  "rounded-md px-1 py-0.5 text-left text-sm break-words transition-colors hover:underline";
 export const railToneClass = (danger?: boolean) => (danger ? "text-destructive" : "text-primary");
 
 /** A single rail action rendered as a link. */

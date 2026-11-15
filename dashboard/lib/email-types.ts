@@ -59,7 +59,7 @@ export const EMAIL_GROUP_DESCRIPTIONS: Record<EmailGroup, string> = {
   Reminders:
     "Time-relative nudges sent ahead of a trial converting, a term renewing, a pause, a resume, a cancellation taking effect or an invoice falling due.",
   "Sent by you":
-    "Emails an operator sends by hand from a customer, invoice or credit note. The master switch does not govern these.",
+    "Emails an operator sends by hand from a customer, invoice, credit note or subscription. The master switch does not govern these.",
   "Customer portal":
     "Emails a customer asks for in the billing portal, such as a sign-in code. We send them only when asked. The master switch does not govern these.",
 };
@@ -83,7 +83,8 @@ export const EMAIL_TYPES: EmailTypeMeta[] = [
     key: "invoice_overdue",
     group: "Invoices & payments",
     label: "Invoice overdue",
-    description: "Sent when an invoice passes its due date unpaid.",
+    description:
+      "Sent when an invoice that the customer pays themselves passes its due date unpaid, and again on each reminder date. A declined automatic payment sends Payment failed instead.",
   },
   {
     key: "payment_receipt",
@@ -95,7 +96,8 @@ export const EMAIL_TYPES: EmailTypeMeta[] = [
     key: "payment_failed",
     group: "Invoices & payments",
     label: "Payment failed",
-    description: "Sent when a charge is declined.",
+    description:
+      "Sent when a charge is declined. It gives the reason and the date of the next attempt, if there is one. The button lets the customer pay or change the payment method.",
   },
   {
     key: "payment_authentication_required",
@@ -165,6 +167,13 @@ export const EMAIL_TYPES: EmailTypeMeta[] = [
     group: "Subscription lifecycle",
     label: "Subscription activated",
     description: "Sent when a subscription becomes active.",
+  },
+  {
+    key: "subscription_reactivated",
+    group: "Subscription lifecycle",
+    label: "Subscription reactivated",
+    description:
+      "Sent when a cancelled subscription starts again: the customer restarted it, or you reactivated it. Off until you switch it on.",
   },
   {
     key: "subscription_changed",
@@ -356,6 +365,14 @@ export const EMAIL_TYPES: EmailTypeMeta[] = [
     adhoc: true,
     label: "Send credit note",
     description: "Emails a credit note to the customer on request.",
+  },
+  {
+    key: "subscription_restart",
+    group: "Sent by you",
+    adhoc: true,
+    label: "Restart link",
+    description:
+      "Sends a link that restarts an ended subscription. The customer pays for a new term on a checkout page.",
   },
 
   // ── Customer portal ──

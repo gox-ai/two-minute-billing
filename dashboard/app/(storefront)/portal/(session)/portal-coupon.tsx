@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Alert } from "@/components/ui/alert";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalApplyCouponAction, portalRemoveCouponAction } from "./actions";
+import { buyerCouponError } from "./portal-change-view";
 
 type Discount = { id: string; coupon: string | null; source: string; removable: boolean };
 
@@ -139,7 +140,7 @@ export function PortalCouponBox({
     setBusy(null);
     if (!res.ok) {
       // Left in the field on failure, so a typo can be corrected rather than retyped.
-      setError(res.error ?? "We could not apply that code.");
+      setError(buyerCouponError(res.error));
       return;
     }
     setCode("");
@@ -179,43 +180,51 @@ export function PortalCouponBox({
   return (
     <div className="border-t px-5 py-3">
       {open ? (
-        <form onSubmit={apply} className="flex flex-wrap items-center gap-3">
-          {/* Field and Apply are one control, not two objects sharing a row: the wrapper
+        <form onSubmit={apply} className="flex flex-col gap-1.5">
+          <label htmlFor={`coupon-${subscription}`} className="text-sm font-medium">
+            Coupon code
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Field and Apply are one control, not two objects sharing a row: the wrapper
               owns the border and the focus ring, and the Input inside surrenders both. */}
-          <div className="flex h-9 w-full max-w-[17rem] items-stretch overflow-hidden rounded-md border border-input bg-card shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
-            <Input
-              ref={inputRef}
-              id={`coupon-${subscription}`}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") close();
-              }}
-              placeholder="Enter your code"
-              aria-label="Coupon code"
-              spellCheck={false}
-              autoComplete="off"
-              maxLength={100}
-              className="h-full rounded-none border-0 bg-transparent px-3 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0"
-            />
-            {/* `ghost`, not a fill: on a storefront route `--solid` becomes the merchant's raw
+            <div className="flex h-9 max-w-[17rem] min-w-0 flex-[1_1_10rem] items-stretch overflow-hidden rounded-md border border-input bg-card shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
+              <Input
+                ref={inputRef}
+                id={`coupon-${subscription}`}
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  if (error) setError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") close();
+                }}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? `coupon-${subscription}-error` : undefined}
+                spellCheck={false}
+                autoComplete="off"
+                maxLength={100}
+                className="h-full rounded-none border-0 bg-transparent px-3 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0"
+              />
+              {/* `ghost`, not a fill: on a storefront route `--solid` becomes the merchant's raw
                 brand colour (lib/brand.ts), and this is a secondary action. */}
-            <Button
-              type="submit"
-              variant="ghost"
-              disabled={!code.trim() || busy === "apply"}
-              className="h-full rounded-none border-l border-input px-3 text-xs font-medium text-primary hover:bg-muted"
+              <Button
+                type="submit"
+                variant="ghost"
+                disabled={!code.trim() || busy === "apply"}
+                className="h-full rounded-none border-l border-input px-3 text-sm font-medium text-primary hover:bg-muted"
+              >
+                {busy === "apply" ? "Applying…" : "Apply"}
+              </Button>
+            </div>
+            <button
+              type="button"
+              onClick={close}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              {busy === "apply" ? "Applying…" : "Apply"}
-            </Button>
+              Cancel
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={close}
-            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Cancel
-          </button>
         </form>
       ) : (
         /* Collapsed until asked for: most buyers have no code, and an empty field parked
@@ -230,9 +239,11 @@ export function PortalCouponBox({
         </button>
       )}
       {error ? (
-        <Alert tone="error" className="mt-2 text-xs">
-          {error}
-        </Alert>
+        <div id={`coupon-${subscription}-error`} className="mt-2">
+          <Alert tone="error" className="text-xs">
+            {error}
+          </Alert>
+        </div>
       ) : null}
     </div>
   );

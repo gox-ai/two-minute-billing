@@ -24,11 +24,13 @@ export default async function ConfirmTeamAlertsPage() {
       <Card>
         <CardHeader className="text-center">
           <CardTitle className="text-xl">
-            {done
-              ? "Email address confirmed"
-              : token
-                ? "Confirm that you want team alerts"
-                : "This link is not valid or is expired"}
+            <h1>
+              {done
+                ? "Email address confirmed"
+                : token
+                  ? "Confirm that you want team alerts"
+                  : "This link is not valid or is expired"}
+            </h1>
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             {done

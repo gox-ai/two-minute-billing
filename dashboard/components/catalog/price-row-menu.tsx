@@ -48,10 +48,7 @@ export function PriceRowMenu({ biz, price }: { biz: string; price: Price; return
           <DropdownMenuItem onSelect={() => router.push(`${base}/edit`)}>
             <Pencil className="size-4" /> Edit
           </DropdownMenuItem>
-          <DropdownMenuItem
-            variant={active ? "destructive" : "default"}
-            onSelect={() => setConfirmOpen(true)}
-          >
+          <DropdownMenuItem onSelect={() => setConfirmOpen(true)}>
             {active ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}
             {active ? "Archive" : "Restore"}
           </DropdownMenuItem>

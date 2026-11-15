@@ -23,7 +23,11 @@ import {
 } from "./service";
 import { isCustomerPaymentMethod } from "./collection";
 import { isOpenInvoiceStatus, OPEN_INVOICE_STATUSES } from "./status";
-import { restoreDiscountPeriod } from "@/modules/coupons/service";
+import {
+  customerCouponsOnInvoice,
+  releaseInvoiceRedemptions,
+  restoreDiscountPeriod,
+} from "@/modules/coupons/service";
 // balances-read, not balances: the writers there import events/emit, and ops.ts is
 // reached from the event snapshot path — see the cycle note in balances-read.ts.
 import {
@@ -188,6 +192,12 @@ export async function createManualInvoice(input: {
   paymentMethodOverrideId?: string;
   /** Runs last inside the invoice transaction. */
   inTx?: Parameters<typeof createInvoiceFromLines>[0]["inTx"];
+  /** Coupon codes redeemed on this invoice; each applies once. */
+  coupons?: { codes: string[]; enteredByCustomer?: boolean };
+  /** As `createInvoiceFromLines({ customerCoupons })`. */
+  customerCoupons?: boolean;
+  /** Stored on the invoice and returned with it. */
+  metadata?: Record<string, unknown>;
 }): Promise<{ invoice: Invoice; payment: Payment | null }> {
   if (input.lines.length === 0) throw new InvoiceOpsError("An invoice needs at least one line");
   const dueDate = input.netDays != null ? new Date(Date.now() + input.netDays * 86_400_000) : null;
@@ -217,6 +227,10 @@ export async function createManualInvoice(input: {
       ? { paymentMethodOverrideId: input.paymentMethodOverrideId }
       : {}),
     ...(input.inTx ? { inTx: input.inTx } : {}),
+    ...(input.customerCoupons === false ? { customerCoupons: false } : {}),
+    ...(input.coupons?.codes.length ? { coupons: input.coupons } : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+    oneOff: true,
   });
 }
 
@@ -275,14 +289,14 @@ export async function voidBlocker(
   return null;
 }
 
+type VoidOpts = { voidReasonCode?: string; comment?: string };
+
 export async function voidInvoice(
   orgId: string,
   businessId: string,
   invoicePublicId: string,
   /** Omit both and the void is exactly as before. */
-  opts: {
-    voidReasonCode?: string;
-    comment?: string;
+  opts: VoidOpts & {
     /**
      * An operator's void: ask the gateway to cancel a pending debit first, and refuse with
      * `DebitInProgressError` if it does not. Automated voids keep `voidBlocker`'s refusal.
@@ -310,216 +324,266 @@ export async function voidInvoice(
   }
   const blocked = await withTenant(orgId, (tx) => voidBlocker(tx, inv));
   if (blocked) throw new InvoiceOpsError(blocked);
-  return withTenant(orgId, async (tx) => {
-    // ATOMIC CLAIM (H review blocker): flip to voided FIRST, guarded on a
-    // still-open status — two concurrent voids otherwise both mirror the ledger
-    // (double reversal) and both restore the coupon redemption. The loser's whole
-    // tx rolls back here.
-    const [claimed] = await tx
-      .update(invoices)
-      // `voided_at` is stamped in the same atomic claim as the status, so the two
-      // can never disagree — the invoice list has a "Voided On" column.
-      .set({
-        status: "voided",
-        nextAttemptAt: null,
-        voidedAt: stampNow(),
-        ...(opts.voidReasonCode ? { voidReasonCode: opts.voidReasonCode } : {}),
-        // The chase has to END with the debt (#57, same root as the allocation release
-        // below: the void moved the money and left the labels). Clearing only
-        // `next_attempt_at` left a voided invoice reading `dunning_status:
-        // 'in_progress'` — 41 such rows on the box that found this. The clock cannot act
-        // on them (`runDunningPass` needs `next_attempt_at IS NOT NULL`; the offline
-        // reminder scan and `sweepStrandedRetries` both require `status = 'payment_due'`,
-        // all three checked rather than assumed), but `listRetriesPage`'s UNDER_RETRY is
-        // `… or dunning_status is not null` with no status filter, so they DID show on the
-        // /retries screen as invoices awaiting collection attention.
-        //
-        // `stopped` is the value `dunningFieldsOnCreditSettle` already documents for the
-        // same question — the balance went away with NO CASH, which is `stopped` and
-        // never `success` — but that helper is NOT reused here, and the difference is
-        // load-bearing. It rewrites ANY chased invoice, and the commonest void on this box
-        // is dunning's own final action, which voids from `not_paid` + `exhausted` (203
-        // such rows, 168 of them with a real failed attempt behind them). `exhausted` is
-        // already terminal and already true: we tried the whole ladder and got nothing.
-        // Replacing it with `stopped` would erase that for the majority of voids and
-        // change the dunning-final-action behaviour this fix is required not to touch.
-        //
-        // So only a LIVE chase is ended here. `in_progress` and `parked` are the two
-        // values that claim collection is still pending; every other value (`exhausted`,
-        // `success`, `stopped`, null) is a finished story that the void must not restate.
-        // An invoice nobody ever chased keeps its null, so a void cannot invent a
-        // collections history either.
-        ...(inv.dunningStatus === "in_progress" || inv.dunningStatus === "parked"
-          ? { dunningStatus: "stopped" as const }
-          : {}),
-      })
-      .where(and(eq(invoices.id, inv.id), inArray(invoices.status, [...OPEN_INVOICE_STATUSES])))
-      .returning();
-    if (!claimed)
-      throw new InvoiceOpsError(
-        "The invoice is no longer open. Another request voided or settled it at the same time.",
-      );
-    // Read every ledger entry generation posted for this invoice: the invoice
-    // itself and any credit applications drawn against it. (Payments never happen
-    // on an open/uncollectible invoice, so there's nothing else to reverse.)
-    const originals = await tx
-      .select()
-      .from(ledgerEntries)
-      .where(
-        and(
-          eq(ledgerEntries.businessId, businessId),
-          // 'invoice' = normal generation; 'import' = imported open invoice
-          // (AR ↔ opening_balance); 'credit_applied' = the D1 bucket draws.
-          inArray(ledgerEntries.sourceType, ["invoice", "import", "credit_applied"]),
-          eq(ledgerEntries.sourceId, inv.publicId),
-        ),
-      );
-    // Mirror each original line (debit↔credit) → a balanced compensating entry.
-    const lines = originals.map((e) => ({
-      account: e.account,
-      direction: (e.direction === "debit" ? "credit" : "debit") as "debit" | "credit",
-      amountMinor: e.amountMinor,
-      currency: e.currency,
-    }));
-    if (lines.length > 0) {
-      await postEntries(
-        {
-          organizationId: orgId,
-          businessId,
-          customerId: inv.customerId,
-          sourceType: "invoice_void",
-          sourceId: inv.publicId,
-          lines,
-        },
-        tx,
-      );
-    }
-    // RELEASE THE CREDIT-NOTE ALLOCATIONS this invoice consumed (#57), in the SAME
-    // transaction as the compensating entry above. The ledger reversal hands the credit
-    // back to the bucket; without this the note kept claiming it was spent, which read as
-    // ₹0 available on an API/UI surface and REFUSED to refund the customer their own
-    // money. The two have to move together or they diverge again — see the function's own
-    // note for the measurement, the delete-vs-reversal decision, and why only refundable
-    // notes are released. Dynamic import for the same reason `writeOffInvoice` below uses
-    // one: `invoicing/service` (this file's static dependency) is imported BY
-    // credit-notes/service.
-    const { releaseAllocationsForVoidedInvoice } = await import("@/modules/credit-notes/service");
-    const creditReleasedMinor = await releaseAllocationsForVoidedInvoice(tx, {
-      organizationId: orgId,
-      businessId,
-      customerId: inv.customerId,
-      invoiceId: inv.id,
-      invoicePublicId: inv.publicId,
-    });
-    // The released allocation must land back in the refundable bucket. The mirror does that
-    // for engine invoices (their `credit_applied` draw is reversed). An imported invoice's
-    // credit was netted into its opening AR, so the mirror returns nothing and the note
-    // would show credit the customer cannot spend: open the gap from `opening_balance`,
-    // as the import does for a note's unused credit.
-    const returnedToBucket = lines
-      .filter((l) => l.account === REFUNDABLE_CREDIT)
-      .reduce((s, l) => s + (l.direction === "credit" ? l.amountMinor : -l.amountMinor), 0n);
-    const unfunded = creditReleasedMinor - returnedToBucket;
-    if (unfunded > 0n && inv.imported) {
-      const memo = "Opening credit (imported refundable credit note, released by invoice void)";
-      await postEntries(
-        {
-          organizationId: orgId,
-          businessId,
-          customerId: inv.customerId,
-          sourceType: "invoice_void",
-          sourceId: inv.publicId,
-          lines: [
-            {
-              account: "opening_balance",
-              direction: "debit",
-              amountMinor: unfunded,
-              currency: inv.currency,
-              memo,
-            },
-            {
-              account: REFUNDABLE_CREDIT,
-              direction: "credit",
-              amountMinor: unfunded,
-              currency: inv.currency,
-              memo,
-            },
-          ],
-        },
-        tx,
-      );
-    } else if (unfunded > 0n) {
-      log.error("void released credit-note allocation that the ledger mirror did not return", {
-        event: "void_credit_release_unfunded",
-        invoice: inv.publicId,
-        releasedMinor: String(creditReleasedMinor),
-        returnedMinor: String(returnedToBucket),
-      });
-    }
-    // Credit grants (design G3 §3.8): the mirror above reversed the draws' postings; give
-    // the units back to their grants, and void any grant this invoice sold but was never paid.
-    const credits = await import("@/modules/credits/service");
-    await credits.restoreGrantDrawsForVoidedInvoice(tx, {
-      organizationId: orgId,
-      businessId,
-      customerId: inv.customerId,
-      invoiceId: inv.id,
-      invoicePublicId: inv.publicId,
-    });
-    await credits.voidPendingGrantsForInvoice(tx, {
-      organizationId: orgId,
-      businessId,
-      invoiceId: inv.id,
-      invoicePublicId: inv.publicId,
-      reason: "void",
-    });
-    // Refund each coupon redemption this invoice consumed (G backlog): restore the
-    // period so a regenerate re-applies the coupon instead of billing at full price.
-    const discountLines = await tx
-      .select({ appliedCouponId: invoiceLineItems.appliedCouponId })
-      .from(invoiceLineItems)
-      .where(and(eq(invoiceLineItems.invoiceId, inv.id), eq(invoiceLineItems.kind, "discount")));
-    for (const dl of discountLines) {
-      if (dl.appliedCouponId) await restoreDiscountPeriod(tx, dl.appliedCouponId);
-    }
-    await emitEvent(tx, {
-      organizationId: orgId,
-      businessId,
-      type: "invoice_voided",
-      data: buildEventData("invoice_voided", { id: inv.publicId, status: claimed.status }),
-    });
-    const { writeAuditLog } = await import("@/modules/audit/service");
-    await writeAuditLog(
+  return withTenant(orgId, (tx) => applyVoid(tx, orgId, businessId, inv, opts));
+}
+
+/**
+ * `voidInvoice` inside the caller's transaction, so the void commits or rolls back with the
+ * caller's other writes. No pending-debit cancel: that calls the gateway.
+ */
+export async function voidInvoiceInTx(
+  tx: Tx,
+  orgId: string,
+  businessId: string,
+  invoicePublicId: string,
+  opts: VoidOpts = {},
+): Promise<Invoice> {
+  const [inv] = await tx
+    .select()
+    .from(invoices)
+    .where(and(eq(invoices.businessId, businessId), eq(invoices.publicId, invoicePublicId)))
+    .limit(1);
+  if (!inv) throw new InvoiceOpsError(`We could not find the invoice ${invoicePublicId}.`);
+  assertNotSettledArchival(inv, "void");
+  if (!isOpenInvoiceStatus(inv.status))
+    throw new InvoiceOpsError(`You cannot void a ${inv.status} invoice`);
+  const blocked = await voidBlocker(tx, inv);
+  if (blocked) throw new InvoiceOpsError(blocked);
+  return applyVoid(tx, orgId, businessId, inv, opts);
+}
+
+/** The void's writes: claim, ledger mirror, credit and coupon release, event, audit. */
+async function applyVoid(
+  tx: Tx,
+  orgId: string,
+  businessId: string,
+  inv: Invoice,
+  opts: VoidOpts,
+): Promise<Invoice> {
+  // ATOMIC CLAIM (H review blocker): flip to voided FIRST, guarded on a
+  // still-open status — two concurrent voids otherwise both mirror the ledger
+  // (double reversal) and both restore the coupon redemption. The loser's whole
+  // tx rolls back here.
+  const [claimed] = await tx
+    .update(invoices)
+    // `voided_at` is stamped in the same atomic claim as the status, so the two
+    // can never disagree — the invoice list has a "Voided On" column.
+    .set({
+      status: "voided",
+      nextAttemptAt: null,
+      voidedAt: stampNow(),
+      ...(opts.voidReasonCode ? { voidReasonCode: opts.voidReasonCode } : {}),
+      // The chase has to END with the debt (#57, same root as the allocation release
+      // below: the void moved the money and left the labels). Clearing only
+      // `next_attempt_at` left a voided invoice reading `dunning_status:
+      // 'in_progress'` — 41 such rows on the box that found this. The clock cannot act
+      // on them (`runDunningPass` needs `next_attempt_at IS NOT NULL`; the offline
+      // reminder scan and `sweepStrandedRetries` both require `status = 'payment_due'`,
+      // all three checked rather than assumed), but `listRetriesPage`'s UNDER_RETRY is
+      // `… or dunning_status is not null` with no status filter, so they DID show on the
+      // /retries screen as invoices awaiting collection attention.
+      //
+      // `stopped` is the value `dunningFieldsOnCreditSettle` already documents for the
+      // same question — the balance went away with NO CASH, which is `stopped` and
+      // never `success` — but that helper is NOT reused here, and the difference is
+      // load-bearing. It rewrites ANY chased invoice, and the commonest void on this box
+      // is dunning's own final action, which voids from `not_paid` + `exhausted` (203
+      // such rows, 168 of them with a real failed attempt behind them). `exhausted` is
+      // already terminal and already true: we tried the whole ladder and got nothing.
+      // Replacing it with `stopped` would erase that for the majority of voids and
+      // change the dunning-final-action behaviour this fix is required not to touch.
+      //
+      // So only a LIVE chase is ended here. `in_progress` and `parked` are the two
+      // values that claim collection is still pending; every other value (`exhausted`,
+      // `success`, `stopped`, null) is a finished story that the void must not restate.
+      // An invoice nobody ever chased keeps its null, so a void cannot invent a
+      // collections history either.
+      ...(inv.dunningStatus === "in_progress" || inv.dunningStatus === "parked"
+        ? { dunningStatus: "stopped" as const }
+        : {}),
+    })
+    .where(and(eq(invoices.id, inv.id), inArray(invoices.status, [...OPEN_INVOICE_STATUSES])))
+    .returning();
+  if (!claimed)
+    throw new InvoiceOpsError(
+      "The invoice is no longer open. Another request voided or settled it at the same time.",
+    );
+  // An invoice for usage beyond the credits: the debt is written off (0530).
+  const { forgiveVoidedOverageInvoice } = await import("@/modules/credits/overage");
+  await forgiveVoidedOverageInvoice(tx, { invoiceId: inv.id, invoicePublicId: inv.publicId });
+  // Read every ledger entry generation posted for this invoice: the invoice
+  // itself and any credit applications drawn against it. (Payments never happen
+  // on an open/uncollectible invoice, so there's nothing else to reverse.)
+  const originals = await tx
+    .select()
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.businessId, businessId),
+        // 'invoice' = normal generation; 'import' = imported open invoice
+        // (AR ↔ opening_balance); 'credit_applied' = the D1 bucket draws.
+        inArray(ledgerEntries.sourceType, ["invoice", "import", "credit_applied"]),
+        eq(ledgerEntries.sourceId, inv.publicId),
+      ),
+    );
+  // Mirror each original line (debit↔credit) → a balanced compensating entry.
+  const lines = originals.map((e) => ({
+    account: e.account,
+    direction: (e.direction === "debit" ? "credit" : "debit") as "debit" | "credit",
+    amountMinor: e.amountMinor,
+    currency: e.currency,
+  }));
+  if (lines.length > 0) {
+    await postEntries(
       {
         organizationId: orgId,
         businessId,
-        action: "invoice.void",
-        resourceType: "invoice",
-        resourceId: inv.publicId,
-        before: { status: inv.status, dunning_status: inv.dunningStatus },
-        after: {
-          status: "voided",
-          dunning_status: claimed.dunningStatus,
-          // What the void gave back to which credit notes is the history that deleting the
-          // allocation rows would otherwise leave only in the ledger. Recorded on the path
-          // that is already the tenant's business record.
-          credit_released_minor: Number(creditReleasedMinor),
-          ...(opts.voidReasonCode ? { void_reason_code: opts.voidReasonCode } : {}),
-          ...(opts.comment ? { comment: opts.comment } : {}),
-        },
+        customerId: inv.customerId,
+        sourceType: "invoice_void",
+        sourceId: inv.publicId,
+        lines,
       },
       tx,
     );
-    log.info("invoice voided", {
-      event: "invoice_voided",
-      invoice: inv.publicId,
-      fromStatus: inv.status,
-      totalMinor: String(inv.totalMinor),
-      creditReleasedMinor: String(creditReleasedMinor),
-      currency: inv.currency,
-    });
-    return claimed;
+  }
+  // RELEASE THE CREDIT-NOTE ALLOCATIONS this invoice consumed (#57), in the SAME
+  // transaction as the compensating entry above. The ledger reversal hands the credit
+  // back to the bucket; without this the note kept claiming it was spent, which read as
+  // ₹0 available on an API/UI surface and REFUSED to refund the customer their own
+  // money. The two have to move together or they diverge again — see the function's own
+  // note for the measurement, the delete-vs-reversal decision, and why only refundable
+  // notes are released. Dynamic import for the same reason `writeOffInvoice` below uses
+  // one: `invoicing/service` (this file's static dependency) is imported BY
+  // credit-notes/service.
+  const { releaseAllocationsForVoidedInvoice } = await import("@/modules/credit-notes/service");
+  const creditReleasedMinor = await releaseAllocationsForVoidedInvoice(tx, {
+    organizationId: orgId,
+    businessId,
+    customerId: inv.customerId,
+    invoiceId: inv.id,
+    invoicePublicId: inv.publicId,
   });
+  // The released allocation must land back in the refundable bucket. The mirror does that
+  // for engine invoices (their `credit_applied` draw is reversed). An imported invoice's
+  // credit was netted into its opening AR, so the mirror returns nothing and the note
+  // would show credit the customer cannot spend: open the gap from `opening_balance`,
+  // as the import does for a note's unused credit.
+  const returnedToBucket = lines
+    .filter((l) => l.account === REFUNDABLE_CREDIT)
+    .reduce((s, l) => s + (l.direction === "credit" ? l.amountMinor : -l.amountMinor), 0n);
+  const unfunded = creditReleasedMinor - returnedToBucket;
+  if (unfunded > 0n && inv.imported) {
+    const memo = "Opening credit (imported refundable credit note, released by invoice void)";
+    await postEntries(
+      {
+        organizationId: orgId,
+        businessId,
+        customerId: inv.customerId,
+        sourceType: "invoice_void",
+        sourceId: inv.publicId,
+        lines: [
+          {
+            account: "opening_balance",
+            direction: "debit",
+            amountMinor: unfunded,
+            currency: inv.currency,
+            memo,
+          },
+          {
+            account: REFUNDABLE_CREDIT,
+            direction: "credit",
+            amountMinor: unfunded,
+            currency: inv.currency,
+            memo,
+          },
+        ],
+      },
+      tx,
+    );
+  } else if (unfunded > 0n) {
+    log.error("void released credit-note allocation that the ledger mirror did not return", {
+      event: "void_credit_release_unfunded",
+      invoice: inv.publicId,
+      releasedMinor: String(creditReleasedMinor),
+      returnedMinor: String(returnedToBucket),
+    });
+  }
+  // Credit grants (design G3 §3.8): the mirror above reversed the draws' postings; give
+  // the units back to their grants, and void any grant this invoice sold but was never paid.
+  const credits = await import("@/modules/credits/service");
+  await credits.restoreGrantDrawsForVoidedInvoice(tx, {
+    organizationId: orgId,
+    businessId,
+    customerId: inv.customerId,
+    invoiceId: inv.id,
+    invoicePublicId: inv.publicId,
+  });
+  await credits.voidPendingGrantsForInvoice(tx, {
+    organizationId: orgId,
+    businessId,
+    invoiceId: inv.id,
+    invoicePublicId: inv.publicId,
+    reason: "void",
+  });
+  // Coupons redeemed on this invoice alone are given back whole. Subscription coupons
+  // carry no invoice id, so this never touches them.
+  await releaseInvoiceRedemptions(tx, inv.id);
+  // Refund each coupon redemption this invoice consumed (G backlog): restore the
+  // period so a regenerate re-applies the coupon instead of billing at full price.
+  const discountLines = await tx
+    .select({ appliedCouponId: invoiceLineItems.appliedCouponId })
+    .from(invoiceLineItems)
+    .where(and(eq(invoiceLineItems.invoiceId, inv.id), eq(invoiceLineItems.kind, "discount")));
+  const restored = new Set<string>();
+  for (const dl of discountLines) {
+    if (!dl.appliedCouponId) continue;
+    restored.add(dl.appliedCouponId);
+    await restoreDiscountPeriod(tx, dl.appliedCouponId);
+  }
+  // A customer coupon counts each invoice it discounted, item-level ones included.
+  for (const id of await customerCouponsOnInvoice(tx, inv.id)) {
+    if (!restored.has(id)) await restoreDiscountPeriod(tx, id);
+  }
+  // A held change's invoice (`apply_when_paid`): the change ends with it.
+  const { onHeldInvoiceVoided } = await import("@/modules/subscriptions/pending-change");
+  await onHeldInvoiceVoided(tx, inv.id);
+  await emitEvent(tx, {
+    organizationId: orgId,
+    businessId,
+    type: "invoice_voided",
+    data: buildEventData("invoice_voided", { id: inv.publicId, status: claimed.status }),
+  });
+  const { writeAuditLog } = await import("@/modules/audit/service");
+  await writeAuditLog(
+    {
+      organizationId: orgId,
+      businessId,
+      action: "invoice.void",
+      resourceType: "invoice",
+      resourceId: inv.publicId,
+      before: { status: inv.status, dunning_status: inv.dunningStatus },
+      after: {
+        status: "voided",
+        dunning_status: claimed.dunningStatus,
+        // What the void gave back to which credit notes is the history that deleting the
+        // allocation rows would otherwise leave only in the ledger. Recorded on the path
+        // that is already the tenant's business record.
+        credit_released_minor: Number(creditReleasedMinor),
+        ...(opts.voidReasonCode ? { void_reason_code: opts.voidReasonCode } : {}),
+        ...(opts.comment ? { comment: opts.comment } : {}),
+      },
+    },
+    tx,
+  );
+  log.info("invoice voided", {
+    event: "invoice_voided",
+    invoice: inv.publicId,
+    fromStatus: inv.status,
+    totalMinor: String(inv.totalMinor),
+    creditReleasedMinor: String(creditReleasedMinor),
+    currency: inv.currency,
+  });
+  return claimed;
 }
 
 /**
@@ -1923,6 +1987,18 @@ export async function renderInvoiceHtml(
    * Amount column and the summary between them account for every unit of the discount,
    * but neither says which coupon caused it. See invoice-pdf.ts for the full note.
    */
+  // Usage that credits paid: information with no amount, outside the line table.
+  const creditUsageBlock = doc.creditUsage?.length
+    ? `<div class="payments">
+        <div class="label">Usage paid with credits</div>
+        ${doc.creditUsage
+          .map(
+            (l) =>
+              `<div>${esc(l.text)}</div>${l.period ? `<div style="color:#888;margin-bottom:6px">Usage from ${fmtDate(l.period.start)} to ${fmtDate(l.period.end)}</div>` : ""}`,
+          )
+          .join("")}
+      </div>`
+    : "";
   const discountBlock = doc.discountDetails.length
     ? `<div class="payments">
         <div class="label">Discount</div>
@@ -2106,6 +2182,7 @@ ${customFieldsBlock}
 <div class="summary"><table class="sum"><tbody>${sumRows.join("")}</tbody></table></div>
 ${discountBlock}
 ${creditsBlock}
+${creditUsageBlock}
 ${paymentsBlock}
 ${doc.meta.notes ? `<div class="payments">${esc(doc.meta.notes)}</div>` : ""}
 ${instructionsBlock}

@@ -24,11 +24,13 @@ import {
   md+: [label flex-1][code w-52][save w-36] inside the row's label form, then the
   Disable/Delete forms in w-40 outside it. Below md every row stacks.
 */
-const ROW = "flex flex-col gap-2 px-5 py-3 xl:flex-row xl:items-center xl:gap-3";
-const LEFT = "flex min-w-0 flex-1 flex-col gap-2 xl:flex-row xl:items-center xl:gap-4";
-const CODE_COL = "shrink-0 xl:w-52";
-const SAVE_COL = "flex shrink-0 items-center gap-2 xl:w-36";
-const ACTIONS_COL = "flex shrink-0 items-center gap-2 xl:w-40";
+const ROW =
+  "flex flex-col gap-2 px-5 py-3 @min-[56.875rem]/main:flex-row @min-[56.875rem]/main:items-center @min-[56.875rem]/main:gap-3";
+const LEFT =
+  "flex min-w-0 flex-1 flex-col gap-2 @min-[56.875rem]/main:flex-row @min-[56.875rem]/main:items-center @min-[56.875rem]/main:gap-4";
+const CODE_COL = "shrink-0 @min-[56.875rem]/main:w-52";
+const SAVE_COL = "flex shrink-0 items-center gap-2 @min-[56.875rem]/main:w-36";
+const ACTIONS_COL = "flex shrink-0 items-center gap-2 @min-[56.875rem]/main:w-40";
 
 /** Inline label editor for one row. A child of the row's own <ActionForm>, so
  * `useFieldError` reads that submission's errors, not a sibling row's. */
@@ -92,7 +94,7 @@ export function ReasonCodeList({
 
       {/* Columns named once, here, rather than per row. */}
       {usingFallback || rows.length > 0 ? (
-        <div className="hidden items-center gap-3 bg-muted/40 px-5 py-2 text-xs font-medium text-muted-foreground xl:flex">
+        <div className="hidden items-center gap-3 bg-muted/40 px-5 py-2 text-xs font-medium text-muted-foreground @min-[56.875rem]/main:flex">
           <div className="flex min-w-0 flex-1 items-center gap-4">
             <span className="flex-1">Label</span>
             <span className={CODE_COL}>Code</span>
@@ -111,9 +113,9 @@ export function ReasonCodeList({
                 <code className={cn(CODE_COL, "font-mono text-xs text-muted-foreground")}>
                   {f.code}
                 </code>
-                <span className={cn(SAVE_COL, "max-xl:hidden")} />
+                <span className={cn(SAVE_COL, "@max-[56.875rem]/main:hidden")} />
               </div>
-              <span className={cn(ACTIONS_COL, "max-xl:hidden")} />
+              <span className={cn(ACTIONS_COL, "@max-[56.875rem]/main:hidden")} />
             </div>
           ))
         : null}
@@ -174,33 +176,39 @@ export function ReasonCodeList({
         </div>
       ) : null}
 
-      <ActionForm action={createReasonCodeAction} className={cn(ROW, "bg-muted/40")}>
+      <ActionForm action={createReasonCodeAction} className="flex flex-col gap-1 bg-muted/40 py-3">
         <input type="hidden" name="biz" value={biz} />
         <input type="hidden" name="applies_to" value={appliesTo} />
-        <div className={LEFT}>
-          <Input
-            name="label"
-            aria-label={`Label for a new ${title.toLowerCase()} reason`}
-            placeholder="e.g. Switched to another product"
-            className="h-8 w-full xl:w-auto xl:flex-1"
-            required
-            maxLength={200}
-          />
-          <Input
-            name="code"
-            aria-label={`Code for a new ${title.toLowerCase()} reason`}
-            placeholder="Code (derived from label)"
-            maxLength={64}
-            className={cn(CODE_COL, "h-8 w-full font-mono text-xs")}
-          />
-          <span className={SAVE_COL}>
-            <SubmitButton size="sm">
-              <Plus className="mr-1 size-3.5" aria-hidden />
-              Create
-            </SubmitButton>
-          </span>
+        <div className={cn(ROW, "py-0")}>
+          <div className={LEFT}>
+            <Input
+              name="label"
+              aria-label={`Label for a new ${title.toLowerCase()} reason`}
+              placeholder="e.g. Switched to another product"
+              className="h-8 w-full @min-[56.875rem]/main:w-auto @min-[56.875rem]/main:flex-1"
+              required
+              maxLength={200}
+            />
+            <Input
+              name="code"
+              aria-label={`Code for a new ${title.toLowerCase()} reason`}
+              placeholder="Code (optional)"
+              maxLength={64}
+              className={cn(CODE_COL, "h-8 w-full font-mono text-xs")}
+            />
+            <span className={SAVE_COL}>
+              {/* Outline: one Create per card, and none is the page's main action. */}
+              <SubmitButton size="sm" variant="outline">
+                <Plus className="mr-1 size-3.5" aria-hidden />
+                Create
+              </SubmitButton>
+            </span>
+          </div>
+          <span className={cn(ACTIONS_COL, "@max-[56.875rem]/main:hidden")} />
         </div>
-        <span className={cn(ACTIONS_COL, "max-xl:hidden")} />
+        <p className="m-0 px-5 text-xs text-muted-foreground">
+          When you leave the code empty, we make it from the label.
+        </p>
       </ActionForm>
     </SettingsCard>
   );

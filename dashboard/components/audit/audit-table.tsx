@@ -10,12 +10,13 @@ import {
   type ListPageHeader,
 } from "@/components/patterns/list-page";
 import { makeListSource } from "@/lib/list-source";
-import { fmtDateTime, fmtDateTimeShort } from "@/lib/format";
-import { actorLabel } from "@/components/audit/labels";
+import { fmtDateTime } from "@/lib/format-date";
+import { actionTitle, actorLabel, sourceLabel } from "@/components/audit/labels";
 import type { AuditLog, AuditSource } from "@/lib/api/audit";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Chip } from "@/components/patterns/chip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { cn } from "@/lib/utils";
 import { useDisplayTz } from "@/components/business-tz";
 
@@ -23,36 +24,82 @@ import { useDisplayTz } from "@/components/business-tz";
 // Source chip
 // ---------------------------------------------------------------------------
 
-const SOURCE_TONE: Record<string, string> = {
-  // api / dashboard are both ordinary actor types (an integration vs. a person), not
-  // an urgency signal, so they share the "info" token — the label already tells them
-  // apart, and the actor column names the person.
-  api: "border-info/25 bg-info-soft text-info",
-  dashboard: "border-info/25 bg-info-soft text-info",
-  billing_clock: "border-warning/25 bg-warning-soft text-warning",
-  migration: "border-success/25 bg-success-soft text-success",
-  // `system` — a seed or a verify run, nobody to attribute it to and nothing to act
-  // on, so it stays neutral (the default tone).
+const SOURCE_TONE: Record<string, React.ComponentProps<typeof Chip>["tone"]> = {
+  // An integration, a person, or a customer on a hosted page: actor types, not urgency.
+  api: "blue",
+  dashboard: "blue",
+  checkout: "blue",
+  portal: "blue",
+  billing_clock: "tan",
+  migration: "green",
+  // `system` — a seed or a verify run, nothing to act on, so the default tone.
 };
 
-function SourceChip({ source }: { source: string }) {
-  const cls = SOURCE_TONE[source as AuditSource] ?? "border-border bg-muted text-muted-foreground";
-  return (
-    <Badge variant="outline" className={cn("font-mono text-xs font-medium", cls)}>
-      {source}
-    </Badge>
-  );
+/** `checkout` / `portal` for a customer's own action (its actor is the session), else `source`. */
+function entrySource(row: AuditLog): string {
+  return row.channel ?? row.source;
+}
+
+function SourceChip({ row }: { row: AuditLog }) {
+  const source = entrySource(row);
+  return <Chip tone={SOURCE_TONE[source as AuditSource] ?? "gray"}>{sourceLabel(source)}</Chip>;
+}
+
+/** Customer page of a checkout/portal actor, when the session's customer is known. */
+function customerHref(row: AuditLog): string | null {
+  const c = row.actor_customer;
+  return row.channel && c && row.business_id
+    ? `/businesses/${row.business_id}/customers/${c.id}`
+    : null;
 }
 
 /**
- * An actor cell. Named actors ("System", "Billing clock") are words, api key ids are
- * tokens — `actorLabel` decides which, so every audit surface renders them alike.
+ * An actor on one line. A checkout or portal session reads as its customer, linked; a
+ * session with no customer reads "Customer". Api key ids are tokens, cut in the middle.
  */
-function ActorText({ actor }: { actor: string | null }) {
-  const { text, mono } = actorLabel(actor);
+function ActorText({ row }: { row: AuditLog }) {
+  if (row.channel) {
+    const href = customerHref(row);
+    const name = row.actor_customer?.name ?? "Customer";
+    return href ? (
+      <Link href={href} className="block max-w-48 truncate text-sm text-primary hover:underline">
+        {name}
+      </Link>
+    ) : (
+      <span className="text-sm text-foreground">Customer</span>
+    );
+  }
+  const { text, mono } = actorLabel(row.actor);
+  if (mono) return <MiddleEllipsis value={text} className="max-w-48 text-xs" />;
+  return <OneLine value={text} className="max-w-48 text-sm text-foreground" />;
+}
+
+/** One line, cut at the end; the whole value is in the tooltip. */
+function OneLine({
+  value,
+  tip,
+  className,
+}: {
+  value: string;
+  /** Tooltip text, when it differs from `value`. */
+  tip?: string;
+  className?: string;
+}) {
   return (
-    <p className={cn("text-xs wrap-anywhere", mono ? "font-mono" : "text-foreground")}>{text}</p>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("block min-w-0 truncate", className)}>{value}</span>
+      </TooltipTrigger>
+      <TooltipContent className="break-all">{tip ?? value}</TooltipContent>
+    </Tooltip>
   );
+}
+
+/** A business row's full record page (0149); org-global rows have none. */
+function recordHref(row: AuditLog): string | undefined {
+  if (!row.business_id) return undefined;
+  const q = row.resource_type ? `?source=${encodeURIComponent(row.resource_type)}` : "";
+  return `/businesses/${row.business_id}/audit/${row.id}${q}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,15 +148,20 @@ function AuditDetailDrawer({
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-xs text-muted-foreground">When</p>
-                  <p className="font-mono">{fmtDateTime(row.created_at, tz)}</p>
+                  <p>{fmtDateTime(row.created_at, tz)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Source</p>
-                  <SourceChip source={row.source} />
+                  <SourceChip row={row} />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Actor</p>
-                  <ActorText actor={row.actor} />
+                  <ActorText row={row} />
+                  {row.channel && row.actor ? (
+                    <p className="font-mono text-xs wrap-anywhere text-muted-foreground">
+                      {row.actor}
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Resource</p>
@@ -131,11 +183,9 @@ function AuditDetailDrawer({
                   that belong to a business: the detail route is business-scoped, and
                   an org-global action (key rotation, cross-business admin) has no
                   page to link to, so the JSON below stays the whole answer there. */}
-              {row.business_id ? (
+              {recordHref(row) ? (
                 <Link
-                  href={`/businesses/${row.business_id}/audit/${row.id}${
-                    row.resource_type ? `?source=${encodeURIComponent(row.resource_type)}` : ""
-                  }`}
+                  href={recordHref(row)!}
                   className="inline-block text-sm text-primary hover:underline"
                 >
                   View full record and diff
@@ -189,47 +239,107 @@ const DATE_OPS = [
 
 function makeColumns(
   showBusiness: boolean,
+  businessNames: Record<string, string>,
   onView: (row: AuditLog) => void,
   /** The zone to render in — business, else organization, else UTC (`useDisplayTz`). */
   tz: string,
 ): ColumnDef<AuditLog>[] {
+  const bizName = (id: string | null | undefined) => (id ? (businessNames[id] ?? id) : "");
   const cols: ColumnDef<AuditLog>[] = [
     {
       id: "created_at",
-      header: "When",
+      header: "Created",
       accessorFn: (r) => r.created_at,
+      meta: { phone: "hide" },
       cell: ({ getValue }) => (
-        <span className="font-mono text-xs text-muted-foreground">
-          {fmtDateTimeShort(getValue<string>(), tz)}
+        <span className="text-sm whitespace-nowrap text-muted-foreground">
+          {fmtDateTime(getValue<string>(), tz)}
         </span>
       ),
     },
     {
       id: "actor",
       header: "Actor",
+      // The export keeps the raw actor (a session id for a customer) and adds the customer.
       accessorFn: (r) => r.actor ?? "",
-      cell: ({ getValue }) => <ActorText actor={getValue<string>() || null} />,
+      meta: {
+        phone: "hide",
+        exportAs: [
+          { header: "Actor", value: (r) => r.actor ?? "" },
+          { header: "Actor customer", value: (r) => r.actor_customer?.id ?? "" },
+        ],
+      },
+      cell: ({ row }) => <ActorText row={row.original} />,
     },
     {
       id: "source",
       header: "Source",
-      accessorFn: (r) => r.source,
-      cell: ({ getValue }) => <SourceChip source={getValue<string>()} />,
+      accessorFn: (r) => entrySource(r),
+      meta: {
+        phone: "hide",
+        exportAs: [
+          { header: "Source", value: (r) => r.source },
+          { header: "Channel", value: (r) => r.channel ?? "" },
+        ],
+      },
+      cell: ({ row }) => <SourceChip row={row.original} />,
     },
     {
       id: "action",
       header: "Action",
+      meta: { grow: true, phone: "title" },
       accessorFn: (r) => r.action,
-      cell: ({ getValue }) => (
-        <span className="font-mono text-xs font-medium">{getValue<string>()}</span>
-      ),
+      // Keyboard path to the entry: a link to the record page, or the drawer for an
+      // org-global row (no business, so no record page). The row itself is pressable too.
+      cell: ({ row }) => {
+        const r = row.original;
+        const href = recordHref(r);
+        const title = (
+          <OneLine value={actionTitle(r.action)} tip={r.action} className="font-medium" />
+        );
+        return (
+          <span className="flex w-0 min-w-full flex-col text-sm">
+            <span className="flex min-w-0 items-baseline gap-2">
+              {href ? (
+                <Link href={href} className="block min-w-0 text-foreground hover:underline">
+                  {title}
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  className="block min-w-0 text-start text-foreground hover:underline"
+                  onClick={() => onView(r)}
+                >
+                  {title}
+                </button>
+              )}
+              {/* Phone: the business shares the action's line, so line 2 has the full width. */}
+              {showBusiness && r.business_id ? (
+                <span className="ms-auto hidden max-w-[45%] shrink-0 truncate text-muted-foreground list-narrow:block">
+                  {bizName(r.business_id)}
+                </span>
+              ) : null}
+            </span>
+            <span className="mt-0.5 hidden min-w-0 items-center gap-1 text-xs text-muted-foreground list-narrow:flex">
+              <span className="shrink-0">{fmtDateTime(r.created_at, tz)}</span>
+              <span aria-hidden>·</span>
+              <span className="min-w-0 truncate [&_*]:text-xs">
+                <ActorText row={r} />
+              </span>
+              <span aria-hidden>·</span>
+              <span className="shrink-0">{sourceLabel(entrySource(r))}</span>
+            </span>
+          </span>
+        );
+      },
     },
     {
       id: "resource",
       header: "Resource",
       accessorFn: (r) => [r.resource_type, r.resource_id].filter(Boolean).join(" / "),
+      meta: { phone: "hide" },
       cell: ({ getValue }) => (
-        <span className="font-mono text-xs text-muted-foreground">{getValue<string>() || "—"}</span>
+        <span className="text-sm text-muted-foreground">{getValue<string>() || "—"}</span>
       ),
     },
   ];
@@ -239,55 +349,24 @@ function makeColumns(
       id: "business_id",
       header: "Business",
       accessorFn: (r) => r.business_id ?? "",
-      cell: ({ getValue }) => (
-        <span className="font-mono text-xs text-muted-foreground">{getValue<string>() || "—"}</span>
-      ),
+      meta: {
+        phone: "hide",
+        exportAs: [{ header: "Business", value: (r) => r.business_id ?? "" }],
+      },
+      cell: ({ getValue }) => {
+        const id = getValue<string>();
+        return id ? (
+          <OneLine
+            value={bizName(id)}
+            tip={id}
+            className="max-w-40 text-sm text-muted-foreground"
+          />
+        ) : (
+          <span className="text-sm text-muted-foreground">—</span>
+        );
+      },
     });
   }
-
-  cols.push({
-    id: "_view",
-    header: "",
-    enableSorting: false,
-    enableHiding: false,
-    // A row that belongs to a business opens the RECORD PAGE (0149) — the same
-    // destination the Activity Log's "Details" link uses, with the prose summary,
-    // every resource the action touched and the contextual diff. It used to open a
-    // drawer of raw before/after JSON, so the same audit entry looked like two
-    // different features depending on which screen you reached it from.
-    //
-    // The drawer survives for ORG-GLOBAL rows only (`business_id` null — an API-key
-    // rotation, a cross-business admin action). Those have no business-scoped page to
-    // link to, and the drawer's JSON is the whole answer for them. Rendering a link
-    // there would 404, which is why this branches instead of always linking.
-    cell: ({ row }) =>
-      row.original.business_id ? (
-        <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
-          <Link
-            href={`/businesses/${row.original.business_id}/audit/${row.original.id}${
-              row.original.resource_type
-                ? `?source=${encodeURIComponent(row.original.resource_type)}`
-                : ""
-            }`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            View
-          </Link>
-        </Button>
-      ) : (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={(e) => {
-            e.stopPropagation();
-            onView(row.original);
-          }}
-        >
-          View
-        </Button>
-      ),
-  });
 
   return cols;
 }
@@ -307,6 +386,7 @@ export function AuditTable({
   hasMore,
   nextCursor,
   showBusiness = false,
+  businessNames = {},
   /** Omit on the org-wide `/audit` page — it has no single business. */
   biz,
 }: {
@@ -317,6 +397,8 @@ export function AuditTable({
   hasMore: boolean;
   nextCursor: string | null;
   showBusiness?: boolean;
+  /** `biz_` id → name, for the Business column on the org-wide page. */
+  businessNames?: Record<string, string>;
   biz?: string;
 }) {
   // Dates render in the business timezone, falling back to the ORGANIZATION's on the
@@ -325,8 +407,8 @@ export function AuditTable({
   const [selected, setSelected] = React.useState<AuditLog | null>(null);
 
   const columns = React.useMemo(
-    () => makeColumns(showBusiness, setSelected, tz),
-    [showBusiness, tz],
+    () => makeColumns(showBusiness, businessNames, setSelected, tz),
+    [showBusiness, businessNames, tz],
   );
 
   const fetchPage = React.useMemo(
@@ -343,7 +425,7 @@ export function AuditTable({
   // segments that would silently stop narrowing the full trail.
   const segments = React.useMemo<ListSegment<AuditLog>[]>(
     () => [
-      { id: "all", label: "All Entries" },
+      { id: "all", label: "All entries" },
       // Keys, webhook endpoints, gateway accounts, integrations, mail transport, team,
       // the 2FA requirement and data exports: `SECURITY_ACTION_PREFIXES` on the engine.
       {
@@ -400,7 +482,7 @@ export function AuditTable({
       { id: "actor", label: "Actor", group: "Identity", serverOps: TEXT_OPS },
       { id: "resource_type", label: "Resource type", group: "Other", serverOps: TEXT_OPS },
       { id: "resource_id", label: "Resource id", group: "Other", serverOps: TEXT_OPS },
-      { id: "created_at", label: "When", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS },
     ],
     [],
   );
@@ -420,11 +502,15 @@ export function AuditTable({
         // business — a view saved there must not appear inside one business's log, and
         // vice versa. The field set is identical, which is why they share this table.
         savedViews={biz ? { entity: "audit_logs", biz } : { entity: "org_audit_logs" }}
-        sortOptions={[{ id: "created_at", label: "When" }]}
+        sortOptions={[{ id: "created_at", label: "Created" }]}
+        // Across businesses the Business column needs the room; the resource stays in the
+        // chooser and on each entry's page.
+        initialHidden={showBusiness ? ["resource"] : undefined}
         searchPlaceholder="Search actions, actors…"
         pageSize={25}
         persistKey={showBusiness ? "audit-org" : "audit-biz"}
         exportName="audit-log"
+        rowHref={recordHref}
       />
       <AuditDetailDrawer
         row={selected}

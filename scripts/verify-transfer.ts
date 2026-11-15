@@ -8,7 +8,7 @@
  *  T6 prefixes: the destination keeps its own unless `numbering` sets them; clashes refused
  *  T7 storefront: the destination keeps its return/cancel URLs and portal error text
  *  T8 live guard: no override = nothing written; each override condition refuses alone
- *  T9 live override: writes and audits field by field; secrets never leave in clear
+ *  T9 live override: writes and audits field by field; secrets are never copied
  *  T10 tax on live: components updated in place, issued invoices keep their link
  *  T11 test twins: one run covers both pairs; a blocked twin leaves live untouched
  *  T12 HTTP: preview, key refused, roles, 409 on a stale preview
@@ -389,18 +389,16 @@ const ALL6 = [
     email: "numbers@example.com",
   });
   await withTenant(orgId, (tx) =>
-    tx
-      .insert(invoices)
-      .values({
-        organizationId: orgId,
-        businessId: sampleBiz.id,
-        customerId: cust.id,
-        publicId: publicId("inv"),
-        number: "OLD-7",
-        currency: "USD",
-        subtotalMinor: 0n,
-        totalMinor: 0n,
-      }),
+    tx.insert(invoices).values({
+      organizationId: orgId,
+      businessId: sampleBiz.id,
+      customerId: cust.id,
+      publicId: publicId("inv"),
+      number: "OLD-7",
+      currency: "USD",
+      subtotalMinor: 0n,
+      totalMinor: 0n,
+    }),
   );
   const issued = await err(
     runTransfer({
@@ -468,6 +466,17 @@ await saveSmtpSettings(orgId, src.id, {
   encryption: "starttls",
   username: "mailer",
   password: SECRET,
+});
+// The live destination has its own password: secrets are never copied, so without it the
+// override refuses the email section (T9).
+const DEST_SECRET = "smtp-pass-live-2b6d";
+await saveSmtpSettings(orgId, liveDest.id, {
+  enabled: true,
+  host: "smtp.live.example",
+  port: 587,
+  encryption: "starttls",
+  username: "live",
+  password: DEST_SECRET,
 });
 const toLive = { ...pair(src, liveDest), sections: [...ALL6] };
 const liveJobs = async () =>
@@ -562,6 +571,35 @@ const liveJobs = async () =>
 
 // ── T9: the live override ──────────────────────────────────────────────────────
 {
+  const own = await row(liveDest.id);
+  await setBiz(liveDest.id, { smtpConfig: null, smtpCredentialsEnc: null });
+  const bare = await previewTransfer(toLive);
+  ok(
+    "T9: with no SMTP password of its own the preview shows a blocker",
+    bare.pairs[0]!.blockers.some(
+      (b) => b.section === "email_sending" && /no SMTP password/.test(b.message),
+    ),
+  );
+  const refused = await err(
+    runTransfer({
+      ...toLive,
+      liveOverride: { confirm: "LiveDest", planDigest: bare.plan_digest },
+      operatorRole: "admin",
+    }),
+  );
+  ok(
+    "T9: the live run is refused with the credential message",
+    refused instanceof TransferError && /Secrets are not copied/.test((refused as Error).message),
+  );
+  ok(
+    "T9: the refused run wrote nothing",
+    (await row(liveDest.id)).defaultDueDays === 9 && (await row(liveDest.id)).smtpConfig === null,
+  );
+  await setBiz(liveDest.id, {
+    smtpConfig: own.smtpConfig,
+    smtpCredentialsEnc: own.smtpCredentialsEnc,
+  });
+
   const pv = await previewTransfer(toLive);
   const pvJson = JSON.stringify(pv);
   const srcRow = await row(src.id);
@@ -570,10 +608,13 @@ const liveJobs = async () =>
     "T9: the preview carries no secret and no envelope",
     !pvJson.includes(SECRET) && !pvJson.includes(srcRow.smtpCredentialsEnc!),
   );
-  const smtpField = pv.pairs[0]!.sections.find((s) => s.section === "email_sending")?.fields?.find(
-    (f) => f.field === "smtp_credentials",
+  const emailFields =
+    pv.pairs[0]!.sections.find((s) => s.section === "email_sending")?.fields ?? [];
+  ok(
+    "T9: the preview has no secret field to copy",
+    emailFields.length > 0 && emailFields.every((f) => !f.secret && f.field !== "smtp_credentials"),
   );
-  ok("T9: the preview masks the secret", smtpField?.to === "••••" && smtpField.changed === true);
+  ok("T9: with its own password the preview has no blocker", pv.pairs[0]!.blockers.length === 0);
   const job = await runTransfer({
     ...toLive,
     liveOverride: { confirm: "LiveDest", planDigest: pv.plan_digest },
@@ -595,8 +636,13 @@ const liveJobs = async () =>
     ec.fromAddress === "billing@src.example" && !("subjectPrefix" in ec) && !("footerNote" in ec),
   );
   ok(
-    "T9: the SMTP password decrypts to the source one on the destination",
-    readSmtpPassword(L.smtpCredentialsEnc) === SECRET,
+    "T9: the destination keeps its own SMTP password",
+    L.smtpCredentialsEnc === own.smtpCredentialsEnc &&
+      readSmtpPassword(L.smtpCredentialsEnc) === DEST_SECRET,
+  );
+  ok(
+    "T9: the SMTP server settings are copied",
+    (L.smtpConfig as { host?: string } | null)?.host === "smtp.src.example",
   );
   const { prices: pricesTable } = await import("@db/schema");
   const livePrice = (
@@ -632,8 +678,9 @@ const liveJobs = async () =>
     "T9: the audit row carries no secret and no envelope",
     !!audit &&
       !auditJson.includes(SECRET) &&
+      !auditJson.includes(srcRow.smtpCredentialsEnc!) &&
       !auditJson.includes(L.smtpCredentialsEnc!) &&
-      a.after.fields.smtp_credentials_enc === "••••",
+      !("smtp_credentials_enc" in a.after.fields),
   );
   const again = await previewTransfer(toLive);
   ok(
@@ -1031,14 +1078,12 @@ const liveJobs = async () =>
   const sessionAs = async (role: "admin" | "manager"): Promise<string> => {
     const invited = await inviteUser({ organizationId: hOrg, email: em(role), role });
     const tok = `invt_${randomBytes(32).toString("base64url")}`;
-    await systemDb
-      .insert(authTokens)
-      .values({
-        userId: invited.userId,
-        tokenHash: createHash("sha256").update(tok).digest("hex"),
-        purpose: "invite",
-        expiresAt: new Date(Date.now() + 3600_000),
-      });
+    await systemDb.insert(authTokens).values({
+      userId: invited.userId,
+      tokenHash: createHash("sha256").update(tok).digest("hex"),
+      purpose: "invite",
+      expiresAt: new Date(Date.now() + 3600_000),
+    });
     return (await acceptInvite(tok, PW)).token;
   };
   const call = (url: string, auth: { cookie?: string; bearer?: string }, payload: object) =>

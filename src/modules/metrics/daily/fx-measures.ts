@@ -63,7 +63,7 @@ export interface FxImpactInput {
   periods: readonly SeriesPeriod[];
   /** The answer's currency. */
   currency: string | null;
-  /** The last day every business has reached — see `readMetricSeries`. */
+  /** The businesses' shared own today — see `readMetricSeries`. */
   through?: string;
   /** Present only for a converted answer; `dayConvert` when each day converts at its own rate. */
   convert?: { base: string; rates: Record<string, number>; dayConvert?: DayConvert };

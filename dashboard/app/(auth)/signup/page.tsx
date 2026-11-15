@@ -12,6 +12,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { Turnstile } from "@/components/turnstile";
+import { Wordmark } from "@/components/wordmark";
 import { LIMITS } from "@/lib/limits";
 import { currentUser } from "@/lib/session";
 import { googleConfig } from "@/lib/google-oauth";
@@ -45,8 +46,8 @@ export default async function SignupPage({
   if (await currentUser()) redirect(LANDING_PATH);
 
   const brand = (
-    <div className="text-center text-2xl font-bold tracking-tight">
-      tm<span className="text-brand">billing</span>
+    <div className="flex justify-center">
+      <Wordmark size="lg" />
     </div>
   );
 
@@ -58,7 +59,9 @@ export default async function SignupPage({
         {brand}
         <Card>
           <CardHeader className="text-center">
-            <CardTitle className="text-xl">We received your request</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>We received your request</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               Our team reads each request. When we approve it, we send a sign-up link to your email
               address.
@@ -81,7 +84,9 @@ export default async function SignupPage({
         {brand}
         <Card>
           <CardHeader className="text-center">
-            <CardTitle className="text-xl">Ask for access</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>Ask for access</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               We open accounts one at a time. Tell us about your business. When we approve your
               request, we send a sign-up link to your email address.
@@ -149,7 +154,9 @@ export default async function SignupPage({
         {brand}
         <Card>
           <CardHeader className="text-center">
-            <CardTitle className="text-xl">Sign-up is not available</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>Sign-up is not available</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               On this deployment, accounts are created by invitation. Ask an administrator to add
               you to an organization.
@@ -171,7 +178,9 @@ export default async function SignupPage({
         {brand}
         <Card>
           <CardHeader className="text-center">
-            <CardTitle className="text-xl">Check your email</CardTitle>
+            <CardTitle className="text-xl">
+              <h1>Check your email</h1>
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               We sent a link to confirm your email address. Open it to create your account. The link
               expires in 24 hours.
@@ -197,7 +206,9 @@ export default async function SignupPage({
       {brand}
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Create your free account</CardTitle>
+          <CardTitle className="text-xl">
+            <h1>Create your free account</h1>
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
             Free while you make less than $1,000 a month. Every feature. No credit card required.
           </p>
@@ -216,7 +227,7 @@ export default async function SignupPage({
           ) : google ? (
             <>
               <Button asChild variant="outline" className="w-full">
-                <a href="/auth/google/start">
+                <a data-document-link href="/auth/google/start">
                   <img
                     src="/web_neutral_rd_na@2x.png"
                     alt=""

@@ -17,7 +17,7 @@ import { archiveCatalogItem, restoreCatalogItem } from "@/app/actions";
 
 /**
  * Row menu for a plan/addon/charge: References group (jump to associated
- * subscriptions) + Quick Actions (edit on a full page, archive/restore).
+ * subscriptions) + Quick actions (edit on a full page, archive/restore).
  */
 export function ProductRowMenu({
   biz,
@@ -53,7 +53,7 @@ export function ProductRowMenu({
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
             References
           </DropdownMenuLabel>
@@ -61,12 +61,12 @@ export function ProductRowMenu({
             onSelect={() => router.push(`/businesses/${biz}/subscriptions?plan=${id}`)}
           >
             <Users className="size-4" />
-            View associated Subscriptions
+            View associated subscriptions
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            Quick Actions
+            Quick actions
           </DropdownMenuLabel>
           <DropdownMenuItem
             onSelect={() => router.push(`/businesses/${biz}/catalog/products/${id}/edit`)}
@@ -74,10 +74,7 @@ export function ProductRowMenu({
             <Pencil className="size-4" />
             Edit
           </DropdownMenuItem>
-          <DropdownMenuItem
-            variant={active ? "destructive" : "default"}
-            onSelect={() => setConfirmOpen(true)}
-          >
+          <DropdownMenuItem onSelect={() => setConfirmOpen(true)}>
             {active ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}
             {active ? "Archive" : "Restore"}
           </DropdownMenuItem>

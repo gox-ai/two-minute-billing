@@ -1130,6 +1130,11 @@ const OPTS = {
       "voiding a hold reports the hold",
       v.voided && v.held === true && v.providerTransactionId === "act_v",
     );
+    // An unanswered session: its payment, if any, is searched by the session's reference.
+    answer = (u, m) =>
+      m === "GET" && String(u).includes("/payments?reference=")
+        ? { status: 404, body: {} }
+        : { status: 200, body: { id: "pay_h", status: "Authorized" } };
     const vs = await cko.voidIntent({ intentId: payIntent.intentId, idempotencyKey: "k" });
     ok("voiding an unanswered challenge holds nothing", vs.voided && vs.held === false);
 

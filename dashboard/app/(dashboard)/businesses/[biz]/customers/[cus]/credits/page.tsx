@@ -12,7 +12,8 @@ import {
 import { businessCurrencyOptions } from "@/lib/business-currencies";
 import { businessTz } from "@/lib/business-tz-server";
 import { accountHolderName } from "@/lib/names";
-import { fmtDate, fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { allows, requirePermission } from "@/lib/session";
 import {
   CATEGORY_LABEL,
@@ -20,18 +21,26 @@ import {
   POLICY_LABEL,
   POLICY_SOURCE_LABEL,
   SOURCE_LABEL,
-  TXN_KIND_LABEL,
+  txnKindLabel,
+  balanceView,
   fmtUnits,
+  hasMoneyValue,
+  heldUnsettledRows,
+  holdAmount,
+  holdLeaseLines,
   movementCells,
+  unitCount,
   resolveCreditConfig,
   unitInfo,
   type CreditConfigInput,
   type CustomerCreditSettings,
+  grantStatusKey,
 } from "@/lib/credits";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, EmptyState } from "@/components/states";
 import { Facts, RecordCard, Row, Zone } from "@/components/patterns/record-page";
 import { StatusChip } from "@/components/patterns/chip";
+import { IdText, MiddleEllipsis } from "@/components/patterns/id-text";
 import { Alert } from "@/components/ui/alert";
 import {
   Table,
@@ -48,6 +57,7 @@ import {
   VoidGrantButton,
 } from "@/components/credits/credit-row-actions";
 import { CreditTransactionFiltersForm } from "@/components/credits/credit-transaction-filters";
+import { CustomerUnitLimits } from "@/components/credits/customer-unit-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -144,6 +154,15 @@ export default async function CustomerCreditsPage({
     <Alert tone="error">We could not load the {what}. Reload the page.</Alert>
   );
 
+  const view = balances
+    ? balanceView({ ...balances, grants_minor: balances.balance.grants_minor }, (key) =>
+        info(key, balances.currency),
+      )
+    : null;
+  const moneyLead = view?.lead !== "units";
+  // A page of movements in units with no rate has no money to show.
+  const showValue = hasMoneyValue((txns?.data ?? []).map((t) => info(t.unit, t.currency)));
+
   const overrideActive = !!settings?.on_exhausted && stillLive(settings.override_expires_at);
 
   return (
@@ -180,27 +199,42 @@ export default async function CustomerCreditsPage({
             title="Available credit"
             meta="Credit left after unbilled usage and open holds"
           >
-            {!balances ? (
+            {!balances || !view ? (
               loadError("balance")
             ) : (
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-sm font-medium">{balances.currency}</span>
-                  <span className="text-2xl font-semibold tabular-nums">
-                    {money(balances.available_minor, balances.currency)}
-                  </span>
-                </div>
+                {view.lead === "units" ? (
+                  // Only credit with no money value: lead with it, not with a money figure of 0.
+                  view.unrated.map((u) => (
+                    <div
+                      key={u.unit.key}
+                      className="flex flex-wrap items-baseline justify-between gap-2"
+                    >
+                      <span className="text-sm font-medium">Available {u.unit.plural}</span>
+                      <span className="text-2xl font-semibold tabular-nums">
+                        {unitCount(u.units, u.unit)}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-sm font-medium">{balances.currency}</span>
+                    <span className="text-2xl font-semibold tabular-nums">
+                      {money(balances.available_minor, balances.currency)}
+                    </span>
+                  </div>
+                )}
                 <Facts
                   rows={[
-                    {
+                    moneyLead && {
                       label: "Credit left",
                       value: money(balances.balance.grants_minor, balances.currency),
                     },
-                    {
+                    (moneyLead || balances.balance.unbilled_usage_minor !== 0) && {
                       label: "Unbilled usage that credit pays",
                       value: money(-balances.balance.unbilled_usage_minor || 0, balances.currency),
                     },
-                    {
+                    (moneyLead || balances.balance.open_holds_minor !== 0) && {
                       label: "Open holds",
                       value: money(-balances.balance.open_holds_minor || 0, balances.currency),
                     },
@@ -210,17 +244,13 @@ export default async function CustomerCreditsPage({
                           value: `+${money(balances.balance.overdraft_limit_minor, balances.currency)}`,
                         }
                       : null,
-                    // The money balance comes keyed by its currency code; format it as money.
-                    ...balances.available_units.map((u) => {
-                      const unit = info(
-                        u.unit === balances.currency ? null : u.unit,
-                        balances.currency,
-                      );
-                      return {
-                        label: `Available ${unit.key ? unit.plural : `in ${balances.currency}`}`,
-                        value: fmtUnits(u.units, unit),
-                      };
-                    }),
+                    // "left", as "Credit left": this figure does not take money holds off.
+                    ...(moneyLead ? view.rated : []).map(({ unit, units }) => ({
+                      label: `${unit.plural.charAt(0).toUpperCase()}${unit.plural.slice(1)} left`,
+                      value: fmtUnits(units, unit),
+                    })),
+                    // Led by units: what the figures above do not count yet.
+                    ...(moneyLead ? [] : view.unrated.flatMap((r) => heldUnsettledRows(r, r.unit))),
                     {
                       label: "When credit is used up",
                       value: [
@@ -232,10 +262,30 @@ export default async function CustomerCreditsPage({
                     },
                   ]}
                 />
-                <p className="m-0 text-xs text-muted-foreground">
-                  In the currency of the customer&apos;s subscriptions. Usage that credit does not
-                  cover goes on the invoice. The invoice shows the final amounts.
-                </p>
+                {moneyLead ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    In the currency of the customer&apos;s subscriptions. Usage that credit does not
+                    cover goes on the invoice. The invoice shows the final amounts.
+                  </p>
+                ) : (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    This credit has no money value.
+                  </p>
+                )}
+                {moneyLead && view.unrated.length > 0 ? (
+                  // Outside the money block: these units are not part of the figure above.
+                  <div className="flex flex-col gap-2 border-t pt-3">
+                    <span className="text-xs text-muted-foreground">
+                      Credit with no money value
+                    </span>
+                    <Facts
+                      rows={view.unrated.flatMap((r) => [
+                        { label: `Available ${r.unit.plural}`, value: fmtUnits(r.units, r.unit) },
+                        ...heldUnsettledRows(r, r.unit),
+                      ])}
+                    />
+                  </div>
+                ) : null}
               </div>
             )}
           </RecordCard>
@@ -285,6 +335,7 @@ export default async function CustomerCreditsPage({
             />
           </RecordCard>
         </Row>
+        <CustomerUnitLimits biz={biz} cus={cus} tz={tz} canManage={canManage} />
       </Zone>
 
       <Zone title="Credit">
@@ -293,16 +344,21 @@ export default async function CustomerCreditsPage({
             <div className="px-5 py-4">{loadError("credit grants")}</div>
           ) : grants.data.length === 0 ? (
             <EmptyState
-              title="No credit grants"
-              description="Give credit by hand, sell a credit pack, or add credits to a plan price."
+              title={canManage ? `Give ${name} credit` : "No credit grants"}
+              description={
+                canManage
+                  ? "Give credit by hand, sell a credit pack, or add credits to a plan price."
+                  : "Credit grants for this customer show here."
+              }
             />
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table phone="stack">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-5">Grant</TableHead>
                     <TableHead>Category</TableHead>
+                    {/* A labelled line on a phone: as the aside it repeated the title's amount. */}
                     <TableHead className="text-right">Remaining</TableHead>
                     <TableHead className="text-right">Cost basis</TableHead>
                     <TableHead>Expires</TableHead>
@@ -320,13 +376,20 @@ export default async function CustomerCreditsPage({
                               columns overflowed the card at 1440 px. */}
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium">{fmtUnits(g.amount, u)}</span>
-                            <StatusChip status={g.status} />
+                            <StatusChip status={grantStatusKey(g.status, g.remaining.units)} />
                           </div>
                           <Link
                             href={`?grant=${g.id}#transactions`}
-                            className="font-mono text-xs text-primary hover:underline"
+                            className="block max-w-56 text-primary hover:underline"
                           >
-                            {g.id}
+                            <MiddleEllipsis value={g.id} className="text-xs" />
+                          </Link>
+                          <Link
+                            href={`/businesses/${biz}/customers/${cus}/credits/grants/${g.id}`}
+                            className="block text-xs text-primary hover:underline"
+                            aria-label={`View activity of the grant of ${fmtUnits(g.amount, u)}`}
+                          >
+                            View activity
                           </Link>
                         </TableCell>
                         <TableCell>
@@ -346,7 +409,7 @@ export default async function CustomerCreditsPage({
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {fmtUnits(g.remaining.units, u)}
-                          {g.unit ? (
+                          {g.unit && u.rated !== false ? (
                             <div className="text-xs text-muted-foreground">
                               {money(g.remaining.face_minor, g.currency)}
                             </div>
@@ -370,15 +433,13 @@ export default async function CustomerCreditsPage({
                           ) : null}
                         </TableCell>
                         <TableCell className="pr-5 text-right">
-                          {canManage &&
-                          g.category === "promotional" &&
-                          g.status === "active" &&
-                          g.remaining.units > 0 ? (
+                          {canManage && g.status === "active" && g.remaining.units > 0 ? (
                             <VoidGrantButton
                               biz={biz}
                               cus={cus}
                               grant={g.id}
                               remaining={fmtUnits(g.remaining.units, u)}
+                              paid={g.category !== "promotional"}
                             />
                           ) : null}
                         </TableCell>
@@ -403,11 +464,13 @@ export default async function CustomerCreditsPage({
             <p className="m-0 px-5 py-4 text-sm text-muted-foreground">No open holds.</p>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table phone="stack">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-5">Hold</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead phone="aside" className="text-right">
+                      Amount
+                    </TableHead>
                     <TableHead>Meter</TableHead>
                     <TableHead>Scope</TableHead>
                     <TableHead>Expires</TableHead>
@@ -417,17 +480,35 @@ export default async function CustomerCreditsPage({
                 <TableBody>
                   {holds.data.map((h) => (
                     <TableRow key={h.id}>
-                      <TableCell className="pl-5 font-mono text-xs">{h.id}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {money(h.amount_minor, h.currency)}
+                      <TableCell className="pl-5">
+                        <IdText id={h.id} />
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{h.meter ?? "—"}</TableCell>
-                      <TableCell className="font-mono text-xs wrap-anywhere whitespace-normal">
-                        {h.scope && Object.keys(h.scope).length
-                          ? Object.entries(h.scope)
-                              .map(([k, v]) => `${k}=${v}`)
-                              .join(", ")
-                          : "—"}
+                      <TableCell className="text-right tabular-nums">
+                        {/* A lease that captured a step: what is left, then its steps. */}
+                        {holdLeaseLines(h, unitList).length ? (
+                          <>
+                            {holdAmount(h, unitList)} left
+                            {holdLeaseLines(h, unitList).map((l) => (
+                              <div key={l} className="text-xs text-muted-foreground">
+                                {l}
+                              </div>
+                            ))}
+                          </>
+                        ) : (
+                          holdAmount(h, unitList, { ofTotal: true })
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-mono text-xs">{h.meter ?? "—"}</span>
+                      </TableCell>
+                      <TableCell className="wrap-anywhere whitespace-normal">
+                        <span className="font-mono text-xs">
+                          {h.scope && Object.keys(h.scope).length
+                            ? Object.entries(h.scope)
+                                .map(([k, v]) => `${k}=${v}`)
+                                .join(", ")
+                            : "—"}
+                        </span>
                       </TableCell>
                       <TableCell className="tabular-nums">
                         {fmtDateTime(h.expires_at, tz)}
@@ -437,7 +518,7 @@ export default async function CustomerCreditsPage({
                           <ReleaseHoldButton
                             biz={biz}
                             hold={h.id}
-                            amount={money(h.amount_minor, h.currency)}
+                            amount={holdAmount(h, unitList)}
                           />
                         ) : null}
                       </TableCell>
@@ -468,14 +549,16 @@ export default async function CustomerCreditsPage({
           ) : (
             <>
               <div className="overflow-x-auto">
-                <Table>
+                <Table phone="stack">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Date</TableHead>
                       <TableHead>Movement</TableHead>
                       <TableHead>Grant</TableHead>
-                      <TableHead className="text-right">Units</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <TableHead phone="aside" className="text-right">
+                        Units
+                      </TableHead>
+                      {showValue ? <TableHead className="text-right">Value</TableHead> : null}
                       <TableHead className="pr-5">Invoice</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -489,14 +572,18 @@ export default async function CustomerCreditsPage({
                             {fmtDateTime(t.created_at, tz)}
                           </TableCell>
                           <TableCell>
-                            {TXN_KIND_LABEL[t.kind] ?? t.kind}
+                            {txnKindLabel(t)}
                             <div className="text-xs text-muted-foreground">
                               {CATEGORY_LABEL[t.category]}
                             </div>
                           </TableCell>
-                          <TableCell className="font-mono text-xs">{t.grant}</TableCell>
+                          <TableCell>
+                            <span className="font-mono text-xs">{t.grant}</span>
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">{cells.units}</TableCell>
-                          <TableCell className="text-right tabular-nums">{cells.value}</TableCell>
+                          {showValue ? (
+                            <TableCell className="text-right tabular-nums">{cells.value}</TableCell>
+                          ) : null}
                           <TableCell className="pr-5">
                             {t.invoice ? (
                               <Link

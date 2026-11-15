@@ -34,6 +34,7 @@ export function MoneyInput({
   inputClassName,
   id,
   onMinorChange,
+  "aria-label": ariaLabel,
   "aria-describedby": describedBy,
   "aria-invalid": ariaInvalid,
 }: {
@@ -65,6 +66,8 @@ export function MoneyInput({
   id?: string;
   /** Called with the minor-unit string ('' when blank/unparseable). */
   onMinorChange?: (minor: string) => void;
+  /** For a money input with no visible label of its own (a row under a column header). */
+  "aria-label"?: string;
   "aria-describedby"?: string;
   /** Injected by <Field> when the enclosing ActionForm reported an error here. */
   "aria-invalid"?: boolean;
@@ -121,6 +124,7 @@ export function MoneyInput({
         required={required}
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
+        aria-label={ariaLabel}
         aria-describedby={describedBy}
         aria-invalid={bad ? true : undefined}
         placeholder={placeholder ?? (exponent === 0 ? "0" : (0).toFixed(exponent))}

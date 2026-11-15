@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 
 /** Members | Roles above the Team screens. Links, so the tab is in the URL. */
 export function TeamTabs({
@@ -22,6 +23,7 @@ export function TeamTabs({
   );
   return (
     <nav aria-label="Team" className={SEGMENT_TRACK}>
+      <SegmentIndicator />
       {tab("members", "/team", "Members")}
       {tab("roles", "/team/roles", "Roles")}
     </nav>

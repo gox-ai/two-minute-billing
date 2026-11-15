@@ -1,8 +1,9 @@
 // Value formatting for the semantic-layer API (`lib/analytics-api.ts`), unit-aware.
 // Distinct from `components/analytics/series-format.ts`, which formats the OLDER
 // payments-analytics payload (`lib/api/analytics`) — different wire shape, same folder.
-import { money, moneyCompact, countCompact, pctFromBps } from "@/lib/format";
-import type { MeasureUnit } from "@/lib/analytics-api";
+// Relative imports only: a root unit test imports this file, where `@/` points at `src/`.
+import { money, moneyCompact, countCompact, pctFromBps, toMajor } from "../../lib/format";
+import type { MeasureUnit } from "../../lib/analytics-api";
 
 /**
  * A measure's value, full precision. `null` is "computed, and the answer is
@@ -41,6 +42,30 @@ export function measureValueCompact(
   return measureValue(value, unit, currency, denominator);
 }
 
+/**
+ * Matrix-cell form: money to three significant figures (₹131K, ₹27.3K, ₹833), so twelve
+ * periods fit a tile without scrolling. The exact amount belongs in the cell's hover.
+ */
+export function measureValueTight(
+  value: number | null,
+  unit: MeasureUnit,
+  currency: string | null,
+): string {
+  if (value == null) return "—";
+  if (unit !== "money") return measureValue(value, unit, currency);
+  const cur = currency ?? "USD";
+  try {
+    return new Intl.NumberFormat("en", {
+      style: "currency",
+      currency: cur,
+      notation: "compact",
+      maximumSignificantDigits: 3,
+    }).format(toMajor(Math.round(value), cur));
+  } catch {
+    return moneyCompact(Math.round(value), cur);
+  }
+}
+
 /** Axis-tick form: bare compact numbers, no currency symbol — the headline states it. */
 export function measureAxisValue(value: number, unit: MeasureUnit): string {
   if (unit === "bps") return pctFromBps(Math.round(value), 1);
@@ -53,4 +78,12 @@ export function chartKindFor(unit: MeasureUnit): "money" | "count" | "percent" {
   if (unit === "money") return "money";
   if (unit === "bps") return "percent";
   return "count";
+}
+
+/**
+ * A period-over-period change, unsigned: "63.4%". Past 999% it reads "> 999%": a young book
+ * moves by thousands of percent, which is true and tells the reader nothing more.
+ */
+export function changePct(absBps: number): string {
+  return absBps >= 99_950 ? "> 999%" : pctFromBps(absBps, 1);
 }

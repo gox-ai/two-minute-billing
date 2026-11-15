@@ -6,6 +6,10 @@ import { Button } from "@/components/ui/button";
 import type { ReactNode } from "react";
 
 import { usePortalSelect } from "./portal-panes";
+
+/** The add-method disclosure's id, and the event that opens it. */
+export const ADD_METHOD_ANCHOR = "portal-add-method";
+export const OPEN_ADD_METHOD_EVENT = "portal:open-add-method";
 import type { PortalTab } from "./portal-tabs";
 
 /**
@@ -84,23 +88,31 @@ export function PortalSectionButton({
   section,
   variant = "default",
   size,
+  addMethod = false,
   children,
 }: {
   section: PortalTab;
   variant?: "default" | "outline";
   size?: "sm" | "default";
+  /** Opens the add-method form and brings it into view (the pane's top is not enough on a phone). */
+  addMethod?: boolean;
   children: ReactNode;
 }) {
   const select = usePortalSelect();
   return (
     <Button asChild variant={variant} size={size}>
       <Link
-        href={`?tab=${section}#portal-${section}`}
+        href={
+          addMethod
+            ? `?tab=${section}&add_card=1#${ADD_METHOD_ANCHOR}`
+            : `?tab=${section}#portal-${section}`
+        }
         onClick={(e) => {
           if (!select) return;
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           e.preventDefault();
-          select(section, { hash: true });
+          if (addMethod) window.dispatchEvent(new Event(OPEN_ADD_METHOD_EVENT));
+          select(section, { hash: true, ...(addMethod ? { anchor: ADD_METHOD_ANCHOR } : {}) });
         }}
       >
         {children}

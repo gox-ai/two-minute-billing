@@ -24,7 +24,7 @@ import { Tmbilling, TmbillingError } from "@two-minute-billing/sdk";
 
 const tmb = new Tmbilling({
   apiKey: process.env.TMBILLING_API_KEY!,
-  baseUrl: process.env.TMBILLING_URL, // your API host; default http://localhost:4000
+  baseUrl: process.env.TMBILLING_URL, // default https://api.twominutebilling.com (Cloud)
 });
 
 const biz = await tmb.businesses.create({ name: "Fernhill Analytics", default_currency: "USD" });

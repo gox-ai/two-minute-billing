@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
-import { portalSessions, customers, businesses } from "@db/schema";
+import { portalSessions, customers, businesses, paymentLinks } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { resolveStorefrontConfig } from "@/modules/checkout/storefront-config";
 
@@ -367,10 +367,29 @@ export async function getPortalLinkNotice(businessPublicId: string) {
     iconUrl: b.iconUrl,
     faviconUrl: b.faviconUrl,
     brandColor: b.brandColor,
+    supportEmail: b.supportEmail,
+    website: b.website,
+    hasPricingPage: await businessHasPricingPage(b.id),
     html: resolveStorefrontConfig(b).portalLinkErrorHtml,
     /** Phase 4: the signed-out card offers "email me a code". */
     emailCode: resolveStorefrontConfig(b).portalEmailCode,
   };
+}
+
+/** The business shows at least one active link on its public pricing page. */
+export async function businessHasPricingPage(businessId: string): Promise<boolean> {
+  const [row] = await systemDb
+    .select({ id: paymentLinks.id })
+    .from(paymentLinks)
+    .where(
+      and(
+        eq(paymentLinks.businessId, businessId),
+        eq(paymentLinks.active, true),
+        eq(paymentLinks.showOnPricingPage, true),
+      ),
+    )
+    .limit(1);
+  return row != null;
 }
 
 /**

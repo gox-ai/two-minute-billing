@@ -62,6 +62,11 @@ export const modelPrices = pgTable(
     model: text("model").notNull(),
     /** input | output | cache_read | cache_write | … (open set from the source). */
     tokenType: text("token_type").notNull(),
+    /** 0524: what one unit is (`MODEL_PRICE_UNITS`). `_kcount` rows are `request`. */
+    unit: text("unit").notNull().default("token"),
+    /** 0524: price tier; '' = none. */
+    quality: text("quality").notNull().default(""),
+    resolution: text("resolution").notNull().default(""),
     currency: char("currency", { length: 3 }).notNull(),
     /** Minor units per `quantityDivisor` units, ≤ 12 dp. "$3 per 1M" = "300" per 1000000. */
     unitAmountDecimal: numeric("unit_amount_decimal", { precision: 38, scale: 12 }).notNull(),
@@ -91,10 +96,20 @@ export const modelPrices = pgTable(
       t.provider,
       t.model,
       t.tokenType,
+      t.unit,
+      t.quality,
+      t.resolution,
       t.currency,
       t.effectiveFrom,
     ),
-    index("model_prices_model_token_from_idx").on(t.model, t.tokenType, t.effectiveFrom.desc()),
+    index("model_prices_model_token_from_idx").on(
+      t.model,
+      t.tokenType,
+      t.unit,
+      t.quality,
+      t.resolution,
+      t.effectiveFrom.desc(),
+    ),
     index("model_prices_sync_run_idx").on(t.syncRunId),
   ],
 );
@@ -120,6 +135,10 @@ export const modelCostOverrides = pgTable(
     /** May name a model the list does not have. */
     model: text("model").notNull(),
     tokenType: text("token_type").notNull(),
+    /** 0524: as on `model_prices`. */
+    unit: text("unit").notNull().default("token"),
+    quality: text("quality").notNull().default(""),
+    resolution: text("resolution").notNull().default(""),
     currency: char("currency", { length: 3 }).notNull(),
     /** Minor units per `quantityDivisor` units, ≤ 12 dp. */
     unitAmountDecimal: numeric("unit_amount_decimal", { precision: 38, scale: 12 }).notNull(),
@@ -144,6 +163,9 @@ export const modelCostOverrides = pgTable(
       t.organizationId,
       t.model,
       t.tokenType,
+      t.unit,
+      t.quality,
+      t.resolution,
       t.effectiveFrom.desc(),
     ),
   ],

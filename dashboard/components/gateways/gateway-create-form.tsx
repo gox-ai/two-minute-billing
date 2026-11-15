@@ -1,23 +1,49 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CurrenciesField } from "@/components/form/currency-select";
 import { Chip } from "@/components/patterns/chip";
-import { SettingRow, SettingsCard } from "@/components/settings/settings-layout";
+import { SettingRow, SettingsCard, SettingsSaveBar } from "@/components/settings/settings-layout";
 import { CredentialFields } from "@/components/gateways/credential-fields";
 import { MethodTypesField } from "@/components/gateways/method-types-field";
 import { InternationalPaymentsRow } from "@/components/gateways/gateway-settings-fields";
-import { gatewayEntry, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
-import { LOGO_SIZE, PartnerLogo } from "@/components/partner-logo";
+import {
+  gatewayEntry,
+  type CredentialFieldMeta,
+  type GatewayCatalogEntry,
+} from "@/components/gateways/gateway-meta";
+import { LOGO_SIZE, PartnerLogo, hasPartnerLogo } from "@/components/partner-logo";
 import type { ActionResult } from "@/lib/action-result";
 import { gatewayCurrencyField } from "@/lib/business-currencies";
+
+/** Where a provider's test keys differ from `test_`. */
+const TEST_KEY_PREFIX: Record<string, string> = { gocardless: "sandbox_" };
+
+/** The catalogue's placeholders show live keys; a test business enters its test keys. */
+function modeFields(
+  fields: CredentialFieldMeta[],
+  live: boolean,
+  gateway: string,
+): CredentialFieldMeta[] {
+  if (live) return fields;
+  return fields.map((f) =>
+    f.placeholder
+      ? {
+          ...f,
+          placeholder: f.placeholder.replace(/^(sk_|pk_|rzp_)?live_/, (_m, pre?: string) =>
+            pre ? `${pre}test_` : (TEST_KEY_PREFIX[gateway] ?? "test_"),
+          ),
+        }
+      : f,
+  );
+}
 
 /**
  * Add a gateway: step one is a directory built from the provider catalogue, step two
@@ -87,7 +113,8 @@ export function GatewayCreateForm({
     <ActionForm
       action={action}
       onSuccess={(r) => r.redirectTo && router.push(r.redirectTo)}
-      className="flex flex-col gap-5"
+      // The cards keep a reading width; the action bar spans the page column.
+      className="flex flex-col gap-5 [&>*:not([data-action-bar])]:max-w-4xl"
     >
       <input type="hidden" name="biz" value={biz} />
       {gatewayKey ? <input type="hidden" name="gateway_key" value={gatewayKey} /> : null}
@@ -110,19 +137,24 @@ export function GatewayCreateForm({
         {selected ? (
           // The directory folds to the chosen card, so its form sits directly below it.
           <div className="p-4">
-            <div className="flex flex-col gap-3 rounded-lg border border-primary px-4 py-3 ring-1 ring-primary">
+            <div className="flex flex-col gap-3 rounded-xl border border-primary px-4 py-3 ring-1 ring-primary">
               <ProviderCardBody g={selected} on />
             </div>
           </div>
         ) : (
-          <ul role="list" className="m-0 grid list-none gap-3 p-4 sm:grid-cols-2">
+          // The assistant's map lists each provider from the catalogue (`OPTION_SOURCES`).
+          <ul
+            role="list"
+            data-map-options="gateways"
+            className="m-0 grid list-none gap-3 p-4 sm:grid-cols-2"
+          >
             {gateways.map((g) => (
               <li key={g.key}>
                 <button
                   type="button"
                   id={`gateway-card-${g.key}`}
                   onClick={() => select(g.key)}
-                  className="flex h-full w-full flex-col gap-3 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  className="flex h-full w-full flex-col gap-3 rounded-xl border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   <ProviderCardBody g={g} on={false} />
                 </button>
@@ -130,9 +162,9 @@ export function GatewayCreateForm({
             ))}
             {comingSoon.map((g) => (
               <li key={g.key}>
-                <div className="flex h-full w-full flex-col gap-3 rounded-lg border bg-muted/50 px-4 py-3">
+                <div className="flex h-full w-full flex-col gap-3 rounded-xl border bg-muted/50 px-4 py-3">
                   <span className="flex items-center justify-between gap-3">
-                    <PartnerLogo brand={g.key} name={g.display_name} {...LOGO_SIZE.card} fit />
+                    <ProviderMark g={g} />
                     <Chip tone="gray">Coming soon</Chip>
                   </span>
                   <span className="flex min-w-0 flex-col gap-1">
@@ -152,11 +184,6 @@ export function GatewayCreateForm({
         <SettingsCard
           title={`Connect ${name}`}
           meta="We encrypt credentials at rest and do not show them again"
-          footer={
-            <div className="flex justify-end py-1.5">
-              <SubmitButton>Create gateway account</SubmitButton>
-            </div>
-          }
         >
           <SettingRow
             label="Label"
@@ -170,7 +197,7 @@ export function GatewayCreateForm({
                 required
                 maxLength={200}
                 placeholder={`${name} account`}
-                className="max-w-md"
+                className="w-full sm:w-72"
               />
             }
           />
@@ -188,7 +215,12 @@ export function GatewayCreateForm({
           />
           <SettingRow
             label="Credentials"
-            control={<CredentialFields fields={selected.credential_fields} requiredFields />}
+            control={
+              <CredentialFields
+                fields={modeFields(selected.credential_fields, live, selected.key)}
+                requiredFields
+              />
+            }
           />
           <SettingRow
             label="Currencies"
@@ -222,7 +254,34 @@ export function GatewayCreateForm({
           />
         </SettingsCard>
       ) : null}
+      {gatewayKey && selected ? (
+        <SettingsSaveBar label="Create gateway account">
+          <Button asChild variant="outline">
+            <Link href={`/businesses/${biz}/settings/gateways`}>Cancel</Link>
+          </Button>
+        </SettingsSaveBar>
+      ) : null}
     </ActionForm>
+  );
+}
+
+/** The logo, or the name's initials in a tile when we have no logo file: the name shows once, below. */
+function ProviderMark({ g }: { g: GatewayCatalogEntry }) {
+  if (hasPartnerLogo(g.key))
+    return <PartnerLogo brand={g.key} name={g.display_name} {...LOGO_SIZE.card} fit />;
+  const initials = g.display_name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+  return (
+    <span
+      aria-hidden
+      className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-sm font-semibold text-muted-foreground"
+    >
+      {initials}
+    </span>
   );
 }
 
@@ -232,7 +291,7 @@ function ProviderCardBody({ g, on }: { g: GatewayCatalogEntry; on: boolean }) {
   return (
     <>
       <span className="flex items-center justify-between gap-3">
-        <PartnerLogo brand={g.key} name={g.display_name} {...LOGO_SIZE.card} fit />
+        <ProviderMark g={g} />
         <span
           aria-hidden
           className={cn(

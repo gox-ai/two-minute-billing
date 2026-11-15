@@ -5,6 +5,7 @@ import { type ColumnDef } from "@tanstack/react-table";
 import { Coins } from "lucide-react";
 import {
   ListPage,
+  createAction,
   type ListFilterField,
   type ListPageHeader,
   type ListSegment,
@@ -12,7 +13,7 @@ import {
 import { InfoCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDateShort } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { useBusinessTz } from "@/components/business-tz";
 import { rateSentence, type CreditUnit } from "@/lib/credits";
 
@@ -72,7 +73,7 @@ export function CreditUnitsTable({
         accessorKey: "created_at",
         header: "Created",
         cell: ({ row }) => (
-          <TextCell className="tabular-nums">{fmtDateShort(row.original.created_at, tz)}</TextCell>
+          <TextCell className="tabular-nums">{fmtDate(row.original.created_at, tz)}</TextCell>
         ),
       },
     ],
@@ -105,8 +106,8 @@ export function CreditUnitsTable({
       data={rows}
       segments={segments}
       filterFields={filterFields}
-      createAction={canManage ? { label: "Create credit unit", href: `${base}/new` } : undefined}
-      searchPlaceholder="Search for ID or name…"
+      createAction={canManage ? createAction("credit unit", `${base}/new`) : undefined}
+      searchPlaceholder="Search by ID or name"
       exportName="credit-units"
       persistKey={`credit-units:${biz}`}
       rowHref={canManage ? (u) => `${base}/${u.id}` : undefined}
@@ -114,8 +115,8 @@ export function CreditUnitsTable({
       emptyState={
         <EmptyState
           icon={<Coins />}
-          title="No credit units"
-          description="A credit unit is your own unit of credit, for example 1 credit = USD 0.01. Grants in money need no unit."
+          title={canManage ? "Create a credit unit" : "No credit units"}
+          description="A credit unit is your own unit of credit, such as API calls. It can have a money value, for example 1 credit = USD 0.01, or none. Credit in money needs no unit."
         />
       }
     />

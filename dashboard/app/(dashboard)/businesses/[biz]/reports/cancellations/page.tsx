@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import { listBusinesses, listProducts } from "@/lib/api";
 import { listOfferedReasons } from "@/lib/api/reason-codes";
 import { getCancellationAnalytics } from "@/lib/api/cancellation-analytics";
@@ -164,7 +165,7 @@ export default async function CancellationsPage({
     <PageHeader
       title="Cancellations"
       description="What cancellations cost, why customers left, and how long they stayed."
-      breadcrumbs={[{ label: "Reports", href: `/businesses/${biz}/reports` }]}
+      breadcrumbs={reportCrumbs(biz, business?.name, "Cancellations")}
     />
   );
   // The period heading carries the filters, as Home's Performance zone carries its picker.
@@ -261,7 +262,7 @@ export default async function CancellationsPage({
                 />
               </RecordCard>
               {/* Not stretched to the chart's height: the footer stays under the bars. */}
-              <div className="min-w-0 xl:self-start">
+              <div className="min-w-0 @min-[59.5rem]/main:self-start">
                 <RecordCard
                   title="What left"
                   meta={`${now.totals.count.toLocaleString("en")} ${now.totals.count === 1 ? "cancellation" : "cancellations"}`}

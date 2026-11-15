@@ -58,9 +58,12 @@ export interface CouponRedemption {
   /** null = forever. */
   remaining_periods: number | null;
   customer: string;
+  /** Account holder's name. Absent on an older engine. */
+  customer_name?: string | null;
   subscription: string | null;
   /** First non-voided invoice it discounted; null until one has. */
   invoice: string | null;
+  invoice_number?: string | null;
   redeemed_at: string;
   discount_minor: number;
   currency: string;

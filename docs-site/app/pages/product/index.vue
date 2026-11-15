@@ -219,7 +219,6 @@ useMarketingSeo({
             </span>
             <span class="mt-4 flex items-center gap-1.5 font-semibold text-highlighted">
               {{ p.label }}
-              <UIcon name="i-lucide-arrow-up-right" class="size-4 text-muted" />
             </span>
             <span class="mt-1.5 text-sm leading-relaxed text-muted">{{ p.description }}</span>
           </NuxtLink>

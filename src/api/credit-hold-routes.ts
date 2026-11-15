@@ -14,6 +14,7 @@ import {
   captureCreditHold,
   createCreditHold,
   CreditRefusedError,
+  extendCreditHold,
   getCreditHold,
   HoldFinalError,
   HoldInputError,
@@ -30,8 +31,16 @@ const log = createLogger("credit-hold-routes");
 
 const scopeSchema = z.record(z.string().min(1).max(64), z.string().max(255));
 
+/** A decimal as text or as a JSON number. */
+const decimal = z
+  .union([z.string().min(1).max(40), z.number().nonnegative().finite()])
+  .transform((v) => (typeof v === "number" ? String(v) : v.trim()));
+
 const createHoldBody = z.object({
-  amount_minor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  amount_minor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  // A meter that is paid in credits: the meter quantity the work will use, or the credits.
+  quantity: decimal.optional(),
+  units: decimal.optional(),
   currency: z
     .string()
     .regex(/^[A-Za-z]{3}$/, "Send a 3-letter ISO currency code")
@@ -45,7 +54,11 @@ const createHoldBody = z.object({
 const captureBody = z.object({
   usage_event: z.unknown().optional(),
   usage_event_id: z.string().min(1).max(255).optional(),
+  // False: a step of a lease. The hold in units stays open with what the event did not use.
+  final: z.boolean().optional(),
 });
+
+const extendBody = z.object({ expires_in: z.number().int().min(1).max(MAX_HOLD_SECONDS) });
 
 function sendHoldError(reply: FastifyReply, e: unknown) {
   if (e instanceof CreditRefusedError)
@@ -78,7 +91,13 @@ function scopeFromQuery(q: Record<string, unknown>): Record<string, string> | nu
   return n ? out : null;
 }
 
-const ACCESS_KEYS = new Set(["meter", "estimate", "customer_key"]);
+const ACCESS_KEYS = new Set([
+  "meter",
+  "estimate",
+  "estimate_quantity",
+  "estimate_units",
+  "customer_key",
+]);
 
 export async function registerCreditHoldRoutes(app: FastifyInstance) {
   app.post(
@@ -97,22 +116,20 @@ export async function registerCreditHoldRoutes(app: FastifyInstance) {
       const customer = await getCustomerByPublicId(req.organization!.id, business.id, cus);
       if (!customer) return notFound(reply, `No such customer: ${cus}`);
       try {
-        const { hold, customerPublicId } = await createCreditHold({
+        const { hold, refs } = await createCreditHold({
           organizationId: req.organization!.id,
           businessId: business.id,
           customerId: customer.id,
-          amountMinor: BigInt(parsed.data.amount_minor),
+          amountMinor: parsed.data.amount_minor != null ? BigInt(parsed.data.amount_minor) : null,
+          quantity: parsed.data.quantity ?? null,
+          units: parsed.data.units ?? null,
           currency: parsed.data.currency,
           meterKey: parsed.data.meter ?? null,
           scope: parsed.data.scope ?? null,
           expiresInSeconds: parsed.data.expires_in,
           metadata: parsed.data.metadata ?? null,
         });
-        return reply
-          .code(201)
-          .send(
-            serializeHold(hold, { customer: customerPublicId, meter: parsed.data.meter ?? null }),
-          );
+        return reply.code(201).send(serializeHold(hold, refs));
       } catch (e) {
         return sendHoldError(reply, e);
       }
@@ -150,6 +167,7 @@ export async function registerCreditHoldRoutes(app: FastifyInstance) {
             holdPublicId: hold,
             usageEvent: parsed.data.usage_event,
             usageEventKey: parsed.data.usage_event_id,
+            final: parsed.data.final,
           });
           return serializeHold(r.hold, r.refs);
         } catch (e) {
@@ -175,6 +193,33 @@ export async function registerCreditHoldRoutes(app: FastifyInstance) {
           organizationId: req.organization!.id,
           businessId: business.id,
           holdPublicId: hold,
+        });
+        return serializeHold(r.hold, r.refs);
+      } catch (e) {
+        return sendHoldError(reply, e);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/businesses/:biz/credit_holds/:hold/extend",
+    {
+      preHandler: [authenticate, requirePerm("credit_holds:manage"), idempotency],
+      onSend: idempotencyOnSend,
+      config: { requestLog: "meta" },
+    },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const { hold } = req.params as { hold: string };
+      const parsed = parseRequest(extendBody, req.body);
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      try {
+        const r = await extendCreditHold({
+          organizationId: req.organization!.id,
+          businessId: business.id,
+          holdPublicId: hold,
+          expiresInSeconds: parsed.data.expires_in,
         });
         return serializeHold(r.hold, r.refs);
       } catch (e) {
@@ -260,6 +305,9 @@ export async function registerCreditHoldRoutes(app: FastifyInstance) {
     }
     if (q.meter !== undefined && typeof q.meter !== "string")
       return badRequest(reply, "meter must be a single value.");
+    for (const k of ["estimate_quantity", "estimate_units"] as const)
+      if (q[k] !== undefined && (typeof q[k] !== "string" || !/^\d{1,15}(\.\d{1,12})?$/.test(q[k])))
+        return badRequest(reply, `${k} must be a number of 0 or more.`);
     let customerId: string | undefined;
     if (by.cus) {
       const c = await getCustomerByPublicId(req.organization!.id, business.id, by.cus);
@@ -274,6 +322,8 @@ export async function registerCreditHoldRoutes(app: FastifyInstance) {
         customerKey: by.customerKey,
         meterKey: (q.meter as string | undefined) ?? null,
         estimateMinor: estimate,
+        estimateQuantity: (q.estimate_quantity as string | undefined) ?? null,
+        estimateUnits: (q.estimate_units as string | undefined) ?? null,
         scope,
       });
       return { object: "access_check", ...r };

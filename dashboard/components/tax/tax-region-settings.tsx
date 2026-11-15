@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import { Input } from "@/components/ui/input";
 import { RecordCard } from "@/components/patterns/record-page";
+import { SettingsSaveBar } from "@/components/settings/settings-layout";
 import { SettingRow, SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { StateSelect } from "@/components/tax/state-select";
 import { saveTaxRegionAction } from "@/app/actions";
@@ -67,7 +67,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             name="home_state_code"
             country={region.country}
             defaultValue={region.home_state_code}
-            className="w-64"
+            className="w-full sm:w-72"
             ariaLabel="Your registered state"
           />
         </SettingRow>
@@ -81,7 +81,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
               { value: "gstin", label: "GSTIN" },
               { value: "gst", label: "GST Reg #" },
               { value: "vat", label: "VAT Reg #" },
-              { value: "tax_reg", label: "Tax Reg #" },
+              { value: "tax_reg", label: "Tax reg #" },
               { value: "abn", label: "ABN" },
             ]}
           />
@@ -96,7 +96,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             defaultValue={region.registration_number ?? ""}
             placeholder="33AAFCN5032R1Z6"
             maxLength={50}
-            className="w-56"
+            className="w-full sm:w-72"
             aria-label="Your tax registration number"
           />
         </SettingRow>
@@ -142,7 +142,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             defaultValue={region.reverse_charge_note ?? ""}
             placeholder="Tax payable by recipient under reverse charge"
             maxLength={250}
-            className="w-72"
+            className="w-full sm:w-72"
             aria-label="Reverse-charge note"
           />
         </SettingRow>
@@ -164,7 +164,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             name="sez_igst_note"
             defaultValue={region.sez_igst_note ?? ""}
             maxLength={100}
-            className="w-72"
+            className="w-full sm:w-72"
             aria-label="SEZ IGST invoice note"
           />
         </SettingRow>
@@ -183,7 +183,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             name="sez_zero_rated_note"
             defaultValue={region.sez_zero_rated_note ?? ""}
             maxLength={100}
-            className="w-72"
+            className="w-full sm:w-72"
             aria-label="SEZ zero-rated invoice note"
           />
         </SettingRow>
@@ -205,7 +205,7 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             name="export_igst_note"
             defaultValue={region.export_igst_note ?? ""}
             maxLength={100}
-            className="w-72"
+            className="w-full sm:w-72"
             aria-label="Export IGST invoice note"
           />
         </SettingRow>
@@ -224,15 +224,14 @@ export function TaxRegionSettings({ biz, region }: { biz: string; region: TaxReg
             name="export_zero_rated_note"
             defaultValue={region.export_zero_rated_note ?? ""}
             maxLength={100}
-            className="w-72"
+            className="w-full sm:w-72"
             aria-label="Export zero-rated invoice note"
           />
         </SettingRow>
       </SettingsCard>
 
-      <div className="flex justify-end">
-        <SubmitButton>Save tax settings</SubmitButton>
-      </div>
+      {/* The page's one filled Save; this form is the last thing on the page. */}
+      <SettingsSaveBar label="Save tax settings" />
     </ActionForm>
   );
 }

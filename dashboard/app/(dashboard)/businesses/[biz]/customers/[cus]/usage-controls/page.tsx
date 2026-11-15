@@ -1,11 +1,19 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { getCustomer, listPaymentMethods, listSubscriptions } from "@/lib/api";
+import {
+  getCustomer,
+  listPaymentMethods,
+  listPrices,
+  listProducts,
+  listSubscriptions,
+} from "@/lib/api";
+import { listCreditUnits } from "@/lib/api/credits";
 import { getBusiness } from "@/lib/api/business-settings";
 import { listMeters } from "@/lib/api/meters";
 import {
   getAutoTopup,
   getCreditRunway,
+  getUnitAutoTopup,
   listAutoTopupRuns,
   listSpendLimits,
   listUsageAlertStates,
@@ -14,11 +22,28 @@ import {
   type AlertThresholdState,
   type UsageAlert,
 } from "@/lib/api/usage-controls";
-import { DEFAULT_PRIORITY, resolveCreditConfig, type CreditConfigInput } from "@/lib/credits";
+import {
+  DEFAULT_PRIORITY,
+  resolveCreditConfig,
+  type CreditConfigInput,
+  type PriceGrantsCredit,
+} from "@/lib/credits";
+import { creditsLabel } from "@/lib/meter-credit-cost";
+import { canChargeMethod, topupCanCharge } from "@/lib/payment-method-status";
+import { declinedPaymentLine, retryPointer, topupMaxTries } from "@/lib/topup-retry";
+import {
+  buysLine,
+  capLine,
+  purchaseLimitLines,
+  thresholdLine,
+  unitTopupState,
+  type UnitTopupConfig,
+} from "@/lib/unit-topup";
 import { businessTz } from "@/lib/business-tz-server";
 import { accountHolderName } from "@/lib/names";
 import { instrumentLabel } from "@/lib/instrument-label";
-import { fmtDate, fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { allows, requirePermission } from "@/lib/session";
 import {
   ALERT_KIND_LABEL,
@@ -55,6 +80,12 @@ import {
   EditSpendLimitButton,
 } from "@/components/usage-controls/controls";
 import {
+  UnitTopupButton,
+  UnitTopupToggle,
+  type TopupUnit,
+  type UnitPack,
+} from "@/components/usage-controls/unit-topup";
+import {
   deleteSpendLimitAction,
   deleteUsageAlertAction,
 } from "@/app/(dashboard)/businesses/[biz]/usage-controls-actions";
@@ -64,6 +95,14 @@ export const dynamic = "force-dynamic";
 /** The weekly "threshold too low" notice is current for 7 days. */
 const withinAWeek = (at: string | null) =>
   at != null && Date.now() - new Date(at).getTime() < 7 * 86_400_000;
+
+/** "a, b and c". */
+const listWords = (w: string[]) =>
+  w.length < 2 ? (w[0] ?? "") : `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}`;
+
+/** A declined run that waits for its next try. */
+const retrying = (r: { status: string; attempts?: number; charge_after: string | null }) =>
+  r.status === "created" && (r.attempts ?? 0) > 0 && r.charge_after != null;
 
 /**
  * Customer → Usage controls (design G5 § 5): runway, spend limits, alerts with each
@@ -112,6 +151,83 @@ export default async function CustomerUsageControlsPage({
     listMeters(biz).catch(() => null),
     listPaymentMethods(biz, cus).catch(() => null),
   ]);
+  // Automatic top-up for each active credit unit with no money value: it buys a credit pack.
+  const unitList = await listCreditUnits(biz).catch(() => null);
+  const topupUnits: TopupUnit[] = (unitList?.data ?? [])
+    .filter((u) => u.status === "active" && u.minor_per_unit === null)
+    .map((u) => ({
+      key: u.id,
+      name: u.name,
+      plural: u.plural_name,
+      decimals: u.decimals,
+      currency: u.currency,
+    }));
+  const [unitTopups, catalogPrices, catalogProducts] = topupUnits.length
+    ? await Promise.all([
+        Promise.all(
+          topupUnits.map((u) =>
+            getUnitAutoTopup(biz, cus, u.key)
+              .then((t) => (t as UnitTopupConfig | null) ?? null)
+              .catch(() => undefined),
+          ),
+        ),
+        listPrices(biz).catch(() => null),
+        listProducts(biz).catch(() => null),
+      ])
+    : [[], null, null];
+  const productOf = new Map((catalogProducts?.data ?? []).map((p) => [p.id, p]));
+  const packsOf = (u: TopupUnit): UnitPack[] =>
+    (catalogPrices?.data ?? []).flatMap((p) => {
+      const gc = (p as { grants_credit?: PriceGrantsCredit | null }).grants_credit;
+      const prod = productOf.get(p.product);
+      if (gc?.kind !== "pack" || gc.unit !== u.key || p.type !== "one_time") return [];
+      if (p.active === false || (prod?.kind ?? "plan") === "plan") return [];
+      const credits = (gc.amount / 10 ** u.decimals).toFixed(u.decimals);
+      const priceMinor = p.model === "flat" ? p.amount_minor : null;
+      const names = { name: u.name, plural: u.plural };
+      return [
+        {
+          value: p.id,
+          label: [
+            prod?.name ?? p.product,
+            p.name,
+            `${creditsLabel(credits, names)}${priceMinor != null ? ` for ${money(priceMinor, p.currency)}` : ""}`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          credits,
+          priceMinor,
+        },
+      ];
+    });
+  const chargeable = (pms?.data ?? []).filter((p) => canChargeMethod(p.status));
+  // A failed read of the methods warns about nothing: we do not know.
+  // A saved top-up says it itself (the engine's rule). With none yet, the same rule here.
+  const canCharge = (t: { payment_method?: string | null; has_payment_method?: boolean } | null) =>
+    t?.has_payment_method ??
+    (pms == null ? undefined : topupCanCharge(t?.payment_method, pms.data));
+  // The tries of a declined top-up, when every kind of payment method has the same number.
+  const maxTries = topupMaxTries(config);
+  const retrySettings = allows(me, "settings:manage", "admin") ? (
+    <Link href={`/businesses/${biz}/settings/credits`} className="text-primary hover:underline">
+      Settings → Credits
+    </Link>
+  ) : (
+    "Settings → Credits"
+  );
+  const moneyState = topup
+    ? unitTopupState(topup, runs?.data ?? [], {
+        maxTries,
+        canCharge: canCharge(topup),
+      })
+    : null;
+  const pmOptions = chargeable.map((p) => ({ value: p.id, label: instrumentLabel(p) }));
+
+  // A unit with a top-up, or a pack to buy, gets a row. The others share one line.
+  const unitRows = topupUnits.map((u, i) => ({ u, t: unitTopups[i], packs: packsOf(u) }));
+  const listedUnits = unitRows.filter((r) => r.t !== null || r.packs.length > 0);
+  const noPackUnits = unitRows.filter((r) => r.t === null && r.packs.length === 0).map((r) => r.u);
+
   const alertStates = new Map<string, AlertStateSubject[] | null>();
   await Promise.all(
     (alerts?.data ?? []).map(async (a) => {
@@ -166,7 +282,7 @@ export default async function CustomerUsageControlsPage({
             ) : (
               <div className="flex flex-col gap-3">
                 <span className="text-2xl font-semibold tabular-nums">
-                  {runwayLabel(runway.runway_days)}
+                  {runwayLabel(runway.runway_days, runway)}
                 </span>
                 <Facts
                   rows={[
@@ -212,9 +328,7 @@ export default async function CustomerUsageControlsPage({
                     cus={cus}
                     currency={currency}
                     config={topup}
-                    paymentMethods={(pms?.data ?? [])
-                      .filter((p) => !p.status || p.status === "active")
-                      .map((p) => ({ value: p.id, label: instrumentLabel(p) }))}
+                    paymentMethods={pmOptions}
                     {...topupLeadInputs(topup ?? null, runway?.burn_minor_per_day ?? null)}
                     limits={config.top_up_limits[currency] ?? null}
                     defaultTaxTreatment={config.default_tax_treatment}
@@ -236,10 +350,24 @@ export default async function CustomerUsageControlsPage({
                   <StatusChip status={topup.status === "active" ? "active" : "disabled"} />
                   {topup.disabled_reason ? (
                     <span className="text-sm text-muted-foreground">
-                      {DISABLED_REASON_LABEL[topup.disabled_reason] ?? topup.disabled_reason}
+                      {DISABLED_REASON_LABEL[topup.disabled_reason] ?? "It is off."}
                     </span>
                   ) : null}
                 </div>
+                {topup.status === "active" && moneyState?.detail ? (
+                  <Alert tone={moneyState.retryAt ? "neutral" : "warning"}>
+                    <div className="min-w-0">
+                      {moneyState.detail}
+                      {moneyState.retryAt ? (
+                        <>
+                          {" "}
+                          Next try: {fmtDateTime(moneyState.retryAt, tz)}. The retry schedule is in{" "}
+                          {retrySettings}.
+                        </>
+                      ) : null}
+                    </div>
+                  </Alert>
+                ) : null}
                 {topup.status === "active" && withinAWeek(topup.threshold_low_at) ? (
                   <Alert tone="warning">
                     Usage grew. The balance of {money(topup.threshold_minor ?? 0, currency)} no
@@ -275,6 +403,7 @@ export default async function CustomerUsageControlsPage({
                       value: money(topup.monthly_cap_minor, currency),
                     },
                     { label: "Top-ups per day", value: String(topup.max_runs_per_day) },
+                    { label: "If a payment is declined", value: declinedPaymentLine(config) },
                   ]}
                 />
               </div>
@@ -305,10 +434,14 @@ export default async function CustomerUsageControlsPage({
                               ? "red"
                               : r.status === "succeeded"
                                 ? "green"
-                                : "gray"
+                                : retrying(r)
+                                  ? "tan"
+                                  : "gray"
                           }
                         >
-                          {RUN_STATUS_LABEL[r.status] ?? r.status}
+                          {retrying(r)
+                            ? "Declined, we try again"
+                            : (RUN_STATUS_LABEL[r.status] ?? r.status)}
                         </Chip>
                         {r.failure_message ? (
                           <span className="ml-2 text-xs text-muted-foreground">
@@ -342,6 +475,159 @@ export default async function CustomerUsageControlsPage({
           </Row>
         ) : null}
       </Zone>
+
+      {topupUnits.length ? (
+        <Zone title="Credit with no money value">
+          <Row span="12">
+            <RecordCard
+              id="unit-auto-topup"
+              title="Automatic top-up of credit units"
+              meta="Buys a credit pack when the balance is at or below an amount that you set"
+              flush
+            >
+              <div className={listedUnits.length ? "overflow-x-auto" : "hidden"}>
+                <Table phone="stack">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-5">Credit unit</TableHead>
+                      <TableHead phone="aside">Status</TableHead>
+                      <TableHead>Rule</TableHead>
+                      <TableHead>Limits</TableHead>
+                      <TableHead className="pr-5" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {listedUnits.map(({ u, t, packs }) => {
+                      const names = { name: u.name, plural: u.plural };
+                      const pack = t?.pack_price
+                        ? (packs.find((p) => p.value === t.pack_price)?.label ?? t.pack_price)
+                        : null;
+                      const methodOk = canCharge(t ?? null) !== false;
+                      const state = t
+                        ? unitTopupState(t, runs?.data ?? [], { maxTries, canCharge: methodOk })
+                        : null;
+                      // The lines under the chip. On a phone they sit under the unit name, so
+                      // the chip alone shares the first line with it.
+                      const notes = (at: "cell" | "title") =>
+                        state?.detail || (t && !methodOk) || (!t && !methodOk) ? (
+                          <div
+                            className={
+                              at === "cell"
+                                ? "flex flex-col gap-1 max-sm:hidden"
+                                : "mt-1 flex flex-col gap-1 sm:hidden"
+                            }
+                          >
+                            {state?.detail ? (
+                              <span className="text-xs text-muted-foreground">{state.detail}</span>
+                            ) : null}
+                            {state?.retryAt ? (
+                              <span className="text-xs text-muted-foreground">
+                                Next try: {fmtDateTime(state.retryAt, tz)}. The retry schedule is in{" "}
+                                {retrySettings}.
+                              </span>
+                            ) : null}
+                            {t?.status === "disabled" && !methodOk ? (
+                              <span className="text-xs text-muted-foreground">
+                                Add a payment method to enable it.
+                              </span>
+                            ) : null}
+                            {!t && !methodOk ? (
+                              <span className="text-xs text-muted-foreground">
+                                Add a payment method to set it up.
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null;
+                      return (
+                        <TableRow key={u.key}>
+                          <TableCell className="max-w-64 pl-5 wrap-anywhere whitespace-normal">
+                            <span className="font-medium">{u.plural}</span>
+                            {pack ? (
+                              <div className="text-xs text-muted-foreground">{pack}</div>
+                            ) : null}
+                            {notes("title")}
+                          </TableCell>
+                          <TableCell className="max-w-64 whitespace-normal">
+                            {t === undefined ? (
+                              <span className="text-sm text-destructive">
+                                We could not load it.
+                              </span>
+                            ) : (
+                              <div className="flex flex-col items-start gap-1">
+                                {state ? (
+                                  <Chip tone={state.tone}>{state.label}</Chip>
+                                ) : (
+                                  <Chip>Not set up</Chip>
+                                )}
+                                {notes("cell")}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className={t ? "whitespace-normal" : "max-sm:hidden"}>
+                            {t ? (
+                              <div className="flex flex-col text-sm">
+                                <span>{thresholdLine(t, names)}</span>
+                                <span className="text-muted-foreground">{buysLine(t, names)}</span>
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell className={t ? "whitespace-normal" : "max-sm:hidden"}>
+                            {t ? (
+                              <div className="flex flex-col text-xs text-muted-foreground">
+                                <span className="whitespace-normal">{capLine(t)}</span>
+                                {purchaseLimitLines(t.purchase_limits, t.currency).map((l) => (
+                                  <span key={l}>{l}</span>
+                                ))}
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell className="pr-5 text-right">
+                            {canManage && t !== undefined && (t || methodOk) ? (
+                              <div className="flex justify-end gap-2">
+                                {t ? (
+                                  <UnitTopupToggle
+                                    biz={biz}
+                                    cus={cus}
+                                    unit={u}
+                                    on={t.status === "active"}
+                                    canEnable={methodOk}
+                                  />
+                                ) : null}
+                                <UnitTopupButton
+                                  biz={biz}
+                                  cus={cus}
+                                  unit={u}
+                                  config={t}
+                                  packs={packs}
+                                  paymentMethods={pmOptions}
+                                  retryHelp={retryPointer(config)}
+                                />
+                              </div>
+                            ) : null}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              {/* Units that nothing can top up: one line, not a row of empty cells each. */}
+              {noPackUnits.length ? (
+                <p
+                  className={`m-0 px-5 py-3 text-sm wrap-anywhere text-muted-foreground ${listedUnits.length ? "border-t" : ""}`}
+                >
+                  No one-time credit pack gives {listWords(noPackUnits.map((u) => u.plural))}.
+                  Automatic top-up needs a pack.
+                </p>
+              ) : null}
+            </RecordCard>
+          </Row>
+        </Zone>
+      ) : null}
 
       <Zone title="Spend limits">
         <Row span="12">

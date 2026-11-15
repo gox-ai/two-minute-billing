@@ -790,7 +790,11 @@ export async function createPrice(input: CreatePriceInput): Promise<typeof price
     throw new CatalogError(ONE_TIME_MINIMUM);
   return withTenant(input.organizationId, async (tx) => {
     // A meter price measures what its meter measures: the usage fields are copied from it.
-    const meter = onMeter ? await meterForPrice(tx, input.businessId, input.meter!) : null;
+    const meter = onMeter
+      ? await meterForPrice(tx, input.businessId, input.meter!, {
+          amountSource: input.amountSource,
+        })
+      : null;
     if (meter) {
       assertMeterPrice(
         {

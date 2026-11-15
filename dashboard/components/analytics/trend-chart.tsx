@@ -1,8 +1,11 @@
 "use client";
 
+import { observeSettledResize } from "@/lib/settled-resize";
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { seriesAxis, seriesValue } from "@/components/analytics/series-format";
+import { CHART_DRAW } from "@/lib/motion";
+import { drawKey } from "@/lib/chart-draw";
+import { axisLabel, seriesAxis, seriesValue } from "@/components/analytics/series-format";
 import type { PaymentsAnalyticsPoint, PaymentsSeriesKind } from "@/lib/api/analytics";
 
 /**
@@ -70,10 +73,9 @@ export function TrendChart({
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setW(el.clientWidth));
-    ro.observe(el);
+    const stop = observeSettledResize(el, () => setW(el.clientWidth));
     setW(el.clientWidth);
-    return () => ro.disconnect();
+    return stop;
   }, []);
 
   const n = points.length;
@@ -140,6 +142,9 @@ export function TrendChart({
       : 0;
   const tipAnchorRight = tipLeft > w / 2;
 
+  // New data remounts the marks and replays the draw; a resize or a same-data refresh does not.
+  const sig = drawKey(points.flatMap((p) => [p.t, p.v]));
+
   const summary = `${label}: ${n} point${n === 1 ? "" : "s"}${
     hasData ? `, peak ${seriesValue(rawMax, kind, currency)}` : ", no activity in this period"
   }`;
@@ -158,7 +163,10 @@ export function TrendChart({
             onPointerMove={(e) => setActive(nearest(e.clientX))}
             onPointerLeave={() => setActive(null)}
             onBlur={() => setActive(null)}
-            className="block rounded outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={cn(
+              "block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              !full && "chart-short",
+            )}
           >
             {/* Gridlines + baseline: solid hairlines one step off the surface. */}
             {ticks.map((t) => (
@@ -196,7 +204,7 @@ export function TrendChart({
                       textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
                       className="fill-muted-foreground text-xs"
                     >
-                      {p.label}
+                      {axisLabel(p.label)}
                     </text>
                   ) : null,
                 )
@@ -221,25 +229,36 @@ export function TrendChart({
                 <stop offset="100%" stopColor="currentColor" stopOpacity={0.01} />
               </linearGradient>
             </defs>
-            {hasData ? <path d={area} fill={`url(#${fillId})`} stroke="none" /> : null}
-            <path
-              d={line}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={full ? 2.5 : 2}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-            />
+            <g key={sig}>
+              {hasData ? (
+                <path
+                  d={area}
+                  fill={`url(#${fillId})`}
+                  stroke="none"
+                  className={CHART_DRAW ? "chart-area" : undefined}
+                />
+              ) : null}
+              <path
+                d={line}
+                pathLength={1}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={full ? 2.5 : 2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                className={CHART_DRAW ? "chart-line" : undefined}
+              />
 
-            {/* Newest point gets an 8px dot with a 2px surface ring. */}
-            <circle
-              cx={x(n - 1)}
-              cy={y(points[n - 1]?.v ?? 0)}
-              r={4}
-              fill="currentColor"
-              className="stroke-card"
-              strokeWidth={2}
-            />
+              {/* Newest point gets an 8px dot with a 2px surface ring. */}
+              <circle
+                cx={x(n - 1)}
+                cy={y(points[n - 1]?.v ?? 0)}
+                r={4}
+                fill="currentColor"
+                className={cn("stroke-card", CHART_DRAW && "chart-dot")}
+                strokeWidth={2}
+              />
+            </g>
 
             {/* Crosshair: snaps to the nearest X, so no one aims at a 2px line. */}
             {active != null && point ? (
@@ -276,7 +295,7 @@ export function TrendChart({
             <div className="font-semibold text-popover-foreground tabular-nums">
               {seriesValue(point.v, kind, currency)}
             </div>
-            <div className="text-muted-foreground">{point.label}</div>
+            <div className="text-muted-foreground">{axisLabel(point.label)}</div>
           </div>
         ) : null}
       </div>
@@ -313,7 +332,7 @@ export function TrendChart({
                       scope="row"
                       className="px-2.5 py-1.5 text-left font-normal text-muted-foreground"
                     >
-                      {p.label}
+                      {axisLabel(p.label)}
                     </th>
                     <td className="px-2.5 py-1.5 text-right">{seriesValue(p.v, kind, currency)}</td>
                   </tr>

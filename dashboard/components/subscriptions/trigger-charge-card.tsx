@@ -54,7 +54,7 @@ export function TriggerChargeCard({
         <ActionForm
           key={r.productId}
           action={triggerChargeAction}
-          className="flex flex-wrap items-center gap-2 rounded-lg border p-3"
+          className="flex flex-wrap items-center gap-2 rounded-xl border p-3"
         >
           <input type="hidden" name="biz" value={biz} />
           <input type="hidden" name="sub" value={sub} />
@@ -70,15 +70,18 @@ export function TriggerChargeCard({
               {r.interval ? `/${r.interval}` : ""}
             </span>
           </span>
-          <Input
-            name="quantity"
-            type="number"
-            min={1}
-            step={1}
-            placeholder="qty (default 1)"
-            className="w-36 tabular-nums"
-            aria-label={`Quantity for ${r.productName}`}
-          />
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Quantity</span>
+            <Input
+              name="quantity"
+              type="number"
+              min={1}
+              step={1}
+              placeholder="1"
+              className="w-20 tabular-nums"
+              aria-label={`Quantity for ${r.productName}`}
+            />
+          </label>
           <SubmitButton variant="outline" size="sm">
             Trigger charge
           </SubmitButton>

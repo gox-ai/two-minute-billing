@@ -5,6 +5,7 @@ import {
   text,
   char,
   bigint,
+  boolean,
   integer,
   timestamp,
   uniqueIndex,
@@ -64,6 +65,11 @@ export const unbilledCharges = pgTable(
     entityType: text("entity_type").notNull().default("adhoc"),
     /** 0454: a meter settlement's line rating, copied onto the invoice line that bills it. */
     rating: jsonb("rating"),
+    /**
+     * 0520: booked net of the subscription's coupons (a deferred period, `recurringChargeMinor`).
+     * The invoice that bills it takes no coupon off it again.
+     */
+    discounted: boolean("discounted").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .default(sql`app_now()`)
       .notNull(),

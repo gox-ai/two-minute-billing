@@ -16,6 +16,7 @@ import {
   GATEWAYS,
   gatewayDefinition,
   gatewayTakesCurrency,
+  serializeDashboardLinks,
 } from "@/providers/gateway-catalog";
 import {
   gatewayAccounts,
@@ -997,6 +998,7 @@ export function listGatewayCatalog(src: AvailabilitySources = {}) {
         allowsIntentPurpose(g.intentPurposes, p),
       ),
       wallet_domains: g.walletDomains ?? false,
+      dashboard_links: serializeDashboardLinks(g.dashboardLinks),
       ach_authorization: g.achAuthorization ?? null,
       currencies: g.currencies ? [...g.currencies] : null,
       // The account has an "International payments" switch; off = this currency only.

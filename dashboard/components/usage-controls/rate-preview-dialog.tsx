@@ -6,6 +6,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -24,7 +25,7 @@ import {
 import type { Price } from "@/lib/api";
 import type { RateChangePreview } from "@/lib/api/usage-controls";
 import { money, pctFromBps } from "@/lib/format";
-import { divisorLabel } from "@/lib/meters";
+import { divisorLabel, majorRateToMinor, minorRateToMajor } from "@/lib/meters";
 import { toMajorInput, toMinor } from "@/lib/money";
 import { previewRateChangeAction } from "@/app/(dashboard)/businesses/[biz]/usage-controls-actions";
 
@@ -37,6 +38,7 @@ const CLASSIC_TIERED = new Set(["tiered", "volume", "stairstep"]);
 /**
  * "Preview a rate change" (design G5 § 3.8): edit the rates, then see what each customer's last
  * closed period would cost. It saves nothing; edit the price to change it.
+ * Meter rates are typed in major units, as on the price form, and posted in minor units.
  */
 export function RatePreviewButton({ biz, price }: { biz: string; price: Price }) {
   const meter = !!price.meter;
@@ -44,20 +46,25 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
   const [open, setOpen] = React.useState(false);
   const seed = React.useCallback(
     () => ({
-      rate: price.unit_amount_decimal ?? "",
+      rate: minorRateToMajor(price.unit_amount_decimal, price.currency),
       unit: toMajorInput(price.amount_minor, price.currency),
       tiers: (price.tiers ?? []).map((t) =>
         meter
           ? {
               up: (t as unknown as MeterTier).up_to ?? "",
-              rate: (t as unknown as MeterTier).unit_amount_decimal,
+              rate: minorRateToMajor(
+                (t as unknown as MeterTier).unit_amount_decimal,
+                price.currency,
+              ),
             }
           : {
               up: (t as ClassicTier).upToMinor == null ? "" : String((t as ClassicTier).upToMinor),
               rate: toMajorInput((t as ClassicTier).unitAmountMinor ?? 0, price.currency),
             },
       ),
-      rates: (price.rates ?? []).map((r) => r.unit_amount_decimal ?? ""),
+      rates: (price.rates ?? []).map((r) =>
+        minorRateToMajor(r.unit_amount_decimal, price.currency),
+      ),
     }),
     [price, meter],
   );
@@ -66,20 +73,28 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(false);
 
-  const draft = (): Record<string, unknown> => {
+  /** `bad.unreadable` is set when a typed meter rate cannot be converted to minor units. */
+  const draft = (bad: { unreadable: boolean }): Record<string, unknown> => {
+    const minorRate = (major: string | undefined) => {
+      const t = major?.trim() ?? "";
+      if (!t) return "";
+      const minor = majorRateToMinor(t, price.currency);
+      if (minor == null) bad.unreadable = true;
+      return minor ?? "";
+    };
     if (meter) {
       const out: Record<string, unknown> = {};
       if (tiered)
         out.tiers = (price.tiers ?? []).map((t, i) => ({
           ...(t as unknown as MeterTier),
           up_to: form.tiers[i]?.up.trim() ? form.tiers[i]!.up.trim() : null,
-          unit_amount_decimal: form.tiers[i]?.rate.trim() ?? "",
+          unit_amount_decimal: minorRate(form.tiers[i]?.rate),
         }));
-      else out.unit_amount_decimal = form.rate.trim() || null;
+      else out.unit_amount_decimal = minorRate(form.rate) || null;
       if (price.rates?.length)
         out.rates = price.rates.map((r, i) => ({
           match: r.match,
-          ...(r.tiers ? { tiers: r.tiers } : { unit_amount_decimal: form.rates[i]?.trim() ?? "" }),
+          ...(r.tiers ? { tiers: r.tiers } : { unit_amount_decimal: minorRate(form.rates[i]) }),
         }));
       return out;
     }
@@ -95,12 +110,18 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
   };
 
   const run = async (after?: string) => {
+    const bad = { unreadable: false };
+    const body = JSON.stringify(draft(bad));
+    if (bad.unreadable) {
+      setError("We could not read a rate. Enter each rate as a number, for example 0.05.");
+      return;
+    }
     setPending(true);
     setError(null);
     const fd = new FormData();
     fd.set("biz", biz);
     fd.set("price", price.id);
-    fd.set("draft", JSON.stringify(draft()));
+    fd.set("draft", body);
     if (after) fd.set("starting_after", after);
     try {
       const res = await previewRateChangeAction(fd);
@@ -117,7 +138,7 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
   };
 
   const cur = price.currency;
-  const rateLabel = `(${cur} minor units ${divisorLabel(price.quantity_divisor)})`;
+  const unitText = meter ? `${cur} ${divisorLabel(price.quantity_divisor)}` : `${cur} per unit`;
   const pct = (bps: number | null) =>
     bps == null ? "—" : `${bps > 0 ? "+" : ""}${pctFromBps(bps)}`;
 
@@ -136,7 +157,7 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
         Preview a rate change
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent size="xl" className="flex max-h-[85vh] flex-col overflow-hidden">
+        <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Preview a rate change</DialogTitle>
             <DialogDescription>
@@ -144,90 +165,96 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
               new rates. This does not change the price. Tax, discounts and credit are not included.
             </DialogDescription>
           </DialogHeader>
-          <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6">
+          <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-1">
             {tiered ? (
               <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium">
-                  Tiers {meter ? rateLabel : `(${cur} per unit)`}
-                </span>
+                <div>
+                  <span className="text-sm font-medium">Tiers</span>
+                  <p className="m-0 text-xs text-muted-foreground">Rates are in {unitText}.</p>
+                </div>
+                {/* One header for the columns: a label on every row would repeat it. */}
+                <div className="flex gap-3 text-sm font-medium" aria-hidden="true">
+                  <span className="w-30">Up to</span>
+                  <span className="w-30">Rate</span>
+                </div>
                 {form.tiers.map((t, i) => (
-                  <div key={i} className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col gap-1">
-                      <Label htmlFor={`tier-up-${i}`}>Up to</Label>
-                      <Input
-                        id={`tier-up-${i}`}
-                        value={t.up}
-                        placeholder={i === form.tiers.length - 1 ? "No upper limit" : ""}
-                        inputMode="decimal"
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            tiers: f.tiers.map((x, j) =>
-                              j === i ? { ...x, up: e.target.value } : x,
-                            ),
-                          }))
-                        }
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <Label htmlFor={`tier-rate-${i}`}>Rate</Label>
-                      <Input
-                        id={`tier-rate-${i}`}
-                        value={t.rate}
-                        inputMode="decimal"
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            tiers: f.tiers.map((x, j) =>
-                              j === i ? { ...x, rate: e.target.value } : x,
-                            ),
-                          }))
-                        }
-                      />
-                    </div>
+                  <div key={i} className="flex gap-3">
+                    <Input
+                      aria-label={`Tier ${i + 1} up to`}
+                      value={t.up}
+                      placeholder={i === form.tiers.length - 1 ? "No limit" : undefined}
+                      inputMode="decimal"
+                      className="w-30 tabular-nums"
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          tiers: f.tiers.map((x, j) =>
+                            j === i ? { ...x, up: e.target.value } : x,
+                          ),
+                        }))
+                      }
+                    />
+                    <Input
+                      aria-label={`Tier ${i + 1} rate`}
+                      value={t.rate}
+                      inputMode="decimal"
+                      className="w-30 tabular-nums"
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          tiers: f.tiers.map((x, j) =>
+                            j === i ? { ...x, rate: e.target.value } : x,
+                          ),
+                        }))
+                      }
+                    />
                   </div>
                 ))}
               </div>
-            ) : meter ? (
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="preview-rate">Default rate {rateLabel}</Label>
-                <Input
-                  id="preview-rate"
-                  value={form.rate}
-                  inputMode="decimal"
-                  onChange={(e) => setForm((f) => ({ ...f, rate: e.target.value }))}
-                />
-              </div>
             ) : (
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="preview-unit">Price per unit ({cur})</Label>
-                <Input
-                  id="preview-unit"
-                  value={form.unit}
-                  inputMode="decimal"
-                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
-                />
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="preview-rate">{meter ? "Default rate" : "Price per unit"}</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="preview-rate"
+                    value={meter ? form.rate : form.unit}
+                    inputMode="decimal"
+                    className="w-30 tabular-nums"
+                    onChange={(e) =>
+                      setForm((f) =>
+                        meter ? { ...f, rate: e.target.value } : { ...f, unit: e.target.value },
+                      )
+                    }
+                  />
+                  <span className="text-sm text-muted-foreground">{meter ? unitText : cur}</span>
+                </div>
               </div>
             )}
             {meter && price.rates?.length ? (
               <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium">Rate card {rateLabel}</span>
+                <div>
+                  <span className="text-sm font-medium">Rate card</span>
+                  <p className="m-0 text-xs text-muted-foreground">Rates are in {unitText}.</p>
+                </div>
+                <div className="flex gap-3 text-sm font-medium" aria-hidden="true">
+                  <span className="min-w-0 flex-1">Usage that matches</span>
+                  <span className="w-30">Rate</span>
+                </div>
                 {price.rates.map((r, i) => (
-                  <div key={i} className="grid grid-cols-2 items-end gap-3">
-                    <span className="text-sm wrap-anywhere text-muted-foreground">
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="min-w-0 flex-1 text-sm wrap-anywhere text-muted-foreground">
                       {Object.entries(r.match)
                         .map(([k, v]) => `${k} = ${v}`)
                         .join(", ")}
                     </span>
                     {r.tiers ? (
-                      <span className="text-sm text-muted-foreground">
-                        Tiered: not changed here
-                      </span>
+                      <span className="w-30 text-xs text-muted-foreground">Tiered: no change</span>
                     ) : (
                       <Input
                         aria-label={`Rate for ${Object.values(r.match).join(", ")}`}
                         value={form.rates[i] ?? ""}
                         inputMode="decimal"
+                        className="w-30 tabular-nums"
                         onChange={(e) =>
                           setForm((f) => ({
                             ...f,
@@ -240,11 +267,6 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
                 ))}
               </div>
             ) : null}
-            <div className="flex justify-end">
-              <Button type="button" onClick={() => run()} disabled={pending}>
-                {pending ? "Calculating…" : "Preview"}
-              </Button>
-            </div>
             {error ? <Alert tone="error">{error}</Alert> : null}
             {result ? (
               <div className="flex flex-col gap-3">
@@ -336,6 +358,14 @@ export function RatePreviewButton({ biz, price }: { biz: string; price: Price })
               </div>
             ) : null}
           </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => run()} disabled={pending}>
+              {pending ? "Calculating…" : "Preview"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

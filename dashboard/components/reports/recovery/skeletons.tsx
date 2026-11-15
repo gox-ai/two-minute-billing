@@ -8,8 +8,9 @@ function TileBones({ span }: { span: "4" | "6" }) {
   return (
     <div
       className={
-        (span === "4" ? "col-span-12 md:col-span-6 xl:col-span-4" : "col-span-12 xl:col-span-6") +
-        " rounded-xl border bg-card p-6"
+        (span === "4"
+          ? "col-span-12 md:col-span-6 @min-[56.875rem]/main:col-span-4"
+          : "col-span-12 @min-[56.875rem]/main:col-span-6") + " rounded-xl border bg-card p-6"
       }
     >
       <Skeleton className="h-3 w-28" />
@@ -73,7 +74,7 @@ export function RecoveryCurrentSkeleton() {
   return (
     <Busy label="recovery" className="flex flex-col gap-6">
       <ZoneBones />
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <StripBones rows={1} figures />
         <StripBones rows={5} />
       </div>

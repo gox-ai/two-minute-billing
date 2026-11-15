@@ -86,6 +86,7 @@ export default async function ReceiptSettings({ params }: { params: Promise<{ bi
               htmlFor="receipt_prefix"
               errorFor="receipt_prefix"
               help="Printed before the counter, for example RCPT-12. 1 to 20 characters."
+              placement="end"
               control={
                 <Input
                   id="receipt_prefix"
@@ -93,13 +94,14 @@ export default async function ReceiptSettings({ params }: { params: Promise<{ bi
                   required
                   maxLength={20}
                   defaultValue={prefix}
-                  className="font-mono sm:w-56"
+                  className="w-30 font-mono"
                 />
               }
             />
             <SettingRow
               label="Next number"
               help="We number receipts in the order of their payments, a few seconds after each payment. You cannot change the counter."
+              placement="end"
               control={<span className="font-mono text-sm tabular-nums">{counter}</span>}
             />
           </SettingsCard>

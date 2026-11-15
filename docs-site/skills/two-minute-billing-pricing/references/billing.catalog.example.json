@@ -1,0 +1,81 @@
+{
+  "business": { "name": "Fernhill Analytics", "default_currency": "USD" },
+  "products": [
+    { "id": "starter", "name": "Starter", "kind": "plan" },
+    { "id": "pro", "name": "Pro", "kind": "plan" },
+    { "id": "report-pack", "name": "Report pack", "kind": "charge" }
+  ],
+  "prices": [
+    {
+      "id": "starter-monthly-usd",
+      "product": "starter",
+      "name": "Starter monthly",
+      "type": "recurring",
+      "model": "flat",
+      "currency": "USD",
+      "amount_minor": 1900,
+      "interval": "month",
+      "tax_behavior": "exclusive"
+    },
+    {
+      "id": "pro-monthly-usd",
+      "product": "pro",
+      "name": "Pro monthly",
+      "type": "recurring",
+      "model": "per_unit",
+      "currency": "USD",
+      "amount_minor": 4900,
+      "interval": "month",
+      "free_quantity": 3,
+      "trial_period": 14,
+      "trial_period_unit": "day",
+      "tax_behavior": "exclusive"
+    },
+    {
+      "id": "pro-yearly-usd",
+      "product": "pro",
+      "name": "Pro yearly",
+      "type": "recurring",
+      "model": "per_unit",
+      "currency": "USD",
+      "amount_minor": 49000,
+      "interval": "year",
+      "free_quantity": 3,
+      "tax_behavior": "exclusive"
+    },
+    {
+      "id": "report-pack-usd",
+      "product": "report-pack",
+      "name": "Report pack (10 reports)",
+      "type": "one_time",
+      "model": "flat",
+      "currency": "USD",
+      "amount_minor": 2500,
+      "tax_behavior": "exclusive"
+    }
+  ],
+  "features": [
+    { "key": "sso", "name": "Single sign-on", "type": "switch" },
+    { "key": "projects", "name": "Projects", "type": "quota" }
+  ],
+  "entitlements": [
+    { "product": "starter", "feature": "projects", "value": "3" },
+    { "product": "pro", "feature": "projects", "value": "unlimited" },
+    { "product": "pro", "feature": "sso", "value": "true" }
+  ],
+  "coupons": [
+    {
+      "code": "FREEREPORT",
+      "name": "Free first report",
+      "kind": "percentage",
+      "percent_off_bps": 10000,
+      "duration_type": "once",
+      "max_redemptions": 500,
+      "max_redemptions_per_customer": 1
+    }
+  ],
+  "settings": {
+    "allow_customer_coupons": true,
+    "billing_rules_config": { "zero_invoice_paid_event": "one_off" }
+  }
+}

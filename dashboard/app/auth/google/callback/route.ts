@@ -20,6 +20,7 @@ import {
   sessionCookieOptions,
   signupCookieOptions,
 } from "@/lib/auth-cookies";
+import { THEME_COOKIE } from "@/lib/theme-cookie";
 
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
@@ -113,6 +114,7 @@ export async function GET(req: Request) {
   }
 
   jar.set(SESSION_COOKIE, json.token, sessionCookieOptions());
+  jar.set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
 
   /**
    * Land where the visitor was headed before the sign-in wall, if `/auth/google/start`

@@ -58,6 +58,8 @@ export interface PortalMe {
   };
   /** Brand Styles (0185) — what this business shows ITS customers. All nullable. */
   business: {
+    /** Public id (`biz_…`). Absent on older engines. */
+    id?: string;
     name: string;
     /** `live` | `test`. Absent on older engines. */
     livemode?: string;
@@ -65,6 +67,11 @@ export interface PortalMe {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    /** Where the buyer asks for help. Null or absent: show nothing. */
+    support_email?: string | null;
+    website?: string | null;
+    /** The business has a public pricing page at `/pricing/<id>`. */
+    has_pricing_page?: boolean;
     /**
      * 0238 — may this customer apply a coupon code to their own subscription? The box
      * renders only when true; `POST /portal/v1/subscriptions/:sub/coupon` 403s otherwise.
@@ -220,6 +227,13 @@ export interface PortalInvoice {
   payment_in_flight?: boolean;
   /** Above the business's card limit: no Pay now, the buyer pays another way (0482). */
   over_card_limit?: boolean;
+  /** The next automatic retry, when one is scheduled. */
+  next_attempt_at?: string | null;
+  /**
+   * The latest charge on this invoice, when it failed: the saved method that was refused
+   * (null when it is gone) and the gateway's code.
+   */
+  last_payment_error?: { payment_method: string | null; code: string | null; at: string } | null;
   /**
    * That in-flight debit is paused for the payer's OWN bank approval (RBI/NPCI, over
    * ₹15,000), not for a settlement network. Only meaningful alongside
@@ -235,6 +249,8 @@ export interface PortalInvoice {
    * unknown, and the cautious wording wins.
    */
   in_flight_gateway?: string | null;
+  /** A held renewal invoice (usage grace window, `pending`): when it finalizes. */
+  usage_closes_at?: string | null;
 }
 
 async function portalFetch<T>(
@@ -315,6 +331,34 @@ export interface PortalLinkPeek {
   business: PortalLinkNotice["business"] | null;
 }
 
+/**
+ * The peek with its failure told apart: `dead` is a link the engine refused (expired,
+ * spent, revoked), with whose it was when known; `unknown` is a rate limit or an error,
+ * where only the POST can decide.
+ */
+export async function portalPeekLink(
+  accessToken: string,
+): Promise<
+  | { kind: "live"; peek: PortalLinkPeek }
+  | { kind: "dead"; business: string | null }
+  | { kind: "unknown" }
+> {
+  try {
+    const res = await fetch(`${BASE}/portal/v1/session/peek`, {
+      headers: { Authorization: `Bearer ${accessToken}`, ...(await forwardedFor()) },
+      cache: "no-store",
+    });
+    if (res.ok) return { kind: "live", peek: (await res.json()) as PortalLinkPeek };
+    if (res.status === 401) {
+      const j = (await res.json().catch(() => ({}))) as { business?: string };
+      return { kind: "dead", business: j.business ?? null };
+    }
+    return { kind: "unknown" };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
 /** What a link opens, without spending it (Phase 4b). Null for a dead link. */
 export async function portalPeek(accessToken: string): Promise<PortalLinkPeek | null> {
   try {
@@ -364,7 +408,11 @@ export interface PortalLinkNotice {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    support_email?: string | null;
+    website?: string | null;
   };
+  /** The business has a public pricing page. Absent on older engines. */
+  pricing_page?: boolean;
   /** Sanitised by the engine; still render through `<SafeHtml>`. Null = default copy. */
   message_html: string | null;
   /** Phase 4: the business offers sign-in by email code. Absent on older engines. */
@@ -497,6 +545,8 @@ export interface PortalSubscriptionItem {
   amount_minor: number | null;
   interval: string | null;
   interval_count: number;
+  /** Billed per unit used: `unit_amount_minor` is a per-unit rate. */
+  metered?: boolean;
 }
 
 export interface PortalSubscription {
@@ -508,9 +558,12 @@ export interface PortalSubscription {
   items: PortalSubscriptionItem[];
   /** The page asks for usage only for these subscriptions. */
   has_metered_items?: boolean;
+  has_credit_usage?: boolean;
   /** Σ line amounts, PRE-tax. What the plan costs, not what we will charge. */
   recurring_subtotal_minor: number;
   current_period_end: string | null;
+  /** When a cancelled subscription ended. */
+  ended_at?: string | null;
   /**
    * The oldest live discount, or null. `removable` is false for an operator's manual
    * discount — that one is not the buyer's to lift.
@@ -549,6 +602,14 @@ export interface PortalSubscription {
     discount_lines?: Array<{ label: string; amount_minor: number }>;
     /** Priced after a scheduled plan change (the items the change leaves). */
     after_scheduled_change?: boolean;
+    /**
+     * Metered subscriptions only. `total_minor` above is the fixed charge; this says
+     * whether usage is billed with this payment and, if so, the total with usage so far.
+     */
+    usage_so_far?:
+      | { billed: "with_this_payment"; total_minor: number | null; amount_due_minor: number | null }
+      | { billed: "separately" }
+      | null;
   } | null;
   /** No `next_payment` because a scheduled change or pause comes first and cannot be priced. */
   next_payment_unpriced?: { type: "change" | "pause"; at: string } | null;
@@ -564,6 +625,15 @@ export interface PortalSubscription {
     pause: boolean;
     resume: boolean;
     reactivate: boolean;
+    /**
+     * What a pause from the portal does (`pause_config`): it starts now or at the term
+     * end, has no end date, and an out-of-term resume bills the new term now or on the
+     * next invoice.
+     */
+    pause_terms?: {
+      starts: "now" | "end_of_term";
+      resume_charge: "now" | "next_invoice";
+    } | null;
   };
   /**
    * Null when the business does not offer skipping. `upcoming` is empty when this
@@ -572,6 +642,27 @@ export interface PortalSubscription {
    */
   /** Set while paused: when a scheduled resume brings it back, or null for no end date. */
   paused?: { resumes_at: string | null } | null;
+  /**
+   * Ended subscriptions, when the business offers restarts: whether this one can restart
+   * here, and if not, why (`message` is ready to show). Null otherwise.
+   */
+  restart?: {
+    allowed: boolean;
+    reason: string | null;
+    message: string | null;
+    open_invoices: string[];
+    closes_at: string | null;
+    /**
+     * The new term the restart checkout bills: its length and the items at the restart
+     * price (`restart_price`), before tax and discounts.
+     */
+    term?: {
+      interval: string;
+      interval_count: number;
+      subtotal_minor: number;
+      currency: string;
+    } | null;
+  } | null;
   /** Plan changes (Phase 2): offered on this subscription, and a change scheduled for the term end. */
   plan_change?: {
     allowed: boolean;
@@ -628,6 +719,23 @@ export const portalSkipRenewal = (
     `/portal/v1/subscriptions/${encodeURIComponent(sub)}/${action}`,
     { method: "POST", body: { renewal_at: renewalAt } },
   );
+
+/** Open a checkout that restarts an ended subscription once the buyer pays the new term. */
+export const portalRestartSubscription = (
+  token: string,
+  sub: string,
+  returnUrl: string,
+  cancelUrl: string,
+) =>
+  portalFetch<{
+    object: "portal_subscription_restart";
+    id: string;
+    url: string;
+    expires_at: string;
+  }>(token, `/portal/v1/subscriptions/${encodeURIComponent(sub)}/restart`, {
+    method: "POST",
+    body: { return_url: returnUrl, cancel_url: cancelUrl },
+  });
 
 export type PortalLifecycleAction = "cancel" | "pause" | "resume" | "reactivate";
 
@@ -1042,12 +1150,42 @@ export interface PortalCreditUnitBalance {
   name: string;
   plural_name: string;
   decimals: number;
+  /** False = the unit has no money value. Absent on an older API = true. */
+  rated?: boolean;
   /** In the unit's smallest step. */
   available_amount: number;
+  /** A unit with no money rate: reserved by open holds, and used but not settled yet. */
+  held_amount?: number;
+  unsettled_amount?: number;
+}
+
+/** An automatic top-up of a credit unit with no money value, as the buyer sees it. */
+export interface PortalAutoTopup {
+  unit: string;
+  unit_name: string;
+  unit_plural_name: string;
+  decimals: number;
+  currency: string;
+  trigger: "threshold" | "schedule";
+  /** In the unit's smallest step. */
+  threshold_amount: number | null;
+  target_amount: number | null;
+  pack_name: string;
+  /** One purchase: its credits (smallest step) and its price before tax. */
+  pack_credits_amount: number;
+  pack_amount_minor: number;
+  /** Packs one purchase buys (1 for a target top-up). Absent on an older API. */
+  pack_quantity?: number;
+  /** False: a run has no payment method that we can charge. Absent on an older API. */
+  has_payment_method?: boolean;
+  status: "active" | "disabled";
+  disabled_reason: string | null;
 }
 
 export interface PortalCredits {
   object: "portal_credits";
+  /** Empty unless the business lets the buyer manage automatic top-up. Absent on an older API. */
+  auto_topups?: PortalAutoTopup[];
   balances: Array<{
     currency: string;
     balance_minor: number;
@@ -1061,6 +1199,8 @@ export interface PortalCredits {
     unit_name: string;
     unit_plural_name: string;
     decimals: number;
+    /** False = the unit has no money value. Absent on an older API = true. */
+    unit_rated?: boolean;
     remaining_amount: number;
     remaining_face_minor: number;
     category: "paid" | "promotional";
@@ -1074,8 +1214,18 @@ export interface PortalCredits {
     kind: string;
     currency: string;
     face_minor: number;
+    /** The movement in the unit's smallest step, signed. Absent on an older API. */
+    units?: number;
+    unit?: string | null;
+    unit_name?: string;
+    unit_plural_name?: string;
+    decimals?: number;
+    /** False = a unit with no money value: `face_minor` is 0, show `units`. */
+    unit_rated?: boolean;
     created_at: string;
     invoice_number?: string | null;
+    /** True = a draw that paid for usage, with no invoice. Absent on an older API. */
+    for_usage?: boolean;
   }>;
   /** The business's active credit-pack prices. */
   packs: Array<{
@@ -1092,16 +1242,51 @@ export interface PortalCredits {
     credit_amount: number;
   }>;
   top_up_limits: Record<string, { min_minor?: number | null; max_minor?: number | null }>;
+  /** The buyer may enter a coupon code on Buy. */
+  allow_coupons?: boolean;
 }
+
+/** One pack purchase priced as the invoice will raise it, with the buyer's coupon. */
+export interface PortalCreditPackQuote {
+  object: "credit_pack_quote";
+  price: string;
+  quantity: number;
+  currency: string;
+  coupon: string | null;
+  /** Before the discount. */
+  subtotal_minor: number;
+  discount_minor: number;
+  tax_minor: number;
+  total_minor: number;
+  amount_due_minor: number;
+}
+
+export const portalQuoteCredits = (
+  token: string,
+  price: string,
+  quantity: number,
+  coupon?: string,
+) =>
+  portalFetch<PortalCreditPackQuote>(token, "/portal/v1/credits/quote", {
+    method: "POST",
+    body: { price, quantity, ...(coupon ? { coupon } : {}) },
+  });
 
 export const portalGetCredits = (token: string) =>
   portalFetch<PortalCredits>(token, "/portal/v1/credits");
 
+/** The buyer enables or disables an automatic top-up of a unit. */
+export const portalSetAutoTopup = (token: string, unit: string, enabled: boolean) =>
+  portalFetch<PortalAutoTopup>(token, "/portal/v1/credits/auto_topup", {
+    method: "POST",
+    body: { unit, enabled },
+  });
+
 /** Opens a purchase checkout for a credit pack, pinned to this customer. */
-export const portalBuyCredits = (token: string, price: string, quantity: number) =>
+export const portalBuyCredits = (token: string, price: string, quantity: number, coupon?: string) =>
   portalFetch<{ url: string }>(token, "/portal/v1/credits/purchase", {
     method: "POST",
-    body: { price, quantity },
+    body: { price, quantity, ...(coupon ? { coupon } : {}) },
   });
 
 // ── Usage controls (design G5 § 5): spend limits and credit runway ─────────────────────
@@ -1122,6 +1307,10 @@ export interface PortalSpendLimit {
   set_by: "operator" | "customer";
   /** The buyer's own row: it may lower or delete it. Provider rows are read-only. */
   editable: boolean;
+  /** Spent so far in the current interval, when the engine can measure it. */
+  spent_minor?: number | null;
+  reached?: boolean | null;
+  resets_at?: string | null;
 }
 
 export const portalListSpendLimits = (token: string) =>
@@ -1193,7 +1382,12 @@ export interface PortalChangeOptions {
     interval: string | null;
     interval_count: number;
     current: boolean;
-    direction: PortalChangeDirection;
+    /** Null when either price has no single rate: the list price cannot say which way it moves. */
+    direction: PortalChangeDirection | null;
+    /** The price's own name ("Pro Team"): tells two prices of one product apart. */
+    price_name?: string | null;
+    /** Billed for what the buyer uses. */
+    metered?: boolean;
   }>;
   seats: {
     item: string;
@@ -1216,6 +1410,12 @@ export interface PortalChangeOptions {
     rules: Record<string, PortalAddonRule>;
     /** Held but no longer offered here: the customer may remove it, not change its quantity. */
     remove_only?: boolean;
+    /** Pricing model (`flat`, `per_unit`, `usage`, …). */
+    model?: string;
+    /** Billed for what the buyer uses: `amount_minor` is a per-unit rate. */
+    metered?: boolean;
+    /** The price's own name ("Per 1k calls"). */
+    price_name?: string | null;
   }>;
   timing: Record<
     "upgrade" | "downgrade",
@@ -1260,11 +1460,26 @@ export interface PortalChangePreview {
     credit_minor: number;
     immediate_charge: boolean;
     added_to_next_invoice: boolean;
+    /** Part of the credit paid back to the card or bank (`downgrade_credit: refund`). */
+    refunded_minor?: number;
+    /** When `added_to_next_invoice`: the date of that invoice. */
+    next_invoice_at?: string | null;
+    /** Coupons and other discounts inside `total_minor`. */
+    discount_minor?: number;
+    /** The unused period the credit lines cover. */
+    credited_period_start?: string | null;
+    credited_period_end?: string | null;
   } | null;
   /** What the buyer is asked to pay now; echoed back on apply. */
   total_minor: number;
   effective_at: string | null;
   next_recurring: { monthly_minor: number; currency: string };
+  /** The change restarts the term today (`plan_change_term`). */
+  reset_term?: boolean;
+  /** The new term end, when this change starts a new term. */
+  new_period_end?: string | null;
+  /** The first renewal after the change, as the engine prices it (tax and discounts in). */
+  next_renewal?: { at: string | null; total_minor: number } | null;
 }
 
 export interface PortalChangeResult {

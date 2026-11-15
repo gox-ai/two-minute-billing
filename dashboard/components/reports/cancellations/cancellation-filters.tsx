@@ -45,50 +45,54 @@ export function CancellationFilters({
     navigate(q ? `${pathname}?${q}` : pathname, { source: "filters" });
   };
 
+  // On a phone the selects are a grid of equal halves (the period takes a full row when a
+  // plan picker joins it); from 640px each keeps its own width in one row.
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="w-44">
-        <SelectField
-          size="sm"
-          ariaLabel="Period"
-          value={range}
-          onValueChange={(v) => go("range", v, v === DEFAULT_RANGE)}
-          options={CANCELLATION_RANGES.map((r) => ({ value: r.id, label: r.label }))}
-        />
-      </div>
-      {/*
+    <div className="flex w-full items-center gap-2 sm:w-auto">
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <div className={plans.length > 0 ? "col-span-2 min-w-0 sm:w-44" : "min-w-0 sm:w-44"}>
+          <SelectField
+            size="sm"
+            ariaLabel="Period"
+            value={range}
+            onValueChange={(v) => go("range", v, v === DEFAULT_RANGE)}
+            options={CANCELLATION_RANGES.map((r) => ({ value: r.id, label: r.label }))}
+          />
+        </div>
+        {/*
         Rendered only when the catalog HAS plans. A plan picker on a business with none
         would be a control whose every choice returns nothing.
       */}
-      {plans.length > 0 ? (
-        <div className="w-48">
+        {plans.length > 0 ? (
+          <div className="min-w-0 sm:w-48">
+            <SelectField
+              size="sm"
+              ariaLabel="Plan"
+              value={plan}
+              onValueChange={(v) => go("plan", v, false)}
+              options={[
+                { value: "", label: "All plans" },
+                ...plans.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+          </div>
+        ) : null}
+        <div className="min-w-0 sm:w-40">
           <SelectField
             size="sm"
-            ariaLabel="Plan"
-            value={plan}
-            onValueChange={(v) => go("plan", v, false)}
+            ariaLabel="Billing interval"
+            value={interval}
+            onValueChange={(v) => go("interval", v, false)}
             options={[
-              { value: "", label: "All plans" },
-              ...plans.map((p) => ({ value: p.id, label: p.name })),
+              { value: "", label: "All intervals" },
+              ...CANCELLATION_INTERVALS.map((i) => ({ value: i.value, label: i.label })),
             ]}
           />
         </div>
-      ) : null}
-      <div className="w-40">
-        <SelectField
-          size="sm"
-          ariaLabel="Billing interval"
-          value={interval}
-          onValueChange={(v) => go("interval", v, false)}
-          options={[
-            { value: "", label: "All intervals" },
-            ...CANCELLATION_INTERVALS.map((i) => ({ value: i.value, label: i.label })),
-          ]}
-        />
       </div>
       {/* The selects own their chevrons, so the spinner sits beside them. */}
       {pending ? (
-        <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden />
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden />
       ) : null}
     </div>
   );

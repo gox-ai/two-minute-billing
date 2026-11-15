@@ -16,9 +16,10 @@ import {
  * THE date/time entry field. Every dated form control in the dashboard goes through this
  * — there is no correct way to hand-roll one.
  *
- * The operator sees and types a **business-timezone** wall clock (with the zone shown, so
- * they know which clock it is); the form submits the **UTC** instant under `name` via a
+ * The operator sees and types a **business-timezone** wall clock (the zone is named in a
+ * help line under the input); the form submits the **UTC** instant under `name` via a
  * hidden input. Same shape as `MoneyInput`: human units visible, wire units hidden.
+ * Width: fills its column; a standalone field passes a width on the scale (`w-72`).
  *
  * WHY. `<input type="datetime-local">` produces a zone-LESS `2026-08-21T00:00`. Whoever
  * calls `new Date()` on that resolves it in their own zone — the Node process's in a
@@ -116,32 +117,40 @@ export function DateTimeField({
     onUtcChange?.(utcIso);
   }, [utcIso, onUtcChange]);
 
+  const zoneId = React.useId();
+  // Names the zone the value is read in, which is the business's unless `tz` overrides it.
+  const zoneName = tz || "UTC";
+  const offset = tzLabel(tz);
+  const zoneText = `${zone === undefined && businessTz ? "Business time zone" : "Time zone"}: ${zoneName}${offset !== zoneName ? ` (${offset})` : ""}`;
+
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <input
-          id={id}
-          type={dateOnly ? "date" : "datetime-local"}
-          value={local}
-          onChange={(e) => setLocal(e.target.value)}
-          required={required}
-          disabled={disabled}
-          min={minToday ? todayInTz(tz) : min}
-          max={max}
-          aria-describedby={describedBy}
-          className={cn(
-            "h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none",
-            "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
-            className,
-          )}
-        />
-        {hideZoneHint ? null : (
-          <span className="shrink-0 text-xs text-muted-foreground select-none" title={tz ?? "UTC"}>
-            {tzLabel(tz)}
-          </span>
+    <div className="flex min-w-0 flex-col gap-1">
+      <input
+        id={id}
+        type={dateOnly ? "date" : "datetime-local"}
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        required={required}
+        disabled={disabled}
+        min={minToday ? todayInTz(tz) : min}
+        max={max}
+        aria-describedby={
+          [describedBy, hideZoneHint ? null : zoneId].filter(Boolean).join(" ") || undefined
+        }
+        // Empty: the browser's format hint reads as a placeholder, not as a value.
+        data-empty={local ? undefined : ""}
+        className={cn(
+          "h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none",
+          "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-empty:text-muted-foreground",
+          "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
+          className,
         )}
-      </div>
+      />
+      {hideZoneHint ? null : (
+        <p id={zoneId} className="m-0 text-xs text-muted-foreground">
+          {zoneText}
+        </p>
+      )}
       {/* The wire value: always UTC, always zone-qualified. Empty when the field is blank
           or unparseable, so the server's own validation reports it rather than receiving a
           silently shifted instant. */}

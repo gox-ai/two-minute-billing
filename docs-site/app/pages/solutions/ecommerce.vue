@@ -378,12 +378,7 @@ useMarketingSeo({
           alt="Orders come in through the hosted checkout, the customer portal or your store's own API calls. The billing engine bills the order and sends your store a webhook: ship the order, hold the order, or ask for a new card."
         />
         <div class="mt-8 text-center">
-          <UButton
-            to="/help/developers/webhooks"
-            color="neutral"
-            variant="outline"
-            trailing-icon="i-lucide-arrow-up-right"
-          >
+          <UButton to="/help/developers/webhooks" color="neutral" variant="outline">
             Webhooks
           </UButton>
         </div>

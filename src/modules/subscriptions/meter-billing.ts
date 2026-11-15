@@ -19,6 +19,33 @@ export class MeterBillingConflictError extends Error {
 }
 
 /**
+ * The conflict `syncMeterBilling` would raise for a new subscription of this customer on these
+ * meters: a live subscription already bills one of them. Read-only, for a check before the
+ * subscription exists (a checkout refuses at mint, not when the buyer pays).
+ */
+export async function meterBillingConflict(
+  tx: Tx,
+  customerId: string,
+  meterIds: string[],
+): Promise<MeterBillingConflictError | null> {
+  for (const meterId of [...new Set(meterIds)].sort()) {
+    const [live] = (await tx.execute(sql`
+      select s.public_id, m.key from customer_meter_billing cmb
+      join subscriptions s on s.id = cmb.subscription_id
+      join meters m on m.id = cmb.meter_id
+      where cmb.customer_id = ${customerId} and cmb.meter_id = ${meterId}
+        and s.status <> 'cancelled' and s.deleted_at is null
+        and exists (select 1 from subscription_items si join prices p on p.id = si.price_id
+                    where si.subscription_id = s.id and p.meter_id = ${meterId})`)) as unknown as Array<{
+      public_id: string;
+      key: string;
+    }>;
+    if (live) return new MeterBillingConflictError(live.public_id, live.key);
+  }
+  return null;
+}
+
+/**
  * Run on every attach path, in its transaction, after the items are written: freeze each meter
  * price's meter and rate card onto its item snapshot, then take `customer_meter_billing` for
  * each meter. One live subscription per customer bills a meter; a row whose owner is cancelled,

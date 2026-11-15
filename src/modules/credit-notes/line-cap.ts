@@ -17,7 +17,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { appliedTaxes, creditNoteItems, creditNotes, invoiceLineItems, prices } from "@db/schema";
 import { lineTaxShare } from "./note-tax";
-import { packLineCredits, type PackLineCredit } from "@/modules/credits/service";
+import { fullRefundable, packLineCredits, type PackLineCredit } from "@/modules/credits/service";
 
 export interface LineValueInput {
   kind: string;
@@ -64,6 +64,8 @@ export async function lineCreditableAmounts(
   inv: { id: string; businessId: string; priceType: string | null },
   onlyPublicIds?: readonly string[],
   pending?: ReadonlyMap<string, bigint>,
+  /** `full`: a pack line credits its whole value, used credits too (0529). */
+  opts?: { packRefund?: "full" },
 ): Promise<Map<string, LineCreditable>> {
   const lines = await tx
     .select({
@@ -182,7 +184,7 @@ export async function lineCreditableAmounts(
             : own;
         // A pack line credits at most its unused cost, with that share of its tax.
         const pack = packs.get(r.l.id);
-        if (pack) {
+        if (pack && opts?.packRefund !== "full") {
           const basis = pack.grant.costBasisMinor;
           const packCap = basis > 0n ? halfUpDiv(r.valueMinor * pack.unusedCostMinor, basis) : 0n;
           leftMinor = min(leftMinor, packCap - (pending?.get(r.l.publicId) ?? 0n));
@@ -204,8 +206,18 @@ export async function lineCreditableAmounts(
 }
 
 /** The cost a credit of `amountMinor` (tax-inclusive) takes off a pack line worth `valueMinor`. */
-export function packNetOf(amountMinor: bigint, valueMinor: bigint, pack: PackLineCredit): bigint {
+export function packNetOf(
+  amountMinor: bigint,
+  valueMinor: bigint,
+  pack: PackLineCredit,
+  packRefund?: "full",
+): bigint {
   if (valueMinor <= 0n) return 0n;
   const net = halfUpDiv(amountMinor * pack.grant.costBasisMinor, valueMinor);
-  return net < pack.unusedCostMinor ? net : pack.unusedCostMinor;
+  // A full refund takes the used cost too where it can be drawn again (0530).
+  const cap =
+    packRefund === "full" && fullRefundable(pack.grant)
+      ? pack.grant.costBasisMinor
+      : pack.unusedCostMinor;
+  return net < cap ? net : cap;
 }

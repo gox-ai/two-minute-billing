@@ -39,7 +39,7 @@ export async function InvoicesSection({ biz, hs }: { biz: string; hs: ConnectedH
               <Alert tone="warning" title="HubSpot did not give access to custom objects.">
                 Invoices sync to a custom object, and custom objects need HubSpot Enterprise. To
                 sync invoices, connect HubSpot again and allow the access.{" "}
-                <a href={reconnect} className="font-medium underline">
+                <a data-document-link href={reconnect} className="font-medium underline">
                   Reconnect HubSpot
                 </a>
               </Alert>

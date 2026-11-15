@@ -48,7 +48,7 @@ export default async function TeamPage() {
   return (
     <SettingsPage
       title="Team"
-      crumbs={[{ label: "Settings", href: "/settings" }, { label: "Team" }]}
+      crumbs={[{ label: "Overview", href: "/" }, { label: "Team" }]}
       description={
         <>
           Who can sign in to this organization. You are{" "}

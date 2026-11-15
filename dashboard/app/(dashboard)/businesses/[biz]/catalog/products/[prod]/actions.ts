@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { requirePermission } from "@/lib/session";
 import { listApplicablePlans, apiWrite, type AttachedItemConfig } from "@/lib/api";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { businessTz } from "@/lib/business-tz-server";
 import { actionOk, actionError, type ActionResult } from "@/lib/action-result";
 import type { SecretLinkResult } from "@/lib/secret-link";
@@ -200,7 +200,7 @@ export async function attachItemToPlanAction(
   try {
     current = await listApplicablePlans(biz, addon);
   } catch {
-    return actionError("We could not load the addon links.");
+    return actionError("We could not load the add-on links.");
   }
 
   const plans = Array.from(new Set([...current.plans, plan]));
@@ -280,7 +280,7 @@ export async function detachItemFromPlanAction(
   try {
     current = await listApplicablePlans(biz, addon);
   } catch {
-    return actionError("We could not load the addon links.");
+    return actionError("We could not load the add-on links.");
   }
 
   const plans = current.plans.filter((p) => p !== plan);

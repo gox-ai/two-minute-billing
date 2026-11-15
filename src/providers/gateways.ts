@@ -79,6 +79,8 @@ export const GATEWAY_FACTORIES: Record<ProviderKey, GatewayFactory> = {
           creds.buyer_auth_mode === "sdk" || creds.buyer_auth_mode === "form_post"
             ? creds.buyer_auth_mode
             : null,
+        // Pay on a hosted page opens the Approve/Decline dialog; `none` authorizes at once.
+        buyerPaymentDialog: creds.buyer_auth_mode !== "none",
         preDebit: preDebitOptionsFromCredentials(creds),
         gatewayNotifiesPayer: String(creds.gateway_notifies_payer ?? "")
           .split(",")

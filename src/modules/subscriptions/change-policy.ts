@@ -11,7 +11,7 @@
  * end of the term, the dashboard and the API apply a change now unless the caller schedules
  * it. A scheduled change is gated and timed when it is scheduled, not when it lands.
  */
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { resolveStorefrontConfig } from "@/modules/checkout/storefront-config";
 import { OPEN_INVOICE_STATUSES } from "@/modules/invoicing/status";
 import {
@@ -125,6 +125,12 @@ export function nowNotAllowedMessage(source: ChangeSource, direction: ChangeDire
   return `We could not apply the change now. This business applies ${what} at the end of the term. Send it to POST …/change with timing: end_of_term, or schedule it.`;
 }
 
+/** Not the invoice of a change held for payment (`apply_when_paid`). */
+export function notHeldInvoice() {
+  return sql`not exists (select 1 from subscription_pending_changes hpc
+    where hpc.invoice_id = ${invoices.id} and hpc.status = 'pending')`;
+}
+
 /** Whether the customer owes on any finalized invoice of this business. */
 export async function hasUnpaidInvoices(
   tx: Tx,
@@ -139,6 +145,8 @@ export async function hasUnpaidInvoices(
         eq(invoices.customerId, sub.customerId),
         inArray(invoices.status, [...OPEN_INVOICE_STATUSES]),
         gt(invoices.amountDueMinor, 0n),
+        // A held change's own invoice is not a debt: it is voided unless paid.
+        notHeldInvoice(),
       ),
     )
     .limit(1);

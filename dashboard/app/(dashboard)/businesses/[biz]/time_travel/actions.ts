@@ -11,7 +11,7 @@ import {
   type StopResult,
 } from "@/lib/api/time-travel";
 import { utcDateTime } from "@/lib/zod-utc";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { businessTz } from "@/lib/business-tz-server";
 import { requirePermission } from "@/lib/session";
 
@@ -54,7 +54,7 @@ export async function startTimeTravelAction(
   const parsed = parseForm(startSchema, formData);
   if (parsed.error) return parsed.error;
   const r = await startTimeTravel(biz, { genesis_time: parsed.data.genesis });
-  const res = fromWrite(r, "Time Travel started. The clock is at the genesis date.");
+  const res = fromWrite(r, "Time travel started. The clock is at the genesis date.");
   if (res.ok) revalidatePath(`/businesses/${biz}/time_travel`);
   return res;
 }
@@ -91,10 +91,10 @@ export async function stopTimeTravelAction(biz: string): Promise<ActionResult> {
   const r = await stopTimeTravel(biz, { wipe: true });
   if (!r.ok) {
     if (r.status === 409) return actionError(r.error ?? "Conflict", { code: "conflict" });
-    return actionError(r.error ?? `We could not stop Time Travel (${r.status}).`);
+    return actionError(r.error ?? `We could not stop time travel (${r.status}).`);
   }
   const data = r.data as StopResult | undefined;
   const wiped = data?.wiped ?? 0;
   revalidatePath(`/businesses/${biz}/time_travel`);
-  return actionOk(`Time Travel stopped. Deleted ${wiped} simulated row${wiped === 1 ? "" : "s"}.`);
+  return actionOk(`Time travel stopped. Deleted ${wiped} simulated row${wiped === 1 ? "" : "s"}.`);
 }

@@ -11,10 +11,11 @@ import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { config } from "@/platform/config";
 import { withTenant } from "@/platform/db";
-import { organizations } from "@db/schema";
+import { organizations, payments } from "@db/schema";
+import { createReceiptForPayment, numberUnnumberedReceipts } from "@/modules/receipts/service";
 import { signup } from "@/modules/auth/service";
 import { createBusiness } from "@/modules/tenancy/service";
 import { listGatewayAccounts, updateGatewayAccount } from "@/modules/gateway/service";
@@ -38,7 +39,7 @@ import {
   transformRow,
   type Manifest,
 } from "./snapshot";
-import { summarise, type BizSummary } from "./reporting";
+import { summarise, writeTodayMetrics, type BizSummary } from "./reporting";
 import type { SeededBusiness } from "./live";
 import type { FillJob } from "./fill-days";
 
@@ -293,6 +294,11 @@ export async function loadSnapshot(input: {
     rows += perBiz.reduce((a, n) => a + n, 0);
     mark("insert", ti);
 
+    // ── receipts: the snapshot predates them, so build each one as the engine would ─
+    const trc = Date.now();
+    await Promise.all(plans.map(({ f }) => seedReceipts(sql, orgId, f.id)));
+    mark("receipts", trc);
+
     // ── reporting: metric_daily from the shifted book (snapshots came with it) ─
     const tp = Date.now();
     await pool.run(
@@ -301,6 +307,11 @@ export async function loadSnapshot(input: {
         at,
         plans.map(({ f, days }) => ({ businessId: f.id, timezone: f.tz, days })),
         workers,
+      ),
+    );
+    await Promise.all(
+      plans.map(({ f }) =>
+        writeTodayMetrics({ organizationId: orgId, businessId: f.id, timezone: f.tz }),
       ),
     );
     for (const { f } of plans) invalidateSeriesCache(f.id);
@@ -331,6 +342,29 @@ export async function loadSnapshot(input: {
   } finally {
     await sql.end({ timeout: 5 });
   }
+}
+
+/**
+ * One receipt per succeeded payment, through the engine's own builder (it skips imported
+ * rows and payment-request children, and is idempotent per payment), dated at the payment
+ * and numbered in payment order.
+ */
+async function seedReceipts(
+  sql: postgres.Sql,
+  organizationId: string,
+  businessId: string,
+): Promise<void> {
+  await withTenant(organizationId, async (tx) => {
+    const paid = await tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.businessId, businessId), eq(payments.status, "succeeded")))
+      .orderBy(asc(payments.createdAt), asc(payments.id));
+    for (const p of paid) await createReceiptForPayment(tx, { paymentId: p.id });
+  });
+  // Created "at payment time", so the list and the numbering run in payment order.
+  await sql`update receipts set created_at = paid_at where business_id = ${businessId}`;
+  while ((await numberUnnumberedReceipts(organizationId, businessId)) > 0);
 }
 
 /** Business-local calendar days from `from` through yesterday. */

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import * as React from "react";
 import { useActionState } from "react";
 import { useRouter } from "next/navigation";
@@ -195,12 +196,12 @@ export function CustomerChargeForm({
             // Rule 0: an empty picker is a dead control — say why instead.
             <>
               The catalog has no charges in {currency}.{" "}
-              <a
+              <Link
                 href={`/businesses/${biz}/catalog/products`}
                 className="font-semibold text-primary hover:underline"
               >
                 Add one to the catalog
-              </a>
+              </Link>
               , or use Create Quick Charge for a one-off charge.
             </>
           ) : (

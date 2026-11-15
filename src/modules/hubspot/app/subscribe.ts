@@ -32,6 +32,7 @@ import {
 } from "@/modules/payment-methods/service";
 import {
   applyCouponToSubscription,
+  assertCouponCodeMatchesAnItem,
   applyManualDiscount,
   CouponError,
 } from "@/modules/coupons/service";
@@ -189,8 +190,15 @@ export async function createSubscriptionFromHubSpot(input: {
     const hasTrial = (price.trialPeriod ?? 0) > 0;
     const invoiceNow = resolveUnbilledChargesConfig(business).onCreate === "invoice_immediately";
     const chargesNow = isAutoCollectOn(null, customer.autoCollection) && !hasTrial && invoiceNow;
-    if (chargesNow)
-      await assertChargeableForAutoCollect({ organizationId: org, businessId: bizId, customer });
+    // The card check waits for the planned first invoice: one with nothing due needs no card.
+    // Before create: a coupon refused after it would leave an announced subscription behind.
+    if (discount && mode === "coupon" && discount.couponCode?.trim())
+      await assertCouponCodeMatchesAnItem({
+        organizationId: org,
+        businessId: bizId,
+        code: discount.couponCode.trim(),
+        items: { priceIds: [price.id], addonsMayFollow: true },
+      });
 
     const { subscription } = await createSubscription({
       organizationId: org,
@@ -268,6 +276,16 @@ export async function createSubscriptionFromHubSpot(input: {
         const due = plan.mode === "finalize" ? plan.money.amountDue : 0n;
         let charge;
         if (due > 0n) {
+          try {
+            await assertChargeableForAutoCollect({
+              organizationId: org,
+              businessId: bizId,
+              customer,
+            });
+          } catch (e) {
+            await discard();
+            throw e;
+          }
           const outcome = await chargeBeforeSubscriptionInvoice({
             organizationId: org,
             businessId: bizId,

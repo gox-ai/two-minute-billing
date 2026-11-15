@@ -80,6 +80,15 @@ export const PRODUCT: SiteLink[] = [
     icon: "i-lucide-chart-line",
     description: "MRR, churn and cohorts. Click a figure to see the records behind it.",
   },
+  {
+    label: "AI assistant",
+    group: "Assistant",
+    blurb: "AI answers from your billing data.",
+    to: "/product/ai-assistant",
+    icon: "i-lucide-sparkles",
+    description:
+      "Ask about your billing. Every figure is checked, and changes wait for your click.",
+  },
 ];
 
 export const SOLUTIONS: SiteLink[] = [
@@ -187,7 +196,7 @@ export const DEVELOPERS: SiteLink[] = [
 export const COMPANY: SiteLink[] = [
   { label: "Pricing", to: "/pricing" },
   { label: "Security", to: "/security" },
-  { label: "Self-hosted", to: "/open-source" },
+  { label: "Open source", to: "/open-source" },
   { label: "Blog", to: "/blog" },
   { label: "Contact", to: "/contact" },
 ];
@@ -219,7 +228,7 @@ export interface HeaderMenu {
 }
 
 export const MENU_COLUMNS: Record<MenuKey, string[][]> = {
-  product: [["Bill"], ["Collect"], ["Tax and reports"]],
+  product: [["Bill"], ["Collect"], ["Tax and reports", "Assistant"]],
   solutions: [["By business model"], ["By region", "By team"]],
   developers: [["Get started"], ["Reference"], ["Open source"]],
 };

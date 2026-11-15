@@ -13,8 +13,10 @@ import { Delta } from "@/components/analytics/delta";
 import { BucketBars } from "@/components/charts/bucket-bars";
 import { SegmentBar } from "@/components/charts/segment-bar";
 import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import type { SeriesPolarity } from "@/components/analytics/series-format";
-import { fmtDate, money, moneyCompact, pctFromBps } from "@/lib/format";
+import { money, moneyCompact, pctFromBps } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import type { CancellationAnalytics, CancellationCause } from "@/lib/api/cancellation-analytics";
 import { InfoTip } from "@/components/analytics/info-tip";
 import type { CardInfo } from "@/components/analytics/card-info";
@@ -95,15 +97,15 @@ export function InsightTable({
   const lost = rows.reduce((a, r) => a + r.mrr_lost_minor, 0);
   const count = rows.reduce((a, r) => a + r.count, 0);
   return (
-    // Compact (half-width) tables fix their number columns so the label wraps instead of
-    // pushing Share out of the card.
+    // Compact (half-width) tables fix their number columns, each at its widest figure
+    // (a 7-digit amount, "100.0%"), so the label gets the rest and fits on one line.
     <Table className={compact ? "table-fixed" : undefined}>
       <TableHeader>
         <TableRow>
           <TableHead>{groupLabel}</TableHead>
-          <TableHead className={cn("text-right", compact && "w-28")}>Cancellations</TableHead>
+          <TableHead className={cn("text-right", compact && "w-26")}>Cancellations</TableHead>
           {showMoney ? (
-            <TableHead className={cn("text-right", compact && "w-36")}>MRR lost</TableHead>
+            <TableHead className={cn("text-right", compact && "w-30")}>MRR lost</TableHead>
           ) : null}
           <TableHead className={cn("text-right", compact && "w-20")}>Share</TableHead>
         </TableRow>
@@ -128,12 +130,13 @@ export function InsightTable({
                   {compact ? null : (
                     <div className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
                       <div
-                        className="anim-grow h-full rounded-full bg-chart-1"
-                        style={{ width: `${Math.round(share * 100)}%` }}
+                        key={drawKey([share])}
+                        className={cn(BAR_GROW, "h-full rounded-full bg-chart-1")}
+                        style={barStyle(Math.round(share * 100))}
                       />
                     </div>
                   )}
-                  <span className="w-12 text-muted-foreground">
+                  <span className={cn("text-muted-foreground", !compact && "w-12")}>
                     {pctFromBps(Math.round(share * 10_000), 1)}
                   </span>
                 </div>
@@ -157,7 +160,7 @@ export function KindBars({ rows }: { rows: Array<{ key: string; label: string; c
   const whole = shown.reduce((a, r) => a + r.count, 0);
   return (
     <div className="flex flex-col gap-4">
-      {shown.map((r) => (
+      {shown.map((r, i) => (
         <div key={r.key} className="flex flex-col gap-1.5">
           <div className="flex items-baseline gap-2 text-sm">
             <span className="min-w-0 wrap-break-word">{r.label}</span>
@@ -170,8 +173,9 @@ export function KindBars({ rows }: { rows: Array<{ key: string; label: string; c
           </div>
           <div className="h-2 overflow-hidden rounded-md bg-muted" aria-hidden>
             <div
-              className="anim-grow h-full rounded-md bg-chart-1"
-              style={{ width: `${Math.min(100, (r.count / widest) * 100)}%` }}
+              key={drawKey([r.count, widest])}
+              className={cn(BAR_GROW, "h-full rounded-md bg-chart-1")}
+              style={barStyle(Math.min(100, (r.count / widest) * 100), i)}
             />
           </div>
         </div>
@@ -211,7 +215,7 @@ export function MrrLostTrend({ bars, currency }: { bars: MrrBar[]; currency: str
       key: "other",
       label: "No payment failure recorded",
       value: lost - involuntary,
-      fill: "bg-muted-foreground",
+      fill: "bg-chart-4",
     },
     { key: "involuntary", label: "Involuntary (payment)", value: involuntary, fill: "bg-chart-5" },
   ].filter((p) => p.value > 0);
@@ -234,7 +238,7 @@ export function MrrLostTrend({ bars, currency }: { bars: MrrBar[]; currency: str
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
           {parts.map((p) => (
             <span key={p.key} className="flex items-center gap-1.5">
-              <span className={cn("size-2 rounded-sm", p.fill)} aria-hidden />
+              <span className={cn("size-2 rounded-xs", p.fill)} aria-hidden />
               {p.label} {moneyCompact(p.value, currency)}
             </span>
           ))}

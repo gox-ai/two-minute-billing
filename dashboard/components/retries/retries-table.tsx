@@ -1,17 +1,20 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import { ListPage, type ListSegment, type ListPageHeader } from "@/components/patterns/list-page";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
 import { makeListSource } from "@/lib/list-source";
-import { InfoCell, MoneyCell, TextCell, TruncateCell } from "@/components/patterns/list-cells";
+import { MoneyCell, TextCell, TruncateCell } from "@/components/patterns/list-cells";
 import { CustomerInfoCell } from "@/components/patterns/customer-info-cell";
 import { StatusChip, Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
+import { enumLabel } from "@/lib/labels";
 import { useBusinessTz } from "@/components/business-tz";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type RetryRow } from "@/lib/api/retries";
 import {
   retryStatusLabel,
@@ -20,6 +23,46 @@ import {
   type RetryState,
 } from "@/lib/retries-format";
 import { RotateCcw } from "lucide-react";
+
+/** A reminder row: auto-collection is off, so dunning sends reminders and never charges. */
+function isReminder(r: RetryRow): boolean {
+  return r.collection === "reminder";
+}
+
+/**
+ * The next retry or reminder. A time in the past is due: the next clock tick acts on it,
+ * so it reads "Due now" with the exact time in the tooltip.
+ */
+function NextStepCell({ row, tz, now }: { row: RetryRow; tz: string | null; now: number }) {
+  const at = row.next_attempt_at;
+  if (!at) {
+    // No retry scheduled is the actionable state, not a blank cell.
+    return (
+      <TextCell>
+        <span className="text-muted-foreground">None scheduled</span>
+      </TextCell>
+    );
+  }
+  const exact = fmtDateTime(at, tz);
+  const due = new Date(at).getTime() <= now;
+  return (
+    <span className="flex flex-col text-sm whitespace-nowrap">
+      {due ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} className="w-fit font-medium">
+              Due now
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{exact}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="text-muted-foreground">{exact}</span>
+      )}
+      {isReminder(row) ? <span className="text-xs text-muted-foreground">Reminder</span> : null}
+    </span>
+  );
+}
 
 /** Every sort on this screen opens descending: the newest or largest first. */
 function descFirst(cols: ColumnDef<RetryRow>[]): ColumnDef<RetryRow>[] {
@@ -40,6 +83,7 @@ export function RetriesTable({
   total,
   hasMore,
   nextCursor,
+  now,
 }: {
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
@@ -48,6 +92,8 @@ export function RetriesTable({
   total: number;
   hasMore: boolean;
   nextCursor: string | null;
+  /** When the page rendered (ms). A next time at or before it reads "Due now". */
+  now: number;
 }) {
   const tz = useBusinessTz();
   const fetchPage = makeListSource<RetryRow>("retries", biz);
@@ -60,16 +106,16 @@ export function RetriesTable({
           header: "Invoice",
           accessorFn: (r) => `${r.invoice_number ?? ""} ${r.invoice}`,
           cell: ({ row }) => (
-            <InfoCell
-              title={
-                <span className={cn(!row.original.invoice_number && "font-mono")}>
-                  {row.original.invoice_number ?? row.original.invoice}
-                </span>
-              }
-              // A number-less invoice already shows its id as the title.
-              sub={row.original.invoice_number ? row.original.invoice : undefined}
+            <Link
               href={`/businesses/${biz}/invoices/${row.original.invoice}`}
-            />
+              data-record-title
+              className={cn(
+                "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline",
+                !row.original.invoice_number && "font-mono",
+              )}
+            >
+              {row.original.invoice_number ?? row.original.invoice}
+            </Link>
           ),
         },
         {
@@ -91,16 +137,16 @@ export function RetriesTable({
         },
         {
           id: "amount_due",
-          header: "Amount Due",
+          header: "Amount due",
           accessorFn: (r) => r.amount_due_minor,
-          meta: { align: "right" },
+          meta: { align: "right", phone: "aside" },
           cell: ({ row }) => (
             <MoneyCell minor={row.original.amount_due_minor} currency={row.original.currency} />
           ),
         },
         {
           id: "retry_status",
-          header: "Retry Status",
+          header: "Retry status",
           accessorFn: (r) => retryStatusLabel(r),
           cell: ({ row }) => (
             <StatusChip status={row.original.dunning_status ?? row.original.status} />
@@ -108,25 +154,21 @@ export function RetriesTable({
         },
         {
           id: "next_attempt_at",
-          header: "Next Retry",
+          header: "Next retry",
           accessorFn: (r) => r.next_attempt_at ?? "",
-          cell: ({ row }) => (
-            <TextCell>
-              {row.original.next_attempt_at ? (
-                fmtDateTimeShort(row.original.next_attempt_at, tz)
-              ) : (
-                // No retry scheduled is the actionable state, not a blank cell.
-                <span className="text-muted-foreground">None scheduled</span>
-              )}
-            </TextCell>
-          ),
+          cell: ({ row }) => <NextStepCell row={row.original} tz={tz} now={now} />,
         },
         {
           id: "attempts",
           header: "Attempts",
           accessorFn: (r) => r.attempt_count,
           meta: { align: "right" },
-          cell: ({ row }) => <TextCell>{String(row.original.attempt_count)}</TextCell>,
+          // A reminder is not a charge, so its count stays 0: name the row instead.
+          cell: ({ row }) => (
+            <TextCell>
+              {isReminder(row.original) ? "Reminder" : String(row.original.attempt_count)}
+            </TextCell>
+          ),
         },
         {
           id: "retryable",
@@ -148,19 +190,19 @@ export function RetriesTable({
         {
           id: "last_error",
           enableSorting: false,
-          header: "Last Error",
+          header: "Last error",
           accessorFn: (r) => [r.last_error_code, r.last_error_text].filter(Boolean).join(" "),
           cell: ({ row }) => {
             const { last_error_code: code, last_error_text: text } = row.original;
             if (!code && !text) return <TextCell />;
-            // One line, cut at the column; the full "(code) message" is the tooltip.
+            // The code reads as words; the message follows it.
             return (
               <TruncateCell
-                value={[code ? `(${code})` : null, text].filter(Boolean).join(" ")}
-                width="max-w-md"
+                value={[code ? enumLabel(code) : null, text].filter(Boolean).join(": ")}
+                width="max-w-64"
                 className="text-foreground"
               >
-                {code ? <span className="text-muted-foreground">({code}) </span> : null}
+                {code ? <span className="text-muted-foreground">{enumLabel(code)}. </span> : null}
                 {text}
               </TruncateCell>
             );
@@ -169,7 +211,7 @@ export function RetriesTable({
         {
           id: "payment_source",
           enableSorting: false,
-          header: "Payment Source",
+          header: "Payment source",
           accessorFn: (r) =>
             [r.payment_method_brand, r.payment_method_last4].filter(Boolean).join(" "),
           cell: ({ row }) => {
@@ -198,14 +240,12 @@ export function RetriesTable({
         },
         {
           id: "retry_started_at",
-          header: "Retry Started On",
+          header: "Retry started on",
           accessorFn: (r) => r.retry_started_at,
-          cell: ({ row }) => (
-            <TextCell>{fmtDateTimeShort(row.original.retry_started_at, tz)}</TextCell>
-          ),
+          cell: ({ row }) => <TextCell>{fmtDateTime(row.original.retry_started_at, tz)}</TextCell>,
         },
       ]),
-    [biz, tz],
+    [biz, tz, now],
   );
 
   /**
@@ -278,7 +318,7 @@ export function RetriesTable({
       // box here would filter nothing. Hidden rather than shipped dead.
       searchable={false}
       // Gateway and Retry Started On are context, not the first thing you scan for.
-      initialHidden={["gateway", "retry_started_at"]}
+      initialHidden={["gateway", "retry_started_at", "retryable", "payment_source", "attempts"]}
       emptyState={
         <EmptyState
           icon={<RotateCcw />}

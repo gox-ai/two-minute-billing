@@ -6,6 +6,7 @@ import { usageRollupState } from "@db/schema";
 import { upsertRollups } from "./rollup-sql";
 import { foldBackstop } from "@/modules/usage-controls/dirty";
 import {
+  countsAsUsage,
   bucketOf,
   countsTowardJoined,
   groupValuesOf,
@@ -58,7 +59,7 @@ function hitsSql(
       ${valueOf("e", sql`m.value_property`)} as val, e.amount, e.cost
     from usage_events e
     join meters m on m.business_id = e.business_id and m.event_name = e.event_name
-    where e.business_id = ${businessId} and e.customer_id is not null and e.voided_at is null
+    where e.business_id = ${businessId} and e.customer_id is not null and ${countsAsUsage("e")}
       and not m.recurring and m.aggregation in ('sum', 'count', 'min', 'max', 'avg', 'last')
       and m.folded_from is not null
       ${backfill ? sql`` : sql`and e.id >= ${uuidFloorSql(sql`m.folded_from`)}`}
@@ -112,6 +113,34 @@ async function matchPendingKeys(
   await tx.execute(sql`update customer_usage_keys set match_pending = false
     where business_id = ${businessId} and match_pending and key = any(${keys}::text[])`);
   return { keys: pending.length, matched: matched.length, customers };
+}
+
+/**
+ * Events that start to count as usage after the fold passed them (a capture paid an event
+ * the gate had refused): fold them now. The caller holds the `usage_rollup_state` row lock.
+ */
+export async function foldEventsBehindWatermark(
+  tx: Tx,
+  businessId: string,
+  eventIds: readonly string[],
+): Promise<void> {
+  const [state] = rowsOf<{ watermark: Date }>(
+    await tx.execute(
+      sql`select watermark from usage_rollup_state where business_id = ${businessId}`,
+    ),
+  );
+  if (!state) return;
+  const watermarkMs = new Date(state.watermark).getTime();
+  const behind = eventIds.filter((id) => uuidMs(id) < watermarkMs);
+  if (!behind.length) return;
+  await upsertRollups(
+    tx,
+    businessId,
+    hitsSql(
+      businessId,
+      sql`e.id = any(${`{${behind.join(",")}}`}::uuid[]) and e.id < ${uuidFloor(watermarkMs)}::uuid`,
+    ),
+  );
 }
 
 export interface FoldStep {
@@ -220,9 +249,10 @@ export async function backfillMeterStep(input: {
     const ffMs = new Date(m.folded_from).getTime();
     const [cut] = rowsOf<{ id: string }>(
       await tx.execute(sql`
-        select id from usage_events
-        where business_id = ${input.businessId} and event_name = ${m.event_name}
-          and customer_id is not null and voided_at is null and id < ${uuidFloor(ffMs)}::uuid
+        select e.id from usage_events e
+        where e.business_id = ${input.businessId} and e.event_name = ${m.event_name}
+          and e.customer_id is not null and ${countsAsUsage("e")}
+          and e.id < ${uuidFloor(ffMs)}::uuid
         order by id desc offset ${chunk - 1} limit 1`),
     );
     const loMs = cut && uuidMs(cut.id) < ffMs ? uuidMs(cut.id) : 0;

@@ -3,8 +3,9 @@ import { UsageDailyChart } from "@/components/usage/usage-daily-chart";
 import { formatDecimalQuantity } from "@/lib/meters";
 import { localDate } from "@/lib/model-prices";
 import { readStorefrontToken } from "@/lib/storefront-session";
-import { hasUsage } from "@/lib/api/current-usage";
-import { fmtDate, money } from "@/lib/format";
+import { creditAmount, hasUsage } from "@/lib/api/current-usage";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const units = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "unit" : "units"}`;
@@ -30,16 +31,20 @@ export async function PortalUsage({
   if (!hasUsage(u)) return null;
   const days = daily?.ok ? daily.data : null;
   const c = u.currency;
+  const credit = u.credit_usage ?? [];
+  const meterNames = new Map(credit.map((m) => [m.meter, m.name]));
   return (
     <div className="border-t px-5 py-4">
       <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
         Usage this period
       </div>
-      {u.window ? (
+      {u.window || credit.length > 0 ? (
         <>
-          <div className="mb-2 text-sm text-muted-foreground">
-            Since {fmtDate(u.window.start, tz)}
-          </div>
+          {u.window ? (
+            <div className="mb-2 text-sm text-muted-foreground">
+              Since {fmtDate(u.window.start, tz)}
+            </div>
+          ) : null}
           <ul className="flex flex-col gap-1.5 text-sm">
             {u.items.map((i, k) => (
               <li key={`${i.name}-${k}`} className="flex items-baseline justify-between gap-3">
@@ -77,6 +82,79 @@ export async function PortalUsage({
                 <span className="shrink-0 tabular-nums">{money(s.amount_minor, c)}</span>
               </li>
             ))}
+            {credit.flatMap((m) => [
+              ...(Number(m.paid_quantity) > 0
+                ? [
+                    <li
+                      key={`credit-${m.meter}`}
+                      className="flex items-baseline justify-between gap-3"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate">{m.name}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          <span className="tabular-nums">
+                            {formatDecimalQuantity(m.paid_quantity)}
+                          </span>{" "}
+                          paid with {creditAmount(m.paid_units, m)}.
+                        </span>
+                      </span>
+                    </li>,
+                  ]
+                : []),
+              ...(Number(m.below_zero_quantity ?? 0) > 0
+                ? [
+                    <li
+                      key={`credit-${m.meter}-below`}
+                      className="flex items-baseline justify-between gap-3"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate">{m.name}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          <span className="tabular-nums">
+                            {formatDecimalQuantity(m.below_zero_quantity!)}
+                          </span>{" "}
+                          used with no credit left.
+                        </span>
+                      </span>
+                    </li>,
+                  ]
+                : []),
+              ...m.billed.map((b, k) => (
+                <li
+                  key={`credit-${m.meter}-billed-${k}`}
+                  className="flex items-baseline justify-between gap-3"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate">{m.name}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      <span className="tabular-nums">{formatDecimalQuantity(b.quantity)}</span> used
+                      past your credit balance. Your next invoice bills this.
+                    </span>
+                  </span>
+                  <span className="shrink-0 tabular-nums">{money(b.amount_minor, c)}</span>
+                </li>
+              )),
+              ...(Number(m.overshoot_units) > 0
+                ? [
+                    <li
+                      key={`credit-${m.unit}-over`}
+                      className="flex items-baseline justify-between gap-3 text-muted-foreground"
+                    >
+                      <span className="min-w-0">
+                        <span className="block first-letter:uppercase">
+                          {m.unit_plural_name}: negative balance
+                        </span>
+                        <span className="block text-xs">
+                          <span className="tabular-nums">
+                            −{creditAmount(m.overshoot_units, m)}
+                          </span>
+                          . Credits that you buy pay it first.
+                        </span>
+                      </span>
+                    </li>,
+                  ]
+                : []),
+            ])}
           </ul>
           <div className="mt-2 flex flex-col gap-1">
             {u.tax_lines.map((t) => (
@@ -110,7 +188,12 @@ export async function PortalUsage({
               <UsageDailyChart
                 points={days.data.map((r) => ({
                   date: r.date,
-                  series: r.group.model ?? Object.values(r.group)[0] ?? r.meter,
+                  // A meter's name, never its key: the buyer reads this.
+                  series:
+                    r.group.model ??
+                    Object.values(r.group)[0] ??
+                    meterNames.get(r.meter) ??
+                    r.meter,
                   quantity: Number(r.quantity) || 0,
                 }))}
                 from={localDate(days.time_zone, new Date(days.from))}
@@ -120,7 +203,7 @@ export async function PortalUsage({
             </div>
           ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
-            These amounts do not include discounts or credits.
+            These amounts are before discounts and account credit.
           </p>
         </>
       ) : null}

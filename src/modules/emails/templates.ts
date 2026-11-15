@@ -3,6 +3,7 @@ import { formatMoney as formatPlatformMoney } from "@/platform/currency";
 import { escapeHtml, emailHtmlToText } from "./sanitize";
 import { renderBody, renderText } from "./template-lang";
 import { accountBrand, type AccountBrand } from "./account-brand";
+import { ASSISTANT_NAME } from "@/modules/assistant/name";
 
 /**
  * Built-in billing email templates. One subject + HTML + text per type, rendered
@@ -28,7 +29,10 @@ export interface RenderVars {
   code?: string;
   /** checkout_reminder: what the buyer left, e.g. "Credit pack × 2". */
   orderSummary?: string;
-  /** checkout_reminder: the link back to their order. The button's URL, never the merchant's. */
+  /**
+   * checkout_reminder: the link back to their order. subscription_restart: the restart
+   * checkout. The button's URL, never the merchant's.
+   */
   checkoutUrl?: string;
   /**
    * Brand Styles (0185). NOT `{{var}}` substitution material — these are consumed by
@@ -60,6 +64,13 @@ export interface RenderVars {
   trialEndDate?: string;
   pauseDate?: string;
   resumeDate?: string;
+  /** subscription_reactivated: the date the subscription became active again. */
+  reactivateDate?: string;
+  /**
+   * payment_method_invalid / mandate_expired: set when the customer has no subscription that
+   * is not cancelled (e.g. a refused restart), so the email does not ask them to keep it active.
+   */
+  subscriptionEnded?: string;
   cancelDate?: string;
   dueDate?: string;
   /** Pre-debit notice: the day the mandate will be debited. */
@@ -129,6 +140,8 @@ export interface RenderVars {
   hardLimit?: string;
   /** Automatic top-up failure: the bank's reason in the payer's words, when it may be shown. */
   declineReason?: string;
+  /** Automatic top-up failure: present when the top-up stays on (`auto_topup_on_hard_decline`). */
+  staysOn?: string;
   /**
    * The facts card — label/value rows under the body ("Invoiced amount / Payment
    * method / Due since / Failure reason").
@@ -319,6 +332,11 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
     heading: "Your subscription is active",
     body: "Hi {{customerName}},\n\nThank you for choosing {{businessName}}. Your {{planName}} subscription is now active. Your next renewal is on {{renewalDate}}.\n\nIf you need help as you start, contact us.",
   },
+  subscription_reactivated: {
+    subject: "Welcome back to {{businessName}}: your subscription is active again",
+    heading: "Welcome back",
+    body: "Hi {{customerName}},\n\nWe are glad to have you back. Your {{planName}} subscription is active again from {{reactivateDate}}. Billing continues as usual. Your next renewal is on {{renewalDate}}.\n\nIf you have a question or a problem, contact us.",
+  },
   subscription_changed: {
     subject: "Your {{businessName}} plan changed",
     heading: "Your plan changed",
@@ -362,7 +380,7 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
   payment_method_invalid: {
     subject: "We can no longer charge your {{paymentMethodType}}",
     heading: "Your payment method needs attention",
-    body: "Hi {{customerName}},\n\nWe can no longer charge your {{paymentMethodType}}. This can occur for different reasons. You can usually correct it.\n\nTo keep your subscription active, add a new payment method with the button below.",
+    body: "Hi {{customerName}},\n\nWe can no longer charge your {{paymentMethodType}}. This can occur for different reasons. You can usually correct it.\n\n{{#if subscriptionEnded}}Your subscription is not active. If you want to restart it, add a new payment method with the button below.{{else}}To keep your subscription active, add a new payment method with the button below.{{/if}}",
   },
   // Rail-neutral, and deliberately so: fires for card, UPI Autopay and e-mandate alike
   // (`emails/outbox.ts` routes here whenever `expiry_reason === 'mandate'`). Names
@@ -373,7 +391,7 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
   mandate_expired: {
     subject: "Renew your automatic payment authorization with {{businessName}}",
     heading: "Your automatic payment authorization ended",
-    body: "Hi {{customerName}},\n\nThe authorization that lets us collect your subscription payments automatically is no longer active. Your payment method is not the problem. Only the permission to charge it automatically needs renewal.\n\nUse the button below to give a new authorization, so that we can collect your next payment.",
+    body: "Hi {{customerName}},\n\nThe authorization that lets us collect your subscription payments automatically is no longer active. Your payment method is not the problem. Only the permission to charge it automatically needs renewal.\n\n{{#if subscriptionEnded}}Your subscription is not active, so we do not collect payments now. If you restart it, use the button below to give a new authorization.{{else}}Use the button below to give a new authorization, so that we can collect your next payment.{{/if}}",
   },
 
   // ── trial lifecycle ─────────────────────────────────────────────────────────
@@ -441,8 +459,8 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
   },
   credit_auto_topup_failed: {
     subject: "We could not add credit to your account",
-    heading: "Automatic top-up is off",
-    body: "Hi {{customerName}},\n\nWe could not add credit to your account.{{#if declineReason}} Your bank declined the payment ({{declineReason}}).{{/if}} Automatic top-up is now off.\n\nUpdate your payment method, then turn on automatic top-up again.",
+    heading: "{{#if staysOn}}Automatic top-up payment failed{{else}}Automatic top-up is off{{/if}}",
+    body: "Hi {{customerName}},\n\nWe could not add credit to your account.{{#if declineReason}} Your bank declined the payment ({{declineReason}}).{{/if}}{{#if staysOn}} Automatic top-up stays on. It tries again when your balance goes below the threshold again.\n\nUpdate your payment method.{{else}} Automatic top-up is now off.\n\nUpdate your payment method, then turn on automatic top-up again.{{/if}}",
   },
   // Legal notice before an automatic top-up debits a mandate: amount, date and mandate
   // reference must stay in the body.
@@ -489,6 +507,12 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
     subject: "Request to change your payment details for {{businessName}}",
     heading: "A request about your payment details",
     body: "Hi {{customerName}},\n\n{{note}}\n\nWe ask you to change the payment method on your account. This keeps your subscription active without interruption.\n\nThe button below opens the correct page.",
+  },
+  subscription_restart: {
+    subject: "Restart your {{planName}} subscription with {{businessName}}",
+    heading: "Restart your subscription",
+    body: "Hi {{customerName}},\n\n{{note}}\n\nYour {{planName}} subscription ended. You can restart it with the button below.\n\nOn the next page, you pay for a new term. Your subscription starts again when the payment succeeds. The link works for a limited time. If you do not want to restart, you do not have to do anything.",
+    ctaLabel: "Restart subscription",
   },
   credit_note_sent: {
     subject: "Credit note {{creditNoteNumber}} from {{businessName}}",
@@ -637,6 +661,13 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     { key: "subscriptionId", always: true },
     { key: "renewalDate", always: true },
   ],
+  subscription_reactivated: [
+    ...COMMON_TEMPLATE_VARS,
+    { key: "planName", always: true },
+    { key: "subscriptionId", always: true },
+    { key: "reactivateDate", always: true },
+    { key: "renewalDate", always: true },
+  ],
   subscription_changed: [
     ...COMMON_TEMPLATE_VARS,
     { key: "planName", always: true },
@@ -693,11 +724,16 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     { key: "paymentMethodType", always: true },
     { key: "cardBrand", always: false },
     { key: "cardLast4", always: false },
+    { key: "subscriptionEnded", always: false },
   ],
   // No `cardBrand`/`cardLast4` here at all, unlike `payment_method_invalid` above: this
   // fires for the SAME rails that carry no printed instrument identity as often as not
   // (upi, emandate), and the body never names the card either — see the template.
-  mandate_expired: [...COMMON_TEMPLATE_VARS, { key: "paymentMethodType", always: true }],
+  mandate_expired: [
+    ...COMMON_TEMPLATE_VARS,
+    { key: "paymentMethodType", always: true },
+    { key: "subscriptionEnded", always: false },
+  ],
 
   // Trial lifecycle. `trialEndDate` is `always` on all three: it is the date the mail is
   // about, and a trial email that cannot name its own date is not worth sending.
@@ -795,6 +831,7 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     ...COMMON_TEMPLATE_VARS,
     { key: "amount", always: true },
     { key: "declineReason", always: false },
+    { key: "staysOn", always: false },
   ],
   credit_topup_debit_notice: [
     ...COMMON_TEMPLATE_VARS,
@@ -833,6 +870,11 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     { key: "note", always: false },
   ],
   payment_method_request: [...COMMON_TEMPLATE_VARS, { key: "note", always: false }],
+  subscription_restart: [
+    ...COMMON_TEMPLATE_VARS,
+    { key: "planName", always: true },
+    { key: "note", always: false },
+  ],
   portal_sign_in_code: [...COMMON_TEMPLATE_VARS, { key: "code", always: true }],
   credit_note_sent: [
     ...COMMON_TEMPLATE_VARS,
@@ -939,6 +981,7 @@ export const VAR_LABELS: Partial<Record<keyof RenderVars, string>> = {
   resetDate: "Reset date",
   hardLimit: "Hard limit",
   declineReason: "Decline reason",
+  staysOn: "Top-up stays on",
   mandateReference: "Mandate reference",
   mandateRail: "Mandate type",
   achDebit: "ACH debit",
@@ -1240,6 +1283,11 @@ export function blocksFor(
       add("Plan", v.planName);
       add("Next renewal", v.renewalDate);
       break;
+    case "subscription_reactivated":
+      add("Plan", v.planName);
+      add("Active again from", v.reactivateDate);
+      add("Next renewal", v.renewalDate);
+      break;
     // The amount rides in the card, which drops the row when there was no estimate.
     case "subscription_renewed":
     case "renewal_reminder":
@@ -1325,6 +1373,14 @@ export function blocksFor(
     return {
       ...(rows.length ? { facts: rows } : {}),
       ...(v.checkoutUrl ? { action: { label: "Return to your order", url: v.checkoutUrl } } : {}),
+    };
+  }
+  // A restart is paid on its own checkout, never in the portal.
+  if (emailType === "subscription_restart") {
+    add("Plan", v.planName);
+    return {
+      ...(rows.length ? { facts: rows } : {}),
+      ...(v.checkoutUrl ? { action: { label: "Restart subscription", url: v.checkoutUrl } } : {}),
     };
   }
 
@@ -1564,6 +1620,93 @@ export function renderSignupRequestNotice(vars: {
 }
 
 /**
+ * To our support address (Cloud): a member's support request or reply, whole, with the link to
+ * answer it in the back-office. Plain text; no Reply-To, so nobody answers the member by email.
+ */
+export function renderSupportStaffNotice(vars: {
+  kind: "new" | "reply";
+  reference: string;
+  organization: { name: string; publicId: string };
+  business: { name: string; publicId: string; livemode: string };
+  member: { name: string | null; email: string };
+  subject: string;
+  body: string;
+  screenshots: string[];
+  /** The items the member left attached; sent with a new request only. */
+  items: Array<{ label: string; value: string }>;
+  link: string | null;
+}): RenderedEmail {
+  const { kind, reference: ref } = vars;
+  const lines = [
+    kind === "new" ? `New support request ${ref}.` : `The member replied on ${ref}.`,
+    "",
+    `Organization: ${vars.organization.name} (${vars.organization.publicId})`,
+    `Business: ${vars.business.name} (${vars.business.publicId}, ${vars.business.livemode})`,
+    `Member: ${vars.member.name ? `${vars.member.name} <${vars.member.email}>` : vars.member.email}`,
+    `Subject: ${vars.subject}`,
+    "",
+    kind === "new" ? "What happened:" : "Reply:",
+    vars.body,
+    ...(vars.screenshots.length ? ["", `Screenshots: ${vars.screenshots.join(", ")}`] : []),
+    ...(kind === "new" && vars.items.length
+      ? [
+          "",
+          "Attached:",
+          ...vars.items.map((i) => `- ${i.label}${i.value !== i.label ? ` — ${i.value}` : ""}`),
+        ]
+      : []),
+    "",
+    vars.link
+      ? `Reply in the back-office, not to this email: ${vars.link}`
+      : "Reply in the back-office (Support), not to this email.",
+  ];
+  const text = lines.join("\n");
+  return {
+    subject: `[${ref}] ${kind === "new" ? "Support request" : "Member reply"}: ${vars.subject}`,
+    html: `<pre style="font-family:inherit;white-space:pre-wrap">${escapeHtml(text)}</pre>`,
+    text,
+  };
+}
+
+/**
+ * Our support team replied to a member's request (Cloud). The reply is quoted as staff wrote
+ * it; the member answers in the dashboard, so nothing invites a reply to this email.
+ */
+export function renderSupportReplyEmail(
+  vars: {
+    name?: string | null;
+    reference: string;
+    subject: string;
+    reply: string;
+    /** The request in the dashboard; null when the dashboard address is not set. */
+    link: string | null;
+    resolved?: boolean;
+  },
+  brand: AccountBrand = accountBrand(),
+): RenderedEmail {
+  const reply = vars.reply.length > 1500 ? `${vars.reply.slice(0, 1499)}…` : vars.reply;
+  const { html, text } = renderAccountLayout(
+    {
+      preheader: `${vars.reference}: ${vars.subject}`,
+      title: "We replied to your support request",
+      greeting: greet(vars.name),
+      paragraphs: [
+        `${brand.name} support replied to your request ${vars.reference}, "${vars.subject}".`,
+        vars.resolved
+          ? "We marked the request as resolved. If you need more help, reply to it in the dashboard and we open it again."
+          : `To reply, open the request in the dashboard, in ${ASSISTANT_NAME}. We do not read replies to this email.`,
+      ],
+      callout: reply,
+      action: vars.link ? { label: "Open the request", url: vars.link } : null,
+      linkFallback: !!vars.link,
+      reason: "You get this email because you sent a support request from the dashboard.",
+    },
+    brand,
+  );
+  return { subject: `${vars.reference}: we replied to your request`, html, text };
+}
+
+/**
  * Sent instead of the confirmation when the address already has an account, so the sign-up
  * form answers the same for every address (M9).
  */
@@ -1636,6 +1779,39 @@ export function renderInviteEmail(
     ? `${vars.inviter.name || vars.inviter.email} added you to ${org} on ${brand.name}`
     : `You are now a member of ${org} on ${brand.name}`;
   return { subject, html, text };
+}
+
+/** The assistant's monthly allowance is 80% used (enforce mode): to owners and admins, once a month. */
+export function renderAssistantAllowanceEmail(
+  vars: {
+    name?: string | null;
+    organizationName: string;
+    usedPercent: number;
+    /** "December 1". */
+    renewsOn: string;
+    link: string | null;
+  },
+  brand: AccountBrand = accountBrand(),
+): RenderedEmail {
+  const org = vars.organizationName;
+  const pct = `${Math.min(vars.usedPercent, 100)}%`;
+  const { html, text } = renderAccountLayout(
+    {
+      preheader: `The ${ASSISTANT_NAME} allowance renews on ${vars.renewsOn}.`,
+      title: `You used ${pct} of this month's ${ASSISTANT_NAME} use`,
+      greeting: greet(vars.name),
+      paragraphs: [
+        `${org} used ${pct} of the ${ASSISTANT_NAME} use that your plan includes this month. ` +
+          `The allowance renews on ${vars.renewsOn}.`,
+        `When you use all of it, ${ASSISTANT_NAME} stops answering until the allowance renews. ` +
+          `To continue before then, upgrade your plan or add your own model key in Settings → ${ASSISTANT_NAME}.`,
+      ],
+      action: vars.link ? { label: `View ${ASSISTANT_NAME} use`, url: vars.link } : null,
+      reason: `You get this email because you are an owner or administrator of ${org}.`,
+    },
+    brand,
+  );
+  return { subject: `${org}: you used ${pct} of this month's ${ASSISTANT_NAME} use`, html, text };
 }
 
 /**

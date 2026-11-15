@@ -16,6 +16,10 @@ boundary). Raw card data never touches us — vaulting goes through the provider
 subscription and, on completion, applies the session's items onto it (plan swap / quantity change /
 add-ons — upsert by default, or a full replace with `replace_items_list`) and applies its coupons —
 the upgrade/downgrade surface.
+The view carries `change.blocked` when the business rules refuse the change, and the page then
+shows the reason in place of figures and Confirm. A declined charge follows
+`failed_change_charge`: under `apply_when_paid` the session stays open with the held invoice's
+price for a retry; under `revert` the change and what the session wrote are undone.
 
 Both modes carry a **list of items** plus **coupons**.
 
@@ -105,12 +109,71 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
 - Changing to the price the plan is *already* on is a no-op success (a double-submit is harmless).
 
 ## Changelog
+- **2026-11-13** — A declined first charge on a create-mode completion reads "We could not start
+  your subscription. <reason>. We did not charge you. Try again, or use a different payment
+  method." (was "Your payment was declined, so we did not create the subscription: <reason>").
+  Gate: `verify:checkout` (declined-first-charge assertion).
+- **2026-11-13** — Every gateway error is shown on our page, even when the gateway's own form
+  shows it too (user decision). Stripe: field validation errors too (`inForm` / `shownByElement`
+  removed; `dashboard/lib/stripe-confirm.ts`). The card step shows an SDK sheet's failure, a
+  RazorPay failure and a setup that will not start beside Pay (`showRefusal`), not as a toast; the
+  Stripe setup dialog shows a completion refusal in the dialog. A failed charge return shows the
+  gateway's reason; only the approval race reads "not yet". Mappings: `dashboard/lib/gateway-errors.ts`.
+- **2026-11-13** — `customer_id` on a `create` session (was purchase only): completing subscribes
+  that existing customer of the business (404 otherwise; never with `change`, `customer` or
+  `billing_address`). The page hides the email and prefills the stored billing address, which the
+  buyer can correct. A live subscription of the customer that already bills one of the items'
+  meters refuses the mint with 409 (`meterBillingConflict`), the rule `syncMeterBilling` applies at
+  completion. `verify:checkout-purchase` covers it.
+- **2026-11-12** — Hosted checkout: the details summary names an invalid combobox (State) by
+  its trigger's label and says "Select …"; no raw input name reaches the buyer. On the test gateway
+  Pay on a purchase opens the Approve/Decline dialog (gateway README). Browser autofill: billing
+  and shipping tokens per block, Country/State comboboxes take a filled value through a capture
+  input, and a filled international phone splits into code + number.
+- **2026-11-12 (0520)** — Purchase-mode sessions take coupons from the API and from the buyer's
+  box (under `max_customer_coupon_codes`). They are checked at mint and at entry as invoice lines,
+  with the per-email limit against `prefill.email`, and redeemed in the invoice transaction. The
+  purchase view carries `discount_minor` / `discounts`. A 100%-off purchase completes with no
+  payment step; a declined payment voids the invoice and releases the code. On the 3-D Secure
+  return leg, a refusal after the gateway authorised the intent (a coupon refused, the amount
+  changed) voids the intent first (`voidPaymentIntent`), so no hold is left. A flat credit pack is
+  rated × quantity (`packAwareLineAmount`), as its grant and top-up limits count it. Gate:
+  `verify:checkout-purchase`.
+- **2026-11-11** — The public pricing page (`GET /checkout/v1/pricing/:biz`) lists `offers`:
+  active percentage coupons with `metadata.pricing_page_until` still ahead (name from
+  `pricing_page_label`, percent, periods, plan intervals from the coupon's billing periods). It
+  advertises a discount; the coupon's own rules decide who gets it.
+- **2026-11-11** — A create checkout can name a known customer (`customerId`), pinned at mint as
+  in purchase mode: the buyer edits billing details, not the email or the customer. Internal
+  callers only (account billing's first paid plan); the API keeps `customer_id` on purchase. The
+  view carries `customer_pinned` at the top level, which locks the details step's email.
+- **2026-11-10** — Item-scoped coupons are checked against the items the subscription will hold:
+  at mint (create mode), when the buyer enters a code, in `coupon_refusals`, and at completion of a
+  change or reactivation before anything is charged (`assertSessionCouponsMatchItems`). A change
+  applies its coupons with `skipItemMatch`, as the items move after.
+- **2026-11-10** — Payment step intro: with saved payment methods listed, it says "Select a payment
+  method to … You can also add a new payment method." (it said "Add a card to …" above the list).
+  With none saved, the "Add …" sentences are unchanged.
+- **2026-11-10** — Hosted page: a refused completion now stays on the card as an inline error
+  (`PaymentRefusal`, from `usePaymentChallenge().refusal`) as well as the toast, in all three
+  payment components; cleared when the buyer tries again or succeeds. A declined restart showed
+  only the toast, which closes by itself, so the page then looked unchanged.
+- **2026-11-10** — A reactivating session always takes the charge first (`onChargeFailure:
+  "refuse"`), whatever `require_successful_charge_on_reactivation` says: a decline leaves the
+  subscription cancelled and the session open. The view's quote for a session that lists no
+  items now prices the kept lines at their frozen amount (`currentItems`), as the invoice bills
+  them; it quoted today's catalogue price.
 - **2026-11-05** — `/checkout/v1/setup` takes `consent` (the same answers as `/complete`) and keeps
   it on the session (`setup_consent`, 0494). `completeCheckoutForSetupIntent` runs
   `resolveCheckoutConsent` on it and refuses without it; on success it records the consent as at
   `/setup`. `assertCouponUsableAtCheckout` refuses the business's retention coupon.
 - **2026-11-03** — Change mode applies `plan_change_term` when the session did not set
   `reset_term` (stored false is read as unset).
+- **2026-11-14** — The change page warns before Confirm. When `change.blocked` is set (unpaid
+  invoices, or a timing rule that sends the change to the term end), the page shows the refusal
+  message in place of the figures and offers no Confirm or card step. A term-end downgrade used
+  to preview an immediate credit ("$80.00 stays on your account") and then fail on Confirm.
+  Gate: `verify:settings-plan-change-rules` (change_timing view check).
 - **2026-11-03** — Change mode follows the business's plan-change rules (`resolveChangePolicy`,
   source `checkout`): a gated change or one the timing rule sends to the term end is refused at
   completion, before any write; the preview and the apply prorate by the direction's rule. The
@@ -798,3 +861,24 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
 - **2026-11-01 (Tier 3 PR 2)** — A purchase with credit-pack lines must stay inside `credit_config.top_up_limits`, checked at mint (`createCheckoutSession`) and at complete. Portal "Buy credits" opens a purchase session pinned to the customer (`POST /portal/v1/credits/purchase`). Gate: `verify:credit-packs`.
 - **2026-11-03 (0495)** — The buyer coupon box is capped by `businesses.max_customer_coupon_codes` (default 1 for every business; deliberate change from no limit). `checkout_sessions.customer_coupon_codes` lists the codes the buyer entered; merchant codes do not count; the update is conditional on the count. Removing a code frees its slot. Gate: `verify:checkout` (0495 block).
 - **2026-11-04** — Checkout session and payment link quantities (`quantity`, `min_quantity`, `max_quantity`) are capped at `LIMITS.quantity` (1,000,000). Gate: `verify:strict-params` § F.
+- **2026-11-14** — A hosted `change` reverted by `failed_change_charge: revert`
+  (`subscriptions/change-revert.ts`) is refused as a signup refuses: `completePlanChange` maps
+  `ChangeRevertedError` to `CheckoutPaymentRefusedError` (`payerRefusal("We could not change your
+  plan.", <decline>)`), the session stays open to retry and no metadata is written. The session's
+  own writes before the change come off too: its coupons are released with their redemption given
+  back and the ones `replace_coupon_list` removed are active again (`undoSubscriptionCouponEdit`),
+  and the subscription's default payment method and PO number go back. So a retry with another
+  card can apply a coupon capped at one redemption per customer. Under `start_dunning` the final
+  action runs and the page reports the change as before. Gate: `verify:change-invoice-revert` §2.
+- **2026-11-15** — A hosted `change` under `failed_change_charge: apply_when_paid` is held when
+  its invoice is not paid: the page shows the decline (`CheckoutPaymentRefusedError`) and the
+  session stays open. The session's coupons, card and PO number stay on the subscription while
+  the change waits and come off if it ends unpaid (`pendingRestore`). A retry with this or another
+  card is a repeat of the same request, so it collects the same invoice and the change applies.
+  Gate: `verify:pending-change` §12.
+- **2026-11-15** — A NEW change-mode session for a change that already waits for payment shows the
+  held invoice too, not only the session that raised it: the view matches the session's request
+  against the pending change (`repeatsPendingChange`), as the portal does. `preview.heldExpiresAt`
+  carries the expiry, and the page shows "This change waits for payment" with the amount and the
+  time in the business timezone. A session for a different change shows nothing (its confirm
+  replaces the hold). Gate: `verify:pending-change` §12.

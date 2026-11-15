@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/session";
 import { getBusiness, type UnbilledEventOption } from "@/lib/api/business-settings";
 import { billingModeIdOf, billingModeLabel } from "@/lib/billing-mode";
 import { listDeclineRules } from "@/lib/api/decline-rules";
-import type { Business } from "@/lib/api";
+import { listPrices, type Business } from "@/lib/api";
 import { ErrorState } from "@/components/states";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -12,6 +12,8 @@ import {
   type AttentionItem,
 } from "@/components/settings/settings-layout";
 import { RuleLink } from "./_parts/shared";
+import { money } from "@/lib/format";
+import { effectiveGraceRange, formatGrace, recurringIntervals } from "@/lib/usage-grace";
 import {
   DECLINED_REFUND_LABELS,
   EXCESS_PAYMENT_LABELS,
@@ -21,8 +23,11 @@ import {
   billingRules,
   paymentApplication,
   resetRules,
-  CREDIT_UPGRADE_LABELS,
-  CREDIT_PAUSE_LABELS,
+  type PlanCreditResets,
+  CUSTOMER_COUPON_LABELS,
+  MID_TERM_COUPON_LABELS,
+  ZERO_INVOICE_PAID_LABELS,
+  couponBillingRules,
 } from "@/lib/billing-rules";
 import { CHARGE_TIMING_LABELS } from "./charge-timing/labels";
 
@@ -68,6 +73,12 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
   // An absent key inherits `collect_on_payment_method_update`, as resolveDunningConfig does.
   const requireChargeOnReactivation =
     b.dunning_config?.require_successful_charge_on_reactivation ?? collectOnPm;
+  // The usage wait after the per-plan cap; with no price list the configured value shows.
+  const delay = b.usage_close_delay_minutes ?? 0;
+  const wait = effectiveGraceRange(
+    delay,
+    delay ? recurringIntervals((await listPrices(biz).catch(() => null))?.data ?? []) : [],
+  );
   // Fetched, not guessed; a failure degrades to no value and the row still links.
   const overriddenRules = await listDeclineRules(biz)
     .then((r) => r.data.filter((x) => x.override != null).length)
@@ -97,6 +108,7 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
   const br = billingRules(b);
   const pa = paymentApplication(b);
   const resets = resetRules(b);
+  const coupons = couponBillingRules(b);
   // Invoice rules (0486): the read resolves every key; fallbacks equal the engine defaults.
   const ir = b.invoice_rules_config;
   const requiredCount = Object.values(br.required_reasons).filter(Boolean).length;
@@ -163,10 +175,18 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
         />
         <RuleLink
           title="Update subscription"
-          description="Invoicing, proration, conditions and timing for plan changes, and proration for a term-end change."
-          value={`${invoiceNow ? "Invoice now" : "Bill at renewal"} · upgrades ${
-            br.upgrade_proration === "prorated" ? "prorated" : "not prorated"
-          } · ${prorate ? "prorate term changes" : "no term proration"}`}
+          // The chip holds the first answer; the two proration answers follow the description.
+          description={
+            <>
+              Invoicing, proration, conditions and timing for plan changes, and proration for a
+              term-end change.
+              <span className="mt-1 block text-foreground/85">
+                Upgrades {br.upgrade_proration === "prorated" ? "prorated" : "not prorated"} · term
+                changes {prorate ? "prorated" : "not prorated"}
+              </span>
+            </>
+          }
+          value={invoiceNow ? "Invoice now" : "Bill at renewal"}
           href={`${rules}/update-subscription`}
         />
         <RuleLink
@@ -206,13 +226,19 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
         />
         <RuleLink
           title="Zero-value invoices"
-          description="Whether we send the invoice email for an invoice whose total is zero."
-          value={
+          description="Whether we send the invoice email and the invoice_paid event for an invoice whose total is zero."
+          value={`${
             b.email_config?.attachments?.invoice_issued?.skipZeroSend === true
               ? "Finalize, do not send"
               : "Finalize and send"
-          }
+          } · invoice_paid: ${ZERO_INVOICE_PAID_LABELS[coupons.zero_invoice_paid_event]}`}
           href={`${rules}/zero-value-invoices`}
+        />
+        <RuleLink
+          title="Coupons"
+          description="Which invoices between renewals get a subscription's coupons, and how a customer coupon works with other coupons."
+          value={`${MID_TERM_COUPON_LABELS[coupons.mid_term_coupons]} · ${CUSTOMER_COUPON_LABELS[coupons.customer_coupons]}`}
+          href={`${rules}/coupons`}
         />
         <RuleLink
           title="Small invoices"
@@ -244,13 +270,29 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
         />
         <RuleLink
           title="Usage close"
-          description="An extra wait, in minutes, before we close a period's usage events and bill them. For prices on a meter."
+          description="How long the invoice of a period with metered usage waits for late usage events. The renewal does not wait."
           value={
-            (b.usage_close_delay_minutes ?? 0) === 0
-              ? "No extra wait"
-              : `${b.usage_close_delay_minutes} minutes extra`
+            delay === 0
+              ? "No wait"
+              : wait.low === wait.high
+                ? `Invoices wait ${formatGrace(wait.low)}`
+                : `Invoices wait ${formatGrace(wait.low)} to ${formatGrace(wait.high)}`
           }
           href={`${rules}/usage-close`}
+        />
+        <RuleLink
+          title="Late usage after a cancellation"
+          description="One more invoice for usage that arrives after the last invoice of a cancelled subscription."
+          value={
+            br.late_usage_invoices.enabled
+              ? Object.keys(br.late_usage_invoices.minimum).length
+                ? `One more invoice · minimum ${Object.entries(br.late_usage_invoices.minimum)
+                    .map(([c, m]) => money(m, c))
+                    .join(", ")}`
+                : "One more invoice"
+              : "Not billed"
+          }
+          href={`${rules}/late-usage`}
         />
       </SettingsCard>
 
@@ -323,8 +365,8 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
         />
         <RuleLink
           title="Credit and allowance resets"
-          description="What credits and allowances that renew on their own schedule do on a plan change, in a short first window, during a pause and after a cancellation."
-          value={`Upgrade: ${CREDIT_UPGRADE_LABELS[resets.planCredits.on_upgrade].toLowerCase()} · Pause: ${CREDIT_PAUSE_LABELS[resets.planCredits.on_pause].toLowerCase()}`}
+          description="What credits and allowances that renew on their own schedule do on a plan change, in a short first window, during a pause, after a cancellation and while an invoice is unpaid."
+          value={`Upgrade: ${UPGRADE_SHORT[resets.planCredits.on_upgrade]} · pause: ${PAUSE_SHORT[resets.planCredits.on_pause]}`}
           href={`${rules}/credit-resets`}
         />
         <RuleLink
@@ -346,6 +388,18 @@ export default async function BillingRules({ params }: { params: Promise<{ biz: 
     </SettingsPage>
   );
 }
+
+// Short forms of the Credit and allowance resets values, so the row value fits on one line.
+const UPGRADE_SHORT: Record<PlanCreditResets["on_upgrade"], string> = {
+  full: "in full",
+  prorated: "prorated",
+  next_window: "next window",
+};
+const PAUSE_SHORT: Record<PlanCreditResets["on_pause"], string> = {
+  skip: "skip",
+  keep_granting: "keep granting",
+  shift: "move windows",
+};
 
 /** "No limit", or the currencies that have one. */
 function cardLimitValue(limits: Business["card_payment_limits"]): string {

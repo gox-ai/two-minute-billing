@@ -1,5 +1,7 @@
 "use client";
 
+import { MiddleEllipsis } from "@/components/patterns/id-text";
+
 import { useDisplayTz } from "@/components/business-tz";
 import * as React from "react";
 import Link from "next/link";
@@ -16,7 +18,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { money, toMajor, fmtDate } from "@/lib/format";
+import { money, toMajor } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import type { ExcessPayment } from "@/lib/api";
 import { refundExcessPaymentAction } from "@/app/(dashboard)/businesses/[biz]/customers/[cus]/actions";
 
@@ -46,9 +49,10 @@ export function ExcessPaymentsHeld({
   return (
     <div className="space-y-2">
       <h3 className="text-sm font-medium">Held as excess credit</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
+      {/* Below 640px each payment is a block: its id, then labelled values, then the action. */}
+      <div className="sm:overflow-x-auto">
+        <table className="w-full text-sm max-sm:block">
+          <thead className="max-sm:hidden">
             <tr className="border-b text-xs text-muted-foreground">
               <th className="pr-4 pb-2 text-left font-medium">Payment</th>
               <th className="pr-4 pb-2 text-left font-medium">Received</th>
@@ -57,11 +61,11 @@ export function ExcessPaymentsHeld({
               <th className="pb-2" />
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {rows.map((r) => (
-              <tr key={r.payment} className="border-b last:border-0">
-                <td className="py-2 pr-4">
-                  <span className="font-mono text-xs">{r.payment}</span>
+              <tr key={r.payment} className="border-b last:border-0 max-sm:block max-sm:py-2">
+                <td className="py-2 pr-4 max-sm:block max-sm:p-0 max-sm:pb-1">
+                  <MiddleEllipsis value={r.payment} className="text-xs" />
                   <span className="block text-xs text-muted-foreground">
                     {r.invoice ? (
                       <>
@@ -79,16 +83,19 @@ export function ExcessPaymentsHeld({
                     {r.gateway ? ` · ${r.gateway}` : ""}
                   </span>
                 </td>
-                <td className="py-2 pr-4 text-muted-foreground tabular-nums">
+                <td className="py-2 pr-4 text-muted-foreground tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
+                  <span className="text-xs text-muted-foreground sm:hidden">Received</span>
                   {fmtDate(r.created_at, tz)}
                 </td>
-                <td className="py-2 pr-4 text-right tabular-nums">
+                <td className="py-2 pr-4 text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
+                  <span className="text-xs text-muted-foreground sm:hidden">Held</span>
                   {money(r.held_minor, r.currency)}
                 </td>
-                <td className="py-2 pr-4 text-right font-medium tabular-nums">
+                <td className="py-2 pr-4 text-right font-medium tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
+                  <span className="text-xs text-muted-foreground sm:hidden">Refundable</span>
                   {money(r.refundable_minor, r.currency)}
                 </td>
-                <td className="py-2 text-right">
+                <td className="py-2 text-right max-sm:block max-sm:p-0 max-sm:pt-1.5 max-sm:text-left">
                   {r.refundable_minor > 0 ? (
                     <Button variant="outline" size="sm" onClick={() => setRefunding(r)}>
                       Refund…

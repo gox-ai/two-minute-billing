@@ -6,7 +6,9 @@ import {
   computeSubscriptionMrr,
   discountsForMrr,
   netMrrForDiscounts,
+  mergeCustomerDiscounts,
   type ActiveDiscountForMrr,
+  type OrderedDiscount,
 } from "@/modules/subscriptions/service";
 import { appliedCoupons, coupons, type prices } from "@db/schema";
 
@@ -78,6 +80,8 @@ export async function loadActiveDiscounts(
 ): Promise<Map<string, ActiveDiscountForMrr[]>> {
   const rows = await tx
     .select({
+      id: appliedCoupons.id,
+      createdAt: appliedCoupons.createdAt,
       subscriptionId: appliedCoupons.subscriptionId,
       source: appliedCoupons.source,
       remainingPeriods: appliedCoupons.remainingPeriods,
@@ -91,6 +95,8 @@ export async function loadActiveDiscounts(
       couponAmountOffMinor: coupons.amountOffMinor,
       couponCurrency: coupons.currency,
       couponDurationType: coupons.durationType,
+      couponId: coupons.id,
+      couponApplyOn: coupons.applyOn,
     })
     .from(appliedCoupons)
     .leftJoin(coupons, eq(appliedCoupons.couponId, coupons.id))
@@ -98,10 +104,16 @@ export async function loadActiveDiscounts(
     // The recompute's order, so both net a stack the same way (see netMrrForDiscounts).
     .orderBy(appliedCoupons.createdAt, appliedCoupons.id);
 
-  const out = new Map<string, ActiveDiscountForMrr[]>();
+  const out = new Map<string, OrderedDiscount[]>();
   for (const r of rows) {
+    // Invoice- and customer-scope rows have no subscription; customer ones merge in below.
+    if (!r.subscriptionId) continue;
     const arr = out.get(r.subscriptionId) ?? [];
     arr.push({
+      id: r.id,
+      createdAt: r.createdAt,
+      couponId: r.couponId,
+      applyOn: r.couponApplyOn,
       source: r.source,
       remainingPeriods: r.remainingPeriods,
       totalPeriods: r.totalPeriods,
@@ -122,7 +134,7 @@ export async function loadActiveDiscounts(
     });
     out.set(r.subscriptionId, arr);
   }
-  return out;
+  return mergeCustomerDiscounts(tx, { businessId }, out);
 }
 
 /**

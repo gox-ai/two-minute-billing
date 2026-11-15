@@ -7,6 +7,7 @@
  *
  *   pnpm verify:gateway-conformance                 every fixture module
  *   pnpm verify:gateway-conformance -- square       one gateway
+ *   pnpm verify:gateway-conformance -- --serial     one gateway at a time (default: all at once)
  *
  * Recipe for a new gateway: scripts/conformance/README.md.
  */
@@ -30,7 +31,7 @@ import {
   pendingMethodProblems,
 } from "./conformance/verdict";
 
-const only = process.argv.slice(2).filter((a) => a !== "--" && !a.endsWith(".ts"));
+const only = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.endsWith(".ts"));
 const gaps = knownGapsByGateway();
 const exclusions = conformanceExclusions();
 
@@ -56,13 +57,22 @@ const app = await buildApp({ logger: false });
 const org = await createOrganization({ name: `Gateway conformance ${Date.now().toString(36)}` });
 const rows: RowResult[] = [];
 const run = FIXTURES.filter((f) => only.length === 0 || only.includes(f.key));
+// Gateways run at once: each has its own fake host, faults and businesses, and every sweep
+// is scoped to its world's business. `--serial` runs them one by one.
+const serial = process.argv.includes("--serial");
+const t00 = Date.now();
 try {
-  for (const f of run) {
+  const runOne = async (f: (typeof run)[number]) => {
     const t0 = Date.now();
     const got = await runFixture(f, app, { id: org.organization.id, secret: org.secret });
-    rows.push(...got);
     console.log(`▶ ${f.key}: ${got.length} rows in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-  }
+    return got;
+  };
+  const results: RowResult[][] = [];
+  if (serial) for (const f of run) results.push(await runOne(f));
+  else results.push(...(await Promise.all(run.map(runOne))));
+  for (const got of results) rows.push(...got);
+  console.log(`▶ all gateways in ${((Date.now() - t00) / 1000).toFixed(1)}s`);
 } finally {
   uninstallFakes();
 }

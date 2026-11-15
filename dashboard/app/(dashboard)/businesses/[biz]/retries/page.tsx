@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 /** Rows per page — keep in step with the page size in /api/lists/[entity]. */
 const PAGE_SIZE = 50;
 
+/** The request instant: a server component renders once per request. */
+const requestTime = () => Date.now();
+
 /**
  * Retries — invoices under retry.
  *
@@ -54,6 +57,8 @@ export default async function RetriesPage({ params }: { params: Promise<{ biz: s
         total={retries.total ?? retries.data.length}
         hasMore={retries.has_more}
         nextCursor={retries.next_cursor}
+        // One instant for the server render and hydration, so "Due now" cannot flip between them.
+        now={requestTime()}
       />
     </>
   );

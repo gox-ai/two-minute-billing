@@ -17,9 +17,11 @@ import {
 } from "@/modules/metering/usage-history";
 import {
   MARGIN_GROUP_BY,
+  MARGIN_SCOPES,
   serializeMarginReport,
   usageMargin,
   type MarginGroupBy,
+  type MarginScope,
 } from "@/modules/metrics/usage-margin";
 import { LIMITS } from "./limits";
 import {
@@ -72,6 +74,7 @@ const marginQuery = z.object({
   from: z.string().datetime({ offset: true }),
   to: z.string().datetime({ offset: true }),
   group_by: z.enum(MARGIN_GROUP_BY as [MarginGroupBy, ...MarginGroupBy[]]).optional(),
+  scope: z.enum(MARGIN_SCOPES as [MarginScope, ...MarginScope[]]).optional(),
   currency: z
     .string()
     .regex(/^[A-Za-z]{3}$/)
@@ -201,16 +204,18 @@ export async function registerUsageViewRoutes(app: FastifyInstance) {
         customerId = c.id;
       }
       const groupBy = q.data.group_by ?? "customer";
+      const scope = q.data.scope ?? "billed";
       const r = await usageMargin({
         organizationId: req.organization!.id,
         businessId: business.id,
         ...range,
         groupBy,
+        scope,
         ...(q.data.currency ? { currency: q.data.currency } : {}),
         ...(customerId ? { customerId } : {}),
       });
       return {
-        ...serializeMarginReport(r, groupBy),
+        ...serializeMarginReport(r, groupBy, scope),
         from: range.from.toISOString(),
         to: range.to.toISOString(),
       };

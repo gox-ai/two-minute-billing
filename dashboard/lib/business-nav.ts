@@ -101,7 +101,7 @@ export function businessNavEntries({
    * Live counts for the work surfaces. Omit a key to render no badge — the layout soft-fails
    * these, and "we could not count" must not display as zero.
    */
-  counts?: { retries?: number };
+  counts?: { retries?: number; disputes?: number };
 }): BizNavEntry[] {
   const base = `/businesses/${biz}`;
   return [
@@ -136,6 +136,11 @@ export function businessNavEntries({
           label: "Usage margin",
           show: sees(perms, "usage_margin:view", "manager"),
         },
+        {
+          href: `${base}/reports/credits`,
+          label: "Credits",
+          show: sees(perms, "credits:view", "manager"),
+        },
       ],
     },
     {
@@ -153,7 +158,7 @@ export function businessNavEntries({
       section: "billing",
     },
     {
-      label: "Invoices & Credit Notes",
+      label: "Invoices & credit notes",
       icon: Receipt,
       show: sees(perms, "invoices:view", "ops") || sees(perms, "credit_notes:view", "ops"),
       section: "billing",
@@ -161,7 +166,7 @@ export function businessNavEntries({
         { href: `${base}/invoices`, label: "Invoices", show: sees(perms, "invoices:view") },
         {
           href: `${base}/credit_notes`,
-          label: "Credit Notes",
+          label: "Credit notes",
           show: sees(perms, "credit_notes:view"),
         },
       ],
@@ -189,10 +194,10 @@ export function businessNavEntries({
       label: "Disputes",
       icon: Gavel,
       show: sees(perms, "payments:view", "ops"),
+      // Disputes that still owe the gateway a response: each one has a deadline.
+      badge: counts?.disputes,
+      badgeTone: "attention",
       section: "payments",
-      // No badge yet, deliberately: the engine's dispute list returns a bare array capped at
-      // `min(limit ?? 50, 200)` with no `total`, so any count here would be a page size
-      // wearing a number's clothes. Needs the paginated contract first.
     },
     // Requests the business sent for a customer's open invoices: open ones are money to chase.
     {
@@ -216,17 +221,17 @@ export function businessNavEntries({
         { href: `${base}/receipts`, label: "Receipts", show: sees(perms, "payments:view") },
         {
           href: `${base}/payment_intents`,
-          label: "Payment Intents",
+          label: "Payment intents",
           show: sees(perms, "payments:view"),
         },
         {
           href: `${base}/gateway_webhooks`,
-          label: "Gateway Webhooks",
+          label: "Gateway webhooks",
           show: sees(perms, "gateways:view"),
         },
         {
           href: `${base}/gateway_requests`,
-          label: "Gateway Requests",
+          label: "Gateway requests",
           show: sees(perms, "gateways:view"),
         },
         { href: `${base}/emails`, label: "Emails", show: sees(perms, "emails:view") },
@@ -234,14 +239,14 @@ export function businessNavEntries({
       ],
     },
     {
-      label: "Product Catalog",
+      label: "Product catalog",
       icon: Package,
       show: sees(perms, "catalog:view", "manager") || sees(perms, "coupons:view", "manager"),
       section: "setup",
       children: [
         {
           href: `${base}/catalog/product_groups`,
-          label: "Product Groups",
+          label: "Product groups",
           show: sees(perms, "catalog:view"),
         },
         { href: `${base}/catalog/plans`, label: "Plans", show: sees(perms, "catalog:view") },
@@ -260,7 +265,7 @@ export function businessNavEntries({
         { href: `${base}/catalog/coupons`, label: "Coupons", show: sees(perms, "coupons:view") },
         {
           href: `${base}/catalog/coupon_sets`,
-          label: "Coupon Sets",
+          label: "Coupon sets",
           show: sees(perms, "coupons:view"),
         },
         { href: `${base}/catalog/tax`, label: "Taxes", show: sees(perms, "taxes:view") },
@@ -283,29 +288,29 @@ export function businessNavEntries({
         { href: `${base}/settings/billing-rules`, label: "Billing rules", show: true },
         {
           href: `${base}/settings/gateways`,
-          label: "Payment Gateways",
+          label: "Payment gateways",
           show: sees(perms, "gateways:manage"),
         },
         {
           href: `${base}/settings/emails`,
-          label: "Email Notifications",
+          label: "Email notifications",
           show: sees(perms, "emails:view"),
         },
         // Was reachable only from a link inside the old settings page.
-        { href: `${base}/settings/custom-fields`, label: "Custom Fields", show: true },
-        { href: `${base}/settings/reason-codes`, label: "Reason Codes", show: true },
+        { href: `${base}/settings/custom-fields`, label: "Custom fields", show: true },
+        { href: `${base}/settings/reason-codes`, label: "Reason codes", show: true },
         {
           href: `${base}/transfer`,
-          label: "Transfer & Sample Data",
+          label: "Transfer & sample data",
           show: sees(perms, "transfers:manage"),
         },
-        { href: `${base}/audit`, label: "Audit Log", show: sees(perms, "audit_logs:view") },
+        { href: `${base}/audit`, label: "Audit log", show: sees(perms, "audit_logs:view") },
       ],
     },
     // Time Travel only makes sense on sandbox businesses (backend is test-mode gated).
     {
       href: `${base}/time_travel`,
-      label: "Time Travel",
+      label: "Time travel",
       icon: Clock,
       show: sees(perms, "test_tools:manage", "admin") && testMode,
       section: "setup",
@@ -316,7 +321,7 @@ export function businessNavEntries({
 /**
  * Every VISIBLE destination, flattened for the palette: a group contributes its children
  * rather than itself, because a group heading is not somewhere you can go. The group label
- * rides along as `section` so the palette can say "Product Catalog › Plans" and so typing
+ * rides along as `section` so the palette can say "Product catalog › Plans" and so typing
  * "catalog" finds Plans — which is how people actually remember where a page lives.
  */
 export function businessNavTargets(args: {

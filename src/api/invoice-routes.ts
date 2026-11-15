@@ -1,8 +1,8 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { loadBillingRulesRow, missingReason } from "@/modules/subscriptions/billing-rules-config";
 import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective";
 import { z } from "zod";
-import { LIMITS, clientResultField, httpUrl, redirectUrl } from "./limits";
+import { LIMITS, clientResultField, httpUrl, metadataField, redirectUrl } from "./limits";
 import { authenticate } from "@/platform/auth";
 import { idempotency, idempotencyOnSend } from "@/platform/idempotency";
 import {
@@ -12,6 +12,7 @@ import {
   INVOICE_SORT_FIELDS,
   getInvoiceWithLines,
   pendingPaymentsForInvoices,
+  previousInvoicePublicId,
   PaymentActionRequiredError,
   type InvoiceLineInput,
 } from "@/modules/invoicing/service";
@@ -24,7 +25,8 @@ import {
   PaymentIntentError,
 } from "@/modules/payment-intents/service";
 import { getPriceByPublicId } from "@/modules/catalog/service";
-import { computeLineAmount } from "@/modules/catalog/pricing";
+import { CouponError } from "@/modules/coupons/service";
+import { packAwareLineAmount } from "@/modules/catalog/pricing";
 import {
   createManualInvoice,
   voidInvoice,
@@ -55,6 +57,7 @@ import { getSubscriptionByPublicId } from "@/modules/subscriptions/service";
 import { invoiceRefundGatewayAccount } from "@/modules/credit-notes/service";
 import type { invoices } from "@db/schema";
 import { serializeInvoice } from "@/modules/invoicing/serialize";
+import { explainInvoice, type InvoiceView } from "@/modules/invoicing/explain";
 import { DebitInProgressError } from "@/modules/payments/pending-debit";
 import { dunningPeriodEndsAt, dunningAnchor } from "@/modules/subscriptions/dunning-schedule";
 import {
@@ -112,6 +115,37 @@ function debitInProgress(reply: FastifyReply, e: DebitInProgressError) {
   return reply
     .code(409)
     .send({ error: { type: "conflict_error", code: e.code, message: e.message } });
+}
+
+type BusinessRow = NonNullable<Awaited<ReturnType<typeof resolveBusiness>>>;
+type FoundInvoice = NonNullable<Awaited<ReturnType<typeof getInvoiceWithLines>>>;
+
+/** The invoice detail view, shared by the retrieve and the explanation. */
+async function invoiceDetailView(req: FastifyRequest, business: BusinessRow, found: FoundInvoice) {
+  return serializeInvoice(found.invoice, {
+    biz: business,
+    // The engine's own answer, not the UI's: once the retry offsets are spent, a period
+    // still in the future buys one more attempt at the deadline (`scheduleTail`).
+    dunningPeriodEndsAt: dunningPeriodEndsAt(
+      await withTenant(req.organization!.id, (tx) =>
+        loadEffectiveDunningConfig(tx, {
+          businessId: business.id,
+          customerId: found.invoice.customerId,
+          subscriptionId: found.invoice.subscriptionId,
+        }),
+      ),
+      dunningAnchor(found.invoice),
+    ),
+    customer: found.customerPublicId,
+    subscription: found.subscriptionPublicId,
+    lines: found.lines,
+    discountShares: found.discountShares,
+    discountSources: found.discountSources,
+    relations: found.relations,
+    paidMinor: found.paidMinor,
+    customerRow: found.customer,
+    showCost: callerHolds(req, "usage_margin:view"),
+  });
 }
 
 export async function registerInvoiceRoutes(app: FastifyInstance) {
@@ -273,30 +307,7 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
        * unchanged, which reads as success.
        */
       const inFlight = await pendingPaymentsForInvoices(req.organization!.id, [found.invoice.id]);
-      const view = serializeInvoice(found.invoice, {
-        biz: business,
-        // The engine's own answer, not the UI's: once the retry offsets are spent, a period
-        // still in the future buys one more attempt at the deadline (`scheduleTail`).
-        dunningPeriodEndsAt: dunningPeriodEndsAt(
-          await withTenant(req.organization!.id, (tx) =>
-            loadEffectiveDunningConfig(tx, {
-              businessId: business.id,
-              customerId: found.invoice.customerId,
-              subscriptionId: found.invoice.subscriptionId,
-            }),
-          ),
-          dunningAnchor(found.invoice),
-        ),
-        customer: found.customerPublicId,
-        subscription: found.subscriptionPublicId,
-        lines: found.lines,
-        discountShares: found.discountShares,
-        discountSources: found.discountSources,
-        relations: found.relations,
-        paidMinor: found.paidMinor,
-        customerRow: found.customer,
-        showCost: callerHolds(req, "usage_margin:view"),
-      });
+      const view = await invoiceDetailView(req, business, found);
       const paged =
         linePage && Array.isArray(view.lines)
           ? {
@@ -313,6 +324,36 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
         payment_in_flight: inFlight.has(found.invoice.id),
         awaiting_authentication: inFlight.get(found.invoice.id)?.awaitingAuthentication ?? false,
       };
+    },
+  );
+
+  // Why the invoice is what it is: the totals ladder, each line's facts, and the change from
+  // the subscription's previous invoice. Read-only; computed from the stored invoice.
+  app.get(
+    "/v1/businesses/:biz/invoices/:inv/explanation",
+    { preHandler: [authenticate, requirePerm("invoices:view")] },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const orgId = req.organization!.id;
+      const invId = (req.params as { inv: string }).inv;
+      const found = await getInvoiceWithLines(orgId, business.id, invId);
+      if (!found) {
+        return reply.code(404).send({
+          error: {
+            type: "invalid_request_error",
+            message: `We could not find the invoice ${invId}.`,
+          },
+        });
+      }
+      const current = await invoiceDetailView(req, business, found);
+      const prevId = await previousInvoicePublicId(orgId, business.id, found.invoice);
+      const prevFound = prevId ? await getInvoiceWithLines(orgId, business.id, prevId) : null;
+      const previous = prevFound ? await invoiceDetailView(req, business, prevFound) : null;
+      return explainInvoice(
+        current as unknown as InvoiceView,
+        previous as unknown as InvoiceView | null,
+      );
     },
   );
 
@@ -467,6 +508,10 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
     po_number: z.string().max(200).optional(),
     /** With `collect: true`: charge this saved method (`pm_…`) only. */
     payment_method: z.string().max(LIMITS.id).min(1).optional(),
+    /** Coupon or coupon-set codes redeemed on this invoice; each applies once. */
+    coupons: z.array(z.string().min(1).max(LIMITS.code)).max(20).optional(),
+    /** Stored on the invoice and returned with it (e.g. the app's order id). */
+    metadata: metadataField().optional(),
   });
   app.post(
     "/v1/businesses/:biz/invoices",
@@ -533,7 +578,7 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
           l.amount_minor != null
             ? BigInt(l.amount_minor)
             : // A `prices` row already satisfies RatablePrice (see its doc comment).
-              computeLineAmount(price, quantity);
+              packAwareLineAmount(price, quantity);
         lines.push({
           description: l.description ?? price.name ?? l.price,
           amountMinor,
@@ -557,10 +602,13 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
           state: customer.state,
           ...(parsed.data.po_number ? { poNumber: parsed.data.po_number } : {}),
           ...(pm ? { paymentMethodOverrideId: pm } : {}),
+          ...(parsed.data.coupons?.length ? { coupons: { codes: parsed.data.coupons } } : {}),
+          ...(parsed.data.metadata ? { metadata: parsed.data.metadata } : {}),
         });
         return reply.code(201).send(serializeInvoice(invoice, { biz: business }));
       } catch (e) {
-        if (e instanceof InvoiceOpsError) return badRequest(reply, e.message);
+        if (e instanceof InvoiceOpsError || e instanceof CouponError)
+          return badRequest(reply, e.message);
         throw e;
       }
     },

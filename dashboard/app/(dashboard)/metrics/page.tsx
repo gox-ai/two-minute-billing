@@ -95,7 +95,10 @@ export default async function MetricsPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Metrics" />
+        <PageHeader
+          title="Metrics"
+          breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Metrics" }]}
+        />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -109,7 +112,10 @@ export default async function MetricsPage({
   if (comparable.length === 0) {
     return (
       <>
-        <PageHeader title="Metrics" />
+        <PageHeader
+          title="Metrics"
+          breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Metrics" }]}
+        />
         <Grid>
           <Block span={12}>
             <EmptyState
@@ -329,6 +335,7 @@ export default async function MetricsPage({
     <NavPendingProvider>
       <PageHeader
         title="Metrics"
+        breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Metrics" }]}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <SyncedBadge syncedAt={syncedAt} />
@@ -390,9 +397,11 @@ export default async function MetricsPage({
                 {refusal.message}
               </Alert>
             ) : main && rows.length === 0 ? (
+              // The card and its controls stay: another measure or period may have figures.
               <Grid>
-                <Block span={12}>
+                <Block span={12} title="Compare any measure" action={compareControls}>
                   <EmptyState
+                    className="min-h-0 py-6"
                     title="Nothing to compare yet"
                     description="No live business has a figure for this measure in the selected period. Figures show after a business starts billing."
                   />

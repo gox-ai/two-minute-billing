@@ -1,4 +1,5 @@
-import { listBusinesses, PUBLIC_API_URL, publicApiReachable } from "@/lib/api";
+import { notFound } from "next/navigation";
+import { listBusinesses, PUBLIC_API_URL, publicApiReachable, isApiNotFound } from "@/lib/api";
 import { businessCurrencyOptions } from "@/lib/business-currencies";
 import {
   getGatewayAccount,
@@ -10,9 +11,8 @@ import {
 } from "@/lib/api/gateways";
 import { gatewayEntry, methodTypeLabel } from "@/components/gateways/gateway-meta";
 import { CopyButton } from "@/components/patterns/copy-button";
-import { LOGO_SIZE, PartnerLogo } from "@/components/partner-logo";
+import { LOGO_SIZE, PartnerLogo, hasPartnerLogo } from "@/components/partner-logo";
 import { requirePermission } from "@/lib/session";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
 import { ErrorState } from "@/components/states";
@@ -28,7 +28,6 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Chip, IdChip, ChipRow } from "@/components/patterns/chip";
 import { ActionForm } from "@/components/form/action-form";
-import { SubmitButton } from "@/components/form/submit-button";
 import {
   SettingRow,
   SettingsCard,
@@ -37,12 +36,13 @@ import {
   SettingsSummary,
   type AttentionItem,
 } from "@/components/settings/settings-layout";
-import { CredentialFields } from "@/components/gateways/credential-fields";
+import { RotateCredentials } from "@/components/gateways/rotate-credentials";
 import { GatewayDetailActions } from "@/components/gateways/gateway-detail-actions";
 import { GatewaySettingsFields } from "@/components/gateways/gateway-settings-fields";
 import { GatewayWebhookCard } from "@/components/gateways/gateway-webhook-card";
 import { WalletDomainCard } from "@/components/gateways/wallet-domain-card";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import {
   updateGatewayAccountAction,
   rotateCredentialsAction,
@@ -80,10 +80,14 @@ export default async function GatewayDetailPage({
       getGatewayCatalog(),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <SettingsPage title="Gateway account" crumbs={[...baseCrumbs, { label: "Account" }]}>
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="gateway"
+          back={{ label: "View gateways", href: `/businesses/${biz}/settings/gateways` }}
+          retry
         />
       </SettingsPage>
     );
@@ -210,94 +214,88 @@ export default async function GatewayDetailPage({
     <SettingsPage
       title={
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <PartnerLogo brand={account.gateway_key} name={gatewayName} {...LOGO_SIZE.title} fit />
+          {hasPartnerLogo(account.gateway_key) ? (
+            <PartnerLogo brand={account.gateway_key} name={gatewayName} {...LOGO_SIZE.title} fit />
+          ) : null}
           <span className="min-w-0 wrap-anywhere">{account.label}</span>
         </span>
       }
       crumbs={[...baseCrumbs, { label: account.label }]}
       description={
         <ChipRow className="mt-1">
-          <Chip>{gatewayName}</Chip>
+          {account.label !== gatewayName ? <Chip>{gatewayName}</Chip> : null}
           <Chip
             tone={account.livemode ? "green" : "tan"}
             className="text-xs font-bold tracking-wide uppercase"
           >
             {account.livemode ? "Live" : "Test"}
           </Chip>
-          {isDefault ? (
-            <Badge variant="outline" className="border-primary/40 text-primary">
-              Default
-            </Badge>
-          ) : null}
+          {isDefault ? <Chip tone="blue">Default</Chip> : null}
           <IdChip id={account.id} />
         </ChipRow>
       }
       attention={attention}
     >
-      <SettingsColumns summary={summary}>
-        {balance?.supported ? (
-          <SettingsCard id="balance" title="Balance" meta={`Read from ${gatewayName}`} padded>
-            {!balance.available ? (
-              <Alert tone="info" title={`We cannot read the ${gatewayName} balance.`}>
-                {balance.message}
-              </Alert>
-            ) : balance.balances.length === 0 ? (
-              <p className="m-0 text-sm text-muted-foreground">
-                {gatewayName} returned no balance for this account.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <div className="overflow-x-auto rounded-xl border bg-card">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Currency</TableHead>
-                        <TableHead className="text-right">Available</TableHead>
-                        <TableHead className="text-right">Withheld</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {balance.balances.map((b) => (
-                        <TableRow key={b.currency}>
-                          <TableCell className="font-medium">{b.currency}</TableCell>
-                          <TableCell className="text-right">
-                            {money(b.available_minor, b.currency)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {money(b.withheld_minor, b.currency)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {money(b.total_minor, b.currency)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+      <ActionForm action={updateGatewayAccountAction}>
+        <input type="hidden" name="biz" value={biz} />
+        <input type="hidden" name="gwa" value={gwa} />
+        <SettingsColumns
+          summary={summary}
+          save={{ note: "Applies to new payments on this account." }}
+        >
+          {balance?.supported ? (
+            <SettingsCard id="balance" title="Balance" meta={`Read from ${gatewayName}`} padded>
+              {!balance.available ? (
+                <Alert tone="info" title={`We cannot read the ${gatewayName} balance.`}>
+                  {balance.message}
+                </Alert>
+              ) : balance.balances.length === 0 ? (
                 <p className="m-0 text-sm text-muted-foreground">
-                  {gatewayName} pays refunds from the available balance.
-                  {balance.as_of
-                    ? ` ${gatewayName} updated these figures on ${fmtDateTime(balance.as_of, tz)}.`
-                    : ""}
+                  {gatewayName} returned no balance for this account.
                 </p>
-              </div>
-            )}
-          </SettingsCard>
-        ) : null}
-        <ActionForm action={updateGatewayAccountAction}>
-          <input type="hidden" name="biz" value={biz} />
-          <input type="hidden" name="gwa" value={gwa} />
-          <SettingsCard
-            id="settings"
-            title="Settings"
-            meta="Routing for this account"
-            footer={
-              <div className="flex justify-end py-1.5">
-                <SubmitButton>Save changes</SubmitButton>
-              </div>
-            }
-          >
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <div className="overflow-x-auto rounded-xl border bg-card">
+                    <Table phone="stack" className="[--phone-row-x:0.75rem]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Currency</TableHead>
+                          <TableHead className="text-right">Available</TableHead>
+                          <TableHead className="text-right">Withheld</TableHead>
+                          <TableHead phone="aside" className="text-right">
+                            Total
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {balance.balances.map((b) => (
+                          <TableRow key={b.currency}>
+                            <TableCell className="font-medium">{b.currency}</TableCell>
+                            <TableCell className="text-right">
+                              {money(b.available_minor, b.currency)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {money(b.withheld_minor, b.currency)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {money(b.total_minor, b.currency)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <p className="m-0 text-sm text-muted-foreground">
+                    {gatewayName} pays refunds from the available balance.
+                    {balance.as_of
+                      ? ` ${gatewayName} updated these figures on ${fmtDateTime(balance.as_of, tz)}.`
+                      : ""}
+                  </p>
+                </div>
+              )}
+            </SettingsCard>
+          ) : null}
+          <SettingsCard id="settings" title="Settings" meta="Routing for this account">
             <GatewaySettingsFields
               account={account}
               methodTypes={entry?.method_types ?? []}
@@ -305,99 +303,93 @@ export default async function GatewayDetailPage({
               gateway={entry}
             />
           </SettingsCard>
-        </ActionForm>
 
-        {hasCredentialFields ? (
-          <ActionForm action={rotateCredentialsAction} resetOnSuccess>
-            <input type="hidden" name="biz" value={biz} />
-            <input type="hidden" name="gwa" value={gwa} />
-            <input type="hidden" name="gateway_key" value={account.gateway_key} />
-            <SettingsCard
-              id="credentials"
-              title="Credentials"
-              meta="Write-only"
-              footer={
-                <div className="flex justify-end py-1.5">
-                  <SubmitButton variant="outline">Rotate credentials</SubmitButton>
-                </div>
-              }
-            >
+          {hasCredentialFields ? (
+            <SettingsCard id="credentials" title="Credentials" meta="Write-only">
               <SettingRow
                 label="Rotate"
                 help="We encrypt stored credentials, and nobody can view them. Enter new values to replace the stored set."
-                control={<CredentialFields fields={credentialFields} />}
+                control={
+                  <RotateCredentials
+                    biz={biz}
+                    gwa={gwa}
+                    gatewayKey={account.gateway_key}
+                    fields={credentialFields}
+                    rotate={rotateCredentialsAction}
+                  />
+                }
               />
             </SettingsCard>
-          </ActionForm>
-        ) : (
-          <SettingsCard id="credentials" title="Credentials" padded>
-            <p className="m-0 text-sm text-muted-foreground">
-              The {gatewayName} requires no credentials. There is nothing to rotate.
-            </p>
-          </SettingsCard>
-        )}
-
-        {/* Only a gateway that registers wallet domains; the API answers 409 for the others. */}
-        {entry?.wallet_domains ? (
-          <SettingsCard title="Apple Pay & Google Pay" meta="Storefront domain" padded>
-            <WalletDomainCard
-              gatewayName={gatewayName}
-              register={registerWalletDomainAction.bind(null, biz, gwa)}
-            />
-          </SettingsCard>
-        ) : null}
-
-        <SettingsCard id="webhooks" title="Webhooks" meta={`Events from ${gatewayName}`} padded>
-          {webhookEndpoint ? (
-            <GatewayWebhookCard
-              gatewayName={gatewayName}
-              endpoint={webhookEndpoint}
-              provision={provisionWebhookEndpointAction.bind(null, biz, gwa)}
-              reveal={revealWebhookSecretAction.bind(null, biz, gwa)}
-              saveSecret={saveWebhookSecretAction.bind(null, biz, gwa)}
-            />
           ) : (
-            <div className="flex flex-col gap-4">
-              {publicApiReachable ? (
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="notification_url" className="text-sm font-semibold">
-                    Notification URL
-                  </label>
-                  <div className="flex max-w-xl items-center gap-2">
-                    <Input
-                      id="notification_url"
-                      readOnly
-                      value={notificationUrl}
-                      className="font-mono text-xs"
-                    />
-                    <CopyButton value={notificationUrl} className="size-8 shrink-0 border" />
-                  </div>
-                  <p className="m-0 text-sm text-muted-foreground">
-                    Configure this URL in your {gatewayName} dashboard so gateway events reach
-                    tmbilling.
-                  </p>
-                </div>
-              ) : (
-                // No copyable field without a reachable URL: a loopback address would
-                // look like it worked and silently receive nothing.
-                <Alert tone="warning">
-                  This deployment has no public API URL configured, so we cannot show the
-                  Notification URL. Set{" "}
-                  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                    TMBILLING_PUBLIC_API_URL
-                  </code>{" "}
-                  on the dashboard to the origin where this API is reachable.
-                </Alert>
-              )}
-              <ol className="m-0 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-                {(entry?.webhook_instructions ?? []).map((step) => (
-                  <li key={step}>{step}</li>
-                ))}
-              </ol>
-            </div>
+            <SettingsCard id="credentials" title="Credentials" padded>
+              <p className="m-0 text-sm text-muted-foreground">
+                The {gatewayName} requires no credentials. There is nothing to rotate.
+              </p>
+            </SettingsCard>
           )}
-        </SettingsCard>
-      </SettingsColumns>
+
+          {/* Only a gateway that registers wallet domains; the API answers 409 for the others. */}
+          {entry?.wallet_domains ? (
+            <SettingsCard title="Apple Pay & Google Pay" meta="Storefront domain" padded>
+              <WalletDomainCard
+                gatewayName={gatewayName}
+                register={registerWalletDomainAction.bind(null, biz, gwa)}
+              />
+            </SettingsCard>
+          ) : null}
+
+          <SettingsCard id="webhooks" title="Webhooks" meta={`Events from ${gatewayName}`} padded>
+            {webhookEndpoint ? (
+              <GatewayWebhookCard
+                gatewayName={gatewayName}
+                endpoint={webhookEndpoint}
+                provision={provisionWebhookEndpointAction.bind(null, biz, gwa)}
+                reveal={revealWebhookSecretAction.bind(null, biz, gwa)}
+                saveSecret={saveWebhookSecretAction.bind(null, biz, gwa)}
+              />
+            ) : (
+              <div className="flex flex-col gap-4">
+                {publicApiReachable ? (
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="notification_url" className="text-sm font-semibold">
+                      Notification URL
+                    </label>
+                    <div className="flex max-w-xl items-center gap-2">
+                      <Input
+                        id="notification_url"
+                        readOnly
+                        value={notificationUrl}
+                        className="font-mono text-xs"
+                      />
+                      <CopyButton value={notificationUrl} className="size-8 shrink-0 border" />
+                    </div>
+                    <p className="m-0 text-sm text-muted-foreground">
+                      Configure this URL in your {gatewayName} dashboard so gateway events reach
+                      tmbilling.
+                    </p>
+                  </div>
+                ) : (
+                  // No copyable field without a reachable URL: a loopback address would
+                  // look like it worked and silently receive nothing.
+                  <Alert tone="warning">
+                    This deployment has no public API URL configured, so we cannot show the
+                    Notification URL. Set{" "}
+                    <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
+                      TMBILLING_PUBLIC_API_URL
+                    </code>{" "}
+                    on the dashboard to the origin where this API is reachable.
+                  </Alert>
+                )}
+                <ol className="m-0 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                  {(entry?.webhook_instructions ?? []).map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </SettingsCard>
+        </SettingsColumns>
+      </ActionForm>
     </SettingsPage>
   );
 }

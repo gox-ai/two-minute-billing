@@ -295,7 +295,10 @@ export const G = {
     "Dunning outcome",
     "Money dunning recovered, compared with money it stopped trying to collect.",
   ),
-  daysToPay: t("Days to pay", "Invoices paid in the period, by how late they were."),
+  daysToPay: t(
+    "Days to pay",
+    "The full value of the invoices that became paid in the period, by how late they were. This is not the money that you received in the period, so it can be different from Collected.",
+  ),
   disputesPeriod: t("Disputes", "Chargebacks opened, won and lost in the period."),
   discounts: t(
     "Discounts",

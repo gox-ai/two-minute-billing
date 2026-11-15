@@ -1,8 +1,13 @@
 import * as React from "react";
+import Link from "next/link";
+import { Gauge } from "lucide-react";
 import { Grid, Block, BlockLink, Stack } from "@/components/analytics/layout";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/states";
 import { G } from "@/components/analytics/glossary";
 import { money, moneyCompact } from "@/lib/format";
 import type { BatchEntry, AnalyticsResult } from "@/lib/analytics-api";
+import { axisLabel } from "@/components/analytics/series-format";
 import { BucketBars } from "./charts";
 import { BarList, Lead, Line, Lines, Tile, pick, slice, slices, type Basis } from "./parts";
 
@@ -13,7 +18,7 @@ import { BarList, Lead, Line, Lines, Tile, pick, slice, slices, type Basis } fro
 
 const count = (n: number) => n.toLocaleString("en");
 const pts = (r: AnalyticsResult | null) => ({
-  labels: (r?.series ?? []).map((p) => p.label),
+  labels: (r?.series ?? []).map((p) => axisLabel(p.label)),
   values: (r?.series ?? []).map((p) => p.value ?? null),
 });
 const HORIZON = ["overdue", "1_30", "31_60", "61_90", "90_plus", "undated"];
@@ -68,6 +73,7 @@ export function creditsZones({
           info={G.creditLiability}
           value={moneyOrDash(total("c_liability"))}
           note="paid credit not used yet"
+          href={`/businesses/${biz}/reports/credits`}
         />
         <Tile
           span={3}
@@ -211,8 +217,33 @@ export function usageZones({
   const countOrDash = (n: number | null) => (n == null ? "—" : count(n));
   const customers = `/businesses/${biz}/customers`;
   const margin = `/businesses/${biz}/reports/usage-margin`;
+  const meters = `/businesses/${biz}/catalog/meters`;
 
-  const current = (
+  /** One card instead of four dashes, an empty chart frame and an empty "Events by meter". */
+  const noUsage = (
+    <Grid>
+      <Block span={12}>
+        <EmptyState
+          icon={<Gauge />}
+          title="No usage events in this period"
+          description="Usage revenue, events and customers with usage show here after a meter records an event."
+          action={
+            <Button asChild variant="outline" size="sm">
+              <Link href={meters}>View meters</Link>
+            </Button>
+          }
+        />
+      </Block>
+    </Grid>
+  );
+  const quiet30 =
+    !total("u_events30") && !slice(pick(batch, "u_rev30"), "usage") && !total("u_customers30");
+  // Usage billed from line items with no meter behind it: revenue, but no events to count.
+  const noEvents30 = !total("u_events30") && !total("u_customers30");
+
+  const current = quiet30 ? (
+    noUsage
+  ) : (
     <Grid>
       <Tile
         span={3}
@@ -220,12 +251,24 @@ export function usageZones({
         info={G.usageRevenue}
         value={moneyOrDash(slice(pick(batch, "u_rev30"), "usage"))}
       />
-      <Tile span={3} label="Usage events, 30 days" value={countOrDash(total("u_events30"))} />
-      <Tile
-        span={3}
-        label="Customers with usage, 30 days"
-        value={countOrDash(total("u_customers30"))}
-      />
+      {noEvents30 ? (
+        <Tile
+          span={6}
+          label="Usage events, 30 days"
+          value={countOrDash(total("u_events30"))}
+          note="no meter recorded an event · View meters"
+          href={meters}
+        />
+      ) : (
+        <>
+          <Tile span={3} label="Usage events, 30 days" value={countOrDash(total("u_events30"))} />
+          <Tile
+            span={3}
+            label="Customers with usage, 30 days"
+            value={countOrDash(total("u_customers30"))}
+          />
+        </>
+      )}
       <Tile
         span={3}
         label="Usage stopped"
@@ -242,17 +285,33 @@ export function usageZones({
   const retention = total("u_retention");
   const byMeter = slices(pick(batch, "u_rev_meter"));
   const eventsByMeter = slices(pick(batch, "u_events_meter"));
+  const quiet = !total("u_events") && !revenue && !total("u_customers");
+  const noEvents = !total("u_events") && !total("u_customers");
 
-  const performance = (
+  const performance = quiet ? (
+    noUsage
+  ) : (
     <Stack>
       <Grid>
         <Block span={8} title="Usage" info={G.usageRevenue}>
           <div className="flex flex-wrap gap-x-8 gap-y-2">
             <Lead value={moneyOrDash(revenue)} note="usage revenue billed" />
-            <Lead value={countOrDash(total("u_events"))} note="events" />
-            <Lead value={countOrDash(total("u_customers"))} note="customers with usage" />
+            {noEvents ? null : (
+              <>
+                <Lead value={countOrDash(total("u_events"))} note="events" />
+                <Lead value={countOrDash(total("u_customers"))} note="customers with usage" />
+              </>
+            )}
           </div>
-          {events && events.series.length > 0 ? (
+          {noEvents ? (
+            <p className="mt-4 text-sm text-muted-foreground">
+              No meter recorded an event in this period. Usage was billed from line items.{" "}
+              <Link href={meters} className="text-primary hover:underline">
+                View meters
+              </Link>
+            </p>
+          ) : null}
+          {!noEvents && events && events.series.length > 0 ? (
             <div className="mt-4">
               <BucketBars
                 labels={pts(events).labels}
@@ -283,18 +342,23 @@ export function usageZones({
       </Grid>
       {byMeter.length > 0 || eventsByMeter.length > 0 ? (
         <Grid>
-          <Block span={6} title="Usage revenue by meter">
-            <BarList
-              rows={byMeter.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
-              format={(n) => moneyCompact(n, cur)}
-            />
-          </Block>
-          <Block span={6} title="Events by meter">
-            <BarList
-              rows={eventsByMeter.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
-              format={count}
-            />
-          </Block>
+          {byMeter.length > 0 ? (
+            <Block span={eventsByMeter.length > 0 ? 6 : 12} title="Usage revenue by meter">
+              <BarList
+                rows={byMeter.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
+                format={(n) => moneyCompact(n, cur)}
+              />
+            </Block>
+          ) : null}
+          {/* An empty bar list is a frame with nothing in it; the card appears with its first event. */}
+          {eventsByMeter.length > 0 ? (
+            <Block span={byMeter.length > 0 ? 6 : 12} title="Events by meter">
+              <BarList
+                rows={eventsByMeter.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
+                format={count}
+              />
+            </Block>
+          ) : null}
         </Grid>
       ) : null}
     </Stack>

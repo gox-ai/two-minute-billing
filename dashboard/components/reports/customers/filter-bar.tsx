@@ -151,8 +151,8 @@ export function SegmentFilterBar({
   return (
     <>
       <section aria-label="Segment" className="anim-rise overflow-hidden rounded-xl border bg-card">
-        <div className="flex flex-col gap-x-8 gap-y-4 px-4 py-5 sm:px-6 xl:flex-row xl:items-start">
-          <div className="min-w-0 flex-1 xl:min-w-60">{heading}</div>
+        <div className="flex flex-col gap-x-8 gap-y-4 px-4 py-5 sm:px-6 @min-[56.875rem]/main:flex-row @min-[56.875rem]/main:items-start">
+          <div className="min-w-0 flex-1 @min-[56.875rem]/main:min-w-60">{heading}</div>
           {/* The count and MRR are the old predicate's until the new one lands. */}
           <div className="flex min-w-0 flex-wrap gap-x-10 gap-y-3">
             <div className="flex flex-col gap-1.5">
@@ -248,24 +248,41 @@ export function SegmentFilterBar({
   );
 }
 
-function AddFilterDialog({
-  open,
-  onOpenChange,
-  attributes,
-  mrrCurrency,
-  pinned,
-  onAdd,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
+type AddFilterProps = {
   attributes: SegmentAttribute[];
   /** What an MRR amount typed here means, and is converted from. */
   mrrCurrency: string;
   /** True when a `currency` filter pins it, rather than the business default. */
   pinned: boolean;
   onAdd: (f: SegmentFilter) => void;
-}) {
-  const [field, setField] = React.useState(attributes[0]?.field ?? "");
+};
+
+function AddFilterDialog({
+  open,
+  onOpenChange,
+  ...body
+}: AddFilterProps & { open: boolean; onOpenChange: (v: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent size="md">
+        {/* The draft lives in the body, which mounts on open: every open starts afresh. */}
+        <AddFilterBody {...body} onCancel={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Where a new draft starts: the first attribute in the picker. */
+const firstField = (attributes: SegmentAttribute[]) => attributes[0]?.field ?? "";
+
+function AddFilterBody({
+  attributes,
+  mrrCurrency,
+  pinned,
+  onAdd,
+  onCancel,
+}: AddFilterProps & { onCancel: () => void }) {
+  const [field, setField] = React.useState(firstField(attributes));
   const attr = attributes.find((a) => a.field === field);
   const [op, setOp] = React.useState(attr?.ops[0] ?? "is");
   const [value, setValue] = React.useState("");
@@ -284,124 +301,122 @@ function AddFilterDialog({
   const valueless = op === "is_present";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="md">
-        <DialogHeader>
-          <DialogTitle>Add a filter</DialogTitle>
-          <DialogDescription>
-            The engine stores every attribute in this list, so the filter changes the real figures.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <Field label="Attribute" name="segment_field">
+    <>
+      <DialogHeader>
+        <DialogTitle>Add a filter</DialogTitle>
+        <DialogDescription>
+          The engine stores every attribute in this list, so the filter changes the real figures.
+        </DialogDescription>
+      </DialogHeader>
+      <div className="space-y-4">
+        <Field label="Attribute" name="segment_field">
+          <SelectField
+            name="segment_field"
+            value={field}
+            onValueChange={setField}
+            options={groups.flatMap((g) =>
+              attributes
+                .filter((a) => a.group === g)
+                .map((a) => ({ value: a.field, label: `${g} · ${a.label}` })),
+            )}
+          />
+        </Field>
+        {attr?.hint ? <p className="text-xs text-muted-foreground">{attr.hint}</p> : null}
+        <Field label="Condition" name="segment_op">
+          <SelectField
+            name="segment_op"
+            value={op}
+            onValueChange={setOp}
+            options={(attr?.ops ?? []).map((o) => ({ value: o, label: OP_LABEL[o] ?? o }))}
+          />
+        </Field>
+        {valueless ? (
+          <Field label="Value" name="segment_value">
             <SelectField
-              name="segment_field"
-              value={field}
-              onValueChange={setField}
-              options={groups.flatMap((g) =>
-                attributes
-                  .filter((a) => a.group === g)
-                  .map((a) => ({ value: a.field, label: `${g} · ${a.label}` })),
-              )}
-            />
-          </Field>
-          {attr?.hint ? <p className="text-xs text-muted-foreground">{attr.hint}</p> : null}
-          <Field label="Condition" name="segment_op">
-            <SelectField
-              name="segment_op"
-              value={op}
-              onValueChange={setOp}
-              options={(attr?.ops ?? []).map((o) => ({ value: o, label: OP_LABEL[o] ?? o }))}
-            />
-          </Field>
-          {valueless ? (
-            <Field label="Value" name="segment_value">
-              <SelectField
-                name="segment_value"
-                value={value || "true"}
-                onValueChange={setValue}
-                options={[
-                  { value: "true", label: "Present" },
-                  { value: "false", label: "Absent" },
-                ]}
-              />
-            </Field>
-          ) : attr?.options ? (
-            <Field label="Value" name="segment_value">
-              <SelectField
-                name="segment_value"
-                value={value}
-                onValueChange={setValue}
-                placeholder="Select one"
-                options={attr.options.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </Field>
-          ) : (
-            <Field
-              label={
-                attr?.field === "mrr"
-                  ? `Monthly amount, in ${mrrCurrency}`
-                  : op === "in_last" || op === "in_next"
-                    ? "Days"
-                    : "Value"
-              }
               name="segment_value"
-              // Typed in MAJOR units of the comparison currency and converted with that
-              // currency's own exponent on the way out (2 for USD, 0 for JPY) — the engine
-              // stores minor units, a person does not think in them.
-              help={
-                attr?.field === "mrr"
-                  ? pinned
-                    ? `Only ${mrrCurrency} subscriptions count.`
-                    : `We convert each customer's subscriptions into ${mrrCurrency} at the rates in Settings → Currencies.`
-                  : attr?.kind === "date" && op !== "in_last" && op !== "in_next"
-                    ? "YYYY-MM-DD"
-                    : undefined
-              }
-            >
-              <Input
-                name="segment_value"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                inputMode={
-                  attr?.field === "mrr"
-                    ? "decimal"
-                    : attr?.kind === "number" || op === "in_last" || op === "in_next"
-                      ? "numeric"
-                      : undefined
-                }
-              />
-            </Field>
-          )}
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={
-              !field ||
-              (!valueless && value.trim() === "") ||
-              (attr?.field === "mrr" && !Number.isFinite(Number(value.trim())))
+              value={value || "true"}
+              onValueChange={setValue}
+              options={[
+                { value: "true", label: "Present" },
+                { value: "false", label: "Absent" },
+              ]}
+            />
+          </Field>
+        ) : attr?.options ? (
+          <Field label="Value" name="segment_value">
+            <SelectField
+              name="segment_value"
+              value={value}
+              onValueChange={setValue}
+              placeholder="Select one"
+              options={attr.options.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </Field>
+        ) : (
+          <Field
+            label={
+              attr?.field === "mrr"
+                ? `Monthly amount, in ${mrrCurrency}`
+                : op === "in_last" || op === "in_next"
+                  ? "Days"
+                  : "Value"
             }
-            onClick={() =>
-              onAdd({
-                field,
-                op,
-                value: valueless
-                  ? value || "true"
-                  : attr?.field === "mrr"
-                    ? String(toMinor(Number(value.trim()), mrrCurrency))
-                    : value.trim(),
-              })
+            name="segment_value"
+            // Typed in MAJOR units of the comparison currency and converted with that
+            // currency's own exponent on the way out (2 for USD, 0 for JPY) — the engine
+            // stores minor units, a person does not think in them.
+            help={
+              attr?.field === "mrr"
+                ? pinned
+                  ? `Only ${mrrCurrency} subscriptions count.`
+                  : `We convert each customer's subscriptions into ${mrrCurrency} at the rates in Settings → Currencies.`
+                : attr?.kind === "date" && op !== "in_last" && op !== "in_next"
+                  ? "YYYY-MM-DD"
+                  : undefined
             }
           >
-            Add filter
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            <Input
+              name="segment_value"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              inputMode={
+                attr?.field === "mrr"
+                  ? "decimal"
+                  : attr?.kind === "number" || op === "in_last" || op === "in_next"
+                    ? "numeric"
+                    : undefined
+              }
+            />
+          </Field>
+        )}
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          disabled={
+            !field ||
+            (!valueless && value.trim() === "") ||
+            (attr?.field === "mrr" && !Number.isFinite(Number(value.trim())))
+          }
+          onClick={() =>
+            onAdd({
+              field,
+              op,
+              value: valueless
+                ? value || "true"
+                : attr?.field === "mrr"
+                  ? String(toMinor(Number(value.trim()), mrrCurrency))
+                  : value.trim(),
+            })
+          }
+        >
+          Add filter
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

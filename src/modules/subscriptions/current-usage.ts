@@ -40,9 +40,13 @@ import { previewInvoiceFromLines, USAGE_SETTLEMENT } from "@/modules/invoicing/s
 import { publicRating } from "@/modules/invoicing/serialize";
 import { addInterval, type Interval } from "./interval";
 import { usageWindowForNextInvoice, type NextInvoiceUsageWindow } from "./usage-window";
+import { creditUsageSoFar, type CreditMeterUsage } from "@/modules/credits/overage";
 import { projectQuantity, projectionSpan, type ProjectionMethod } from "./usage-projection";
 
 const log = createLogger("subscriptions.current-usage");
+
+/** The next period invoice bills every event received before its boundary: all of them so far. */
+const EVERY_EVENT_SO_FAR = new Date("9999-12-31T00:00:00.000Z");
 
 /**
  * Usage so far in the window the next invoice bills, rated as that invoice rates it, plus
@@ -73,7 +77,15 @@ export interface CurrentUsageItem {
   /** Model values billed at the default rate: no list price and no cost of yours. */
   unpricedModels?: string[];
   /** The same as list keys, where the meter names a token type: what a cost row would set. */
-  unpricedKeys?: Array<{ provider: string | null; model: string; tokenType: string }>;
+  unpricedKeys?: Array<{
+    provider: string | null;
+    model: string;
+    tokenType: string;
+    /** Null = the meter names no unit (token, else request). */
+    unit: string | null;
+    quality: string | null;
+    resolution: string | null;
+  }>;
 }
 
 export interface CombinationUsage {
@@ -115,6 +127,11 @@ export interface CurrentUsageView {
   settled: SettledUsageCharge[];
   totals: TaxedTotals;
   projection: (TaxedTotals & { minimumTrueUpMinor: bigint }) | null;
+  /**
+   * Credit-cost meters, on the customer's oldest live subscription only: what credits paid,
+   * what the next invoice bills in money (in `totals`) and the open overshoot.
+   */
+  creditUsage: CreditMeterUsage[];
   /** Usage recorded in a trial: units only, since no invoice bills it. */
   trial: {
     start: Date;
@@ -177,10 +194,23 @@ export async function currentUsage(input: {
     const trial =
       sub.status === "in_trial" && rows.length > 0 ? await trialUnits(tx, sub, rows) : null;
     const records = window ? await recordCount(tx, rows, window) : 0;
-    return { sub, window, items, settled, trial, records };
+    const creditUsage = await creditUsageSoFar(tx, {
+      customerId: sub.customerId,
+      subscriptionId: sub.id,
+      currency: sub.currency,
+      subscriptionStart: sub.startedAt ?? sub.createdAt,
+      before: EVERY_EVENT_SO_FAR,
+    });
+    return { sub, window, items, settled, trial, records, creditUsage };
   });
   if (!loaded) return null;
-  const { sub, window, items, settled, trial } = loaded;
+  const { sub, window, settled, trial, creditUsage } = loaded;
+  // Credits pay a meter with a credit cost; its own item would only repeat as a zero line
+  // above the credit rows, so the credit rows stand for it.
+  const creditMeters = new Set(creditUsage.map((m) => m.meter));
+  const items = loaded.items.filter(
+    (i) => !(i.meterKey && creditMeters.has(i.meterKey) && i.view.amountMinor === 0n),
+  );
 
   const taxCtx = {
     organizationId: input.organizationId,
@@ -189,7 +219,13 @@ export async function currentUsage(input: {
     subscriptionId: sub.id,
     currency: sub.currency,
   };
-  const settledLines = settled.map((c) => ({ priceId: c.priceId, amountMinor: c.amountMinor }));
+  // Usage beyond the credits is not projected: it counts at its amount so far.
+  const settledLines: Array<{ priceId: string | null; amountMinor: bigint }> = [
+    ...settled.map((c) => ({ priceId: c.priceId, amountMinor: c.amountMinor })),
+    ...creditUsage.flatMap((m) =>
+      m.billed.map((b) => ({ priceId: b.priceId, amountMinor: b.amountMinor })),
+    ),
+  ];
   const totals = await taxed(taxCtx, [
     ...items.map((i) => ({ priceId: i.priceId, amountMinor: i.view.amountMinor })),
     ...settledLines,
@@ -226,6 +262,7 @@ export async function currentUsage(input: {
     settled: settled.map((c) => c.view),
     totals,
     projection,
+    creditUsage,
     trial,
   };
 }
@@ -238,14 +275,15 @@ async function rateItems(
   asOf: Date,
   includeProjection: boolean,
   sub: { businessId: string; customerId: string; currency: string },
-): Promise<Array<{ priceId: string; view: CurrentUsageItem }>> {
+): Promise<Array<{ priceId: string; meterKey?: string; view: CurrentUsageItem }>> {
   const span = includeProjection ? projectionSpan(window, asOf) : null;
-  const out: Array<{ priceId: string; view: CurrentUsageItem }> = [];
+  const out: Array<{ priceId: string; meterKey?: string; view: CurrentUsageItem }> = [];
   for (const row of rows) {
     const { item, snap } = row;
     if (snap.meter) {
       out.push({
         priceId: row.price.id,
+        meterKey: snap.meter.key,
         view: await meterItemSoFar(tx, row, sub, window, asOf, span),
       });
       continue;
@@ -402,7 +440,14 @@ function unpricedKeys(
     if (c.priceSource !== "default_rate") continue;
     const k = listKeyOf(meter, c.group, currency);
     if (!k) continue;
-    const key = { provider: k.provider ?? null, model: k.model, tokenType: k.tokenType };
+    const key = {
+      provider: k.provider ?? null,
+      model: k.model,
+      tokenType: k.tokenType,
+      unit: k.unit ?? null,
+      quality: k.quality || null,
+      resolution: k.resolution || null,
+    };
     out.set(JSON.stringify(key), key);
   }
   return [...out.values()].sort((a, b) =>
@@ -626,7 +671,7 @@ async function taxed(
     subscriptionId: string;
     currency: string;
   },
-  lines: Array<{ priceId: string; amountMinor: bigint }>,
+  lines: Array<{ priceId: string | null; amountMinor: bigint }>,
 ): Promise<TaxedTotals> {
   const billed = lines.filter((l) => l.amountMinor !== 0n);
   if (billed.length === 0) return { subtotalMinor: 0n, taxMinor: 0n, taxLines: [], totalMinor: 0n };
@@ -832,6 +877,9 @@ export function serializeCurrentUsage(
               provider: k.provider,
               model: k.model,
               token_type: k.tokenType,
+              unit: k.unit,
+              quality: k.quality,
+              resolution: k.resolution,
             })),
           }
         : {}),
@@ -853,6 +901,30 @@ export function serializeCurrentUsage(
           estimate: true as const,
         }
       : null,
+    // Only with a credit-cost meter: other subscriptions keep their shape.
+    ...(v.creditUsage.length
+      ? {
+          credit_usage: v.creditUsage.map((m) => ({
+            meter: m.meter,
+            name: m.name,
+            unit: m.unit,
+            unit_name: m.unitName,
+            unit_plural_name: m.unitPluralName,
+            paid_quantity: m.paidQuantity,
+            paid_units: m.paidUnits,
+            billed: m.billed.map((b) => ({
+              basis: b.basis,
+              ...(portal ? {} : { price: b.pricePublicId }),
+              quantity: b.quantity,
+              units: b.units,
+              amount_minor: Number(b.amountMinor),
+            })),
+            billed_amount_minor: Number(m.billed.reduce((a, b) => a + b.amountMinor, 0n)),
+            overshoot_units: m.overshootUnits,
+            below_zero_quantity: m.belowZeroQuantity,
+          })),
+        }
+      : {}),
     discounts_applied: false as const,
     trial: v.trial
       ? {

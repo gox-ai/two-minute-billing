@@ -38,7 +38,7 @@ import { billingModeFor } from "@/modules/subscriptions/billing-mode";
 import { publicId } from "@/platform/ids";
 import { currentChannel } from "@/platform/event-context";
 import { withSpan } from "@/platform/trace";
-import { businessNow, businessWallClock, stampNow } from "@/platform/clock";
+import { activeClockPin, businessNow, businessWallClock, stampNow } from "@/platform/clock";
 import { postEntries } from "@/modules/ledger/service";
 import {
   bucketBalancesForCurrency,
@@ -77,6 +77,7 @@ import {
   MANDATE_REVOKED_CODES,
   resolveBillingRulesConfig,
 } from "@/modules/subscriptions/billing-rules-config";
+import { zeroInvoicePaidEvent } from "./zero-invoice-paid";
 import {
   COMMITMENT_CHARGE,
   commitmentDescription,
@@ -131,7 +132,18 @@ import {
   type TaxResolution,
   type TaxTreatment,
 } from "@/modules/tax/service";
-import { peekDiscounts, consumeDiscount, settlePeriodDiscount } from "@/modules/coupons/service";
+import {
+  peekDiscounts,
+  consumeDiscount,
+  settlePeriodDiscount,
+  creditPaidBasis,
+  redeemCouponsForInvoice,
+  priceCouponCodesForInvoice,
+  priceInvoiceDiscounts,
+  type DiscountLine,
+  type DiscountStack,
+  type StackCoupon,
+} from "@/modules/coupons/service";
 import { DUNNING_STATUS_ALIASES, isLiveDunning, isOpenInvoiceStatus } from "./status";
 import {
   emitEvent,
@@ -196,6 +208,7 @@ import {
   transactions,
   customers,
   unbilledCharges,
+  meterCreditCosts,
   businesses,
 } from "@db/schema";
 import { createLogger } from "@/platform/logger";
@@ -223,11 +236,21 @@ import { loadPlannerGrants, postGrantDraws } from "@/modules/credits/service";
 import {
   activatePaidCreditGrants,
   createPendingPackGrants,
+  paidCreditCostBasisMinor,
   packLinesMinor,
 } from "@/modules/credits/packs";
-import { applyPlanCredits } from "@/modules/credits/plan-credits";
+import { applyPlanCredits, grantPlanCycle, settlePlanCycles } from "@/modules/credits/plan-credits";
 import { ensureCreditWindows } from "@/modules/credits/credit-clock";
 import { withGrantSlices } from "@/modules/credits/slices";
+import {
+  insertCreditUsageLines,
+  settleCustomerCreditUsage,
+} from "@/modules/credits/usage-settlement";
+import {
+  chargeCreditOverage,
+  CREDIT_OVERAGE_CHARGE,
+  previewCreditOverage,
+} from "@/modules/credits/overage";
 import type { LineSlice } from "@/modules/credits/planner";
 import {
   grantPhase,
@@ -802,6 +825,12 @@ export interface BillSubscriptionPeriodInput {
    */
   preview?: { excludePendingCharges?: boolean; ignoreCreditBalances?: boolean };
   /**
+   * Usage beyond the credits (0530). Unset: queue it as charges and bill it (a real period
+   * invoice; a preview leaves it out). `preview`: rate it as those charges would be and add
+   * the lines, writing nothing (the renewal estimate with usage). `omit`: leave it out.
+   */
+  creditOverage?: "preview" | "omit";
+  /**
    * Preview only: rate these item rows instead of the stored ones. The renewal estimate
    * passes the item set a scheduled change leaves, ordered plan first.
    */
@@ -821,6 +850,33 @@ export interface BillSubscriptionPeriodInput {
    * Meter usage is read to now, with no fold grace.
    */
   interim?: { originToken: string };
+  /**
+   * Late usage after a cancellation: only the late lines of `meterIds`, re-rated at each billed
+   * period's pricing, over a zero-length `usagePeriod`. No fixed, current-window, minimum,
+   * pending-charge, commitment or coupon lines and no net terms; `usage_through` stays put.
+   */
+  lateOnly?: { originToken: string; meterIds: string[] };
+  /**
+   * With `createAsPending`: a held renewal draft (usage grace window). Stored as
+   * `hold_until` and `metadata.held`; the draft grants the new cycle's plan credits, and
+   * `finalizeHeldInvoice` closes it at `until`.
+   */
+  hold?: HeldDraft;
+  /**
+   * Finalizing a held draft: settle the closed cycle's plan credits instead of granting, and
+   * count the due date from `at` (the close, business clock), not from the period start.
+   */
+  heldClose?: { kind: HeldDraft["kind"]; windowEnd: Date; at: Date };
+}
+
+/** A held renewal draft: what kind of boundary wrote it and what its close needs. */
+export interface HeldDraft {
+  until: Date;
+  kind: "renewal" | "skip" | "closing";
+  /** The closing commitment, serialized before the term moved. */
+  commitment: unknown;
+  /** No payment method at the renewal: the close skips the charge. */
+  noCard?: boolean;
 }
 
 export interface CommitmentInput {
@@ -906,11 +962,14 @@ export interface PeriodInvoicePlanBase {
   metadata?: Record<string, unknown>;
   /** Meter lines: the billing pointers and level snapshots the finalize transaction writes. */
   meterCommit?: { pointers: MeterItemRating["pointer"][]; levels: LevelSnapshot[] };
-  /** Threshold invoicing: what this invoice is for, and its idempotency token (0474). */
-  purpose?: "usage_interim";
+  /** What an engine-made invoice is for, and its idempotency token (0474, 0521). */
+  purpose?: "usage_interim" | "late_usage";
   originToken?: string;
   /** Runs inside the invoice transaction, after the lines (threshold invoicing). */
   inTx?: (tx: Tx, invoice: Invoice) => Promise<void>;
+  /** See `BillSubscriptionPeriodInput.hold` / `heldClose`. */
+  hold?: HeldDraft;
+  heldClose?: BillSubscriptionPeriodInput["heldClose"];
   /** The counted fees the commitment line was planned on, rechecked at commit. */
   commitmentCheck?: {
     subscriptionId: string;
@@ -1224,6 +1283,48 @@ async function resolveNetTermDays(input: {
  * returned plan to `commitSubscriptionPeriodInvoice` to actually write it.
  */
 /**
+ * Usage beyond the credits (0530) as a usage line: taxed and discounted as its meter price,
+ * or as a taxable charge when the unit's overage price bills it. The queued charge and the
+ * estimate's read-only preview of it build the same line.
+ */
+function creditOverageLine(
+  ch: {
+    description: string;
+    priceId: string | null;
+    amountMinor: bigint;
+    rating: unknown;
+    periodStart: Date | null;
+    periodEnd: Date | null;
+  },
+  p: {
+    price: typeof prices.$inferSelect | null;
+    productKind: string | null;
+    productPublicId: string | null;
+  },
+  period: { periodStart: Date; periodEnd: Date },
+): ComputedLine {
+  const over = (ch.rating as { credit_overage?: { quantity?: string } } | null)?.credit_overage;
+  const { price } = p;
+  return {
+    description: ch.description,
+    priceId: ch.priceId,
+    quantity: 1,
+    unitAmountMinor: ch.amountMinor,
+    amountMinor: ch.amountMinor,
+    ...(ch.rating ? { rating: ch.rating as ComputedLine["rating"] } : {}),
+    ...(over?.quantity ? { quantityDecimal: over.quantity } : {}),
+    kind: "usage",
+    periodStart: ch.periodStart ?? period.periodStart,
+    periodEnd: ch.periodEnd ?? period.periodEnd,
+    taxable: price ? price.isTaxable : true,
+    inclusive: price ? price.taxBehavior === "inclusive" : false,
+    productKind: price ? (p.productKind as ComputedLine["productKind"]) : "charge",
+    productPublicId: price ? p.productPublicId : null,
+    pricePublicId: price?.publicId ?? null,
+  };
+}
+
+/**
  * An interim invoice's meter lines: one per value combination, the window to the cut less what
  * earlier interim invoices billed. `period` is the whole term, so late usage of the term later
  * counts interim and final lines together.
@@ -1304,7 +1405,7 @@ export async function planSubscriptionPeriodInvoice(
   const meterCutoffs = new Map<string, MeterCutoff>();
   const meterRatings: MeterItemRating[] = [];
   if (input.usagePeriod) {
-    const meterIds = input.items
+    const subMeterIds = input.items
       ? [...new Set(input.items.flatMap((r) => (r.price.meterId ? [r.price.meterId] : [])))]
       : await withTenant(organizationId, async (tx) =>
           (
@@ -1320,6 +1421,32 @@ export async function planSubscriptionPeriodInvoice(
               )
           ).map((r) => r.meterId!),
         );
+    // A meter with a credit cost bills only what credits did not pay, as a charge (0530).
+    const paidInCredits = subMeterIds.length
+      ? new Set(
+          (
+            await withTenant(organizationId, (tx) =>
+              tx
+                .select({ meterId: meterCreditCosts.meterId })
+                .from(meterCreditCosts)
+                .where(
+                  and(
+                    inArray(meterCreditCosts.meterId, subMeterIds),
+                    eq(meterCreditCosts.active, true),
+                    sql`${meterCreditCosts.productId} is null and ${meterCreditCosts.subscriptionId} is null`,
+                  ),
+                ),
+            )
+          ).map((r) => r.meterId),
+        )
+      : new Set<string>();
+    const meterIds = (
+      input.lateOnly
+        ? subMeterIds.filter((id) => input.lateOnly!.meterIds.includes(id))
+        : subMeterIds
+    ).filter((id) => !paidInCredits.has(id));
+    // A test clock takes in every event received by now, as `takeMeterCutoff` does.
+    const travelled = activeClockPin()?.businessId === businessId;
     for (const meterId of meterIds) {
       const key = { customerId: subscription.customerId, meterId };
       meterCutoffs.set(
@@ -1334,7 +1461,11 @@ export async function planSubscriptionPeriodInvoice(
                 at: new Date(Date.now() + FOLD_GRACE_MS + 1_000),
               }))
             : input.preview
-              ? peekMeterCutoff(tx, { ...key, businessId })
+              ? peekMeterCutoff(tx, { ...key, businessId }).then((p) =>
+                  input.lateOnly && travelled
+                    ? { ...p, at: new Date(p.at.getTime() + FOLD_GRACE_MS) }
+                    : p,
+                )
               : takeMeterCutoff(tx, {
                   ...key,
                   organizationId,
@@ -1419,9 +1550,10 @@ export async function planSubscriptionPeriodInvoice(
 
     const computed: ComputedLine[] = [];
     // Threshold invoicing: what interim invoices already billed in this window, per item.
-    const billed: Map<string, ItemBilled> = input.usagePeriod
-      ? await billedOnInterims(tx, subscription.id, input.usagePeriod)
-      : new Map();
+    const billed: Map<string, ItemBilled> =
+      input.usagePeriod && !input.lateOnly
+        ? await billedOnInterims(tx, subscription.id, input.usagePeriod)
+        : new Map();
     for (const { item, price, productName, productKind, productPublicId } of rows) {
       // Rate from the item's frozen price snapshot (immutability) — falling back
       // to the live price row for any legacy item without one.
@@ -1463,6 +1595,8 @@ export async function planSubscriptionPeriodInvoice(
       // of `estimateChange` (estimate.ts) now call the same one, so this stops being
       // the third independent copy (2026-08-03).
       if (isCycleCapExhausted(item.billingCycles, snap.type, item.cyclesBilled)) continue;
+      // A late-usage invoice bills meter prices only.
+      if (input.lateOnly && !snap.meter) continue;
       // An interim invoice bills eligible metered items only (design G5 §3.7).
       if (input.interim && !snap.meter && !(isMeteredPrice(snap) && thresholdEligible(snap)))
         continue;
@@ -1485,7 +1619,7 @@ export async function planSubscriptionPeriodInvoice(
         kind: ComputedLine["kind"],
         window: { start: Date; end: Date },
       ) => {
-        if (input.interim) return;
+        if (input.interim || input.lateOnly) return;
         if (snap.minimumAmountMinor == null || snap.type === "one_time" || !snap.interval) return;
         const fullEnd = addInterval(window.start, snap.interval as Interval, snap.intervalCount);
         const trueUp = minimumTrueUp(
@@ -1513,14 +1647,19 @@ export async function planSubscriptionPeriodInvoice(
         if (!input.usagePeriod) continue;
         const cutoff = meterCutoffs.get(snap.meter.id);
         if (!cutoff) continue;
+        // Nothing billed yet: no period of this meter can have late usage.
+        if (input.lateOnly && !cutoff.previous.usageThrough) continue;
         const rated = await rateMeterItem(tx, {
           item: { ...item, priceSnapshot: snap },
           subscription,
           window: input.usagePeriod,
           cutoff,
-          // An interim invoice keeps the period-end pointer where it is.
-          ...(input.interim ? { usageThrough: cutoff.previous.usageThrough ?? undefined } : {}),
+          // Interim and late-usage invoices keep the period-end pointer where it is.
+          ...(input.interim || input.lateOnly
+            ? { usageThrough: cutoff.previous.usageThrough ?? undefined }
+            : {}),
         });
+        if (input.lateOnly) rated.lines = rated.lines.filter((l) => l.late);
         const label = priceLabel(price, { name: productName });
         if (input.interim) {
           if (
@@ -1563,7 +1702,7 @@ export async function planSubscriptionPeriodInvoice(
             periodEnd: line.window.end,
             // The window's first line keeps its pricing, for late usage re-rated later.
             rating: {
-              ...meterLineRatingJson(snap, rated, line, i === 0),
+              ...meterLineRatingJson(snap, rated, line, i === 0 && !input.lateOnly),
               ...(netted?.lines.has(line)
                 ? {
                     item_id: item.id,
@@ -1688,7 +1827,22 @@ export async function planSubscriptionPeriodInvoice(
   // Fold in any pending ad-hoc charges queued against this subscription (they ride
   // on this renewal invoice, then get marked billed inside the invoice txn below).
   const pendingChargeIds: string[] = [];
-  if (!input.preview?.excludePendingCharges && !input.interim) {
+  // Usage on a credit-cost meter that credits did not pay and a money price bills (0530):
+  // queued as charges first, so it rides on this invoice as usage lines. A preview writes nothing.
+  const overageMode =
+    input.interim || input.lateOnly
+      ? "omit"
+      : (input.creditOverage ?? (input.preview ? "omit" : "charge"));
+  if (overageMode === "charge")
+    await chargeCreditOverage({
+      organizationId,
+      businessId,
+      customerId: subscription.customerId,
+      subscriptionId: subscription.id,
+      currency: subscription.currency,
+      before: input.periodStart,
+    });
+  if (!input.preview?.excludePendingCharges && !input.interim && !input.lateOnly) {
     const charges = await withTenant(organizationId, (tx) =>
       tx
         .select({
@@ -1740,6 +1894,11 @@ export async function planSubscriptionPeriodInvoice(
         pendingChargeIds.push(ch.id);
         continue;
       }
+      if (ch.entityType === CREDIT_OVERAGE_CHARGE) {
+        lines.push(creditOverageLine(ch, { price, productKind, productPublicId }, input));
+        pendingChargeIds.push(ch.id);
+        continue;
+      }
       // An early-end commitment true-up: a plan line, so plan coupons and the plan's tax apply.
       if (ch.entityType === COMMITMENT_CHARGE && price) {
         lines.push({
@@ -1779,15 +1938,62 @@ export async function planSubscriptionPeriodInvoice(
         productKind: "charge",
         productPublicId: null, // ad-hoc → 'charge' kind, no product
         pricePublicId: null,
+        ...(ch.discounted ? { discounted: true } : {}),
       });
       pendingChargeIds.push(ch.id);
     }
   }
 
+  // The renewal estimate with usage: the lines `chargeCreditOverage` would queue, read-only.
+  if (overageMode === "preview") {
+    const planned = await withTenant(organizationId, async (tx) => {
+      const rows = await previewCreditOverage(tx, {
+        customerId: subscription.customerId,
+        subscriptionId: subscription.id,
+        currency: subscription.currency,
+        before: input.periodStart,
+      });
+      const priceIds = [...new Set(rows.map((r) => r.priceId).filter((x): x is string => !!x))];
+      const byId = new Map(
+        (priceIds.length
+          ? await tx
+              .select({
+                price: prices,
+                productKind: products.kind,
+                productPublicId: products.publicId,
+              })
+              .from(prices)
+              .leftJoin(products, eq(prices.productId, products.id))
+              .where(inArray(prices.id, priceIds))
+          : []
+        ).map((r) => [r.price.id, r]),
+      );
+      return rows.map((r) => ({ r, p: r.priceId ? byId.get(r.priceId) : undefined }));
+    });
+    for (const { r, p } of planned)
+      lines.push(
+        creditOverageLine(
+          r,
+          {
+            price: p?.price ?? null,
+            productKind: p?.productKind ?? null,
+            productPublicId: p?.productPublicId ?? null,
+          },
+          input,
+        ),
+      );
+  }
+
   // Minimum commitment: lift the closing term's counted fees to the prorated commitment.
   let commitmentCheck: PeriodInvoicePlanBase["commitmentCheck"];
   const commitment = input.commitment;
-  if (commitment && commitment.segments.length > 0 && !input.createAsPending && !input.interim) {
+  if (
+    commitment &&
+    commitment.segments.length > 0 &&
+    !input.createAsPending &&
+    !input.interim &&
+    !input.lateOnly
+  ) {
     const { term, endedAt } = commitment;
     const trueUp = await withTenant(organizationId, async (tx) => {
       const counted = await countedCommitmentFees(tx, subscription.id, term);
@@ -1845,14 +2051,19 @@ export async function planSubscriptionPeriodInvoice(
     existingInvoiceId: input.existingInvoiceId,
     emitClosedEvent: input.emitClosedEvent,
     auditWrite: input.auditWrite,
-    ...(input.preview ? { previewOnly: true as const } : {}),
+    ...(input.preview || overageMode === "preview" ? { previewOnly: true as const } : {}),
     lines,
     usageEvents,
     billedItemIds,
     pendingChargeIds,
     subtotal,
     ...(input.metadata ? { metadata: input.metadata } : {}),
+    ...(input.hold ? { hold: input.hold } : {}),
+    ...(input.heldClose ? { heldClose: input.heldClose } : {}),
     ...(commitmentCheck ? { commitmentCheck } : {}),
+    ...(input.lateOnly
+      ? { purpose: "late_usage" as const, originToken: input.lateOnly.originToken }
+      : {}),
     ...(input.interim
       ? {
           purpose: "usage_interim" as const,
@@ -1909,37 +2120,40 @@ export async function planSubscriptionPeriodInvoice(
   // feeds tax.
   // Threshold invoicing: no coupon on an interim invoice; a final invoice prices its coupons
   // over the whole period (its lines plus what interim invoices billed) and carries them all.
-  const peeked: PeriodDiscountStack = input.interim
-    ? {
-        rows: [],
-        totalMinor: 0n,
-        invoiceLevelMinor: 0n,
-        itemLevelMinor: 0n,
-        lineDiscountByIndex: lines.map(() => 0n),
-        invoiceLevelByIndex: lines.map(() => 0n),
-        shares: [],
-        appliedCouponIds: [],
-        pendingOnlyMinor: 0n,
-      }
-    : await withTenant(organizationId, async (tx) =>
-        peekDiscounts(
-          tx,
-          subscription.id,
-          [...lines, ...billedVirtual].map((l, i) => ({
-            index: i,
-            amountMinor: l.amountMinor,
-            productKind: l.productKind,
-            productPublicId: l.productPublicId,
-            pricePublicId: l.pricePublicId,
-          })),
-          subscription.currency,
-          undefined,
-          // 0247. The period this invoice bills, so a fixed amount is clamped to what that
-          // period's allowance has left. The READ and the settle below must always agree on
-          // the period — clamping here without recording there would under-discount.
-          input.periodStart,
-        ),
-      );
+  // A late-usage invoice takes no coupon either.
+  const peeked: PeriodDiscountStack =
+    input.interim || input.lateOnly
+      ? {
+          rows: [],
+          totalMinor: 0n,
+          invoiceLevelMinor: 0n,
+          itemLevelMinor: 0n,
+          lineDiscountByIndex: lines.map(() => 0n),
+          invoiceLevelByIndex: lines.map(() => 0n),
+          shares: [],
+          appliedCouponIds: [],
+          pendingOnlyMinor: 0n,
+        }
+      : await withTenant(organizationId, async (tx) =>
+          peekDiscounts(
+            tx,
+            subscription.id,
+            [...lines, ...billedVirtual].map((l, i) => ({
+              index: i,
+              // A charge booked net of the coupons takes none off again.
+              amountMinor: "discounted" in l && l.discounted ? 0n : l.amountMinor,
+              productKind: l.productKind,
+              productPublicId: l.productPublicId,
+              pricePublicId: l.pricePublicId,
+            })),
+            subscription.currency,
+            undefined,
+            // 0247. The period this invoice bills, so a fixed amount is clamped to what that
+            // period's allowance has left. The READ and the settle below must always agree on
+            // the period — clamping here without recording there would under-discount.
+            input.periodStart,
+          ),
+        );
   let discStack = peeked;
   if (billedVirtual.length > 0) {
     const folded = foldBilledDiscount(
@@ -1996,7 +2210,10 @@ export async function planSubscriptionPeriodInvoice(
   );
   // `0`/null both mean "no terms here" — fall through to the next level. The rule itself
   // is `netTermDaysFrom`, shared with `createInvoiceFromLines` so the two cannot drift.
-  const dueDays = netTermDaysFrom({ subscription, customer, business: bizRow });
+  // A late-usage invoice is due on issue.
+  const dueDays = input.lateOnly
+    ? null
+    : netTermDaysFrom({ subscription, customer, business: bizRow });
   const sellerOrigin = await withTenant(organizationId, (tx) =>
     sellerAtIssue(tx, organizationId, bizRow, customer?.country),
   );
@@ -2023,7 +2240,9 @@ export async function planSubscriptionPeriodInvoice(
   // raised now — rather than propagating the null.
   const invoiceDate = input.interim
     ? input.usagePeriod!.end
-    : ((input.periodStart as Date | null) ?? stampNow());
+    : input.heldClose
+      ? input.heldClose.at
+      : ((input.periodStart as Date | null) ?? stampNow());
   const dueDate =
     dueDays && dueDays > 0
       ? new Date(invoiceDate.getTime() + dueDays * 86_400_000)
@@ -2070,6 +2289,7 @@ export async function planSubscriptionPeriodInvoice(
         await ensureCreditWindows(tx, {
           customerId: subscription.customerId,
           now: stampNow(businessId),
+          awaitingInvoiceOf: subscription.id,
         });
         const grants = await loadPlannerGrants(tx, {
           businessId,
@@ -2234,6 +2454,8 @@ export async function commitSubscriptionPeriodInvoice(
      * False rolls everything back and throws `PeriodClaimLostError`.
      */
     claim?: (tx: Tx) => Promise<boolean>;
+    /** Run last inside the invoice transaction, once the final invoice row is written. */
+    afterInvoice?: (tx: Tx) => Promise<void>;
     /**
      * Mark a fresh invoice as the one that opens its period (`invoices.opens_period`). A
      * second live one for the same (subscription, period_start) rolls back and throws
@@ -2290,9 +2512,19 @@ export async function commitSubscriptionPeriodInvoice(
                     start: plan.pendingUsageWindow.start.toISOString(),
                     end: plan.pendingUsageWindow.end.toISOString(),
                   },
+                  ...(plan.hold
+                    ? {
+                        held: {
+                          kind: plan.hold.kind,
+                          commitment: plan.hold.commitment ?? null,
+                          ...(plan.hold.noCard ? { no_card: true } : {}),
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),
+          ...(plan.hold ? { holdUntil: plan.hold.until } : {}),
         })
         .returning();
       if (lines.length > 0) {
@@ -2332,6 +2564,23 @@ export async function commitSubscriptionPeriodInvoice(
           status: "pending",
         }),
       });
+      // A held renewal starts the new cycle now: its plan credits, then its reset windows.
+      if (plan.hold && plan.hold.kind !== "closing") {
+        await lockCustomerBalances(tx, subscription.customerId);
+        if (isOwnTermInvoice(plan, subscription))
+          await grantPlanCycle(tx, {
+            organizationId,
+            businessId,
+            subscription,
+            periodStart: plan.periodStart,
+            periodEnd: plan.periodEnd,
+            invoiceId: inv!.id,
+          });
+        await ensureCreditWindows(tx, {
+          customerId: subscription.customerId,
+          now: stampNow(businessId),
+        });
+      }
       return inv!;
     }).catch(rethrowOpensPeriodConflict);
     return { invoice: draft, payment: null };
@@ -2368,6 +2617,12 @@ export async function commitSubscriptionPeriodInvoice(
       tx,
     );
     await ensureCreditWindows(tx, {
+      customerId: subscription.customerId,
+      now: stampNow(businessId),
+      awaitingInvoiceOf: subscription.id,
+    });
+    // Usage paid in credits (0526): draw what ingest took before this invoice is written.
+    await settleCustomerCreditUsage(tx, {
       customerId: subscription.customerId,
       now: stampNow(businessId),
     });
@@ -2580,6 +2835,17 @@ export async function commitSubscriptionPeriodInvoice(
             )
             .returning({ id: invoiceLineItems.id, amountMinor: invoiceLineItems.amountMinor })
         : [];
+    // Information lines: usage that credits paid, zero amount. Period invoices only.
+    if (!plan.purpose)
+      await insertCreditUsageLines(tx, {
+        organizationId,
+        businessId,
+        customerId: subscription.customerId,
+        subscriptionId: subscription.id,
+        subscriptionStart: subscription.startedAt ?? subscription.createdAt,
+        invoiceId: inv!.id,
+        periodStart: plan.periodStart,
+      });
     // Meter lines: advance each billing pointer and record recurring levels, atomically with
     // the invoice. A rollback leaves the pointer where it was, so nothing is lost.
     if (plan.meterCommit)
@@ -2866,6 +3132,14 @@ export async function commitSubscriptionPeriodInvoice(
         ),
       });
       await activatePaidCreditGrants(tx, { organizationId, invoiceId: inv!.id });
+    } else if (total === 0n && inv!.status === "paid") {
+      const zero = await zeroInvoicePaidEvent(tx, {
+        organizationId,
+        businessId,
+        oneOff: false,
+        invoice: { publicId: inv!.publicId, currency: subscription.currency },
+      });
+      if (zero) await emitOrPrepare(zero);
     }
     // Mark any folded-in ad-hoc charges as billed on this invoice.
     if (pendingChargeIds.length > 0) {
@@ -3085,6 +3359,9 @@ export async function commitSubscriptionPeriodInvoice(
             paymentId: pay!.id,
             errorCode: c.result.failure?.code ?? null,
             errorText: c.result.failure?.message ?? null,
+            ...(c.lost
+              ? { ownershipRef: c.lost.ownershipRef, idempotencyKey: c.lost.idempotencyKey }
+              : {}),
           },
           tx,
         );
@@ -3100,14 +3377,28 @@ export async function commitSubscriptionPeriodInvoice(
     if (plan.inTx) await plan.inTx(tx, inv!);
     // Credits per cycle, after this period's usage drew on the closing grant (design G3 §3.6).
     // Only for the subscription's own term; a re-run of the period grants once.
-    if (isOwnTermInvoice(plan, subscription))
+    if (plan.heldClose) {
+      // A held invoice: the new cycle was granted at the renewal. Settle the closed one now,
+      // after its usage drew on it; a paid close opens credits held for this invoice.
+      if (plan.heldClose.kind !== "closing")
+        await settlePlanCycles(tx, {
+          organizationId,
+          businessId,
+          subscription,
+          periodStart: plan.heldClose.windowEnd,
+          periodEnd: plan.periodEnd,
+        });
+      await activatePaidCreditGrants(tx, { organizationId, invoiceId: inv!.id });
+    } else if (plan.purpose !== "late_usage" && isOwnTermInvoice(plan, subscription))
       await applyPlanCredits(tx, {
         organizationId,
         businessId,
         subscription,
         periodStart: plan.periodStart,
         periodEnd: plan.periodEnd,
+        invoiceId: inv!.id,
       });
+    if (opts.afterInvoice) await opts.afterInvoice(tx);
     return { inv: inv!, prepaidPayment, deferNumber };
   }).catch(rethrowOpensPeriodConflict);
 
@@ -3161,6 +3452,8 @@ export async function collectPeriodInvoice(input: {
       .limit(1),
   );
   if (!isAutoCollectOn(subscription.autoCollection, custAc?.ac)) {
+    // A late-usage invoice is issued unpaid and left alone: no dunning, no reminders.
+    if (invoice.purpose === "late_usage") return { invoice, payment: null };
     // Send-invoice, so nothing is charged — but the invoice is not simply parked
     // either: it goes straight into dunning, which for an offline bill means
     // reminders. See `enrolOfflineInvoiceInDunning`.
@@ -3261,6 +3554,39 @@ export interface InvoiceLineInput {
    * promotional credit, and `taxed_at_use` zero-rates it (`prepaid_credit`).
    */
   creditPack?: "taxed_at_purchase" | "taxed_at_use";
+  /** Already net of a coupon (`unbilled_charges.discounted`): no coupon takes anything off it. */
+  discounted?: boolean;
+}
+
+/**
+ * The lines as coupon matching sees them: each line's product kind, product and price
+ * slug. A line with no price (manual text, tax) matches no item-scoped coupon.
+ */
+async function discountLinesFor(tx: Tx, lines: InvoiceLineInput[]): Promise<DiscountLine[]> {
+  const priceIds = [...new Set(lines.map((l) => l.priceId).filter((p): p is string => !!p))];
+  const rows = priceIds.length
+    ? await tx
+        .select({
+          priceId: prices.id,
+          kind: products.kind,
+          productPublicId: products.publicId,
+          pricePublicId: prices.publicId,
+        })
+        .from(prices)
+        .innerJoin(products, eq(prices.productId, products.id))
+        .where(inArray(prices.id, priceIds))
+    : [];
+  const byPrice = new Map(rows.map((r) => [r.priceId, r]));
+  return lines.map((l, i) => {
+    const p = l.priceId ? byPrice.get(l.priceId) : undefined;
+    return {
+      index: i,
+      amountMinor: l.discounted ? 0n : l.amountMinor,
+      productKind: p?.kind,
+      productPublicId: p?.productPublicId,
+      pricePublicId: p?.pricePublicId,
+    };
+  });
 }
 
 /**
@@ -3301,9 +3627,9 @@ export async function createInvoiceFromLines(input: {
    * coupon turns a 64900 upgrade into 58410 — but this shared engine had no coupon
    * step at all, so every proration invoice charged list price.
    *
-   * Opt-in, and requires `subscriptionId`: the other callers (ad-hoc charges,
-   * add-on adds, manual/one-off invoices) must stay list-priced, and leaving the
-   * default off keeps them byte-identical.
+   * Opt-in, and requires `subscriptionId`. The other mid-term callers (item adds,
+   * charges, unbilled charges, term changes) pass what the business's
+   * `mid_term_coupons` rule says (`subscriptions/mid-term-coupons.ts`).
    *
    * Consumes the redemption when the coupon actually discounts, same rule as
    * billSubscriptionPeriod — otherwise a `once` coupon applied mid-term (still
@@ -3312,9 +3638,31 @@ export async function createInvoiceFromLines(input: {
    * limited-period coupon; that is defensible (a reset IS a new billing cycle) and is
    * the decision that stands.
    *
-   * Silently skipped when any line is negative — see `hasCreditLines` below.
+   * With credit lines (a change netted on one invoice), each credit is first restated at
+   * what was paid for that time (`creditPaidBasis`), then the coupons discount the net.
    */
   applyCoupons?: boolean;
+  /**
+   * Coupon codes redeemed on THIS invoice, with or without a subscription. Every duration
+   * applies once (`redeemCouponsForInvoice`). With `applyCoupons` too, both are priced in
+   * one stacking pass. A refusal throws `CouponError` and nothing is raised. With credit
+   * lines, the coupons discount the net of the lines they apply to.
+   */
+  coupons?: { codes: string[]; enteredByCustomer?: boolean };
+  /**
+   * A one-off sale: a one-time purchase, a manual invoice, a credit purchase or an automatic
+   * top-up. Read only by `zero_invoice_paid_event: one_off`.
+   */
+  oneOff?: boolean;
+  /** Caller metadata stored on the invoice (a purchase's checkout metadata, `POST /invoices`). */
+  metadata?: Record<string, unknown>;
+  /**
+   * The customer's own coupons (0520) on an invoice with no subscription. Default on: they
+   * discount one-off invoices, purchases and top-ups. `false` for an invoice whose price is
+   * fixed elsewhere (a manual paid credit grant). A subscription invoice takes them with
+   * `applyCoupons`, through `peekDiscounts`. With credit lines they discount the net.
+   */
+  customerCoupons?: boolean;
   dueDate?: Date | null;
   collect?: boolean;
   subscription?: typeof subscriptions.$inferSelect;
@@ -3359,7 +3707,11 @@ export async function createInvoiceFromLines(input: {
   /** Runs last inside the invoice transaction (a manual paid credit grant books its grant here). */
   inTx?: (
     tx: Tx,
-    created: { invoice: Invoice; lines: Array<{ id: string; amountMinor: bigint }> },
+    created: {
+      invoice: Invoice;
+      /** `costBasisMinor`: the line's `paidCreditCostBasisMinor`, for a paid grant sold on it. */
+      lines: Array<{ id: string; amountMinor: bigint; costBasisMinor: bigint }>;
+    },
   ) => Promise<void>;
 }): Promise<{ invoice: Invoice; payment: Payment | null }> {
   const { organizationId, businessId, customerId, currency } = input;
@@ -3456,7 +3808,32 @@ export async function createInvoiceFromLines(input: {
     customerId: input.customerId,
   });
   const dueDate = input.dueDate ?? (netDays ? new Date(now.getTime() + netDays * 86_400_000) : now);
-  const subtotal = input.lines.reduce((s, l) => s + l.amountMinor, 0n);
+  // A credit line on a change invoice hands back what the customer PAID for that time,
+  // not its list rate (`creditPaidBasis`). Read first: it moves the subtotal.
+  const hasCreditLines = input.lines.some((l) => l.amountMinor < 0n);
+  const withSubCoupons = !!(input.applyCoupons && input.subscriptionId);
+  const paidBasis =
+    withSubCoupons && hasCreditLines
+      ? await withTenant(organizationId, (tx) =>
+          creditPaidBasis(tx, {
+            subscriptionId: input.subscriptionId!,
+            periodStart: input.subscription?.currentPeriodStart ?? null,
+            periodEnd: input.subscription?.currentPeriodEnd ?? null,
+            credits: input.lines.map((l, index) => ({
+              index,
+              priceId: l.priceId,
+              amountMinor: l.amountMinor,
+            })),
+          }),
+        )
+      : null;
+  const lines: InvoiceLineInput[] = paidBasis
+    ? input.lines.map((l, i) => {
+        const paid = paidBasis.paidByIndex.get(i);
+        return paid == null ? l : { ...l, amountMinor: -paid };
+      })
+    : input.lines;
+  const subtotal = lines.reduce((s, l) => s + l.amountMinor, 0n);
 
   /**
    * Credits Flexibility ceilings (0219), resolved OUTSIDE the invoice transaction for the
@@ -3528,9 +3905,7 @@ export async function createInvoiceFromLines(input: {
   //
   // Read once, outside the promo clamp loop, for the reason `manualResolution` is: it is a
   // DB read and the determination does not depend on the amount.
-  const linePriceIds = [
-    ...new Set(input.lines.map((l) => l.priceId).filter((v): v is string => !!v)),
-  ];
+  const linePriceIds = [...new Set(lines.map((l) => l.priceId).filter((v): v is string => !!v))];
   const priceTaxById = new Map<string, { isTaxable: boolean; inclusive: boolean }>();
   // Credit packs taxed at use: the sale is zero-rated, the credit is taxed when spent.
   const prepaidPriceIds = new Set<string>();
@@ -3558,7 +3933,7 @@ export async function createInvoiceFromLines(input: {
    * names a price can carry a different answer, and now it does.
    */
   const taxableLinesFor = (): TaxableLine[] =>
-    input.lines.map((l, i) => {
+    lines.map((l, i) => {
       const pt = l.priceId ? priceTaxById.get(l.priceId) : undefined;
       return {
         id: String(i),
@@ -3627,64 +4002,70 @@ export async function createInvoiceFromLines(input: {
       // Resolve each line's product so `each_specified_item` coupons can match it
       // (invoice-level coupons ignore this). Lines with no priceId — tax, manual
       // text — simply match nothing.
-      // A line set containing CREDIT lines (the non-reset proration path nets "Unused
-      // time on X" against "Remaining time on Y" in one invoice) cannot be discounted
-      // here: computeStackedDiscounts floors every line at 0, so it would take the
-      // coupon off the GROSS charge while `subtotal` is already NET. On 10→11 seats at
-      // 1000/seat with a 10% coupon that is a 550 discount on a 500 subtotal — a
-      // negative total whose AR line is skipped, leaving revenue 500 against discounts
-      // 550 and an UNBALANCED ledger entry, thrown after the item updates have already
-      // committed in an earlier transaction (upgraded subscription, no invoice).
-      // Netting the coupon across credit lines correctly is real work and is not done
-      // yet. Until then these invoices stay list-priced, exactly as they were before.
-      const hasCreditLines = input.lines.some((l) => l.amountMinor < 0n);
-      const discStack =
-        input.applyCoupons && input.subscriptionId && !hasCreditLines
-          ? await (async () => {
-              const priceIds = [
-                ...new Set(input.lines.map((l) => l.priceId).filter((p): p is string => !!p)),
-              ];
-              const prodRows = priceIds.length
-                ? await tx
-                    .select({
-                      priceId: prices.id,
-                      kind: products.kind,
-                      productPublicId: products.publicId,
-                      pricePublicId: prices.publicId,
-                    })
-                    .from(prices)
-                    .innerJoin(products, eq(prices.productId, products.id))
-                    .where(inArray(prices.id, priceIds))
-                : [];
-              const byPrice = new Map(prodRows.map((r) => [r.priceId, r]));
+      // Credit lines take part: a coupon discounts the NET of the lines it applies to,
+      // and one already stated at its paid basis is `settled` and left alone
+      // (`computeStackedDiscounts`). The discount never exceeds the net subtotal.
+      const codes = input.coupons?.codes ?? [];
+      const released = paidBasis?.releasedByCoupon ?? new Map<string, bigint>();
+      const withCustomerCoupons = !input.subscriptionId && input.customerCoupons !== false;
+      let invoiceCoupons: StackCoupon[] = [];
+      let discStack: DiscountStack | null = null;
+      if (withSubCoupons || codes.length > 0 || withCustomerCoupons) {
+        const discountLines = (await discountLinesFor(tx, lines)).map((l) =>
+          paidBasis?.paidByIndex.has(l.index) ? { ...l, settled: true } : l,
+        );
+        if (codes.length > 0)
+          invoiceCoupons = await redeemCouponsForInvoice(tx, {
+            organizationId,
+            businessId,
+            customerId,
+            currency,
+            codes,
+            lines: discountLines,
+            enteredByCustomer: input.coupons?.enteredByCustomer,
+          });
+        discStack = withSubCoupons
+          ? await peekDiscounts(
+              tx,
+              input.subscriptionId!,
+              discountLines,
+              currency,
+              invoiceCoupons.length > 0 || released.size > 0
+                ? { organizationId, businessId, redeemed: invoiceCoupons, released }
+                : undefined,
               // 0247. The same anchor the settle below uses — the subscription's CURRENT
               // period, because these lines are an adjustment inside it. Null only for an
               // ad-hoc invoice with no period behind it, where there is no allowance.
-              const allowancePeriod = input.subscription?.currentPeriodStart ?? null;
-              return peekDiscounts(
-                tx,
-                input.subscriptionId!,
-                input.lines.map((l, i) => {
-                  const p = l.priceId ? byPrice.get(l.priceId) : undefined;
-                  return {
-                    index: i,
-                    amountMinor: l.amountMinor,
-                    productKind: p?.kind,
-                    productPublicId: p?.productPublicId,
-                    pricePublicId: p?.pricePublicId,
-                  };
-                }),
-                currency,
-                undefined,
-                allowancePeriod,
-              );
-            })()
-          : null;
+              input.subscription?.currentPeriodStart ?? null,
+            )
+          : await priceInvoiceDiscounts(tx, {
+              businessId,
+              customerId,
+              currency,
+              lines: discountLines,
+              invoiceCoupons,
+              withCustomer: withCustomerCoupons,
+            });
+      }
+      // Invoice-scope redemptions: born exhausted, never consumed again.
+      const invoiceCouponIds = new Set(invoiceCoupons.map((c) => c.appliedCouponId));
       const discountRows = (discStack?.rows ?? []).filter((r) => r.discountMinor > 0n);
       const discountMinor = discStack?.totalMinor ?? 0n;
 
       // Credit packs take no promotional credit: free credit never buys paid credit.
-      const packMinor = await packLinesMinor(tx, input.lines);
+      // A pack counts after its discount shares, so the rest stays open to promotional credit.
+      const hasPackLines = (await packLinesMinor(tx, lines)) > 0n;
+      const packMinor = hasPackLines
+        ? await packLinesMinor(
+            tx,
+            lines,
+            lines.map(
+              (_, i) =>
+                (discStack?.lineDiscountByIndex[i] ?? 0n) +
+                (discStack?.invoiceLevelByIndex[i] ?? 0n),
+            ),
+          )
+        : 0n;
       const promoCap =
         subtotal - discountMinor - packMinor > 0n ? subtotal - discountMinor - packMinor : 0n;
       let promoApplied = balances.promotional < promoCap ? balances.promotional : promoCap;
@@ -3722,6 +4103,7 @@ export async function createInvoiceFromLines(input: {
           poNumber:
             input.poNumber ??
             inheritedPoNumber(input.subscription, await poInheritanceEnabled(tx, businessId)),
+          ...(input.metadata ? { metadata: input.metadata } : {}),
           // Same due-now rule as billSubscriptionPeriod above: a due date at or before
           // the invoice date means due immediately, i.e. `payment_due`, not `posted`.
           // Compared as dates rather than tested for null
@@ -3787,7 +4169,12 @@ export async function createInvoiceFromLines(input: {
           ...exchangeRateColumns(await loadIssueRate(tx, businessId, currency)),
         })
         .returning();
-      const lineDiscounts = input.lines.map(
+      if (invoiceCouponIds.size > 0)
+        await tx
+          .update(appliedCoupons)
+          .set({ invoiceId: inv!.id })
+          .where(inArray(appliedCoupons.id, [...invoiceCouponIds]));
+      const lineDiscounts = lines.map(
         (_, i) =>
           (discStack?.lineDiscountByIndex[i] ?? 0n) + (discStack?.invoiceLevelByIndex[i] ?? 0n),
       );
@@ -3796,30 +4183,36 @@ export async function createInvoiceFromLines(input: {
         organizationId,
         businessId,
         inv!.id,
-        input.lines,
+        lines,
         input.periodStart,
         input.periodEnd,
         lineDiscounts,
       );
+      // What paid credit sold on each line is worth: after discounts, excl. tax.
+      const lineCostBasis = insertedLines.map((l, i) =>
+        paidCreditCostBasisMinor({
+          amountMinor: l.amountMinor,
+          discountMinor: lineDiscounts[i] ?? 0n,
+          inclusiveTaxMinor: invoiceTax.rows
+            .filter((r) => r.inclusive && r.lineId === String(i))
+            .reduce((a, r) => a + r.amountMinor, 0n),
+        }),
+      );
       // A credit pack line sells a pending grant; it activates when this invoice is paid.
-      if (packMinor > 0n)
+      if (hasPackLines)
         await createPendingPackGrants(tx, {
           organizationId,
           businessId,
           invoice: inv!,
           lines: insertedLines.map((l, i) => ({
             id: l.id,
-            priceId: input.lines[i]?.priceId ?? null,
-            quantity: input.lines[i]?.quantity ?? 1,
-            amountMinor: l.amountMinor,
-            discountMinor: lineDiscounts[i] ?? 0n,
-            inclusiveTaxMinor: invoiceTax.rows
-              .filter((r) => r.inclusive && r.lineId === String(i))
-              .reduce((a, r) => a + r.amountMinor, 0n),
+            priceId: lines[i]?.priceId ?? null,
+            quantity: lines[i]?.quantity ?? 1,
+            costBasisMinor: lineCostBasis[i]!,
           })),
         });
       // `line_item_discounts[]` — same (line, coupon, stage) attribution as the
-      // subscription path. `share.lineIndex` indexes `input.lines`, which is the order
+      // subscription path. `share.lineIndex` indexes `lines`, which is the order
       // `insertLines` inserted and returned.
       if (discStack && discStack.shares.length > 0 && insertedLines.length > 0) {
         await tx.insert(invoiceLineDiscounts).values(
@@ -3888,6 +4281,7 @@ export async function createInvoiceFromLines(input: {
             periodEnd: input.periodEnd ?? null,
           });
         }
+        if (invoiceCouponIds.has(row.appliedCouponId)) continue;
         // 0247. These invoices are adjustments INSIDE the subscription's current
         // period, so they draw on that period's remaining allowance and — being the
         // same period — spend none of it. That is the reported defect, fixed at the
@@ -3896,7 +4290,7 @@ export async function createInvoiceFromLines(input: {
         if (periodAnchor != null) {
           await settlePeriodDiscount(tx, row.appliedCouponId, {
             periodStart: periodAnchor,
-            appliedMinor: row.discountMinor,
+            appliedMinor: row.discountMinor - (released.get(row.appliedCouponId) ?? 0n),
           });
         } else {
           // No current period (an ad-hoc customer invoice with no subscription behind
@@ -4099,8 +4493,22 @@ export async function createInvoiceFromLines(input: {
           ),
         });
         await activatePaidCreditGrants(tx, { organizationId, invoiceId: inv!.id });
+      } else if (total === 0n && inv!.status === "paid") {
+        const zero = await zeroInvoicePaidEvent(tx, {
+          organizationId,
+          businessId,
+          oneOff: input.oneOff === true,
+          invoice: inv!,
+        });
+        if (zero) await emitEvent(tx, zero);
+        // A fully discounted pack is paid at raise: its grant activates in this transaction.
+        await activatePaidCreditGrants(tx, { organizationId, invoiceId: inv!.id });
       }
-      if (input.inTx) await input.inTx(tx, { invoice: inv!, lines: insertedLines });
+      if (input.inTx)
+        await input.inTx(tx, {
+          invoice: inv!,
+          lines: insertedLines.map((l, i) => ({ ...l, costBasisMinor: lineCostBasis[i]! })),
+        });
       return { invoice: inv!, fullyPaid };
     });
     invoice = r.invoice;
@@ -4196,10 +4604,12 @@ export async function createInvoiceFromLines(input: {
 
 /**
  * What `createInvoiceFromLines` would raise for these lines with `applyTax` and
- * `applyCredit` on and no coupons — read-only, nothing locked or written. The steps are
- * the ones above in the same order (tax per line, promo pre-tax with its clamp,
+ * `applyCredit` on — read-only, nothing locked or written. The steps are the ones above
+ * in the same order (coupons off the subtotal, tax per line, promo pre-tax with its clamp,
  * withholding, then refundable/excess post-tax); a change there must be made here too.
- * `verify:usage-api` asserts the two agree.
+ * `coupons` are checked as the create checks them (`priceCouponCodesForInvoice`) and
+ * refused with `CouponError`. `verify:usage-api` and `verify:coupons-invoice` assert the
+ * two agree.
  */
 export async function previewInvoiceFromLines(input: {
   organizationId: string;
@@ -4210,8 +4620,23 @@ export async function previewInvoiceFromLines(input: {
   lines: InvoiceLineInput[];
   /** Balances to draw from instead of the stored ones — for previewing several invoices in turn. */
   balances?: CustomerBalances;
+  /** Coupon codes to price on this invoice, as `createInvoiceFromLines({ coupons })`. */
+  coupons?: string[];
+  /**
+   * The subscription's coupons, as `createInvoiceFromLines({ applyCoupons })`: needs
+   * `subscriptionId`, clamped to its current period's allowance; credit lines restated as
+   * the create restates them.
+   */
+  applyCoupons?: boolean;
+  /** As `createInvoiceFromLines({ customerCoupons })`: default on with no subscription. */
+  customerCoupons?: boolean;
 }): Promise<{
+  /** After the item-level discount, as `invoices.subtotal_minor` (0169). */
   subtotalMinor: bigint;
+  /** Every coupon's discount, both stages. */
+  discountMinor: bigint;
+  /** One row per coupon: its label and what it took off. */
+  discounts: Array<{ code: string; label: string; discountMinor: bigint }>;
   taxMinor: bigint;
   taxLines: Array<{ description: string; amountMinor: bigint }>;
   totalMinor: bigint;
@@ -4223,7 +4648,38 @@ export async function previewInvoiceFromLines(input: {
   balancesAfter: CustomerBalances;
 }> {
   const { organizationId, businessId, customerId, currency } = input;
-  const subtotal = input.lines.reduce((s, l) => s + l.amountMinor, 0n);
+  // Credit lines restated at what was paid, as the create restates them (`creditPaidBasis`).
+  const subscriptionId = input.applyCoupons ? input.subscriptionId : undefined;
+  const paidBasis =
+    subscriptionId && input.lines.some((l) => l.amountMinor < 0n)
+      ? await withTenant(organizationId, async (tx) => {
+          const [sub] = await tx
+            .select({
+              currentPeriodStart: subscriptions.currentPeriodStart,
+              currentPeriodEnd: subscriptions.currentPeriodEnd,
+            })
+            .from(subscriptions)
+            .where(eq(subscriptions.id, subscriptionId))
+            .limit(1);
+          return creditPaidBasis(tx, {
+            subscriptionId,
+            periodStart: sub?.currentPeriodStart ?? null,
+            periodEnd: sub?.currentPeriodEnd ?? null,
+            credits: input.lines.map((l, index) => ({
+              index,
+              priceId: l.priceId,
+              amountMinor: l.amountMinor,
+            })),
+          });
+        })
+      : null;
+  const lines: InvoiceLineInput[] = paidBasis
+    ? input.lines.map((l, i) => {
+        const paid = paidBasis.paidByIndex.get(i);
+        return paid == null ? l : { ...l, amountMinor: -paid };
+      })
+    : input.lines;
+  const subtotal = lines.reduce((s, l) => s + l.amountMinor, 0n);
   const creditLimits = await loadCreditApplicationLimits({
     organizationId,
     businessId,
@@ -4243,9 +4699,7 @@ export async function previewInvoiceFromLines(input: {
         customerTaxBehavior: cust?.taxBehavior,
       })
     : await getTaxProvider().resolve({ organizationId, businessId, customerExempt: true });
-  const linePriceIds = [
-    ...new Set(input.lines.map((l) => l.priceId).filter((v): v is string => !!v)),
-  ];
+  const linePriceIds = [...new Set(lines.map((l) => l.priceId).filter((v): v is string => !!v))];
   const priceTaxById = new Map<string, { isTaxable: boolean; inclusive: boolean }>();
   // Credit packs: no promotional credit; taxed at use = zero-rated (as `createInvoiceFromLines`).
   const packPriceIds = new Set<string>();
@@ -4270,7 +4724,7 @@ export async function previewInvoiceFromLines(input: {
       }
     }
   }
-  const taxableLines: TaxableLine[] = input.lines.map((l, i) => {
+  const taxableLines: TaxableLine[] = lines.map((l, i) => {
     const pt = l.priceId ? priceTaxById.get(l.priceId) : undefined;
     return {
       id: String(i),
@@ -4283,26 +4737,88 @@ export async function previewInvoiceFromLines(input: {
           : resolution,
     };
   });
+  const codes = input.coupons ?? [];
+  const withCustomer = !input.subscriptionId && input.customerCoupons !== false;
+  const discStack: DiscountStack | null =
+    codes.length > 0 || subscriptionId || withCustomer
+      ? await withTenant(organizationId, async (tx) => {
+          const discountLines = (await discountLinesFor(tx, lines)).map((l) =>
+            paidBasis?.paidByIndex.has(l.index) ? { ...l, settled: true } : l,
+          );
+          const stack = codes.length
+            ? await priceCouponCodesForInvoice(tx, {
+                organizationId,
+                businessId,
+                customerId,
+                currency,
+                codes,
+                lines: discountLines,
+              })
+            : [];
+          if (subscriptionId) {
+            const [sub] = await tx
+              .select({ currentPeriodStart: subscriptions.currentPeriodStart })
+              .from(subscriptions)
+              .where(eq(subscriptions.id, subscriptionId))
+              .limit(1);
+            return peekDiscounts(
+              tx,
+              subscriptionId,
+              discountLines,
+              currency,
+              stack.length > 0 || paidBasis?.releasedByCoupon.size
+                ? {
+                    organizationId,
+                    businessId,
+                    redeemed: stack,
+                    released: paidBasis?.releasedByCoupon,
+                  }
+                : undefined,
+              sub?.currentPeriodStart ?? null,
+            );
+          }
+          return priceInvoiceDiscounts(tx, {
+            businessId,
+            customerId,
+            currency,
+            lines: discountLines,
+            invoiceCoupons: stack,
+            withCustomer,
+          });
+        })
+      : null;
+  const discountMinor = discStack?.totalMinor ?? 0n;
+  const discountedSubtotal = subtotal - discountMinor;
   const computeTotals = (promo: bigint) => {
     const invoiceTax = computeInvoiceTax({
       lines: taxableLines,
-      discountMinor: promo,
+      discountMinor: discountMinor + promo,
       subtotalMinor: subtotal,
       customerExempt: exempt,
     });
-    const total = subtotal + invoiceTax.additiveTaxMinor;
+    const total = discountedSubtotal + invoiceTax.additiveTaxMinor;
     const whRateBps = cust?.withholdingRateBps ?? 0;
     const withholdingMinor =
-      whRateBps > 0 && subtotal > 0n ? (subtotal * BigInt(whRateBps)) / 10000n : 0n;
+      whRateBps > 0 && discountedSubtotal > 0n
+        ? (discountedSubtotal * BigInt(whRateBps)) / 10000n
+        : 0n;
     return { invoiceTax, total, withholdingMinor, collectible: total - withholdingMinor };
   };
   const balances =
     input.balances ?? (await bucketBalancesForCurrency(organizationId, customerId, currency));
-  const packMinor = input.lines.reduce(
-    (s, l) => s + (l.creditPack || (l.priceId && packPriceIds.has(l.priceId)) ? l.amountMinor : 0n),
+  // After their discount shares, as the create counts them.
+  const packMinor = lines.reduce(
+    (s, l, i) =>
+      s +
+      (l.creditPack || (l.priceId && packPriceIds.has(l.priceId))
+        ? l.amountMinor -
+          (discStack?.lineDiscountByIndex[i] ?? 0n) -
+          (discStack?.invoiceLevelByIndex[i] ?? 0n)
+        : 0n),
     0n,
   );
-  const promoCap = subtotal - packMinor > 0n ? subtotal - packMinor : 0n;
+  const promoCap =
+    subtotal - discountMinor - packMinor > 0n ? subtotal - discountMinor - packMinor : 0n;
   let promoApplied = balances.promotional < promoCap ? balances.promotional : promoCap;
   let totals = computeTotals(promoApplied);
   for (
@@ -4315,7 +4831,7 @@ export async function previewInvoiceFromLines(input: {
   }
   const { refundable, excess } = planCreditApplication({
     balances,
-    discountedSubtotal: subtotal,
+    discountedSubtotal,
     postTaxRemaining: totals.collectible - promoApplied,
     limits: creditLimits,
   });
@@ -4331,7 +4847,13 @@ export async function previewInvoiceFromLines(input: {
     byComponent.set(k, acc);
   }
   return {
-    subtotalMinor: subtotal,
+    subtotalMinor: subtotal - (discStack?.itemLevelMinor ?? 0n),
+    discountMinor,
+    discounts: (discStack?.rows ?? []).map((r) => ({
+      code: r.couponPublicId,
+      label: r.label,
+      discountMinor: r.discountMinor,
+    })),
     taxMinor: totals.invoiceTax.totalTaxMinor,
     taxLines: [...byComponent.values()].filter((c) => c.amountMinor !== 0n),
     totalMinor: totals.total,
@@ -5031,7 +5553,8 @@ export async function collectInvoice(input: {
    * running.
    *
    * The failed payment row is still written — the attempt really happened and has to
-   * be visible — it just does not advance dunning.
+   * be visible — it just does not advance dunning. One exception: a manual attempt that is
+   * the invoice's first failure starts dunning and counts as attempt 1, as an automatic one does.
    */
   manualAttempt?: boolean;
 }): Promise<Payment> {
@@ -6316,8 +6839,6 @@ async function recordFailedPayment(input: {
       deferralsSoFar,
       now,
     });
-    const newAttemptCount =
-      input.manualAttempt || mandateDeferral ? invoice.attemptCount : invoice.attemptCount + 1;
     // Business-configurable retry offsets (Settings → Dunning); default [1,3,5,7].
     const [bizDunning] = await tx
       .select({
@@ -6353,6 +6874,13 @@ async function recordFailedPayment(input: {
     // Exclusion and the minimum stop dunning from STARTING. An invoice already in dunning
     // keeps its schedule; the passes hold it.
     const liveDunningStatus = live ? live.dunningStatus : invoice.dunningStatus;
+    // A manual attempt that is the invoice's FIRST failure is the original attempt, as on the
+    // automatic paths: it counts as 1. Held at 0, the first scheduled retry would also index
+    // offset 1 and run one extra retry (1, 2, 3, 5, 7 on the default 1, 3, 5, 7).
+    const holdCount =
+      input.manualAttempt === true && !(invoice.attemptCount === 0 && liveDunningStatus == null);
+    const newAttemptCount =
+      holdCount || mandateDeferral ? invoice.attemptCount : invoice.attemptCount + 1;
     const startHeld =
       liveDunningStatus == null && (await dunningHoldFor(tx, invoice, dunningCfg)) !== null;
     // On this transaction, not a second one: a nested `withTenant` holds this connection while
@@ -6390,6 +6918,7 @@ async function recordFailedPayment(input: {
         dunningAppliesTo(dunningCfg, {
           hasSubscription: invoice.subscriptionId != null,
           subscriptionStatus: input.subscriptionStatus,
+          purpose: invoice.purpose,
         }),
       periodEndsAt: dunningPeriodEndsAt(dunningCfg, anchor),
       // Every retry offset is measured from the DUE DATE, not from the last
@@ -6423,7 +6952,7 @@ async function recordFailedPayment(input: {
      * two offline invoices on one customer report different states.
      */
     const set: Partial<typeof invoices.$inferInsert> =
-      input.manualAttempt || mandateDeferral || plan.action === "send_invoice"
+      holdCount || mandateDeferral || plan.action === "send_invoice"
         ? {}
         : { attemptCount: newAttemptCount };
     // The next retry as written (deferral or hold included), for the events below.
@@ -7247,5 +7776,34 @@ export async function getInvoiceWithLines(
         code: r.setCode ?? r.code,
       })),
     };
+  });
+}
+
+/**
+ * The same subscription's invoice issued just before this one, voided ones skipped — what an
+ * explanation compares against. Null for an invoice with no subscription, or the first one.
+ */
+export async function previousInvoicePublicId(
+  organizationId: string,
+  businessId: string,
+  inv: { subscriptionId: string | null; createdAt: Date },
+): Promise<string | null> {
+  const subscriptionId = inv.subscriptionId;
+  if (!subscriptionId) return null;
+  return withTenant(organizationId, async (tx) => {
+    const [row] = await tx
+      .select({ publicId: invoices.publicId })
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.businessId, businessId),
+          eq(invoices.subscriptionId, subscriptionId),
+          lt(invoices.createdAt, inv.createdAt),
+          ne(invoices.status, "voided"),
+        ),
+      )
+      .orderBy(desc(invoices.createdAt))
+      .limit(1);
+    return row?.publicId ?? null;
   });
 }

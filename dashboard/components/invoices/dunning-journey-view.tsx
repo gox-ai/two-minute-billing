@@ -7,7 +7,8 @@ import type {
   DunningJourneyStep,
 } from "@/lib/api";
 import type { Transaction } from "@/lib/api/payments";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { JourneyMarker, type MarkKind } from "@/components/patterns/journey-marker";
 

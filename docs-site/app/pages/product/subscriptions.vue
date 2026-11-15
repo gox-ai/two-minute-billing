@@ -243,8 +243,8 @@ useMarketingSeo({
       <MkShot
         src="/product/fragments/subscription-items"
         alt="A subscription with a Growth plan and an Extra Seats add-on, and the tax on the next renewal"
-        :width="1556"
-        :height="1156"
+        :width="1339"
+        :height="1134"
       />
     </MkPageZig>
 

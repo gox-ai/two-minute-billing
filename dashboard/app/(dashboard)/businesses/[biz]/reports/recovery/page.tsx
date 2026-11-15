@@ -1,4 +1,5 @@
 import * as React from "react";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import { getReport, listBusinesses, type AnalyticsRange } from "@/lib/api";
 import { listRetries } from "@/lib/api/retries";
 import { requirePermission } from "@/lib/session";
@@ -92,10 +93,7 @@ export default async function RecoveryReportPage({
   } catch (e) {
     return (
       <>
-        <PageHeader
-          title="Recovery"
-          breadcrumbs={[{ label: "Reports", href: `/businesses/${biz}/reports` }]}
-        />
+        <PageHeader title="Recovery" breadcrumbs={reportCrumbs(biz, undefined, "Recovery")} />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -148,14 +146,21 @@ export default async function RecoveryReportPage({
       <PageHeader
         title="Recovery"
         description="Refused charges, the money that dunning recovered, and the campaigns that still run."
-        breadcrumbs={[{ label: "Reports", href: `/businesses/${biz}/reports` }]}
+        breadcrumbs={reportCrumbs(biz, business?.name, "Recovery")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <CurrencyPicker
-              value={currency ?? "ALL"}
-              baseCurrency={baseCurrency}
-              available={currencies}
-            />
+            {currencies.length < 2 ? (
+              // Nothing to choose: a fact, not a control, so plain text and no pill.
+              <span className="text-sm text-muted-foreground">
+                Reported in {currency ?? baseCurrency}
+              </span>
+            ) : (
+              <CurrencyPicker
+                value={currency ?? "ALL"}
+                baseCurrency={baseCurrency}
+                available={currencies}
+              />
+            )}
           </div>
         }
       />

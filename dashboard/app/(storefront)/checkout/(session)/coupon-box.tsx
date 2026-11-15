@@ -5,6 +5,14 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert } from "@/components/ui/alert";
+import { Label } from "@/components/ui/label";
+
+/** A refusal the buyer can act on. The engine's own sentence is the reason when it has one. */
+function couponRefusal(error: string | undefined): string {
+  if (!error || /^No such coupon/.test(error))
+    return "We could not apply this coupon. The code is not correct. Check the code and try again.";
+  return /^We could not/.test(error) ? error : `We could not apply this coupon. ${error}`;
+}
 import { checkoutApplyCouponAction, checkoutRemoveCouponAction } from "./actions";
 
 /**
@@ -21,8 +29,8 @@ import { checkoutApplyCouponAction, checkoutRemoveCouponAction } from "./actions
  * beside them came from the previous render is exactly the parity-that-lies failure — the
  * buyer would read a discount that the amount underneath it did not include.
  *
- * The engine's own sentence is shown verbatim on failure ("No such coupon: FOO"). A buyer
- * has no operator to ask and no log to read; "could not apply" would leave them stuck.
+ * A refusal says why, in the buyer's words: the engine's "No such coupon: FOO" (which the
+ * route maps to a 404 by its prefix, so it stays as it is) becomes "the code is not correct".
  */
 export function CouponBox({
   applied,
@@ -44,7 +52,7 @@ export function CouponBox({
     setBusy("apply");
     const res = await checkoutApplyCouponAction(entered);
     if (!res.ok) {
-      setError(res.error ?? "We could not apply that code.");
+      setError(couponRefusal(res.error));
       setBusy(null);
       return;
     }
@@ -62,7 +70,7 @@ export function CouponBox({
     const res = await checkoutRemoveCouponAction(target);
     setBusy(null);
     if (!res.ok) {
-      setError(res.error ?? "We could not remove that code.");
+      setError(res.error ?? "We could not remove this coupon. Try again.");
       return;
     }
     router.refresh();
@@ -97,30 +105,39 @@ export function CouponBox({
 
       <CouponRefusals refusals={refusals} />
 
-      <form onSubmit={apply} className="flex flex-wrap items-center gap-2">
-        <Input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Coupon code"
-          aria-label="Coupon code"
-          spellCheck={false}
-          maxLength={100}
-          className="h-8 w-48 font-mono text-xs"
-        />
-        {/* `outline`, not a filled button: on a storefront route `--solid` is rewritten to
+      <form onSubmit={apply} className="flex flex-col gap-1.5">
+        <Label htmlFor="checkout-coupon" className="text-sm font-medium">
+          Coupon code
+        </Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="checkout-coupon"
+            value={code}
+            onChange={(e) => {
+              setCode(e.target.value);
+              if (error) setError(null);
+            }}
+            spellCheck={false}
+            autoCapitalize="characters"
+            autoComplete="off"
+            maxLength={100}
+            aria-invalid={error ? true : undefined}
+            className="min-w-0 flex-1"
+          />
+          {/* `outline`, not a filled button: on a storefront route `--solid` is rewritten to
             the MERCHANT's raw brand colour (lib/brand.ts), and a full-strength brand button
             for a secondary action shouts over the one that actually completes the
             checkout. */}
-        <Button type="submit" size="sm" variant="outline" disabled={!code.trim() || !!busy}>
-          {busy === "apply" ? "Applying…" : "Apply"}
-        </Button>
+          <Button type="submit" variant="outline" disabled={!code.trim() || !!busy}>
+            {busy === "apply" ? "Applying…" : "Apply"}
+          </Button>
+        </div>
+        {error ? (
+          <p className="text-xs font-medium text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
       </form>
-
-      {error ? (
-        <Alert tone="error" className="text-xs">
-          {error}
-        </Alert>
-      ) : null}
     </div>
   );
 }

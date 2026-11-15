@@ -7,6 +7,7 @@ import { invoices } from "@db/schema";
 import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { nextInvoiceNumbers } from "./service";
+import { zeroInvoicePaidEvent } from "./zero-invoice-paid";
 
 /** Invoices whose events are emitted at once, each in its own transaction. */
 const EMIT_CONCURRENCY = 8;
@@ -18,8 +19,9 @@ const EMIT_CONCURRENCY = 8;
  *     ONE counter update. Single-flight per business; a crash leaves the batch unnumbered.
  *  2. Emit: lanes claim numbered invoices one at a time (`skip locked`, so concurrent runs share
  *     the work instead of queueing on each other's rows) and emit `invoice_generated` (and
- *     `invoice_paid` when nothing is owed) in the claiming transaction, which also clears
- *     `awaiting_number` and makes the invoice due for collection: each event is emitted once.
+ *     `invoice_paid` when credit covers it, or on a zero total per `zero_invoice_paid_event`) in
+ *     the claiming transaction, which also clears `awaiting_number` and makes the invoice due
+ *     for collection: each event is emitted once.
  *
  * Returns how many invoices it numbered; a full batch means more may be waiting.
  */
@@ -103,6 +105,14 @@ async function emitNextNumbered(organizationId: string, businessId: string): Pro
         ),
       });
       await activatePaidCreditGrants(tx, { organizationId, invoiceId: inv.id });
+    } else if (inv.totalMinor === 0n && inv.status === "paid") {
+      const zero = await zeroInvoicePaidEvent(tx, {
+        organizationId,
+        businessId,
+        oneOff: false,
+        invoice: inv,
+      });
+      if (zero) await emitEvent(tx, zero);
     }
     await emitEvent(tx, {
       organizationId,

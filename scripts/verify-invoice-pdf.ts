@@ -13,7 +13,8 @@
  *   pnpm verify:invoice-pdf
  */
 import { eq } from "drizzle-orm";
-import { withTenant, closeDb } from "@/platform/db";
+import { withTenant, closeDb, systemDb } from "@/platform/db";
+import { publicId } from "@/platform/ids";
 import { createOrganization, createBusiness, updateBusiness } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
@@ -22,13 +23,19 @@ import { createSubscription } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod, createInvoiceFromLines } from "@/modules/invoicing/service";
 import { createFlatTaxRate } from "@/modules/tax/service";
 import { createCoupon, applyCouponToSubscription } from "@/modules/coupons/service";
-import { assembleInvoiceDocument, formatMoney } from "@/modules/invoicing/document";
+import {
+  assembleInvoiceDocument,
+  formatDateInTz,
+  formatDateTimeInTz,
+  formatMoney,
+} from "@/modules/invoicing/document";
 import { assembleCreditNoteDocument } from "@/modules/credit-notes/document";
 import { issueCreditNote } from "@/modules/credit-notes/service";
 import { renderInvoicePdf } from "@/modules/invoicing/invoice-pdf";
 import { renderInvoiceHtml } from "@/modules/invoicing/ops";
-import { subscriptions, invoices, businesses, organizations } from "@db/schema";
+import { subscriptions, invoices, invoiceLineItems, businesses, organizations } from "@db/schema";
 import zlib from "node:zlib";
+import PDFDocument from "pdfkit";
 
 const org = await createOrganization({ name: "Invoice PDF Org" });
 const orgId = org.organization.id;
@@ -736,6 +743,153 @@ checks.push([
   "0239 clearing the column returns the document to its default",
   restoredDoc?.title === "INVOICE" && restoredDoc?.billTo.id === customer.publicId,
 ]);
+
+/**
+ * ── A held renewal prints as a draft ─────────────────────────────────────────
+ * Its usage is not in yet, so it must not read as final or state an amount due. The
+ * strings pdfkit draws are recorded, so the check reads the page, not the bytes.
+ */
+const drawn = async (d: NonNullable<typeof doc>) => {
+  const out: string[] = [];
+  const proto = PDFDocument.prototype as unknown as { text: (...a: unknown[]) => unknown };
+  const text = proto.text;
+  proto.text = function (this: unknown, t: unknown, ...rest: unknown[]) {
+    out.push(String(t));
+    return text.call(this, t, ...rest);
+  };
+  try {
+    await renderInvoicePdf(d);
+  } finally {
+    proto.text = text;
+  }
+  return out;
+};
+const { invoice: heldInv } = await createInvoiceFromLines({
+  organizationId: orgId,
+  businessId: biz.id,
+  customerId: customer.id,
+  currency: "INR",
+  lines: [{ description: "Held renewal charge", amountMinor: 1_000_00n, quantity: 1 }],
+});
+const holdUntil = new Date(Date.UTC(2031, 0, 15, 12));
+await withTenant(orgId, (tx) =>
+  tx.update(invoices).set({ status: "pending", holdUntil }).where(eq(invoices.id, heldInv.id)),
+);
+const heldDoc = await assembleInvoiceDocument(orgId, biz.id, heldInv.publicId);
+// The same payment instruction on both, so its absence on the held draft means something.
+const bank = [
+  {
+    kind: "bank_transfer",
+    title: "Pay by bank transfer",
+    description: "Send the invoice total to this account.",
+    fields: [{ label: "Account number", value: "000111222333" }],
+  },
+];
+const heldText = heldDoc ? (await drawn({ ...heldDoc, paymentInstructions: bank })).join("\n") : "";
+const normalWithBankText = (await drawn({ ...doc, paymentInstructions: bank })).join("\n");
+const normalText = (await drawn(doc)).join("\n");
+checks.push(
+  [
+    "held: the document carries hold_until",
+    heldDoc?.meta.holdUntil?.getTime() === holdUntil.getTime(),
+  ],
+  [
+    "held: the PDF says draft and when it finalizes",
+    heldText.includes("DRAFT") &&
+      heldText.includes(
+        `Draft. Finalizes on ${formatDateTimeInTz(holdUntil, heldDoc!.seller.timezone)}.`,
+      ),
+  ],
+  ["held: no Amount Due and no Invoice Amount", !/Amount Due|Invoice Amount/.test(heldText)],
+  [
+    "held: the total is labelled as not final and there are no payment instructions",
+    heldText.includes("Total so far") &&
+      !heldText.includes("PAY BY BANK TRANSFER") &&
+      !heldText.includes("Account number") &&
+      normalWithBankText.includes("PAY BY BANK TRANSFER") &&
+      normalWithBankText.includes("Account number"),
+  ],
+  [
+    "a normal invoice keeps its title, Amount Due and status",
+    doc.meta.holdUntil === null &&
+      normalText.includes(doc.title) &&
+      normalText.includes("Amount Due") &&
+      normalText.includes("Invoice Amount") &&
+      !normalText.includes("Draft"),
+  ],
+);
+
+// ── Usage paid with credits: information, never a charge ─────────────────────
+// A `credit_usage` line has amount 0. It must not print as a "$0.00" row, and the totals and
+// the tax lines must not read it.
+{
+  const sentence = "Renders: 91. Paid with 85 credits.";
+  // The usage arrived in the period before the invoice's own.
+  const usedFrom = new Date("2026-03-01T00:00:00Z");
+  const usedUntil = new Date("2026-04-01T00:00:00Z");
+  const [invRow] = await systemDb
+    .select({ id: invoices.id })
+    .from(invoices)
+    .where(eq(invoices.publicId, invoice.publicId));
+  await systemDb.insert(invoiceLineItems).values({
+    organizationId: orgId,
+    businessId: biz.id,
+    invoiceId: invRow!.id,
+    publicId: publicId("il"),
+    description: sentence,
+    priceId: null,
+    quantity: 91,
+    unitAmountMinor: 0n,
+    amountMinor: 0n,
+    kind: "credit_usage",
+    periodStart: usedFrom,
+    periodEnd: usedUntil,
+  });
+  const withInfo = await assembleInvoiceDocument(orgId, biz.id, invoice.publicId);
+  const infoText = withInfo ? (await drawn(withInfo)).join("\n") : "";
+  const infoHtml = (await renderInvoiceHtml(orgId, biz.id, invoice.publicId)) ?? "";
+  const usagePeriod = withInfo?.creditUsage?.[0]?.period;
+  const tz = withInfo?.seller.timezone ?? "UTC";
+  // The last day covered, as the Billing Period prints it.
+  const lastDay = new Date(usedUntil.getTime() - 86_400_000);
+  const periodText = `${formatDateInTz(usedFrom, tz)} to ${formatDateInTz(lastDay, tz)}`;
+  checks.push(
+    [
+      "credit usage: the document carries the sentence, outside the charge lines",
+      withInfo?.creditUsage?.length === 1 &&
+        withInfo.creditUsage[0]!.text === sentence &&
+        withInfo.chargeLines.length === doc.chargeLines.length &&
+        withInfo.chargeLines.every((l) => l.description !== sentence),
+    ],
+    [
+      "credit usage: totals and tax lines are unchanged",
+      withInfo?.totals.totalMinor === doc.totals.totalMinor &&
+        withInfo.totals.subtotalMinor === doc.totals.subtotalMinor &&
+        withInfo.taxLines.length === doc.taxLines.length,
+    ],
+    [
+      "credit usage: the PDF prints it under its own heading, with no amount",
+      infoText.includes("USAGE PAID WITH CREDITS") &&
+        infoText.includes(sentence) &&
+        !normalText.includes("USAGE PAID WITH CREDITS"),
+    ],
+    [
+      "credit usage: the document carries the usage period, to its last day",
+      usagePeriod?.start.getTime() === usedFrom.getTime() &&
+        usagePeriod.end.getTime() === lastDay.getTime(),
+    ],
+    [
+      "credit usage: the PDF and the HTML print the usage period",
+      infoText.includes(periodText) && infoHtml.includes(periodText),
+    ],
+    [
+      "credit usage: the HTML states it outside the line table, and adds no table row",
+      infoHtml.includes(`<div>${sentence}</div>`) &&
+        !infoHtml.includes(`<td>${sentence}`) &&
+        (infoHtml.match(/<tr/g) ?? []).length === ((html ?? "").match(/<tr/g) ?? []).length,
+    ],
+  );
+}
 
 let failed = 0;
 for (const [name, ok] of checks) {

@@ -20,6 +20,7 @@ import { parse } from "dotenv";
 export const ROOT_ENV_KEYS = Object.freeze([
   "TMBILLING_API_URL",
   "TMBILLING_PUBLIC_API_URL",
+  "ADVERTISED_API_URL",
   "TMBILLING_EDITION",
   "ALLOW_INSECURE_COOKIES",
   "CSP_REPORT_ONLY",

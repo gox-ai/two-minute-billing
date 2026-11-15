@@ -8,7 +8,7 @@ import { Chip } from "@/components/patterns/chip";
 import { EditDrawer } from "@/components/edit-drawer";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { type EmailTransport, isRealDelivery, transportLabel } from "@/lib/email-types";
 import type { EmailMessage } from "@/lib/api/emails";
 import { resendEmailAction } from "@/app/(dashboard)/businesses/[biz]/emails/actions";

@@ -1,7 +1,14 @@
 import { reportableCustomer } from "./reportable";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
-import { mrrMovements, subscriptions, subscriptionItems, prices, customers } from "@db/schema";
+import {
+  mrrMovements,
+  subscriptions,
+  subscriptionItems,
+  prices,
+  customers,
+  events,
+} from "@db/schema";
 import { zonedDayEndExclusive } from "@/platform/timezones";
 import { notDeleted } from "@/modules/subscriptions/deleted-sql";
 import {
@@ -448,6 +455,10 @@ async function readLedgerAt(tx: Tx, businessId: string, at: Date): Promise<Ledge
  * A reactivation at zero MRR books no movement, so a live row whose last churn has no
  * reactivation after it closes that stretch at `start_date`, which every reactivation
  * re-stamps to its term start.
+ *
+ * A cancel at zero MRR (a trial) books no churn either, so its stretch comes from the
+ * `subscription_canceled` and `subscription_reactivated` events — only where no churn
+ * covers it. The latest one ends at `start_date`; an earlier one at its event.
  */
 export async function loadLapses(
   tx: Tx,
@@ -479,6 +490,35 @@ export async function loadLapses(
         select 1 from ${mrrMovements} r
         where r.subscription_id = s.id and r.reason = 'reactivation' and r.delta_minor > 0
           and r.occurred_at >= c.occurred_at
+      )
+    union all
+    select s.id, c.created_at,
+      case when s.start_date > c.created_at and not exists (
+          select 1 from ${events} n
+          where n.business_id = r.business_id and n.type = 'subscription_reactivated'
+            and n.resource_id = r.resource_id and n.created_at > r.created_at
+        ) then s.start_date else r.created_at end
+    from ${events} r
+    join ${subscriptions} s on s.business_id = r.business_id and s.public_id = r.resource_id
+    cross join lateral (
+      select max(e.created_at) as created_at from ${events} e
+      where e.business_id = r.business_id and e.resource_id = r.resource_id
+        and e.type in ('subscription_canceled', 'subscription_canceled_nonpayment')
+        and e.created_at < r.created_at
+    ) c
+    cross join lateral (
+      select max(p.created_at) as created_at from ${events} p
+      where p.business_id = r.business_id and p.resource_id = r.resource_id
+        and p.type = 'subscription_reactivated' and p.created_at < c.created_at
+    ) prev
+    where r.business_id = ${businessId} and r.type = 'subscription_reactivated'
+      and c.created_at is not null
+      and ${subscriptionInScope(sql`s.id`, businessId, scope)}
+      and not exists (
+        select 1 from ${mrrMovements} m
+        where m.subscription_id = s.id and m.reason = 'churn' and m.delta_minor < 0
+          and m.occurred_at <= r.created_at
+          and m.occurred_at > coalesce(prev.created_at, '-infinity'::timestamptz)
       )
   `)) as unknown as Array<{ subscription_id: string; from_at: string; to_at: string }>;
   const out = new Map<string, Lapse[]>();

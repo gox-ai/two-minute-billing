@@ -26,11 +26,61 @@ const idParam = (description: string) => ({
 const DECIMAL =
   'A decimal string with at most 12 decimal places and no exponent, for example `"0.25"`.';
 const UNIT_AMOUNT = `Minor units (cents for USD) per \`quantity_divisor\` units. ${DECIMAL}`;
+const UNITS = [
+  "token",
+  "request",
+  "image",
+  "video_second",
+  "audio_second",
+  "character",
+  "page",
+  "pixel",
+];
+const unitQuery = q("unit", "Only this unit, for example `audio_second`.", {
+  type: "string",
+  enum: UNITS,
+});
+const kindQuery = [
+  q("token_type", "Only this price kind, for example `input`."),
+  q("price_kind", "The same as `token_type`. Set one of them."),
+];
+const keyFields = {
+  token_type: {
+    type: "string",
+    example: "input",
+    description:
+      "The price kind: `input`, `output`, `cache_read`, `input_document`, … as the source names it.",
+  },
+  price_kind: {
+    type: "string",
+    example: "input",
+    description: "The same value as `token_type`, under its new name.",
+  },
+  unit: {
+    type: "string",
+    enum: UNITS,
+    example: "token",
+    description:
+      "What one unit is. `token` and `request` (counted items such as web searches) are the units the list had first; `audio_second` and `video_second` are seconds.",
+  },
+  quality: {
+    type: "string",
+    nullable: true,
+    example: "hd",
+    description: "The quality tier, such as `hd`. Null = no tier.",
+  },
+  resolution: {
+    type: "string",
+    nullable: true,
+    example: "1024x1024",
+    description: "The resolution tier. Null = no tier.",
+  },
+};
 
 export const MODEL_PRICE_TAG = {
   name: "Model prices",
   description:
-    "A dated price list for AI models (model × token type), refreshed every hour from the " +
+    "A dated price list for AI models (model × price kind × unit), refreshed every hour from the " +
     "public genai-prices list (MIT license) into a table we keep. Prices are USD. Each row " +
     "has two dates: `source_effective_from`, the source's own date, and `effective_from`, the " +
     "instant we apply it from. A change never reprices usage recorded before it. Every usage " +
@@ -45,12 +95,13 @@ export const MODEL_PRICE_PATHS = {
       tags: ["Model prices"],
       summary: "List model prices",
       description:
-        "The list price per model and token type at `as_of` (default now), with your cost in " +
-        "effect at the same instant.",
+        "The list price per model, price kind and unit at `as_of` (default now), with your cost " +
+        "in effect at the same instant.",
       parameters: [
         q("provider", "Only this provider, for example `openai`."),
         q("model", "Only this model id."),
-        q("token_type", "Only this token type, for example `input`."),
+        ...kindQuery,
+        unitQuery,
         q("q", "Text in the model or provider id."),
         q("has_cost", "Only rows with your cost.", { type: "boolean" }),
         q("used", "Only models your meters saw in the last 35 days.", { type: "boolean" }),
@@ -73,11 +124,15 @@ export const MODEL_PRICE_PATHS = {
       tags: ["Model prices"],
       summary: "Price history of a model",
       description:
-        "Every dated list row of a model, both dates on each, and your cost rows for it.",
+        "Every dated list row of a model, both dates on each, and your cost rows for it. Your " +
+        "cost rows match as on the list: a cost stored under an alias of the model is included, " +
+        "and `unit=request` includes `token` costs, which price a request row that has no " +
+        "request cost.",
       parameters: [
         q("model", "The model id.", { type: "string" }, true),
         q("provider", "Only this provider."),
-        q("token_type", "Only this token type."),
+        ...kindQuery,
+        unitQuery,
       ],
       responses: {
         "200": json("ModelPriceHistory", "The model's price history."),
@@ -90,9 +145,10 @@ export const MODEL_PRICE_PATHS = {
       tags: ["Model prices"],
       summary: "Price list source",
       description:
-        "Where the list comes from, its license, and how fresh it is. When `held` is true, a " +
-        "sync changed prices sharply and waits until the source keeps them for 6 hours; bills " +
-        "use the last prices until then.",
+        "Where the list comes from, its license, and how fresh it is, for each feed in " +
+        "`sources`. When `held` is true, a sync changed prices sharply (or the two feeds give " +
+        "one price more than 25% apart) and waits until the source keeps them for 6 hours; " +
+        "bills use the last prices until then.",
       responses: { "200": json("ModelPriceSource", "The source state.") },
     },
   },
@@ -127,7 +183,15 @@ export const MODEL_PRICE_PATHS = {
       parameters: [
         q("model", "Only this model."),
         q("provider", "Only this provider."),
-        q("token_type", "Only this token type."),
+        ...kindQuery,
+        unitQuery,
+        q("q", "Text in the model or provider id."),
+        q(
+          "listed",
+          "`false`: only costs whose model, price kind, unit and tier have no row on the price " +
+            "list, so `GET /v1/organization/model_prices` does not show them. `true`: only the others.",
+          { type: "boolean" },
+        ),
         q("limit", "Page size, 1–500 (default 100).", { type: "integer" }),
         q("starting_after", "Cursor: the last row's `id` from the previous page."),
       ],
@@ -137,7 +201,8 @@ export const MODEL_PRICE_PATHS = {
       tags: ["Model prices"],
       summary: "Set your cost",
       description:
-        "Record the price you pay for a model and token type. It starts now or later and never " +
+        "Record the price you pay for a model, price kind and unit, with an optional quality or " +
+        "resolution tier. It starts now or later and never " +
         "reaches back over usage that is already costed. To change a cost, end the current row " +
         "and add a new one. The model can be one the list does not have. Needs `model_prices:manage`.",
       requestBody: {
@@ -215,7 +280,7 @@ const costFields = {
     description: "Null = this model under any provider.",
   },
   model: { type: "string", description: "The model id or name, as your events send it." },
-  token_type: { type: "string", example: "input" },
+  ...keyFields,
   currency: { type: "string", example: "USD" },
   unit_amount_decimal: { type: "string", example: "200", description: UNIT_AMOUNT },
   quantity_divisor: { type: "integer", example: 1000000 },
@@ -228,17 +293,14 @@ const modelPrice = {
     id: { type: "string", example: "mpr_…" },
     provider: { type: "string", example: "openai" },
     model: { type: "string", example: "gpt-4o" },
-    token_type: {
-      type: "string",
-      example: "input",
-      description: "`input`, `output`, `cache_read`, `cache_write`, … as the source names them.",
-    },
+    ...keyFields,
     currency: { type: "string", example: "USD" },
     unit_amount_decimal: { type: "string", example: "250", description: UNIT_AMOUNT },
     quantity_divisor: {
       type: "integer",
       example: 1000000,
-      description: "1,000,000 for tokens; 1,000 for counted items such as web searches.",
+      description:
+        "1,000,000 for tokens and characters; 1,000 for requests and pages; 3,600 for audio priced per hour.",
     },
     effective_from: {
       type: "string",
@@ -252,7 +314,11 @@ const modelPrice = {
       nullable: true,
       description: "The source's own date for this price.",
     },
-    source: { type: "string", example: "genai-prices" },
+    source: {
+      type: "string",
+      example: "genai-prices",
+      description: "Who published the price: `genai-prices`, or `litellm` for a media price.",
+    },
     source_version: { type: "string", nullable: true },
     rounded: {
       type: "boolean",
@@ -331,6 +397,26 @@ export const MODEL_PRICE_SCHEMAS = {
       held: { type: "boolean" },
       next_check_at: { type: "string", format: "date-time" },
       providers: { type: "array", items: { type: "string" } },
+      sources: {
+        type: "array",
+        description:
+          "Every feed of the list, each with its own state. The top-level fields are the first " +
+          "feed. The second gives image, video, audio and character prices; when both give one, " +
+          "the list uses the second.",
+        items: {
+          type: "object",
+          properties: {
+            source: { type: "string", example: "litellm" },
+            url: { type: "string" },
+            licence: { type: "string" },
+            prices: { type: "string", enum: ["all", "media"] },
+            checked_at: { type: "string", format: "date-time", nullable: true },
+            last_success_at: { type: "string", format: "date-time", nullable: true },
+            check_error: { type: "string", nullable: true },
+            upstream_version: { type: "string", nullable: true },
+          },
+        },
+      },
     },
   },
   ModelPriceDriftList: {
@@ -372,9 +458,34 @@ export const MODEL_PRICE_SCHEMAS = {
   ModelCostOverrideCreate: {
     type: "object",
     additionalProperties: false,
-    required: ["model", "token_type", "currency", "unit_amount_decimal", "quantity_divisor"],
+    required: ["model", "currency", "unit_amount_decimal", "quantity_divisor"],
     properties: {
       ...costFields,
+      token_type: {
+        ...keyFields.token_type,
+        description: "The price kind. Required unless you set `price_kind`.",
+      },
+      price_kind: {
+        ...keyFields.price_kind,
+        description: "The same as `token_type`. Set one of them.",
+      },
+      unit: { ...keyFields.unit, description: "What one unit is. Default `token`." },
+      quality: {
+        type: "string",
+        nullable: true,
+        maxLength: 40,
+        example: "hd",
+        description:
+          "The quality tier, such as `hd`: letters, digits, `_`, `.` and `-`. We trim it and store " +
+          "it in lower case. Default none.",
+      },
+      resolution: {
+        type: "string",
+        nullable: true,
+        maxLength: 40,
+        example: "1024x1024",
+        description: "The resolution tier, in the same characters. Default none.",
+      },
       quantity_divisor: {
         oneOf: [{ type: "integer", minimum: 1 }, { type: "string" }],
         description: "Units the amount is for: 1000000 (per 1M), 1000 (per 1K) or 1.",

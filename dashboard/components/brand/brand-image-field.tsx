@@ -42,7 +42,10 @@ export function BrandImageField({
   upload,
   placeholder,
   className,
+  bare,
 }: {
+  /** Control only: no label or help, for a row that supplies its own. */
+  bare?: boolean;
   /** The owning business, or null for the organization's own image. */
   biz: string | null;
   asset: BrandAsset;
@@ -90,48 +93,57 @@ export function BrandImageField({
     }
   }
 
-  return (
-    <Field name={name} label={label} help={help} error={error ?? undefined} className={className}>
-      {/* An explicit id so `Field` does not clone one onto this wrapper — the label must
-          point at the text input, not at the group. */}
-      <div id={`${name}-group`} className="flex items-center gap-2">
-        <Input
-          id={name}
-          name={name}
-          type="url"
-          value={value}
-          onChange={(e) => onValueChange(e.target.value)}
-          maxLength={2000}
-          placeholder={placeholder}
-        />
-        {upload.uploadEnabled ? (
-          <>
-            {/* Hidden native file input driven by the styled Button: `verify:ui` bans a
+  const row = (
+    <div id={`${name}-group`} className="flex items-center gap-2">
+      <Input
+        id={name}
+        name={name}
+        type="url"
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+        maxLength={2000}
+        placeholder={placeholder}
+        className={bare ? "min-w-0 flex-1 sm:w-72 sm:flex-none" : undefined}
+      />
+      {upload.uploadEnabled ? (
+        <>
+          {/* Hidden native file input driven by the styled Button: `verify:ui` bans a
                 native select/checkbox/radio, and a file input has no primitive — this is
                 the standard way to keep the visible control a Button. */}
-            <input
-              ref={fileRef}
-              type="file"
-              accept={accepts.join(",")}
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void store(file);
-              }}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
-            >
-              <Upload className="size-3.5" aria-hidden />
-              {busy ? "Uploading…" : "Upload"}
-            </Button>
-          </>
-        ) : null}
+          <input
+            ref={fileRef}
+            type="file"
+            accept={accepts.join(",")}
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void store(file);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Upload className="size-3.5" aria-hidden />
+            {busy ? "Uploading…" : "Upload"}
+          </Button>
+        </>
+      ) : null}
+    </div>
+  );
+  if (bare)
+    return (
+      <div className="min-w-0">
+        {row}
+        {error ? <p className="mt-1.5 text-xs font-medium text-destructive">{error}</p> : null}
       </div>
+    );
+  return (
+    <Field name={name} label={label} help={help} error={error ?? undefined} className={className}>
+      {row}
     </Field>
   );
 }

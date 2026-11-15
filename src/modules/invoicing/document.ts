@@ -280,6 +280,11 @@ export interface InvoiceDocument {
      * against AND a rate was recorded.
      */
     exchangeRate: { base: string; rate: string; currency: string } | null;
+    /**
+     * A held renewal (usage grace): the pending invoice finalizes at this instant, so the
+     * document prints as a draft with no amount due. Null on every other invoice.
+     */
+    holdUntil: Date | null;
   };
   /**
    * Merchant-picked custom fields (`custom_field_definitions.show_on_invoice`), already
@@ -310,6 +315,13 @@ export interface InvoiceDocument {
     description: string | null;
     fields: Array<{ label: string; value: string }>;
   }>;
+  /**
+   * Usage that credits paid (line kind `credit_usage`, amount 0): information, one sentence
+   * per meter. Not a charge: it has no row in the line-item table, no amount and no tax.
+   * `period` is when the usage arrived, which is not the invoice's billing period; `end` is
+   * the last day covered, as in the Billing Period.
+   */
+  creditUsage?: Array<{ text: string; period: { start: Date; end: Date } | null }>;
   chargeLines: Array<{
     description: string;
     period: { start: Date; end: Date } | null;
@@ -1220,11 +1232,21 @@ export async function assembleInvoiceDocument(
         relatedInvoiceDate: null,
         creditNoteNumbers,
         exchangeRate: printedExchangeRate(custom, inv),
+        holdUntil: inv.status === "pending" ? inv.holdUntil : null,
       },
       customFields,
       signature: signatureBlock(custom),
       paymentInstructions: paymentInstructionsForDoc,
       chargeLines,
+      creditUsage: lines
+        .filter((l) => l.kind === "credit_usage")
+        .map((l) => ({
+          text: l.description,
+          period:
+            l.periodStart && l.periodEnd
+              ? { start: l.periodStart, end: new Date(l.periodEnd.getTime() - 86_400_000) }
+              : null,
+        })),
       discountLines,
       discountDetails,
       taxLines,

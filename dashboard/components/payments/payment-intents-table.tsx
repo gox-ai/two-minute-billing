@@ -10,16 +10,20 @@ import {
 } from "@/components/patterns/list-page";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
 import { makeListSource } from "@/lib/list-source";
-import { IdCell, MoneyCell, TextCell } from "@/components/patterns/list-cells";
+import Link from "next/link";
+import { MoneyCell, TextCell } from "@/components/patterns/list-cells";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { Chip, StatusChip } from "@/components/patterns/chip";
+import { declineReading } from "@/lib/decline-reading";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { CustomerInfoCell } from "@/components/patterns/customer-info-cell";
 import { displayIntentStatus } from "@/lib/payment-intent-status";
 import { useBusinessTz } from "@/components/business-tz";
 import type { PaymentIntentRow } from "@/lib/api/payments";
 import { Wallet } from "lucide-react";
-import { GatewayLabel } from "@/components/partner-logo";
+import { distinctAccountLabel, GatewayLabel } from "@/components/partner-logo";
+import { gatewayDisplayName, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
 
 /**
  * `customer_name` on this row is ALREADY the engine's resolved `accountHolderName`
@@ -52,10 +56,13 @@ export function PaymentIntentsTable({
   total,
   hasMore,
   nextCursor,
+  gatewayCatalog,
 }: {
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
   biz: string;
+  /** Names the gateway ("TM Test Gateway", not the key). */
+  gatewayCatalog: GatewayCatalogEntry[];
   rows: PaymentIntentRow[];
   total: number;
   hasMore: boolean;
@@ -68,21 +75,19 @@ export function PaymentIntentsTable({
     () => [
       {
         id: "intent",
-        header: "Payment Intent",
+        header: "Payment intent",
         accessorFn: (r) => r.id,
-        // The href was dropped when the old create/inspect tool (`?pi=`) was
-        // deleted, with a note that it returns once a real detail route exists.
-        // It does now — `/payment_intents/[pi]`.
-        //
-        // Ellipsised: `pi_…` ids are 28 chars, and at full width this column alone
-        // pushed the table 65px past its container (measured). The whole id stays
-        // in the title tooltip and on the detail page it links to.
+        // The phone row's title stays the id: "Last error" takes the spare width.
+        meta: { phone: "title" },
+        // Middle ellipsis: ids are time-ordered, so they share their first characters
+        // and differ at the end. The full id is in the tooltip and on the detail page.
         cell: ({ row }) => (
-          <IdCell
-            id={row.original.id}
+          <Link
             href={`/businesses/${biz}/payment_intents/${row.original.id}`}
-            width="max-w-40"
-          />
+            className="flex max-w-28 text-muted-foreground hover:text-primary hover:underline"
+          >
+            <MiddleEllipsis value={row.original.id} className="text-xs" />
+          </Link>
         ),
       },
       {
@@ -113,6 +118,49 @@ export function PaymentIntentsTable({
         cell: ({ row }) => <StatusChip status={displayIntentStatus(row.original)} />,
       },
       {
+        id: "last_error",
+        header: "Last error",
+        enableSorting: false,
+        accessorFn: (r) =>
+          [
+            declineReading(r.last_error?.code, r.last_error?.message),
+            r.last_error?.message,
+            r.last_error?.code,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        // The one column that takes the spare width, so the list fits its card: the
+        // message wraps to whatever is left, and a long code breaks only when it must.
+        meta: { grow: true },
+        // Why the newest attempt failed: the message, then the gateway's code under it,
+        // as the transactions list shows it. Wraps rather than cuts.
+        cell: ({ row }) => {
+          const err = row.original.last_error;
+          if (!err?.message && !err?.code) return <TextCell />;
+          const reading = declineReading(err.code, err.message);
+          return (
+            <span className="flex flex-col gap-0.5">
+              {/* Our reading first; the gateway's own words always stay under it. */}
+              {reading ? (
+                <span className="block max-w-80 text-sm/6 font-medium whitespace-normal">
+                  {reading}
+                </span>
+              ) : null}
+              {err.message ? (
+                <span className="block min-h-6 max-w-80 text-sm/6 wrap-break-word whitespace-normal">
+                  {err.message}
+                </span>
+              ) : null}
+              {err.code ? (
+                <span className="flex min-h-5 items-center font-mono text-xs wrap-anywhere whitespace-normal text-muted-foreground">
+                  {err.code}
+                </span>
+              ) : null}
+            </span>
+          );
+        },
+      },
+      {
         id: "purpose",
         header: "Type",
         accessorFn: (r) => r.purpose,
@@ -124,7 +172,7 @@ export function PaymentIntentsTable({
         id: "amount",
         header: "Amount",
         accessorFn: (r) => r.amount_minor ?? 0,
-        meta: { align: "right" },
+        meta: { align: "right", phone: "aside" },
         cell: ({ row }) => {
           const { amount_minor: amt, currency } = row.original;
           // Blank, not $0.00 — an intent may predate knowing the amount.
@@ -149,7 +197,7 @@ export function PaymentIntentsTable({
       },
       {
         id: "payment_method",
-        header: "Payment Method",
+        header: "Payment method",
         accessorFn: (r) =>
           [r.payment_method_brand, r.payment_method_last4].filter(Boolean).join(" "),
         cell: ({ row }) => {
@@ -168,25 +216,25 @@ export function PaymentIntentsTable({
       {
         id: "gateway",
         header: "Gateway",
-        accessorFn: (r) => [r.gateway_key, r.gateway_account_label].filter(Boolean).join(" "),
-        // The gateway stacks over the gateway ACCOUNT ("Stripe" / "Stripe-1")
-        // because a business can hold several accounts on one gateway.
-        // `serializePaymentIntentRow` supplies both; the account line
-        // falls back to its public id when the account carries no label, and
-        // disappears entirely when the intent has no account (it is nullable).
+        accessorFn: (r) =>
+          [
+            r.gateway_key && gatewayDisplayName(r.gateway_key, gatewayCatalog),
+            r.gateway_account_label,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        // The logo, with the gateway ACCOUNT under it ("Stripe-1") only when its label
+        // differs from the gateway's name: a business can hold several accounts on one
+        // gateway, but "Stripe" under the Stripe logo says nothing new.
         cell: ({ row }) => {
-          const {
-            gateway_key: key,
-            gateway_account: acct,
-            gateway_account_label: label,
-          } = row.original;
+          const { gateway_key: key, gateway_account_label: label } = row.original;
           if (!key) return <TextCell />;
+          const name = gatewayDisplayName(key, gatewayCatalog);
+          const account = distinctAccountLabel(key, label, name);
           return (
             <div className="flex flex-col gap-0.5">
-              <GatewayLabel gatewayKey={key} className="text-sm capitalize" />
-              {label || acct ? (
-                <span className="text-xs text-muted-foreground">{label ?? acct}</span>
-              ) : null}
+              <GatewayLabel gatewayKey={key} name={name} className="text-sm" />
+              {account ? <span className="text-xs text-muted-foreground">{account}</span> : null}
             </div>
           );
         },
@@ -197,7 +245,7 @@ export function PaymentIntentsTable({
         accessorFn: (r) => r.expires_at ?? "",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.expires_at ? fmtDateTimeShort(row.original.expires_at, tz) : null}
+            {row.original.expires_at ? fmtDateTime(row.original.expires_at, tz) : null}
           </TextCell>
         ),
       },
@@ -205,10 +253,10 @@ export function PaymentIntentsTable({
         accessorKey: "created_at",
         id: "created_at",
         header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
     ],
-    [biz, tz],
+    [biz, tz, gatewayCatalog],
   );
 
   /**
@@ -223,11 +271,11 @@ export function PaymentIntentsTable({
    */
   const segments = React.useMemo<ListSegment<PaymentIntentRow>[]>(
     () => [
-      { id: "all", label: "All Payment Intents" },
-      { id: "inited", label: "Inited", filters: [{ field: "status", op: "is", value: "inited" }] },
+      { id: "all", label: "All payment intents" },
+      { id: "inited", label: "Open", filters: [{ field: "status", op: "is", value: "inited" }] },
       {
         id: "in_progress",
-        label: "In Progress",
+        label: "In progress",
         filters: [{ field: "status", op: "is", value: "in_progress" }],
       },
       {
@@ -237,7 +285,7 @@ export function PaymentIntentsTable({
       },
       {
         id: "consumed",
-        label: "Consumed",
+        label: "Used",
         filters: [{ field: "status", op: "is", value: "consumed" }],
       },
       {
@@ -284,10 +332,10 @@ export function PaymentIntentsTable({
         type: "select",
         group: "Status",
         options: [
-          { value: "inited", label: "Inited" },
+          { value: "inited", label: "Open" },
           { value: "in_progress", label: "In progress" },
           { value: "authorized", label: "Authorized" },
-          { value: "consumed", label: "Consumed" },
+          { value: "consumed", label: "Used" },
           { value: "expired", label: "Expired" },
           { value: "voided", label: "Voided" },
         ],
@@ -311,7 +359,7 @@ export function PaymentIntentsTable({
   return (
     <ListPage
       page={page}
-      entity={{ singular: "Payment Intent", plural: "Payment Intents" }}
+      entity={{ singular: "Payment intent", plural: "Payment intents" }}
       columns={columns}
       data={rows}
       server={{ total, hasMore, nextCursor, fetchPage }}
@@ -338,8 +386,17 @@ export function PaymentIntentsTable({
        * reference viewport, un-hiding it makes the table 1411px in a 1204px wrapper
        * — 207px over, 9 cells clipped. Keep it hidden until something else gives up
        * room.
+       *
+       * 2026-11-13: "Last error" (on by default) cost 280px and pushed Gateway and
+       * Created out of a 1068px wrapper at a 1440px window. `purpose` and
+       * `attempt_count` gave up the room: the status chip and the error now say what
+       * the attempt count used to hint at. Both stay in the column chooser.
+       *
+       * `gateway` goes too, as on transactions and gateway requests: the table was
+       * still 31px over at 1440 and cut Gateway and Created at 1280 (910px card).
+       * "Last error" is now the grow column, so it absorbs what is left.
        */
-      initialHidden={["expires_at", "payment_method"]}
+      initialHidden={["expires_at", "payment_method", "purpose", "attempt_count", "gateway"]}
       emptyState={
         <EmptyState
           icon={<Wallet />}

@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Field } from "@/components/form/field";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { money } from "@/lib/format";
@@ -63,7 +65,7 @@ export function CatalogAddModal({
   confirmLabel,
   startAt,
 }: {
-  /** Link text and dialog title — "Add Plan" / "Add Recurring Addon" / "Add Charge". */
+  /** Link text and dialog title — "Add plan" / "Add recurring addon" / "Add charge". */
   label: string;
   /** Candidate products, already filtered to the right kind + applicability. */
   products: Product[];
@@ -204,11 +206,14 @@ export function CatalogAddModal({
           if (!next && !product) close();
         }}
       >
-        <DialogContent className="gap-0 p-0">
-          <DialogHeader className="border-b p-4">
+        <DialogContent className="gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4 pr-12">
             <DialogTitle>{label}</DialogTitle>
+            <DialogDescription>
+              Select a product from the catalog. Then select its price.
+            </DialogDescription>
           </DialogHeader>
-          <div className="border-b p-3">
+          <div className="border-b px-6 py-3">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -223,17 +228,23 @@ export function CatalogAddModal({
           </div>
           <div className="max-h-80 overflow-y-auto">
             {candidates.length === 0 ? (
-              <p className="p-5 text-sm text-muted-foreground">No matching catalog items.</p>
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                No catalog items match the search.
+              </p>
             ) : (
               candidates.map((p) => (
                 <button
                   key={p.id}
                   type="button"
                   onClick={() => openConfig(p)}
-                  className="flex w-full items-center justify-between gap-3 border-b px-4 py-3 text-left text-sm transition-colors last:border-0 hover:bg-muted/50"
+                  className="flex w-full flex-col items-start gap-0.5 border-b px-6 py-3 text-left transition-colors last:border-0 hover:bg-muted/50"
                 >
-                  <span className="truncate font-medium">{p.id}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{p.name}</span>
+                  <span className="w-full truncate text-sm font-medium">{p.name || p.id}</span>
+                  {p.name && p.name !== p.id ? (
+                    <span className="w-full truncate font-mono text-xs text-muted-foreground">
+                      {p.id}
+                    </span>
+                  ) : null}
                 </button>
               ))
             )}
@@ -243,8 +254,8 @@ export function CatalogAddModal({
 
       {/* Step 2 — configure the pick */}
       <Dialog open={product !== null} onOpenChange={(next) => !next && close()}>
-        <DialogContent className="gap-0 p-0">
-          <DialogHeader className="border-b p-4">
+        <DialogContent className="gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4 pr-12">
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -261,7 +272,7 @@ export function CatalogAddModal({
               >
                 <ChevronLeft className="size-4" />
               </Button>
-              <DialogTitle>Configure &apos;{product?.id}&apos;</DialogTitle>
+              <DialogTitle className="min-w-0 truncate">{product?.name || product?.id}</DialogTitle>
             </div>
             <DialogDescription>
               {currencies.length > 1
@@ -273,27 +284,27 @@ export function CatalogAddModal({
             {/* Only a real choice is offered: on a change the subscription's currency
                 is already fixed, so this step would be a one-option select. */}
             {currencies.length > 1 ? (
-              <div className="space-y-1.5">
-                <span className="text-sm font-medium">Currency</span>
+              <Field name="catalog_currency" label="Currency">
                 <SelectField
+                  id="catalog_currency"
                   value={currency}
                   onValueChange={(value) => {
                     setCurrency(value);
                     setInterval("");
                   }}
                   ariaLabel="Currency"
-                  placeholder="Select"
+                  placeholder="Select a currency"
                   options={currencies.map((c) => ({ value: c, label: c }))}
                 />
-              </div>
+              </Field>
             ) : null}
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium">Billing frequency</span>
+            <Field name="catalog_interval" label="Billing frequency">
               <SelectField
+                id="catalog_interval"
                 value={interval}
                 onValueChange={setInterval}
                 ariaLabel="Billing frequency"
-                placeholder="Select"
+                placeholder={currency ? "Select a billing frequency" : "Select a currency first"}
                 disabled={!currency}
                 options={intervals.map((p) => ({
                   value: intervalKey(p),
@@ -306,7 +317,7 @@ export function CatalogAddModal({
                   })(),
                 }))}
               />
-            </div>
+            </Field>
             {product && productPrices.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {productById.get(product.id)?.name ?? product.id} has no price that you can add
@@ -314,9 +325,9 @@ export function CatalogAddModal({
               </p>
             ) : null}
           </div>
-          <div className="flex justify-end gap-2 border-t p-4">
+          <DialogFooter className="border-t px-6 py-4">
             <Button type="button" variant="outline" onClick={close}>
-              Close
+              Cancel
             </Button>
             <Button
               type="button"
@@ -329,7 +340,7 @@ export function CatalogAddModal({
             >
               {confirmLabel ?? "Add"}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

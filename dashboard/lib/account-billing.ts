@@ -19,6 +19,8 @@ export interface PlanPrice {
   interval: "month" | "year";
   amount_minor: number;
   volume_limit_minor: number | null;
+  /** The assistant's monthly allowance on our model, in US cents. */
+  assistant_allowance_usd_cents?: number;
 }
 
 export interface AccountBilling {
@@ -47,6 +49,16 @@ export interface AccountBilling {
   /** This month's volume is above `limit_minor`. A notice only. */
   over_limit: boolean;
   usage: { volume_minor: number | null; from: string; to: string; note: string | null };
+  /**
+   * A campaign's discount on the first paid plan, applied at checkout. `ends_at` null: it does
+   * not end for this organization. Absent on an older back-office.
+   */
+  offer?: {
+    name: string;
+    percent_off: number;
+    intervals: Array<"month" | "year">;
+    ends_at: string | null;
+  } | null;
 }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {

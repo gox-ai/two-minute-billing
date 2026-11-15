@@ -35,4 +35,4 @@ export function roleOfResult(
  * `FLOOR`/`SPAN`. `hero` is pinned to the full row: fourteen columns at quarter
  * width is not a small table, it is an unreadable one.
  */
-export const HERO_MIN_SPAN = "md:col-span-2 xl:col-span-4";
+export const HERO_MIN_SPAN = "md:col-span-2 @min-[56.875rem]/main:col-span-4";

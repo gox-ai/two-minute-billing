@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE } from "@/lib/auth-cookies";
 import { forwardedFor } from "@/lib/forwarded-for";
+import { signInUrl } from "@/lib/sign-in-url";
 
 /**
  * The organization's "Require two-factor authentication" setting (0329), for Settings →
@@ -25,11 +26,9 @@ export interface OrganizationSecurity {
   members_blocked: number;
   caller_has_two_factor: boolean;
   caller_role?: string;
-  /** The organization's own session policy (0482). Null = the installation value. */
-  session_idle_minutes?: number | null;
-  session_absolute_ttl_hours?: number | null;
+  /** The organization's own 2FA roles (0482), added to the installation's. */
   mfa_required_roles?: string[];
-  /** The installation values the policy can only tighten. */
+  /** The installation values. Only the 2FA roles can be extended by the organization. */
   deployment?: {
     session_idle_minutes: number;
     session_absolute_ttl_hours: number;
@@ -40,7 +39,7 @@ export interface OrganizationSecurity {
 /** Null when the engine could not answer; the card says so rather than guessing a state. */
 export async function getOrganizationSecurity(): Promise<OrganizationSecurity | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   try {
     const res = await fetch(`${BASE}/auth/organization/security`, {
       headers: { cookie: `${SESSION_COOKIE}=${token}`, ...(await forwardedFor()) },

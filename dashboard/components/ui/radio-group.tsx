@@ -37,7 +37,8 @@ function RadioGroupItem({
     <RadioGroupPrimitive.Item
       data-slot="radio-group-item"
       className={cn(
-        "touch-target relative aspect-square size-4 shrink-0 rounded-full border border-input bg-card shadow-xs transition-[color,box-shadow] outline-none",
+        // The ring closes in on the spring when selected.
+        "touch-target relative aspect-square size-4 shrink-0 rounded-full border border-input bg-card shadow-xs transition-[color,box-shadow,border-color,border-width] duration-(--dur) ease-(--ease-spring) outline-none",
         "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
         "data-[state=checked]:border-4 data-[state=checked]:border-solid",
         "disabled:cursor-not-allowed disabled:opacity-50",
@@ -67,6 +68,7 @@ function RadioOption({
   hint,
   icon,
   disabled,
+  card,
   className,
 }: {
   value: string;
@@ -75,6 +77,8 @@ function RadioOption({
   /** Decorative glyph between the radio and the label. */
   icon?: React.ReactNode;
   disabled?: boolean;
+  /** A bordered card; a click anywhere on it selects the option. */
+  card?: boolean;
   className?: string;
 }) {
   const id = React.useId();
@@ -83,6 +87,8 @@ function RadioOption({
       className={cn(
         "grid items-start gap-x-3 gap-y-1",
         icon ? "grid-cols-[1rem_auto_1fr]" : "grid-cols-[1rem_1fr]",
+        card &&
+          "relative rounded-xl border bg-card p-4 transition-colors has-data-[state=checked]:border-primary has-data-[state=checked]:shadow-[inset_0_0_0_1px_var(--primary)]",
         className,
       )}
     >
@@ -99,12 +105,22 @@ function RadioOption({
       ) : null}
       <label
         htmlFor={id}
-        className={cn("text-sm font-medium", disabled ? "opacity-50" : "cursor-pointer")}
+        className={cn(
+          "text-sm font-medium",
+          disabled ? "opacity-50" : "cursor-pointer",
+          card && "after:absolute after:inset-0 after:rounded-xl",
+        )}
       >
         {label}
       </label>
       {hint ? (
-        <p className={cn("text-xs text-muted-foreground", icon ? "col-start-3" : "col-start-2")}>
+        <p
+          className={cn(
+            "text-xs text-muted-foreground",
+            icon ? "col-start-3" : "col-start-2",
+            disabled && "opacity-50",
+          )}
+        >
           {hint}
         </p>
       ) : null}
@@ -117,6 +133,8 @@ export interface RadioFieldOption {
   label: React.ReactNode;
   hint?: React.ReactNode;
   disabled?: boolean;
+  /** Decorative glyph beside the label (`variant="cards"` only). */
+  icon?: React.ReactNode;
 }
 
 /**
@@ -135,6 +153,7 @@ function RadioField({
   onValueChange,
   className,
   ariaLabel,
+  variant = "list",
 }: {
   name?: string;
   options: RadioFieldOption[];
@@ -143,6 +162,8 @@ function RadioField({
   onValueChange?: (value: string) => void;
   className?: string;
   ariaLabel?: string;
+  /** `cards`: each option is a bordered card, side by side from 640px. */
+  variant?: "list" | "cards";
 }) {
   const [internal, setInternal] = useDefaultState(defaultValue);
   const isControlled = controlledValue !== undefined;
@@ -168,7 +189,7 @@ function RadioField({
         value={current}
         onValueChange={handle}
         aria-label={ariaLabel}
-        className={className}
+        className={cn(variant === "cards" && "grid-cols-1 gap-3 sm:grid-cols-2", className)}
       >
         {options.map((o) => (
           <RadioOption
@@ -177,6 +198,8 @@ function RadioField({
             label={o.label}
             hint={o.hint}
             disabled={o.disabled}
+            icon={variant === "cards" ? o.icon : undefined}
+            card={variant === "cards"}
           />
         ))}
       </RadioGroup>

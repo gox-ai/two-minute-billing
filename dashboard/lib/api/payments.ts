@@ -100,6 +100,9 @@ export interface Transaction {
     currency: string | null;
   } | null;
   invoice: string | null;
+  /** Display number of that invoice (INV-229). Null on an older engine. */
+  invoice_number?: string | null;
+  credit_note_number?: string | null;
   customer: string | null;
   customer_email: string | null;
   customer_name: string | null;
@@ -215,6 +218,8 @@ export interface PaymentIntentRow {
   gateway_account_label: string | null;
   payment_method_brand: string | null;
   payment_method_last4: string | null;
+  /** The newest attempt's error, only when that attempt failed. */
+  last_error: { code: string | null; message: string | null } | null;
 }
 
 export function listPaymentIntents(

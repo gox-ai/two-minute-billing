@@ -5,10 +5,14 @@ import {
   listAuditLogsPage,
   getAuditRecord,
   businessPublicIds,
+  sessionActors,
+  sessionChannel,
   AUDIT_FILTER_OPS,
   AUDIT_SORT_FIELDS,
   type AuditBlock,
+  type SessionActor,
 } from "@/modules/audit/service";
+import { accountHolderName } from "@/modules/customers/names";
 import { resolveBusiness, parseListQuery, listResponse, notFound, requirePerm } from "./helpers";
 
 /**
@@ -23,7 +27,11 @@ import { resolveBusiness, parseListQuery, listResponse, notFound, requirePerm } 
  * is the wrong trade. `null` is meaningful and common — an org-global action (an API
  * key rotation, a cross-business admin change) belongs to no business.
  */
-function serialize(a: typeof auditLogs.$inferSelect, businessPublicId?: string | null) {
+function serialize(
+  a: typeof auditLogs.$inferSelect,
+  businessPublicId?: string | null,
+  sessions?: Map<string, SessionActor>,
+) {
   return {
     object: "audit_log",
     business_id: businessPublicId ?? null,
@@ -42,6 +50,24 @@ function serialize(a: typeof auditLogs.$inferSelect, businessPublicId?: string |
     // what the detail route groups into a single record with a block per resource.
     trace_id: a.traceId ?? null,
     created_at: a.createdAt,
+    ...actorDetail(a, sessions),
+  };
+}
+
+/**
+ * Additive fields for a buyer's own action. `actor` stays the raw session id; `channel`
+ * names the hosted page and `actor_customer` the customer behind the session, or null
+ * when the session has none (deleted, or never attached). Absent on the record route.
+ */
+function actorDetail(a: typeof auditLogs.$inferSelect, sessions?: Map<string, SessionActor>) {
+  if (!sessions) return {};
+  const channel = sessionChannel(a.actor);
+  const hit = channel && a.actor ? sessions.get(a.actor) : undefined;
+  // A session of another business never names this row's customer.
+  const c = hit && hit.businessId === a.businessId ? hit.customer : null;
+  return {
+    channel,
+    actor_customer: c ? { id: c.publicId, name: accountHolderName(c) } : null,
   };
 }
 
@@ -87,9 +113,13 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
       // emitted at all: the dashboard's list declared the column, so every row rendered
       // its Business as "—" and the row could not link to its own record page.
       const ids = [...new Set(page.data.map((r) => r.businessId).filter((v): v is string => !!v))];
-      const names = await businessPublicIds(req.organization!.id, ids);
+      const actors = page.data.map((r) => r.actor);
+      const [names, sessions] = await Promise.all([
+        businessPublicIds(req.organization!.id, ids),
+        sessionActors(req.organization!.id, actors),
+      ]);
       return listResponse(page, (a) =>
-        serialize(a, a.businessId ? (names.get(a.businessId) ?? null) : null),
+        serialize(a, a.businessId ? (names.get(a.businessId) ?? null) : null, sessions),
       );
     },
   );
@@ -114,7 +144,12 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
         businessId: business.id,
         customer: customer ? String(customer) : undefined,
       });
-      return listResponse(page, (a) => serialize(a, business.publicId));
+      const sessions = await sessionActors(
+        req.organization!.id,
+        page.data.map((r) => r.actor),
+        business.id,
+      );
+      return listResponse(page, (a) => serialize(a, business.publicId, sessions));
     },
   );
 

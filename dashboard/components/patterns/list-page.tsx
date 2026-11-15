@@ -3,11 +3,17 @@
 import * as React from "react";
 import { useBusinessTz } from "@/components/business-tz";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { BookmarkPlus, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { RefreshButton } from "@/components/refresh-button";
 import { PageHeader, type Crumb } from "@/components/page-header";
-import { DataTable, resolveDefaultSort, type SortOption } from "@/components/data-table";
+import {
+  DataTable,
+  resolveDefaultSort,
+  type DataTableEmptyContext,
+  type SortOption,
+} from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LIST_TOTAL_CAP } from "@/lib/list-source";
@@ -47,10 +53,21 @@ export type {
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface ListEntity {
-  /** "Customer" — used for "Create Customer". */
+  /** "Customer" — used for "Create customer". */
   singular: string;
-  /** "Customers" — used for the count, "All Customers", "Import Customers". */
+  /** "Customers" — used for the count, "All customers", "Import customers". */
   plural: string;
+}
+
+/**
+ * A noun as it reads mid-sentence: "Credit Note" → "credit note". A word in capitals
+ * ("ID", "PO") keeps them.
+ */
+export function lowerNoun(s: string): string {
+  return s
+    .split(" ")
+    .map((w) => (w.length > 1 && w === w.toUpperCase() ? w : w.toLowerCase()))
+    .join(" ");
 }
 
 /**
@@ -144,6 +161,8 @@ export interface ListPageHeader {
   actions?: React.ReactNode;
   /** Between the header and the list: the page's flash message or a warning. */
   notice?: React.ReactNode;
+  /** Refresh also re-renders the page, for a page with more than the list (a dashboard). */
+  refreshesPage?: boolean;
 }
 
 export interface ListPageProps<T, TValue = unknown> {
@@ -206,6 +225,12 @@ export interface ListPageProps<T, TValue = unknown> {
   sortOptions?: SortOption[];
   pageSize?: number;
   emptyState?: React.ReactNode;
+  /**
+   * The settled search and filters, each time they change. The address bar is written with
+   * `history.replaceState`, which `useSearchParams` does not follow, so a sibling that
+   * narrows with the list reads them here.
+   */
+  onQueryChange?: (query: { search?: string; filters: ListServerFilter[] }) => void;
   /**
    * Initial sort — defaults to the created-at column descending (every list opens
    * newest-first). `null` opens unsorted.
@@ -311,6 +336,7 @@ export function ListPage<T, TValue = unknown>({
   sortOptions,
   pageSize,
   emptyState,
+  onQueryChange,
   defaultSort,
   searchDebounceMs,
   server,
@@ -323,6 +349,7 @@ export function ListPage<T, TValue = unknown>({
   );
   // Date filters bucket by the BUSINESS day, not the UTC day — see businessDay().
   const tz = useBusinessTz();
+  const router = useRouter();
   const isServer = !!server;
 
   /**
@@ -347,7 +374,7 @@ export function ListPage<T, TValue = unknown>({
     // is safe — React gives each instance its own state and Radix mints its own ids — so the
     // dialog opens from the empty state exactly as it does from the toolbar.
     const action = createAction ? (
-      <ActionButton action={createAction} variant="default" />
+      <ActionButton action={createAction} variant="outline" />
     ) : (
       createSlot
     );
@@ -356,6 +383,7 @@ export function ListPage<T, TValue = unknown>({
   }, [emptyState, createAction, createSlot]);
 
   const fields = React.useMemo(() => filterFields ?? [], [filterFields]);
+  const plural = lowerNoun(entity.plural);
   const fieldsById = React.useMemo(
     () => Object.fromEntries(fields.map((f) => [f.id, f])),
     [fields],
@@ -744,6 +772,13 @@ export function ListPage<T, TValue = unknown>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlStateKey, urlAdopted]);
 
+  // After the link is read, as above: the first report is the adopted state, not the default.
+  const narrowKey = JSON.stringify([query.search ?? "", query.filters]);
+  React.useEffect(() => {
+    if (urlAdopted) onQueryChange?.({ search: query.search, filters: query.filters });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrowKey, urlAdopted]);
+
   /**
    * On a cold load: honour `?view=` from a shared link, else the operator's own default
    * view. Runs once, the first time views are available — re-running would drag the
@@ -835,7 +870,41 @@ export function ListPage<T, TValue = unknown>({
   }, [selectedView, currentState, builderFilters, search, trackColumns]);
 
   const segment = segments?.find((s) => s.id === segmentId);
-  const viewLabel = selectedView?.name ?? segment?.label ?? `All ${entity.plural}`;
+  const viewLabel = selectedView?.name ?? segment?.label ?? `All ${plural}`;
+
+  /**
+   * An empty table that our narrowing caused offers the way back, not "Create": a search
+   * clears the search, a filter or saved view clears the filters.
+   */
+  const filtered = applied.length > 0 || savedId != null;
+  const clearFilters = () => {
+    if (savedId != null) {
+      applySegment(segments?.[0]?.id ?? "all");
+      setSearch("");
+    }
+    clearAll();
+  };
+  const renderEmpty = ({ searching, clearSearch }: DataTableEmptyContext) => {
+    if (
+      !(searching || filtered) ||
+      !React.isValidElement<{ action?: React.ReactNode; description?: React.ReactNode }>(
+        emptyStateWithCreate,
+      )
+    )
+      return emptyStateWithCreate;
+    const clearSearchAndFilters = () => {
+      clearSearch();
+      if (filtered) clearFilters();
+    };
+    return React.cloneElement(emptyStateWithCreate, {
+      description: `No ${plural} match your search or filters.`,
+      action: (
+        <Button variant="outline" size="sm" onClick={clearSearchAndFilters}>
+          <X className="size-3.5" /> {searching ? "Clear search" : "Clear filters"}
+        </Button>
+      ),
+    });
+  };
   const filterCount = applied.length;
 
   const systemSegments = React.useMemo(
@@ -845,12 +914,12 @@ export function ListPage<T, TValue = unknown>({
 
   const saveButton =
     savedViews && dirty ? (
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1">
         {selectedView ? (
           <Button
             variant="ghost"
             size="sm"
-            className="text-primary"
+            className="min-w-0 text-primary list-narrow:max-w-44"
             onClick={() =>
               void viewsApi.saveOver(
                 selectedView.id,
@@ -859,7 +928,7 @@ export function ListPage<T, TValue = unknown>({
               )
             }
           >
-            Update “{selectedView.name}”
+            <span className="truncate">Update “{selectedView.name}”</span>
           </Button>
         ) : null}
         <Button
@@ -869,7 +938,9 @@ export function ListPage<T, TValue = unknown>({
           onClick={() => setSaveOpen(true)}
         >
           <BookmarkPlus className="size-3.5" />
-          {selectedView ? "Save as new view" : "Save view"}
+          <span className="list-narrow:sr-only">
+            {selectedView ? "Save as new view" : "Save view"}
+          </span>
         </Button>
       </div>
     ) : null;
@@ -883,7 +954,10 @@ export function ListPage<T, TValue = unknown>({
         {server ? (
           <RefreshButton
             key="refresh"
-            onRefresh={refreshRows}
+            onRefresh={() => {
+              refreshRows();
+              if (page?.refreshesPage) router.refresh();
+            }}
             pending={loading}
             variant={page ? "outline" : "ghost"}
           />
@@ -924,13 +998,22 @@ export function ListPage<T, TValue = unknown>({
           className={cn(filterCount > 0 && "border border-primary/30 text-primary")}
         >
           <SlidersHorizontal className="size-3.5" />
-          {filterCount > 0 ? `${filterCount} Filter${filterCount > 1 ? "s" : ""}` : "Filter list"}
+          {/* Narrow card: the icon and the count; the words stay the button's name. */}
+          {filterCount > 0 ? (
+            <span>
+              {filterCount}
+              <span className="list-narrow:sr-only"> Filter{filterCount > 1 ? "s" : ""}</span>
+            </span>
+          ) : (
+            <span className="list-narrow:sr-only">Filter list</span>
+          )}
         </Button>
       ) : null}
 
       {filterCount > 0 ? (
         <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={clearAll}>
-          <X className="size-3.5" /> Clear filters
+          <X className="size-3.5" />
+          <span className="list-narrow:sr-only">Clear filters</span>
         </Button>
       ) : null}
 
@@ -1022,7 +1105,8 @@ export function ListPage<T, TValue = unknown>({
         columns={columns}
         data={rows}
         countLabel={entity.plural}
-        searchPlaceholder={searchPlaceholder ?? `Search for ID / Name…`}
+        countSingular={entity.singular}
+        searchPlaceholder={searchPlaceholder ?? `Search by ID or name`}
         searchable={searchable}
         exportName={exportName}
         columnChooser={columnChooser}
@@ -1036,7 +1120,7 @@ export function ListPage<T, TValue = unknown>({
         rowMenu={rowMenu}
         sortOptions={sortOptions}
         pageSize={pageSize}
-        emptyState={emptyStateWithCreate}
+        emptyState={renderEmpty}
         // Client mode: the table owns sorting, so it needs the default too.
         defaultSort={defaultSort}
         searchDebounceMs={searchDebounceMs ?? (server ? 350 : 250)}
@@ -1134,13 +1218,13 @@ function ActionButton({ action, variant }: { action: ListAction; variant: "defau
 
 /** Convenience: the `+ Create <Thing>` action with its icon + wording. */
 export function createAction(singular: string, href: string): ListAction {
-  return { label: `Create ${singular}`, href, icon: <Plus className="size-4" /> };
+  return { label: `Create ${lowerNoun(singular)}`, href, icon: <Plus className="size-4" /> };
 }
 
 /** Convenience: the `Import <Things>` action. */
 export function importAction(plural: string, href?: string, title?: string): ListAction {
   return {
-    label: `Import ${plural}`,
+    label: `Import ${lowerNoun(plural)}`,
     href,
     icon: <Upload className="size-4" />,
     disabled: !href,

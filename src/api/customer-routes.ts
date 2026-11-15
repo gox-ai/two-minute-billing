@@ -92,6 +92,7 @@ import { withTenant } from "@/platform/db";
 import { dunningPolicyPublicIds } from "@/modules/dunning-policies/effective";
 import { DunningPolicyError, resolveDunningPolicyRef } from "@/modules/dunning-policies/service";
 import { collectedRevenue } from "@/modules/payments/revenue";
+import { listCustomerDiscounts } from "@/modules/coupons/service";
 
 // Digits, spaces and + ( ) - . — enough for any international format, no more.
 // Mirrors `PHONE_RE` in dashboard/components/customers/address-fields.tsx; keep
@@ -587,14 +588,16 @@ export async function registerCustomerRoutes(app: FastifyInstance) {
       const cusId = (req.params as { cus: string }).cus;
       const c = await getCustomerByPublicId(req.organization!.id, business.id, cusId);
       if (!c) return notFound(reply, `No such customer: ${cusId}`);
-      const [financials, balances, roles, lifetimeRevenue] = await Promise.all([
+      const [financials, balances, roles, lifetimeRevenue, discounts] = await Promise.all([
         getCustomerFinancials(req.organization!.id, c.id),
         getCustomerBalances(req.organization!.id, c.id),
         getPaymentRoleIds(req.organization!.id, c.id),
         collectedRevenue(req.organization!.id, { customerId: c.id }),
+        withTenant(req.organization!.id, (tx) => listCustomerDiscounts(tx, c.id)),
       ]);
       return serializeCustomer(c, {
         ...(await dunningPolicyExtra(req.organization!.id, c)),
+        discounts,
         balances,
         mrr: financials.mrr,
         roles,

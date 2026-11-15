@@ -28,7 +28,9 @@ via `email_config.types.<type> = false`.
 
 - **Event-driven (24)** — `enqueueEmails` maps a billing event to a type in `emailTypeForEvent`.
   Invoicing and payments (10): `invoice_generated → invoice_issued` ·
-  `invoice_payment_due → invoice_overdue` · `payment_succeeded → payment_receipt` ·
+  `invoice_payment_due → invoice_overdue` (only an invoice the customer pays themselves; on an
+  auto-collected one the event means a decline, which `payment_failed` mails) ·
+  `payment_succeeded → payment_receipt` ·
   `payment_failed → payment_failed` ·
   `payment_authentication_required → payment_authentication_required` · `dunning_retry` ·
   `refund_created → refund_initiated | refund_issued` (split on the refund's status — see
@@ -337,6 +339,37 @@ Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
   path. It is what caught the unescaped-template-body hole.
 
 ## Changelog
+- **2026-11-10** — `payment_method_invalid` and `mandate_expired` get `subscriptionEnded` (set when
+  the customer has no subscription that is not cancelled, resolved in `resolveCard`). Their default
+  bodies branch on it with `{{#if}}`: a refused restart's hard decline invalidates the card of a
+  cancelled customer, and the old text told them to "keep your subscription active". Covered by
+  `verify:email-events` (live → old text; none live → "Your subscription is not active").
+- **2026-11-10** — `subscription_reactivated` default copy follows the lifecycle pattern
+  (`subscription_resumed`, `trial_started`): "Welcome back to {{businessName}}: …" subject, "We are
+  glad to have you back", the new var `reactivateDate` (event time, business timezone), and an
+  "Active again from" row in the facts card.
+- **2026-11-10** — Automatic `subscription_reactivated` ("Welcome back"; audience account) from the
+  `subscription_reactivated` event: names the plan and the next renewal (same vars and facts as
+  `subscription_activated`). Opt-in (`OPT_IN_EMAIL_TYPES`): existing businesses send nothing new
+  until they switch it on; `initialEmailConfig` turns it on for a business a person creates
+  (`createBusiness` now takes `emailConfig`; sending itself stays off). Covered by
+  `verify:email-events` (unset = none; on = one email) and `email-reactivated-opt-in.test.ts`.
+- **2026-11-10** — Ad hoc `subscription_restart` (audience account): needs `subscription` (an
+  ENDED one; a live one is refused) and takes `restart_price` `current`|`keep`. The button is a
+  restart checkout minted by `mintRestartSession` (customer-portal/restart.ts) only on a real send,
+  after every refusal; the preview keeps the portal entry URL. `planNameFor` is now exported from
+  the outbox and shared. Covered by `verify:email-adhoc` (5 types) and `verify:portal-restart`.
+- **2026-11-08** — Delivery report: `getEmailDeliveryReport` and
+  `GET /v1/businesses/:biz/emails/report?weeks=1..52` (default 12) count email_messages by week
+  (Monday, business time zone, by `created_at`) and by type: delivered, not delivered, pending,
+  failed, bounced, complained, skipped. A complaint (`bounce_type = complaint`) is counted only as
+  complained. Dashboard: Emails → Delivery report. Suite `verify:email-report`.
+- **2026-11-08 (later)** — `previewAdhocEmail` also returns the rendered `html`.
+- **2026-11-08** — `previewAdhocEmail` in `adhoc-service.ts`: the ad-hoc email as
+  `sendAdhocEmail` would send it (recipient, copies, subject with prefix, text), with the same
+  refusals (missing record, no recipient, test-mode recipient) and no send, row or portal link.
+  `sendAdhocEmail` now composes through the same function. Used by Billy's email cards.
+  Gate: `verify:email-adhoc` 118/118.
 - **2026-11-05** — Account emails share one layout (`renderAccountLayout` in `templates.ts`):
   sign-up, sign-up invite, existing-account notice, password reset, both team invites and every
   account-security notice. White card, logo, brand-hue button, preview text, a copy-the-link
@@ -926,3 +959,20 @@ Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
   stays the attach setting. Gate: `verify:settings-invoices-org` H.
 - **2026-11-03 (security)** — The portal sign-in code also clears `bcc`: the business BCC list
   (`email_config.bcc`) no longer gets a copy of a live code.
+- **2026-11-13 (usage grace)** — `invoice_sent` / `payment_request` refuse a `pending` invoice (400,
+  "We could not send the invoice. Invoice '…' is not final. Send it after it finalizes."): its amount
+  and due date can still change. `subscription_renewed` leaves the amount out when the event carries
+  `invoice_hold_until`. Cover: `verify:usage-grace`.
+- **2026-11-13 (renewal email amount)** — `subscription_renewed` quotes the invoice of ITS renewal:
+  the one that opens the term just claimed (`opens_period`, same `period_start`), never the newest
+  invoice of the subscription. The event is written before that invoice in the same transaction, so
+  `refreshEmails` (an event refresher) drops the unsent copy and builds it again once the invoice
+  exists. A pending (held or draft) or missing invoice states no amount. Cover:
+  `verify:usage-grace` (first and second renewal, held, pending mode), `verify:email-events`.
+- **2026-11-13** — A declined automatic charge sends ONE email, `payment_failed` (reason, next
+  attempt, Pay now). `enqueueEmails` now drops `invoice_overdue` unless `isPayableOfflineInvoice`
+  (auto-collection off, money due), and for a `reopened: late_failure` event. Before, every
+  retriable decline also mailed "Invoice … is past due", so a five-attempt ladder sent nine
+  payment mails. The `invoice_payment_due` event and its webhook are unchanged. With
+  `payment_failed` switched off, a decline mails nothing: `invoice_overdue` is not a fallback.
+  Gate: `verify:emails` cases 12–14, `verify:email-events`.

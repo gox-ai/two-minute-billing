@@ -2,7 +2,8 @@
  * Subscription lifecycle + estimate parameters added for API parity. Each one reaches real
  * behaviour, refuses what it cannot honour, and — absent — leaves the route as it was.
  *
- *  - create `payment_method`; PATCH `payment_method` + `net_term_days`
+ *  - create `payment_method`; PATCH `payment_method` + `net_term_days`; create 3-D Secure off
+ *    session (refused, with a hint) and on session (intent, then paid with `payment_intent`)
  *  - reactivate `reactivate_from`, `payment_intent`, `payment_initiator`; estimate `reactivate_from`
  *  - `coupon_ids[]` (at most one) on change / estimate / reactivate
  *  - cancel `end_of_billing_term`, `include_cancellation_day_in_billing` (+ cancel_estimate)
@@ -687,6 +688,35 @@ const subRow = async (pub: string) =>
   );
   await withTenant(orgId, (tx) =>
     tx.update(businesses).set({ storefrontConfig: null }).where(eq(businesses.id, S.bizRow.id)),
+  );
+}
+
+// ── create: 3-D Secure off and on session ─────────────────────────────────────────
+{
+  const { cus } = await customerWith("3ds@sap.test", "4000000000003155");
+  const off = await create(cus);
+  ok(
+    "create 3DS off-session → 402 requires_action, no intent, a hint to send on_session",
+    off.status === 402 &&
+      off.body.error?.code === "requires_action" &&
+      !off.body.payment_intent &&
+      /on_session: true/.test(String(off.body.error?.message)),
+  );
+  const on = await create(cus, { on_session: true });
+  ok(
+    "create 3DS on_session → 402 with payment_intent and next_action",
+    on.status === 402 && /^pi_/.test(String(on.body.payment_intent?.id)) && !!on.body.next_action,
+  );
+  const done = await create(cus, {
+    on_session: true,
+    payment_intent: on.body.payment_intent?.id,
+    client_result: { nonce: "tmtest_ok" },
+  });
+  ok(
+    "create 3DS: re-sent with the authorized payment_intent → 201 active, first invoice paid",
+    done.status === 201 &&
+      done.body.status === "active" &&
+      done.body.latest_invoice?.status === "paid",
   );
 }
 

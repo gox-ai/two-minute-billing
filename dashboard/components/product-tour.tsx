@@ -15,7 +15,9 @@ import { Button } from "@/components/ui/button";
 import { markProductTourSeenAction } from "@/app/auth-actions";
 import { START_TOUR_EVENT, startProductTour } from "@/lib/product-tour";
 import { paletteKeys } from "@/lib/palette-hints";
+import { ASSISTANT_NAME } from "@/lib/assistant";
 import { cn } from "@/lib/utils";
+import { CoachGrip, useCoachCard } from "@/components/coach-card";
 
 interface Stop {
   /** Tried in order; the first visible match is the anchor. No match: the stop is skipped. */
@@ -44,27 +46,36 @@ const STOPS: Stop[] = [
     body: "Live mode bills real customers. To try each step first, use this switch to go to test mode.",
   },
   {
-    anchors: [`${RAIL} [title="Product Catalog"]`, `${RAIL} [title="Plans"]`],
-    title: "Product Catalog",
+    // The bubble at the bottom right (2026-11-09), no longer on the rail.
+    anchors: ['[data-tour="assistant"]'],
+    title: `Meet ${ASSISTANT_NAME}`,
+    body: `Ask about any invoice, customer or payment. ${ASSISTANT_NAME} reads your data and shows you where to act. It changes nothing without your confirmation.`,
+  },
+  {
+    anchors: [`${RAIL} [data-nav-label="Product catalog"]`, `${RAIL} [data-nav-label="Plans"]`],
+    title: "Product catalog",
     body: "Create your plans, prices, addons and coupons here. A subscription bills a recurring price.",
   },
   {
-    anchors: [`${RAIL} [title="Customers"]`],
+    anchors: [`${RAIL} [data-nav-label="Customers"]`],
     title: "Customers",
     body: "Customers are the people and companies that pay you. Each customer has their payment methods and invoices.",
   },
   {
-    anchors: [`${RAIL} [title="Subscriptions"]`],
+    anchors: [`${RAIL} [data-nav-label="Subscriptions"]`],
     title: "Subscriptions",
     body: "A subscription connects a customer to a price. It renews on time and creates each invoice.",
   },
   {
-    anchors: [`${RAIL} [title="Invoices & Credit Notes"]`, `${RAIL} [title="Invoices"]`],
+    anchors: [
+      `${RAIL} [data-nav-label="Invoices & credit notes"]`,
+      `${RAIL} [data-nav-label="Invoices"]`,
+    ],
     title: "Invoices and credit notes",
     body: "All invoices, payments and refunds are here. Open an invoice to see each payment attempt.",
   },
   {
-    anchors: [`${RAIL} [title="Settings"]`],
+    anchors: [`${RAIL} [data-nav-label="Settings"]`],
     title: "Settings",
     body: "Connect your payment gateway in Settings, Payment Gateways. Billing rules and email notifications are here too.",
   },
@@ -80,7 +91,6 @@ const BUSINESS_HOME = /^\/businesses\/[^/]+$/;
 /** Below this the rail is an off-canvas drawer, so there is nothing to point at. */
 const MIN_WIDTH = 768;
 const POP_WIDTH = 340;
-const GAP = 12;
 
 function findAnchor(stop: Stop): HTMLElement | null {
   for (const sel of stop.anchors) {
@@ -118,8 +128,6 @@ export function ProductTour({ offer }: { offer: boolean }) {
   const [answered, setAnswered] = React.useState(false);
   const [stops, setStops] = React.useState<Stop[]>([]);
   const [i, setI] = React.useState(0);
-  // Bumped on scroll and resize so the spotlight re-reads its anchor.
-  const [, setTick] = React.useState(0);
   const nextRef = React.useRef<HTMLButtonElement>(null);
   // The rail's scroll position before the tour, put back when it ends.
   const railScroll = React.useRef<{ el: Element; top: number } | null>(null);
@@ -147,19 +155,21 @@ export function ProductTour({ offer }: { offer: boolean }) {
   const offering = offer && !answered && phase === "idle" && wide && BUSINESS_HOME.test(path);
   const stop = phase === "touring" ? stops[i] : undefined;
 
-  // Bring the anchor into view, then follow it while the rail scrolls or the window resizes.
+  // Bring the anchor into view; the coach card follows it from there.
   React.useEffect(() => {
     if (!stop) return;
     findAnchor(stop)?.scrollIntoView({ block: "nearest" });
     nextRef.current?.focus();
-    const bump = () => setTick((t) => t + 1);
-    window.addEventListener("resize", bump);
-    window.addEventListener("scroll", bump, true);
-    return () => {
-      window.removeEventListener("resize", bump);
-      window.removeEventListener("scroll", bump, true);
-    };
   }, [stop]);
+  const anchor = stop ? findAnchor(stop) : null;
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const coach = useCoachCard({
+    cardRef,
+    stepKey: stop && anchor ? `tour:${i}` : null,
+    measureTarget: () => (stop ? (findAnchor(stop)?.getBoundingClientRect() ?? null) : null),
+    targetEl: () => (stop ? findAnchor(stop) : null),
+    width: POP_WIDTH,
+  });
 
   const end = React.useCallback((finished: boolean) => {
     setPhase("idle");
@@ -175,7 +185,7 @@ export function ProductTour({ offer }: { offer: boolean }) {
   React.useEffect(() => {
     if (phase !== "touring") return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") end(false);
+      if (e.key === "Escape" && !e.defaultPrevented) end(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -228,13 +238,10 @@ export function ProductTour({ offer }: { offer: boolean }) {
     );
   }
 
-  // Read during render: the tick above re-renders on every scroll and resize.
-  const rect = stop ? (findAnchor(stop)?.getBoundingClientRect() ?? null) : null;
-  if (!stop || !rect) return null;
+  if (!stop || !anchor) return null;
 
   const last = i === stops.length - 1;
-  const left = Math.min(rect.right + GAP, window.innerWidth - POP_WIDTH - GAP);
-  const top = Math.max(GAP, Math.min(rect.top - 8, window.innerHeight - 260));
+  const rect = coach.target;
   const body =
     stop.title === "Go anywhere fast" && paletteKeys()
       ? `${stop.body} Press ${paletteKeys()} on any page.`
@@ -244,27 +251,37 @@ export function ProductTour({ offer }: { offer: boolean }) {
     <div className="fixed inset-0 z-50" aria-live="polite">
       {/* The spotlight: one box whose huge shadow dims everything else. Clicks are caught,
           so a stray click cannot navigate away mid-tour. */}
+      {rect ? (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed rounded-md shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-2 ring-primary transition-all duration-200"
+          style={{
+            left: rect.left - 4,
+            top: rect.top - 4,
+            width: rect.right - rect.left + 8,
+            height: rect.bottom - rect.top + 8,
+          }}
+        />
+      ) : null}
+      {/* Placed clear of the anchor and any open menu; the member can drag it by its header. */}
       <div
-        aria-hidden
-        className="pointer-events-none fixed rounded-lg shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-2 ring-primary transition-all duration-200"
-        style={{
-          left: rect.left - 4,
-          top: rect.top - 4,
-          width: rect.width + 8,
-          height: rect.height + 8,
-        }}
-      />
-      <div
+        ref={cardRef}
         role="dialog"
         aria-labelledby="tour-title"
         aria-describedby="tour-body"
-        className={cn(
-          "fixed flex flex-col gap-2 rounded-xl border bg-popover p-5 text-popover-foreground shadow-lg",
-        )}
-        style={{ left, top, width: POP_WIDTH, maxWidth: `calc(100vw - ${GAP * 2}px)` }}
+        data-coach-card
+        className="fixed flex flex-col gap-2 rounded-xl border bg-popover p-5 text-popover-foreground shadow-lg"
+        style={coach.style}
       >
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-primary">
+        <div
+          {...coach.handleProps}
+          className={cn(
+            "-mx-2 -mt-2 flex touch-none items-center justify-between gap-2 rounded-md px-2 pt-2 select-none",
+            coach.dragging ? "cursor-grabbing" : "cursor-grab",
+          )}
+        >
+          <span className="flex items-center gap-1 text-xs font-semibold text-primary">
+            <CoachGrip onKeyDown={coach.onGripKey} dragging={coach.dragging} />
             {i + 1} of {stops.length}
           </span>
           <button

@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 
 // Billing rules → Credits flexibility (`credits_flexibility`, 0219): credit KIND
 // (refundable, excess) × invoice CLASS (recurring, one-time). The per-subscription cap
-// is API-only, and the page says so instead of rendering a control that does not exist.
+// is on the subscription page (Subscription configurations), and this page says where.
 // Promotional credit is out of scope: pre-tax, non-refundable, already capped.
 
 type Kind = "refundable" | "excess";
@@ -135,10 +135,9 @@ export default async function CreditsFlexibilitySettings({
                 invoice.
               </li>
               <li>
-                You can set a lower cap for one subscription through the API (
-                <span className="font-mono break-all">max_refundable_credits_usage_minor</span> and{" "}
-                <span className="font-mono break-all">max_excess_payment_usage_minor</span>). The
-                tighter limit applies. There is no screen for it yet.
+                To set a lower limit for one subscription, open the subscription. Under Subscription
+                configurations, change Refundable credit or Excess payments. The lower limit
+                applies.
               </li>
             </ul>
           </SettingsCard>

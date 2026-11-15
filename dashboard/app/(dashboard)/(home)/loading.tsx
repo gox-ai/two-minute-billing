@@ -1,6 +1,6 @@
-import { OrgHomeLoading } from "@/components/analytics/org/skeletons";
+import { OverviewLoading } from "@/components/overview/overview-skeleton";
 
-// Header, the portfolio card (figure, trend, three readings), then the business roster.
+// Header, the totals cards, then the business cards.
 export default function Loading() {
-  return <OrgHomeLoading />;
+  return <OverviewLoading />;
 }

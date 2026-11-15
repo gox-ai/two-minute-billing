@@ -730,3 +730,8 @@ every module's events via `emitEvent`, but those are owned by the emitting modul
 - **2026-11-02 (0481)** — The reversal re-arm is now `rearmReversedInvoice`, shared with payment-request reversals. A mandate going live stamps `payment_methods.authorized_at` with the event's own time, so a delayed activation cannot clear a later revocation.
 - **2026-11-03 (settings slice F)** — The reversal re-arm passes the plan policy, the method type, `retries_by_method` and `adaptive_cadence` to `planFailureRearm`. Gate: `verify:settings-dunning-p2`.
 - **2026-11-03 (0495, security)** — `rearmReversedInvoice` restores the `status = 'paid'` guard lost in slice F, for the direct reversal too: it locks the invoice, skips it when it is not `paid` or other money still pays it, and the update is conditional on `paid`. Gate: `verify:payment-requests` §18.
+- **2026-11-15 (0532)** — `handleProviderEvent` applies an event under the span of the attempt
+  (then the transaction) that holds its intent or charge id (`event-span.ts`), keeping the
+  delivery's `hook-` trace, for every gateway. A delivery of one event also hands its span-less
+  calls (signature check, the adapter's object read) to that span (`adoptTraceLogsIntoSpan`).
+  No match, or two spans for one id: nothing changes. Gate: `verify:gateway` (span-hook).

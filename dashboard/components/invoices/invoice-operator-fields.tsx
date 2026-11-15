@@ -77,7 +77,7 @@ export function UpdatePoNumberButton({
     <>
       <button
         type="button"
-        className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+        className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
         onClick={() => setOpen(true)}
       >
         Edit PO number…
@@ -126,7 +126,7 @@ export function SetExpectedPaymentDateButton({
     <>
       <button
         type="button"
-        className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+        className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
         onClick={() => setOpen(true)}
       >
         Set expected payment date…
@@ -191,7 +191,7 @@ export function UpdateAddressButton({
     <>
       <button
         type="button"
-        className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+        className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
         onClick={() => setOpen(true)}
       >
         {label}

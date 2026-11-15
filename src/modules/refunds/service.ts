@@ -54,6 +54,8 @@ export class RefundError extends Error {
    * contract while leaving every gate green.
    */
   readonly code?: "not_found";
+  /** True when `refundPayment` already emitted this failure's `refund_failed` event. */
+  eventEmitted = false;
   constructor(message: string, code?: "not_found") {
     super(message);
     this.name = "RefundError";
@@ -148,6 +150,61 @@ export async function refundPayment(input: RefundPaymentInput): Promise<Refund> 
 }
 
 type RefundPaymentInput = Parameters<typeof refundPaymentInSpan>[0];
+
+/**
+ * Emits the ONE `refund_failed` event for a gateway refusal and returns the error to throw,
+ * marked `eventEmitted` so a catching caller does not emit a second. `refund.invoice` is what
+ * lets enrichment attach the customer and subscription; the flat keys are the shape consumers
+ * already read.
+ */
+async function refundFailed(
+  organizationId: string,
+  businessId: string,
+  pay: { publicId: string; invoiceId: string | null; currency: string },
+  refundId: string,
+  amount: bigint,
+  creditNoteId: string | null | undefined,
+  reason: string,
+): Promise<RefundError> {
+  await withTenant(organizationId, async (tx) => {
+    const [inv] = pay.invoiceId
+      ? await tx
+          .select({ publicId: invoices.publicId })
+          .from(invoices)
+          .where(eq(invoices.id, pay.invoiceId))
+          .limit(1)
+      : [];
+    const [cn] = creditNoteId
+      ? await tx
+          .select({ publicId: creditNotes.publicId })
+          .from(creditNotes)
+          .where(eq(creditNotes.id, creditNoteId))
+          .limit(1)
+      : [];
+    const flat = {
+      id: refundId,
+      payment: pay.publicId,
+      credit_note: cn?.publicId ?? null,
+      amount_minor: Number(amount),
+      currency: pay.currency,
+      reason,
+    };
+    await emitEvent(tx, {
+      organizationId,
+      businessId,
+      type: "refund_failed",
+      data: buildEventData(
+        "refund_failed",
+        { ...flat, invoice: inv?.publicId ?? null },
+        null,
+        flat,
+      ),
+    });
+  });
+  const err = new RefundError(reason);
+  err.eventEmitted = true;
+  return err;
+}
 
 async function refundPaymentInSpan(input: {
   organizationId: string;
@@ -406,20 +463,16 @@ async function refundPaymentInSpan(input: {
       errorCode: "provider_unresolved",
       errorText: message,
     });
-    await withTenant(organizationId, (tx) =>
-      emitEvent(tx, {
-        organizationId,
-        businessId,
-        type: "refund_failed",
-        data: buildEventData("refund_failed", {
-          id: pubId,
-          payment: pay.publicId,
-          amount_minor: Number(amount),
-          currency: pay.currency,
-        }),
-      }),
+    const failure = `We could not refund payment ${pay.publicId}: ${message}`;
+    throw await refundFailed(
+      organizationId,
+      businessId,
+      pay,
+      pubId,
+      amount,
+      input.creditNoteId,
+      failure,
     );
-    throw new RefundError(`We could not refund payment ${pay.publicId}: ${message}`);
   }
 
   /**
@@ -476,20 +529,16 @@ async function refundPaymentInSpan(input: {
         errorCode: "refund_refused",
         errorText: e.message,
       });
-      await withTenant(organizationId, (tx) =>
-        emitEvent(tx, {
-          organizationId,
-          businessId,
-          type: "refund_failed",
-          data: buildEventData("refund_failed", {
-            id: pubId,
-            payment: pay.publicId,
-            amount_minor: Number(amount),
-            currency: pay.currency,
-          }),
-        }),
+      const failure = `We could not refund payment ${pay.publicId}. ${e.message}`;
+      throw await refundFailed(
+        organizationId,
+        businessId,
+        pay,
+        pubId,
+        amount,
+        input.creditNoteId,
+        failure,
       );
-      throw new RefundError(`We could not refund payment ${pay.publicId}. ${e.message}`);
     }
   }
   if (result.status === "failed") {
@@ -515,21 +564,15 @@ async function refundPaymentInSpan(input: {
       errorCode: "refund_failed",
       errorText: result.failureMessage ?? "The payment gateway refused the refund.",
     });
-    await withTenant(organizationId, (tx) =>
-      emitEvent(tx, {
-        organizationId,
-        businessId,
-        type: "refund_failed",
-        data: buildEventData("refund_failed", {
-          id: pubId,
-          payment: pay.publicId,
-          amount_minor: Number(amount),
-          currency: pay.currency,
-        }),
-      }),
-    );
-    throw new RefundError(
-      `We could not refund payment ${pay.publicId}. ${result.failureMessage ?? "The payment gateway refused the refund."}`,
+    const failure = `We could not refund payment ${pay.publicId}. ${result.failureMessage ?? "The payment gateway refused the refund."}`;
+    throw await refundFailed(
+      organizationId,
+      businessId,
+      pay,
+      pubId,
+      amount,
+      input.creditNoteId,
+      failure,
     );
   }
 

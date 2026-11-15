@@ -28,6 +28,7 @@ import {
   portalSubscriptionLifecycleAction,
   portalTakeRetentionOfferAction,
 } from "./actions";
+import { pauseCopy } from "./portal-change-view";
 
 type Actions = NonNullable<PortalSubscription["actions"]>;
 
@@ -78,14 +79,9 @@ export function PortalLifecycle({
 
   const until = periodEndLabel ? ` until ${periodEndLabel}` : " until the end of this period";
   const confirmCopy: Record<
-    Exclude<PortalLifecycleAction, "cancel">,
+    "resume" | "reactivate",
     { title: string; description: string; label: string }
   > = {
-    pause: {
-      title: "Pause your subscription?",
-      description: "We stop charging your plan while it is paused. You can resume it here.",
-      label: "Pause subscription",
-    },
     resume: {
       title: "Resume your subscription?",
       description: resumeStartsNewPeriod
@@ -141,7 +137,16 @@ export function PortalLifecycle({
         </Alert>
       ) : null}
 
-      {confirming ? (
+      {confirming === "pause" ? (
+        <PauseDialog
+          sentences={pauseCopy(actions.pause_terms, periodEndLabel)}
+          onClose={() => setConfirming(null)}
+          onConfirm={async () => {
+            await run("pause");
+            setConfirming(null);
+          }}
+        />
+      ) : confirming ? (
         <ConfirmDialog
           brand
           open
@@ -179,7 +184,7 @@ type Step = "reason" | "offers" | "confirm";
 
 /**
  * The cancel flow: a reason (when the business asks), offers (when it makes any), then the
- * cancel. "Cancel subscription" is reachable from every step, so an offer never traps anyone.
+ * cancel. Every step moves toward the cancel in one click, so an offer never traps anyone.
  * With no offers and an optional reason it is one dialog, as before Phase 3.
  */
 function CancelFlowDialog({
@@ -297,7 +302,17 @@ function CancelFlowDialog({
       <DialogContent size="sm" data-brand className="flex max-h-[85vh] flex-col overflow-hidden">
         <DialogHeader className="pr-12">
           <DialogTitle>{title}</DialogTitle>
-          {step === "confirm" ? <DialogDescription>{description}</DialogDescription> : null}
+          {step === "confirm" ? (
+            <DialogDescription>{description}</DialogDescription>
+          ) : step === "reason" ? (
+            <DialogDescription>
+              {hasOffers
+                ? "Your answer helps us to improve. Next, you see options to keep your plan."
+                : "Your answer helps us to improve."}
+            </DialogDescription>
+          ) : step === "offers" ? (
+            <DialogDescription>Select an option to keep your plan, or cancel it.</DialogDescription>
+          ) : null}
         </DialogHeader>
         <div className="-mx-6 min-h-0 flex-1 space-y-3 overflow-y-auto px-6">
           {step === null ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
@@ -408,37 +423,24 @@ function CancelFlowDialog({
               <Button variant="outline" onClick={onClose} disabled={busy}>
                 Keep subscription
               </Button>
-              {hasOffers ? (
-                <>
-                  {/* Ink, not the merchant's colour: the offers are the step we recommend. */}
-                  <Button
-                    className="bg-foreground text-background hover:bg-foreground/90"
-                    disabled={busy || (required && !reason)}
-                    onClick={() => setStep("confirm")}
-                  >
-                    Cancel subscription
-                  </Button>
-                  <Button disabled={busy || (required && !reason)} onClick={showOffers}>
-                    Continue
-                  </Button>
-                </>
-              ) : (
-                <Button disabled={busy || (required && !reason)} onClick={() => setStep("confirm")}>
-                  Continue
-                </Button>
-              )}
+              {/* Ink, not the merchant's colour: it moves toward cancelling. */}
+              <Button
+                variant="ink"
+                disabled={busy || (required && !reason)}
+                onClick={hasOffers ? showOffers : () => setStep("confirm")}
+              >
+                Continue
+              </Button>
             </>
           ) : step === "offers" ? (
             <>
               <Button variant="outline" onClick={onClose} disabled={busy}>
                 Keep subscription
               </Button>
-              {/* Ink, not the merchant's colour: the brand fill is for the action we recommend. */}
-              <Button
-                className="bg-foreground text-background hover:bg-foreground/90"
-                disabled={busy}
-                onClick={() => setStep("confirm")}
-              >
+              {/* Ink, not the merchant's colour and not red: the offers are what we recommend
+                  here, and this button only opens the confirm step. Red is for the one button
+                  that cancels. */}
+              <Button variant="ink" disabled={busy} onClick={() => setStep("confirm")}>
                 Cancel subscription
               </Button>
             </>
@@ -452,6 +454,57 @@ function CancelFlowDialog({
               </Button>
             </>
           ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * The pause confirm. Not `ConfirmDialog`: its confirm is the merchant's colour, and pausing
+ * is a step away from what the merchant wants, so it is ink. The facts are a list, not one
+ * paragraph: start, length, charges and the time already paid.
+ */
+function PauseDialog({
+  sentences,
+  onClose,
+  onConfirm,
+}: {
+  sentences: string[];
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [pending, setPending] = React.useState(false);
+  return (
+    <Dialog open onOpenChange={(o) => (o ? null : onClose())}>
+      <DialogContent size="sm" data-brand>
+        <DialogHeader className="pr-12">
+          <DialogTitle>Pause your subscription?</DialogTitle>
+          <DialogDescription>{sentences[0]}</DialogDescription>
+        </DialogHeader>
+        <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+          {sentences.slice(1).map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ul>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={pending}>
+            Go back
+          </Button>
+          <Button
+            variant="ink"
+            disabled={pending}
+            onClick={async () => {
+              setPending(true);
+              try {
+                await onConfirm();
+              } finally {
+                setPending(false);
+              }
+            }}
+          >
+            {pending ? "Pausing…" : "Pause subscription"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

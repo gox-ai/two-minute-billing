@@ -20,7 +20,7 @@ export function ExploreResultSkeleton() {
         <StripBones title="w-64" chip />
         <div className="flex flex-col gap-3 px-5 pt-4 pb-5">
           <Skeleton className="h-3.5 w-56" />
-          <Skeleton className="h-[220px] w-full rounded-lg" />
+          <Skeleton className="h-[220px] w-full rounded-xl" />
         </div>
         <div className="flex h-9 items-center gap-4 border-y px-5">
           <Skeleton className="h-3 flex-1" />
@@ -53,14 +53,14 @@ export function ExploreLoading() {
   return (
     <div>
       <PageHeaderBones description />
-      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-6 @min-[56.875rem]/main:grid-cols-12">
         <div
-          className="flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card xl:col-span-4"
+          className="flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card @min-[56.875rem]/main:col-span-4"
           aria-hidden
         >
           <StripBones title="w-16" />
-          {/* Measures, Rows, Period, Filters. */}
-          {[8, 6, 3, 1].map((rows, s) => (
+          {/* Measures, Rows, Period. The currency section shows only with a choice. */}
+          {[8, 6, 3].map((rows, s) => (
             <div key={s} className="flex flex-col gap-3 border-b px-5 py-4 last:border-0">
               <Skeleton className="h-3 w-24" />
               {Array.from({ length: rows }).map((_, i) => (
@@ -69,7 +69,7 @@ export function ExploreLoading() {
             </div>
           ))}
         </div>
-        <div className="min-w-0 xl:col-span-8">
+        <div className="min-w-0 @min-[56.875rem]/main:col-span-8">
           <ExploreResultSkeleton />
         </div>
       </div>

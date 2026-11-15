@@ -5,7 +5,7 @@ import { getCountries } from "@/lib/api/geo";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import { Combobox } from "@/components/ui/combobox";
 import {
   SettingRow,
@@ -78,7 +78,7 @@ export default async function TaxSettings({ params }: { params: Promise<{ biz: s
                 // What the API does: an unset currency is exclusive.
                 ...currencies.map((c) => ({
                   label: `New ${c} prices`,
-                  value: byCurrency[c] ? label(byCurrency[c]) : "Tax exclusive (not set)",
+                  value: label(byCurrency[c] ?? "exclusive"),
                 })),
                 {
                   label: "Tax rounding",
@@ -126,12 +126,12 @@ export default async function TaxSettings({ params }: { params: Promise<{ biz: s
               label="Round tax"
               htmlFor="tax_rounding"
               help="How we round each tax on an invoice."
+              placement="end"
               control={
-                <SelectField
+                <SelectAnswer
                   name="tax_rounding"
                   defaultValue={rounding}
-                  ariaLabel="Tax rounding"
-                  className="w-full sm:w-96"
+                  ariaLabel="Round tax"
                   options={[
                     { value: "per_invoice_total", label: "One time, on the invoice total" },
                     { value: "per_line", label: "On each line, then add the lines" },
@@ -154,6 +154,7 @@ export default async function TaxSettings({ params }: { params: Promise<{ biz: s
                 label={countryName.get(cc) ?? cc}
                 htmlFor={`taxid_${cc}`}
                 help="Clear the field to remove this country."
+                placement="end"
                 control={
                   <Input
                     id={`taxid_${cc}`}
@@ -171,13 +172,14 @@ export default async function TaxSettings({ params }: { params: Promise<{ biz: s
                 label={idCountries.length || i > 0 ? "Add a country" : "Country"}
                 htmlFor={`new_country_${i}`}
                 errorFor={`new_taxid_${i}`}
+                placement="end"
                 control={
-                  <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                  <div className="flex w-full flex-col gap-2 sm:w-72">
                     <Combobox
                       name={`new_country_${i}`}
                       ariaLabel="Country"
                       placeholder="Select a country"
-                      className="w-full sm:w-56"
+                      className="w-full"
                       options={countryOptions}
                     />
                     <Input
@@ -185,7 +187,7 @@ export default async function TaxSettings({ params }: { params: Promise<{ biz: s
                       aria-label="Tax ID"
                       placeholder="Tax ID"
                       maxLength={64}
-                      className="w-full font-mono sm:w-56"
+                      className="w-full font-mono"
                     />
                   </div>
                 }

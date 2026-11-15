@@ -37,7 +37,7 @@ import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { scanBusinessFilter } from "@/platform/clock";
 import { config } from "@/platform/config";
 import { createLogger } from "@/platform/logger";
-import { joinSpan } from "@/platform/trace";
+import { joinSpan, joinSpanIfAny } from "@/platform/trace";
 import type { ChargeResult } from "@/providers/types";
 import {
   deferredUntilLater,
@@ -1331,17 +1331,21 @@ export async function abandonAuthenticationPendingDebit(input: {
   let voidedAtGateway = false;
   if (adapter.capabilities?.intentVoid && adapter.voidIntent && txn.idAtGateway) {
     try {
-      const res = await adapter.voidIntent({
-        intentId: txn.idAtGateway,
-        idempotencyKey: `abandon-${txn.publicId}`,
-      });
+      const intentId = txn.idAtGateway;
+      const voidIntent = adapter.voidIntent.bind(adapter);
+      const res = await joinSpanIfAny(txn.spanId, () =>
+        voidIntent({ intentId, idempotencyKey: `abandon-${txn.publicId}` }),
+      );
       voidedAtGateway = res.voided === true;
     } catch (e) {
       // Did they authenticate while we were deciding? Ask again — the gateway's answer
       // outranks our intention, exactly as it did before we started.
       let recheck;
       try {
-        recheck = await adapter.fetchChargeStatus?.({ providerChargeId: txn.idAtGateway });
+        const chargeId = txn.idAtGateway;
+        recheck = await joinSpanIfAny(txn.spanId, () =>
+          adapter.fetchChargeStatus?.({ providerChargeId: chargeId }),
+        );
       } catch {
         recheck = undefined;
       }

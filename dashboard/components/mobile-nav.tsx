@@ -42,6 +42,14 @@ export function MobileNavTrigger({ className }: { className?: string }) {
     setOpen(false);
   }, [pathname]);
 
+  // The drawer's own close button writes the attribute; follow it.
+  React.useEffect(() => {
+    const el = document.documentElement;
+    const mo = new MutationObserver(() => setOpenState(el.dataset[ATTR] === "open"));
+    mo.observe(el, { attributes: true, attributeFilter: ["data-mobile-nav"] });
+    return () => mo.disconnect();
+  }, []);
+
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -95,6 +103,20 @@ export function MobileNavTrigger({ className }: { className?: string }) {
         )}
       />
     </>
+  );
+}
+
+/** The drawer's own close button, top right of the panel; absent from `md` up. */
+export function MobileNavClose() {
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen(false)}
+      className="app-mobile-only touch-target absolute top-4 right-3 z-10 grid size-7 place-items-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      <X className="size-4" aria-hidden />
+      <span className="sr-only">Close navigation</span>
+    </button>
   );
 }
 

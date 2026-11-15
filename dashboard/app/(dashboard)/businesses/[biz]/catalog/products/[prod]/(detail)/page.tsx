@@ -1,3 +1,5 @@
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import {
   listBusinesses,
   getProduct,
@@ -28,6 +30,7 @@ import { PlanUsageThresholdCard } from "@/components/usage-controls/usage-invoic
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
 import { StatusChip, IdChip, Chip } from "@/components/patterns/chip";
+import { eventTitle, quantityLabel } from "@/lib/labels";
 import {
   Facts,
   FoldedCard,
@@ -80,7 +83,7 @@ export const dynamic = "force-dynamic";
 
 const KIND_META: Record<string, { noun: string; plural: string; page: string }> = {
   plan: { noun: "Plan", plural: "Plans", page: "plans" },
-  addon: { noun: "Addon", plural: "Add-ons", page: "addons" },
+  addon: { noun: "Add-on", plural: "Add-ons", page: "addons" },
   charge: { noun: "One-time product", plural: "One-time products", page: "charges" },
 };
 
@@ -88,7 +91,7 @@ const KIND_META: Record<string, { noun: string; plural: string; page: string }> 
 function entitlementValue(e: PlanEntitlement, link: CreditsLinkOption | undefined): string {
   if (e.type === "switch") return e.value === "true" ? "Enabled" : "Disabled";
   if (e.value === "unlimited") return "Unlimited";
-  const v = e.unit ? `${e.value} ${e.unit}` : e.value;
+  const v = quantityLabel(e.value, e.unit);
   if (e.type !== "meter" || !e.reset) return v;
   if (!isCreditsLink(e.reset)) return `${v} · renews ${resetLabel(e.reset)}`;
   return link && "reset" in link
@@ -122,11 +125,15 @@ export default async function ProductDetail({
       listProducts(biz),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Product" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="product"
+          back={{ label: "View products", href: `/businesses/${biz}/catalog/products` }}
+          retry
         />
       </>
     );
@@ -298,10 +305,9 @@ export default async function ProductDetail({
       id: "identity",
       title: "Identity",
       summary: [
-        product.id,
-        kindMeta.noun,
-        group ? `group ${group.name}` : null,
-        product.external_name ? `external name “${product.external_name}”` : null,
+        `Type ${kindMeta.noun}`,
+        group ? `Group ${group.name}` : null,
+        product.external_name ? `External name ${product.external_name}` : null,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -325,6 +331,8 @@ export default async function ProductDetail({
             },
             { label: "External name", value: product.external_name || "—" },
             { label: "Description", value: product.description || "—" },
+            { label: "Created", value: product.created_at ? fmtDate(product.created_at, tz) : "—" },
+            { label: "Last modified", value: lastModified ? fmtDateTime(lastModified, tz) : "—" },
           ]}
         />
       ),
@@ -332,7 +340,12 @@ export default async function ProductDetail({
     {
       id: "unit",
       title: "Unit of measure",
-      summary: `${product.unit_of_measure || "—"} · ${product.metered ? "metered" : "not metered"}`,
+      summary: [
+        product.unit_of_measure ? `Unit ${product.unit_of_measure}` : null,
+        product.metered ? "Metered" : "Not metered",
+      ]
+        .filter(Boolean)
+        .join(" · "),
       children: (
         <Facts
           rows={[
@@ -376,12 +389,13 @@ export default async function ProductDetail({
       // them, so they are not shown here or on the form until a feature does.
       id: "display",
       title: "Buyers",
-      summary: [
-        product.image_url ? "has an image" : "no image",
-        product.redirect_url ? `after payment ${product.redirect_url}` : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      summary:
+        [
+          product.image_url ? "Image set" : null,
+          product.redirect_url ? `After-payment page ${product.redirect_url}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "Nothing set",
       children: (
         <Facts
           rows={[
@@ -428,19 +442,6 @@ export default async function ProductDetail({
             metadata={product.metadata}
           />
         </div>
-      ),
-    },
-    {
-      id: "modified",
-      title: "Last modified",
-      summary: lastModified ? fmtDateTime(lastModified, tz) : "—",
-      children: (
-        <Facts
-          rows={[
-            { label: "Last modified", value: lastModified ? fmtDateTime(lastModified, tz) : "—" },
-            { label: "Created", value: product.created_at ? fmtDate(product.created_at, tz) : "—" },
-          ]}
-        />
       ),
     },
   ];
@@ -510,7 +511,7 @@ export default async function ProductDetail({
             </TableRow>
           ))}
         >
-          <Table className="table-fixed">
+          <Table phone="stack" className="table-fixed">
             <colgroup>
               <col />
               <col className="w-[30%]" />
@@ -522,7 +523,7 @@ export default async function ProductDetail({
                 <TableHead className="pl-5">Feature</TableHead>
                 <TableHead>Key</TableHead>
                 <TableHead>Value</TableHead>
-                <TableHead className="pr-5">
+                <TableHead phone="aside" className="pr-5">
                   <span className="sr-only">Actions</span>
                 </TableHead>
               </TableRow>
@@ -576,6 +577,7 @@ export default async function ProductDetail({
             options={linkPicker.options}
             meta={linkPicker.meta}
             initialPrice={livePrices[0]!.id}
+            variant="outline"
           />
         ) : null
       }
@@ -616,7 +618,7 @@ export default async function ProductDetail({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: kindMeta.plural, href: `/businesses/${biz}/catalog/${kindMeta.page}` },
           { label: product.name },
         ]}
@@ -674,7 +676,7 @@ export default async function ProductDetail({
 
       <UsageTiles stats={stats} scope={kind} currency={business?.default_currency} />
 
-      <Zone title="Pricing">
+      <Zone>
         <Row span="12">
           <RecordCard
             id="pricing"
@@ -769,14 +771,17 @@ export default async function ProductDetail({
 
       <Zone title="Records">
         <Row span="8/4">
-          <ActivityLogCard
-            biz={biz}
-            resourceType="product"
-            resourceId={prod}
-            tz={tz}
-            layout="card"
-            previewRows={5}
-          />
+          {/* Natural height: stretching to the comments card left ~200px of empty card. */}
+          <div className="self-start">
+            <ActivityLogCard
+              biz={biz}
+              resourceType="product"
+              resourceId={prod}
+              tz={tz}
+              layout="card"
+              previewRows={5}
+            />
+          </div>
           <CommentsCard
             biz={biz}
             resourceType="product"
@@ -799,10 +804,9 @@ export default async function ProductDetail({
                       href={`/businesses/${biz}/events/${e.id}`}
                       className="text-primary hover:underline"
                     >
-                      {e.type}
+                      {eventTitle(e.type)}
                     </Link>
                     <span className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-muted-foreground">{e.id}</span>
                       <span className="text-xs text-muted-foreground tabular-nums">
                         {fmtDateTime(e.occurred_at, tz)}
                       </span>

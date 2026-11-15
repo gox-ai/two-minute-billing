@@ -19,7 +19,7 @@ import type { ProductGroup } from "@/lib/api";
 
 /**
  * Per-row action menu for the Product Groups table: a References group (jump
- * to the associated plans / add-ons / charges) and a Quick Actions group (edit,
+ * to the associated plans / add-ons / charges) and a Quick actions group (edit,
  * delete, create).
  */
 export function GroupRowMenu({
@@ -62,26 +62,26 @@ export function GroupRowMenu({
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
             References
           </DropdownMenuLabel>
           <DropdownMenuItem onSelect={show("plans")}>
             <Package className="size-4" />
-            View associated Plans
+            View associated plans
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={show("addons")}>
             <Puzzle className="size-4" />
-            View associated Add-ons
+            View associated add-ons
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={show("charges")}>
             <Receipt className="size-4" />
-            View associated Charges
+            View associated charges
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            Quick Actions
+            Quick actions
           </DropdownMenuLabel>
           <DropdownMenuItem
             onSelect={() =>
@@ -89,23 +89,23 @@ export function GroupRowMenu({
             }
           >
             <Pencil className="size-4" />
-            Edit Product Group
+            Edit product group
           </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirmOpen(true)}>
             <Trash2 className="size-4" />
-            Delete Product Group
+            Delete product group
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={create("plans")}>
             <Plus className="size-4" />
-            Create Plan
+            Create plan
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={create("addons")}>
             <Plus className="size-4" />
-            Create Add-on
+            Create add-on
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={create("charges")}>
             <Plus className="size-4" />
-            Create Charge
+            Create charge
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

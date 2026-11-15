@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import { getSyncedAt, listMeasures, queryAnalytics, type BatchEntry } from "@/lib/analytics-api";
 import { listBusinesses } from "@/lib/api";
 import { requirePermission } from "@/lib/session";
@@ -56,7 +57,7 @@ export default async function ExplorePage({
   await requirePermission("reports:view", "ops");
 
   const basePath = `/businesses/${biz}/reports/explore`;
-  const crumbs = [{ label: "Reports", href: `/businesses/${biz}/reports` }];
+  const crumbs = reportCrumbs(biz, undefined, "Explore");
 
   // Never throws — a missing pill costs the pill, not the page.
   const syncedAtP = getSyncedAt(biz);
@@ -164,7 +165,9 @@ export default async function ExplorePage({
 
   const rowsLabel = query.dimension ? dimensionLabel(query.dimension) : "Period";
   const title = `${query.measures.map((m) => m.name).join(" · ")} by ${rowsLabel.toLowerCase()}`;
-  const chip = `${RANGE_PHRASE[query.range] ?? query.range} · by ${GRAIN_PHRASE[query.grain] ?? query.grain}`;
+  const cut = `${RANGE_PHRASE[query.range] ?? query.range} · by ${GRAIN_PHRASE[query.grain] ?? query.grain}`;
+  // A chip is a label: sentence case ("The last 12 months · by month").
+  const chip = cut.charAt(0).toUpperCase() + cut.slice(1);
 
   // The kinds in play. Mixing them is legal — each measure keeps its own column and its own
   // unit — but it must be SAID, because a reader scanning across a row would otherwise take a
@@ -258,7 +261,7 @@ export default async function ExplorePage({
       <PageHeader
         title="Explore"
         description="Select the measures that you want as columns and the dimension that you want as rows."
-        breadcrumbs={crumbs}
+        breadcrumbs={reportCrumbs(biz, thisBusiness?.name, "Explore")}
         actions={<SyncedBadge syncedAt={syncedAt} />}
       />
 
@@ -274,8 +277,8 @@ export default async function ExplorePage({
         <AttentionCard items={attention} columns={false} />
 
         {/* Query 4, result 8; top-aligned, so neither card grows a gap above its footer. */}
-        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
-          <div className="min-w-0 xl:col-span-4">
+        <div className="grid grid-cols-1 items-start gap-6 @min-[56.875rem]/main:grid-cols-12">
+          <div className="min-w-0 @min-[56.875rem]/main:col-span-4">
             <RecordCard title="Query" flush>
               <ControlPanel
                 basePath={basePath}
@@ -297,7 +300,7 @@ export default async function ExplorePage({
             </RecordCard>
           </div>
 
-          <div className="min-w-0 xl:col-span-8">
+          <div className="min-w-0 @min-[56.875rem]/main:col-span-8">
             <PendingContent skeleton={<ExploreResultSkeleton />}>
               <ExploreResult
                 query={query}

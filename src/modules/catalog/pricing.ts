@@ -793,6 +793,21 @@ export function computeLineAmount(price: RatablePrice, rawQuantity: number): big
   }
 }
 
+/**
+ * `computeLineAmount` for a line that may sell credit packs. A credit pack's flat price is
+ * the price of ONE pack and the quantity counts packs, as its grant, top-up limits and the
+ * portal count them; every other price rates as `computeLineAmount`.
+ */
+export function packAwareLineAmount(
+  price: RatablePrice & { grantsCredit?: unknown },
+  quantity: number,
+): bigint {
+  const gc = price.grantsCredit as { kind?: string } | null | undefined;
+  if (gc?.kind === "pack" && price.model === "flat")
+    return BigInt(price.amountMinor ?? 0n) * BigInt(Math.max(1, quantity));
+  return computeLineAmount(price, quantity);
+}
+
 /** One tier's share of a rated quantity. `from`/`to` are unit bounds (inclusive). */
 export interface RatedTier {
   from: bigint;

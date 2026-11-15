@@ -1,7 +1,8 @@
 import { RecordCard } from "@/components/patterns/record-page";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { Alert } from "@/components/ui/alert";
 import { listUsageKeys } from "@/lib/api/meters";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { AddUsageKeyDialog, RemoveUsageKeyButton } from "./customer-usage-keys-actions";
 
 /**
@@ -34,13 +35,19 @@ export async function CustomerUsageKeysCard({
             has, for example a user, workspace or API key ID.
           </p>
           <ul className="flex flex-col divide-y divide-border/60">
-            <li className="flex items-center gap-3 py-2">
-              <span className="min-w-0 flex-1 font-mono text-xs wrap-anywhere">{cus}</span>
-              <span className="text-xs text-muted-foreground">Customer ID · always works</span>
+            <li className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+              <span className="flex min-w-32 flex-1">
+                <MiddleEllipsis value={cus} className="text-xs" />
+              </span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                Customer ID · always works
+              </span>
             </li>
             {keys.data.map((k) => (
-              <li key={k.key} className="flex items-center gap-3 py-2">
-                <span className="min-w-0 flex-1 font-mono text-xs wrap-anywhere">{k.key}</span>
+              <li key={k.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                <span className="flex min-w-32 flex-1">
+                  <MiddleEllipsis value={k.key} className="text-xs" />
+                </span>
                 <span className="text-xs text-muted-foreground tabular-nums">
                   Added {fmtDate(k.created_at, tz)}
                 </span>

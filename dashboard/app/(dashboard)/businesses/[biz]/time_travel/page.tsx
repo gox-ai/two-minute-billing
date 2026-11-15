@@ -1,16 +1,18 @@
 import { listBusinesses } from "@/lib/api";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { getTimeTravel } from "@/lib/api/time-travel";
-import { PageHeader } from "@/components/page-header";
+import { PageHeader, type Crumb } from "@/components/page-header";
 import { SectionCard } from "@/components/patterns/section-card";
-import { KeyValueGrid } from "@/components/patterns/key-value-grid";
-import { StatusBadge } from "@/components/status-badge";
+import { Facts } from "@/components/patterns/record-page";
+import { StatusChip } from "@/components/patterns/chip";
 import { ErrorState } from "@/components/states";
 import { StartForm, TravelForm, StopButton } from "@/components/time-travel/controls";
 import { Explainer } from "@/components/time-travel/explainer";
 import { requirePermission } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
+
+const TITLE = "Time travel";
 
 /** Human "N days" delta between the simulated clock and real now. */
 function deltaLabel(simulatedNow: string): string {
@@ -26,7 +28,8 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
   await requirePermission("test_tools:manage", "admin");
 
   const { biz } = await params;
-  const crumbs = [{ label: "Businesses", href: "/" }, { label: "Time Travel" }];
+  const crumbsFor = (name?: string): Crumb[] =>
+    name ? [{ label: name, href: `/businesses/${biz}` }, { label: TITLE }] : [{ label: TITLE }];
 
   let businesses;
   try {
@@ -34,7 +37,7 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
   } catch (e) {
     return (
       <>
-        <PageHeader title="Time Travel" breadcrumbs={crumbs} />
+        <PageHeader title={TITLE} breadcrumbs={crumbsFor()} />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -44,22 +47,23 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
   const business = businesses.data.find((b) => b.id === biz);
   // Dates render in the business timezone, not UTC — the engine's term
   // boundaries are midnight in this zone (see components/business-tz).
-  const tz = businesses.data.find((b) => b.id === biz)?.timezone ?? null;
+  const tz = business?.timezone ?? null;
   if (!business) {
     return (
       <>
-        <PageHeader title="Time Travel" breadcrumbs={crumbs} />
+        <PageHeader title={TITLE} breadcrumbs={crumbsFor()} />
         <ErrorState title="Not found" description={`No business has the ID ${biz}.`} />
       </>
     );
   }
+  const crumbs = crumbsFor(business.name);
 
-  // Guard: Time Travel is test-only. A live business gets an explainer, not controls.
+  // Guard: time travel is test-only. A live business gets an explainer, not controls.
   if (business.livemode === "live") {
     return (
       <>
         <PageHeader
-          title="Time Travel"
+          title={TITLE}
           description={
             <>
               Simulated billing clock for <span className="font-medium">{business.name}</span>
@@ -67,14 +71,14 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
           }
           breadcrumbs={crumbs}
         />
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <SectionCard title="Not available on live businesses">
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <SectionCard layout="card" title="Not available on live businesses">
             <div className="space-y-2 text-sm text-foreground/80">
               <p className="font-medium text-foreground">
                 {business.name} is a <span className="text-destructive">live</span> business.
               </p>
               <p>
-                Time Travel runs destructive, simulated billing. It runs only on test businesses, so
+                Time travel runs destructive, simulated billing. It runs only on test businesses, so
                 that it never changes or deletes real customer data. Switch to a test business to
                 simulate billing time.
               </p>
@@ -92,7 +96,7 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
   } catch (e) {
     return (
       <>
-        <PageHeader title="Time Travel" breadcrumbs={crumbs} />
+        <PageHeader title={TITLE} breadcrumbs={crumbs} />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -105,7 +109,7 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
   return (
     <>
       <PageHeader
-        title="Time Travel"
+        title={TITLE}
         description={
           <>
             Simulate billing time on <span className="font-medium">{business.name}</span> (test)
@@ -115,15 +119,15 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
         actions={running ? <StopButton biz={biz} /> : undefined}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="space-y-6">
-          {/* Status card */}
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
           <SectionCard
+            layout="card"
             title="Clock status"
-            actions={<StatusBadge status={running ? "active" : "disabled"} />}
+            actions={<StatusChip status={running ? "active" : "disabled"} />}
           >
             {running ? (
-              <KeyValueGrid
+              <Facts
                 rows={[
                   { label: "Simulated now", value: fmtDateTime(tm.simulated_now, tz) },
                   { label: "Genesis", value: fmtDateTime(tm.genesis_time, tz) },
@@ -142,20 +146,19 @@ export default async function TimeTravelPage({ params }: { params: Promise<{ biz
               />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Time Travel is <span className="font-medium text-foreground">off</span>. This
+                Time travel is <span className="font-medium text-foreground">off</span>. This
                 business runs on the real clock. Start it below. This sets the clock to a genesis
                 date and starts to simulate billing time.
               </p>
             )}
           </SectionCard>
 
-          {/* Controls */}
           {running ? (
-            <SectionCard title="Travel forward">
+            <SectionCard layout="card" title="Travel forward">
               <TravelForm biz={biz} simulatedNow={tm.simulated_now!} />
             </SectionCard>
           ) : (
-            <SectionCard title="Start Time Travel">
+            <SectionCard layout="card" title="Start time travel">
               <StartForm biz={biz} />
             </SectionCard>
           )}

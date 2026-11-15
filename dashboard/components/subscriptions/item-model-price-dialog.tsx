@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { ActionForm, useFieldError } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
@@ -13,6 +13,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -23,6 +24,36 @@ import type { PriceRate } from "@/lib/api";
 import type { MeterPriceList } from "@/lib/api/meters";
 import { majorRateToMinor, minorRateToMajor } from "@/lib/meters";
 import { perLabel } from "@/lib/model-prices";
+import { cn } from "@/lib/utils";
+
+/** `token_type` → "Token type": a column header names the dimension, not the key. */
+const dimensionLabel = (key: string) => {
+  const words = key.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+/** A number field with its unit spelled out inside the right edge. */
+function UnitInput({
+  unit,
+  className,
+  ...props
+}: React.ComponentProps<"input"> & { unit: string }) {
+  return (
+    <div
+      className={cn(
+        "flex h-9 min-w-0 items-center rounded-md border border-input focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+        className,
+      )}
+    >
+      <input
+        inputMode="decimal"
+        {...props}
+        className="w-full min-w-0 flex-1 self-stretch rounded-l-md bg-transparent pl-3 text-sm tabular-nums outline-none placeholder:text-muted-foreground"
+      />
+      <span className="px-3 text-sm font-medium text-muted-foreground">{unit}</span>
+    </div>
+  );
+}
 
 interface Row {
   values: Record<string, string>;
@@ -91,7 +122,7 @@ export function ItemModelPriceDialog({
   );
   const upd = (i: number, patch: Partial<Row>) =>
     setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const cols = `repeat(${groupBy.length}, minmax(0,1fr)) 8.5rem minmax(0,1fr) minmax(0,1fr) 2rem`;
+  const cols = `repeat(${groupBy.length}, minmax(0,1fr)) 9rem minmax(0,1fr) minmax(0,1fr) 2rem`;
 
   return (
     <Dialog
@@ -109,8 +140,8 @@ export function ItemModelPriceDialog({
           Edit price
         </button>
       </DialogTrigger>
-      <DialogContent size="xl" className="flex max-h-[85vh] flex-col overflow-hidden">
-        <DialogHeader>
+      <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
+        <DialogHeader className="pr-12">
           <DialogTitle>Edit price for this customer</DialogTitle>
           <DialogDescription>
             {price.cost_first
@@ -123,48 +154,48 @@ export function ItemModelPriceDialog({
         <ActionForm
           action={setItemModelPriceAction}
           onSuccess={() => setOpen(false)}
-          className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6"
+          className="flex min-h-0 flex-1 flex-col gap-4"
         >
           <input type="hidden" name="biz" value={biz} />
           <input type="hidden" name="sub" value={sub} />
           <input type="hidden" name="item" value={item} />
           <input type="hidden" name="rates" value={wire} />
-          <Field
-            name="markup_percent"
-            label="Markup"
-            help={`Leave empty to use the markup of the price (${price.markup_percent || "0"}%).`}
-          >
-            <div className="flex h-9 w-40 items-center rounded-md border border-input focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
-              <input
+          {/* The body scrolls; the footer stays. */}
+          <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6">
+            <Field
+              name="markup_percent"
+              label="Markup"
+              help={`Leave empty to use the markup of the price (${price.markup_percent || "0"}%).`}
+            >
+              <UnitInput
                 id="markup_percent"
                 name="markup_percent"
-                inputMode="decimal"
+                unit="%"
                 value={markup}
                 onChange={(e) => setMarkup(e.target.value)}
                 placeholder={price.markup_percent || "0"}
-                className="w-full min-w-0 flex-1 self-stretch rounded-l-md bg-transparent pl-3 text-sm tabular-nums outline-none placeholder:text-muted-foreground"
+                className="w-30"
               />
-              <span className="px-3 text-sm font-medium text-muted-foreground">%</span>
-            </div>
-          </Field>
-          <OverrideRows
-            groupBy={groupBy}
-            cols={cols}
-            rows={rows}
-            setRows={setRows}
-            upd={upd}
-            currency={cur}
-            divisor={price.quantity_divisor}
-            markup={effectiveMarkup}
-            base={price.markup_base}
-            map={meter.price_list}
-          />
-          <div className="flex justify-end gap-2 pt-1 pb-1">
+            </Field>
+            <OverrideRows
+              groupBy={groupBy}
+              cols={cols}
+              rows={rows}
+              setRows={setRows}
+              upd={upd}
+              currency={cur}
+              divisor={price.quantity_divisor}
+              markup={effectiveMarkup}
+              base={price.markup_base}
+              map={meter.price_list}
+            />
+          </div>
+          <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <SubmitButton>Save</SubmitButton>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>
@@ -195,59 +226,68 @@ function OverrideRows({
   map: MeterPriceList | null;
 }) {
   const error = useFieldError("rates");
+  // Phone: each rate is a small card with its own labels. Wider: one header row over
+  // aligned columns. No sideways scroll at either width.
+  const gridCols = { "--rate-cols": cols } as React.CSSProperties;
+  const rowGrid = "grid gap-2 sm:[grid-template-columns:var(--rate-cols)]";
+  const phoneLabel = "text-xs text-muted-foreground sm:hidden";
   return (
     <div className="flex flex-col gap-2">
       <span className="text-sm font-medium">Rates for this customer</span>
       {rows.length ? (
-        <div className="overflow-x-auto">
-          <div className="flex min-w-fit flex-col gap-2">
-            <div
-              className="grid gap-2 text-xs text-muted-foreground"
-              style={{ gridTemplateColumns: cols }}
-            >
-              {groupBy.map((p) => (
-                <span key={p} className="font-mono">
-                  {p}
-                </span>
-              ))}
-              <span>Set</span>
-              <span>Value</span>
-              <span>Price now</span>
-              <span />
-            </div>
-            {rows.map((r, i) => {
-              const fixed = r.mode === "rate" ? majorRateToMinor(r.rate, currency) : null;
-              return (
-                <div
-                  key={i}
-                  className="grid items-center gap-2"
-                  style={{ gridTemplateColumns: cols }}
-                >
-                  {groupBy.map((p) => (
+        <div className="flex flex-col gap-2">
+          <div
+            className={cn(rowGrid, "hidden text-xs font-medium text-muted-foreground sm:grid")}
+            style={gridCols}
+            aria-hidden="true"
+          >
+            {groupBy.map((p) => (
+              <span key={p}>{dimensionLabel(p)}</span>
+            ))}
+            <span>Price type</span>
+            <span>Rate or markup</span>
+            <span>Price now</span>
+            <span />
+          </div>
+          {rows.map((r, i) => {
+            const fixed = r.mode === "rate" ? majorRateToMinor(r.rate, currency) : null;
+            return (
+              <div
+                key={i}
+                className={cn(
+                  rowGrid,
+                  "grid-cols-2 items-end max-sm:rounded-md max-sm:border max-sm:p-3 sm:items-center",
+                )}
+                style={gridCols}
+              >
+                {groupBy.map((p) => (
+                  <div key={p} className="flex min-w-0 flex-col gap-1">
+                    <span className={phoneLabel}>{dimensionLabel(p)}</span>
                     <Input
-                      key={p}
-                      aria-label={`Row ${i + 1} ${p}`}
+                      aria-label={`Rate ${i + 1} ${dimensionLabel(p).toLowerCase()}`}
                       value={r.values[p] ?? ""}
-                      placeholder="Any"
-                      className="font-mono"
                       onChange={(e) => upd(i, { values: { ...r.values, [p]: e.target.value } })}
                     />
-                  ))}
+                  </div>
+                ))}
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className={phoneLabel}>Price type</span>
                   <SelectField
                     value={r.mode}
                     onValueChange={(v) => upd(i, { mode: v === "markup" ? "markup" : "rate" })}
-                    ariaLabel={`Row ${i + 1} type`}
+                    ariaLabel={`Rate ${i + 1} price type`}
                     options={[
                       { value: "rate", label: "Fixed rate" },
-                      { value: "markup", label: "Markup %" },
+                      { value: "markup", label: "Markup" },
                     ]}
                   />
-                  <Input
-                    aria-label={`Row ${i + 1} value`}
-                    inputMode="decimal"
+                </div>
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className={phoneLabel}>Rate or markup</span>
+                  <UnitInput
+                    aria-label={`Rate ${i + 1} ${r.mode === "markup" ? "markup" : "fixed rate"}`}
+                    unit={r.mode === "markup" ? "%" : currency}
                     value={r.mode === "markup" ? r.markup : r.rate}
-                    placeholder={r.mode === "markup" ? "0 %" : `${currency} ${perLabel(divisor)}`}
-                    className="tabular-nums"
                     onChange={(e) =>
                       upd(
                         i,
@@ -255,6 +295,9 @@ function OverrideRows({
                       )
                     }
                   />
+                </div>
+                <div className="flex min-w-0 flex-col gap-1 max-sm:self-center">
+                  <span className={phoneLabel}>Price now</span>
                   <span className="text-sm tabular-nums">
                     <PriceNow
                       listKey={rowListKey(map, r.values)}
@@ -264,35 +307,38 @@ function OverrideRows({
                       currency={currency}
                     />
                   </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Remove row ${i + 1}`}
-                    onClick={() => setRows(rows.filter((_, j) => j !== i))}
-                  >
-                    <X className="size-4" />
-                  </Button>
                 </div>
-              );
-            })}
-          </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove rate ${i + 1}`}
+                  className="max-sm:col-span-2 max-sm:justify-self-end"
+                  onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
-      <div>
-        <button
-          type="button"
-          className="text-sm font-medium text-primary hover:underline"
-          onClick={() => setRows([...rows, { values: {}, mode: "rate", rate: "", markup: "" }])}
-        >
-          + Add rate
-        </button>
-      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="-ml-2 self-start text-primary"
+        onClick={() => setRows([...rows, { values: {}, mode: "rate", rate: "", markup: "" }])}
+      >
+        <Plus className="size-4" />
+        Add rate
+      </Button>
       {error ? (
         <p className="text-xs font-medium text-destructive">{error}</p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          A row sets a fixed rate or a markup for the values it names. Other models use the markup
+          A rate sets a fixed price or a markup for the values it names. An empty cell matches every
+          value. A fixed rate is in {currency} {perLabel(divisor)}. Other models use the markup
           above. Price now is a preview: the invoice uses the price in effect when the usage
           occurred.
         </p>

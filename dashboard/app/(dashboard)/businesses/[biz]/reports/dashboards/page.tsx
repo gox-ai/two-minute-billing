@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import { Download } from "lucide-react";
 import { listBusinesses } from "@/lib/api";
 import { listReportDashboards } from "@/lib/dashboards-api";
@@ -10,7 +11,8 @@ import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Button } from "@/components/ui/button";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
+import { enumLabel } from "@/lib/labels";
 import { EXPLORE_RANGES } from "@/components/analytics/cut-options";
 import { BoardTabs } from "@/components/analytics/board/board-tabs";
 import { PeriodPicker } from "@/components/analytics/board/period-picker";
@@ -108,7 +110,7 @@ export default async function DashboardsPage({
       ? { start: startParam, end: endParam }
       : null;
 
-  const crumbs = [{ label: "Reports", href: `/businesses/${biz}/reports` }];
+  const crumbs = reportCrumbs(biz, undefined, "Dashboards");
 
   // Never throws — a missing pill costs the pill, not the page.
   const syncedAtP = getSyncedAt(biz);
@@ -267,7 +269,7 @@ export default async function DashboardsPage({
         <GrainControl
           grains={boardGrains.map((g) => ({
             id: g,
-            label: g,
+            label: enumLabel(g),
             // Grain keeps the window; pressing the pinned grain again unpins it.
             href: hrefFor({ grain: g === grain ? "" : g, keepWindow: true }),
           }))}
@@ -282,6 +284,7 @@ export default async function DashboardsPage({
   const download = selected ? (
     <Button asChild variant="outline" size="sm" className="bg-card">
       <a
+        data-document-link
         href={`${basePath}/csv?${new URLSearchParams({
           dash: selected.id,
           range,
@@ -289,7 +292,7 @@ export default async function DashboardsPage({
         })}`}
       >
         <Download className="size-3.5 text-muted-foreground" />
-        Download dashboard
+        <span className="max-sm:sr-only">Download dashboard</span>
       </a>
     </Button>
   ) : null;
@@ -318,21 +321,26 @@ export default async function DashboardsPage({
       <PageHeader
         title="Dashboards"
         description="The numbers you read every morning. Arrange them one time, then open them by name."
-        breadcrumbs={crumbs}
+        breadcrumbs={reportCrumbs(
+          biz,
+          businesses.data.find((b) => b.id === biz)?.name,
+          "Dashboards",
+        )}
         actions={
-          <div className="flex items-center gap-4">
+          // One row on a phone: "Explore metrics" keeps its full name for screen readers.
+          <div className="flex items-center gap-3 sm:gap-4">
             <SyncedBadge syncedAt={syncedAt} />
             <Link
               href={`/businesses/${biz}/reports/stats`}
-              className="text-sm font-medium text-primary hover:underline"
+              className="text-sm font-medium whitespace-nowrap text-primary hover:underline"
             >
               Stats
             </Link>
             <Link
               href={`/businesses/${biz}/reports/explore`}
-              className="text-sm font-medium text-primary hover:underline"
+              className="text-sm font-medium whitespace-nowrap text-primary hover:underline"
             >
-              Explore metrics →
+              Explore<span className="max-sm:sr-only"> metrics</span> →
             </Link>
           </div>
         }

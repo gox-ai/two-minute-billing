@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
+import { activeClockPin } from "@/platform/clock";
 import {
   billsFromList,
   rateMeterCombination,
@@ -23,7 +24,9 @@ import type { UsageWindow } from "@/modules/subscriptions/usage-window";
 import { recurringLevel, timeWeightedLevel, type Level, type LevelEvent } from "./levels";
 import { readMeterUsage, takeUsageCutoff, type MeterUsageRow, type UsageCutoff } from "./read";
 import { lineCost, priceListResolver, sellingRule } from "./price-list-rating";
+import type { MeterPriceListMap } from "./meters";
 import {
+  countsAsUsage,
   countsTowardMeter,
   groupValuesOf,
   isRollable,
@@ -94,7 +97,12 @@ export async function takeMeterCutoff(
   );
   // Locks the row, moves F → F + 1, reads the watermark after the lock.
   const cut = await takeUsageCutoff(tx, input);
-  return { ...cut, previous: pointerOf(row!), taken: true };
+  // A test clock moves months in real seconds, so the 5 real minutes would hide usage sent
+  // just before an advance from every invoice of that advance. Nothing folds for a
+  // time-travelled business, so its cutoff takes in every event received by now.
+  const travelled = activeClockPin()?.businessId === input.businessId;
+  const at = travelled ? new Date(cut.at.getTime() + FOLD_GRACE_MS) : cut.at;
+  return { ...cut, at, previous: pointerOf(row!), taken: true };
 }
 
 async function foldWatermark(tx: Tx, businessId: string): Promise<Date> {
@@ -264,13 +272,7 @@ export type MeterRow = MeterShape & {
   timeUnit: string | null;
   organizationId: string;
   /** 0457: the model price list key of each combination. */
-  priceList: {
-    provider?: string;
-    provider_key?: string;
-    model_key?: string;
-    token_type?: string;
-    token_type_key?: string;
-  } | null;
+  priceList: MeterPriceListMap | null;
   costCurrency: string | null;
 };
 
@@ -322,7 +324,15 @@ export async function rateMeterItem(
         }
       : input.window;
 
-  const current = await readCombos(ctx, window, input.cutoff);
+  // A meter with a credit cost: credits pay its usage, and what they do not pay is billed as
+  // a charge (`credits/overage.ts`), never from the meter's quantity (0530).
+  const paidInCredits =
+    rowsOf<{ x: number }>(
+      await tx.execute(sql`select 1 as x from meter_credit_costs
+      where meter_id = ${meter.id} and active and product_id is null and subscription_id is null
+      limit 1`),
+    ).length > 0;
+  const current = paidInCredits ? { combos: [] } : await readCombos(ctx, window, input.cutoff);
   const lines = await rateCombos(ctx, window, current.combos, false, input.cutoff);
   // No usage still records the window and its pricing, so late usage of it can bill.
   if (lines.length === 0 && window.end.getTime() > window.start.getTime())
@@ -356,7 +366,9 @@ export async function rateMeterItem(
             })
           : null;
   const late =
-    meter.recurring || input.measureOnly ? [] : await lateLines(ctx, window, input.cutoff);
+    meter.recurring || input.measureOnly || paidInCredits
+      ? []
+      : await lateLines(ctx, window, input.cutoff);
   const levels: LevelSnapshot[] = meter.recurring
     ? current.combos.map((c) => ({
         customerId,
@@ -681,7 +693,7 @@ function eventScope(ctx: RateCtx): SQL {
     ? sql` and e.properties ->> ${ctx.where.key}::text = ${ctx.where.value}::text`
     : sql``;
   return sql`e.business_id = ${m.businessId} and e.customer_id = ${ctx.customerId}
-    and e.event_name = ${m.eventName} and e.voided_at is null and ${countsTowardMeter("e", m)}${where}`;
+    and e.event_name = ${m.eventName} and ${countsAsUsage("e")} and ${countsTowardMeter("e", m)}${where}`;
 }
 
 /**

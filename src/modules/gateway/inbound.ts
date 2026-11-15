@@ -120,6 +120,7 @@ export async function ingestGatewayWebhook(input: {
         payload: parsedPayload,
         headers,
         requestUrl: input.requestUrl ?? null,
+        soleEventOfDelivery: ordered.length === 1,
       });
       handled.push(result);
       // A replay wrote nothing (dedup returned early), so the row already records the
@@ -358,6 +359,8 @@ export async function processStoredGatewayWebhook(
         headers: row.headers as Record<string, string> | null,
         // The row is in flight (NULL, stored before processing) or errored.
         rerunIf: (o) => o == null || o === "error",
+        // The job runs in the delivery's trace (stamped on the payload).
+        soleEventOfDelivery: job.providerEventIds.length === 1,
       }),
     );
   }

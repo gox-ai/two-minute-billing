@@ -45,6 +45,12 @@ export default defineAppConfig({
     },
   },
   ui: {
+    /* Tailwind 4 resets buttons to the default cursor; tab triggers are clickable. */
+    tabs: {
+      slots: {
+        trigger: "cursor-pointer",
+      },
+    },
     /* The hero's default bottom padding left a ~200px void between the buttons
        and the first section. Tightened, and the section padding with it, so the
        landing page reads as one page rather than three screens. */

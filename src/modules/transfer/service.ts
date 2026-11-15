@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, type SQL } from "drizzle-orm";
 import { withTenant, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
 import {
@@ -83,7 +83,7 @@ export type TransferJob = JobRow & { twin: JobRow | null };
 /** Strip identity/audit columns and re-home a copied row onto the destination.
  *  Returns `any` — a bulk row copier can't be statically typed per table. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function copyValues(
+export function copyValues(
   src: Record<string, unknown>,
   destOrg: string,
   destBiz: string,
@@ -119,13 +119,13 @@ export interface TransferInput {
   operatorPermissions?: ReadonlySet<string> | null;
 }
 
-interface Pair {
+export interface Pair {
   src: Biz;
   dest: Biz;
 }
 
 /** The main pair, plus the test twins when asked. Same organization by construction (RLS). */
-async function resolvePairs(
+export async function resolvePairs(
   tx: Tx,
   input: TransferInput,
 ): Promise<{ main: Pair; twin: Pair | null }> {
@@ -290,9 +290,18 @@ export async function runTransfer(input: TransferInput): Promise<TransferJob> {
       .where(
         and(
           inArray(transferConfigurations.destinationBusinessId, dests),
-          eq(transferConfigurations.status, "running"),
-          // Older than the reaper's cutoff = a crashed run, not a live one.
-          gt(transferConfigurations.createdAt, new Date(Date.now() - STUCK_AFTER_MS)),
+          or(
+            // An async run holds its destination from queue to end; the runner resumes it.
+            and(
+              eq(transferConfigurations.runKind, "async"),
+              inArray(transferConfigurations.status, ["queued", "running"]),
+            ),
+            and(
+              eq(transferConfigurations.status, "running"),
+              // Older than the reaper's cutoff = a crashed run, not a live one.
+              gt(transferConfigurations.createdAt, new Date(Date.now() - STUCK_AFTER_MS)),
+            ),
+          ),
         ),
       )
       .limit(1);
@@ -561,6 +570,10 @@ async function copyBySlug(
   for (const src of srcRows) {
     const ov = typeof overrides === "function" ? overrides(src) : overrides;
     const values = copyValues(src, orgId, destBiz, ov);
+    // A redemption count is run-time state: a new coupon starts at 0, an existing one keeps its own.
+    if ("timesRedeemed" in values) {
+      if (keyCol === "code") values.timesRedeemed = 0;
+    }
     const [existing] = await tx
       .select()
       .from(table)
@@ -575,7 +588,7 @@ async function copyBySlug(
         continue;
       }
       // Test destination merge: update everything except identity/key.
-      const { [keyCol]: _k, ...updatable } = values as Record<string, unknown>;
+      const { [keyCol]: _k, timesRedeemed: _t, ...updatable } = values as Record<string, unknown>;
       await tx.update(table).set(updatable).where(eq(table.id, existing.id));
       idMap.set(src.id, existing.id);
       rep.updated++;
@@ -587,7 +600,7 @@ async function copyBySlug(
   }
 }
 
-async function wipeDestinationCatalog(
+export async function wipeDestinationCatalog(
   tx: Tx,
   destBiz: string,
   sections: TransferSection[],
@@ -687,6 +700,8 @@ async function copyDifferentialPrices(
           eq(differentialPrices.businessId, destBiz),
           eq(differentialPrices.addonProductId, addon),
           eq(differentialPrices.planProductId, plan),
+          // The natural key is (addon, plan, currency, interval), as differential_prices_uq.
+          eq(differentialPrices.currency, src.currency),
           // Natural key includes the interval; NULL interval must match NULL, not
           // any row (H review: the old tautology overwrote arbitrary intervals).
           src.interval == null
@@ -758,15 +773,23 @@ async function copyCouponConstraints(
  * destination the plan refuses when an issued invoice uses one). `skip_existing` skips a
  * matched profile entirely, regions and vectors included.
  */
-async function copyTaxRates(
+export async function copyTaxRates(
   tx: Tx,
   srcBiz: string,
   destBiz: string,
   orgId: string,
   rep: SectionReport,
   mode: MergeMode = "overwrite",
+  onlyProfile?: string,
 ): Promise<void> {
-  const srcProfiles = await tx.select().from(taxProfiles).where(eq(taxProfiles.businessId, srcBiz));
+  const srcProfiles = await tx
+    .select()
+    .from(taxProfiles)
+    .where(
+      onlyProfile
+        ? and(eq(taxProfiles.businessId, srcBiz), eq(taxProfiles.name, onlyProfile))
+        : eq(taxProfiles.businessId, srcBiz),
+    );
   for (const sp of srcProfiles) {
     const [destProfile] = await tx
       .select()
@@ -892,12 +915,11 @@ async function copyTaxRates(
 }
 
 /**
- * Clock pass (finale review): a crash between the copy tx and finishJob leaves a
- * transfer stuck `running` forever. Reap anything running > 10 minutes to
- * `failed` (the copy tx is atomic — a reaped job either fully applied or fully
- * rolled back; re-running the transfer is the idempotent recovery).
+ * Clock pass. A sync run still `running` after 10 minutes is a crash: its transaction rolled back
+ * or committed whole, so it is marked failed. An async run whose runner stopped sending heartbeats
+ * is queued again: its items resume where they stopped (`runner.ts`). Database only.
  */
-export async function reapStuckTransfers(now: Date): Promise<{ reaped: number }> {
+export async function reapStuckTransfers(now: Date): Promise<{ reaped: number; requeued: number }> {
   const { systemDb: db } = await import("@/platform/db");
   const cutoff = new Date(now.getTime() - STUCK_AFTER_MS);
   const rows = await db
@@ -909,12 +931,15 @@ export async function reapStuckTransfers(now: Date): Promise<{ reaped: number }>
     })
     .where(
       and(
+        eq(transferConfigurations.runKind, "sync"),
         eq(transferConfigurations.status, "running"),
         lt(transferConfigurations.createdAt, cutoff),
       ),
     )
     .returning({ id: transferConfigurations.id });
-  return { reaped: rows.length };
+  const { requeueStalledRuns } = await import("./runner");
+  const requeued = await requeueStalledRuns(now);
+  return { reaped: rows.length, requeued };
 }
 
 /** A job and, for a run with test twins, the twin job that ran with it. */
@@ -944,14 +969,33 @@ export async function getTransfer(orgId: string, jobId: string): Promise<Transfe
  */
 export async function listTransfers(
   orgId: string,
-  opts: { businessId?: string; limit: number; startingAfter?: string },
+  opts: {
+    businessId?: string;
+    limit: number;
+    startingAfter?: string;
+    statuses?: string[];
+    runKind?: "async" | "sync";
+    /** Relative to `businessId`: runs started from it, or runs into it. Both when unset. */
+    direction?: "outgoing" | "incoming";
+  },
 ): Promise<{ data: TransferJob[]; hasMore: boolean }> {
   return withTenant(orgId, async (tx) => {
     const t = transferConfigurations;
     const where: SQL[] = [isNull(t.twinOf)];
+    // History is runs: a plan nobody applied is not one, unless asked for by status.
+    if (opts.statuses?.length) where.push(inArray(t.status, opts.statuses));
+    else where.push(or(eq(t.runKind, "sync"), isNotNull(t.queuedAt))!);
+    if (opts.runKind) where.push(eq(t.runKind, opts.runKind));
     if (opts.businessId)
       where.push(
-        or(eq(t.sourceBusinessId, opts.businessId), eq(t.destinationBusinessId, opts.businessId))!,
+        opts.direction === "outgoing"
+          ? eq(t.sourceBusinessId, opts.businessId)
+          : opts.direction === "incoming"
+            ? eq(t.destinationBusinessId, opts.businessId)
+            : or(
+                eq(t.sourceBusinessId, opts.businessId),
+                eq(t.destinationBusinessId, opts.businessId),
+              )!,
       );
     if (opts.startingAfter) {
       if (!isUuid(opts.startingAfter)) return { data: [], hasMore: false };

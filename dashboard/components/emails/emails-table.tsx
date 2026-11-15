@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   ListPage,
@@ -21,7 +22,7 @@ import { EMAIL_TYPES, emailTypeLabel, isRealDelivery, transportLabel } from "@/l
 import { EmailDetailDialog, emailStatusTone } from "@/components/emails/email-detail-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { Mail } from "lucide-react";
 import { type EmailMessage } from "@/lib/api/emails";
 import { useBusinessTz } from "@/components/business-tz";
@@ -124,8 +125,8 @@ export function EmailsTable({
       {
         accessorKey: "created_at",
         id: "created_at",
-        header: "Time",
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        header: "Created",
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
       {
         accessorKey: "type",
@@ -147,6 +148,7 @@ export function EmailsTable({
       {
         accessorKey: "subject",
         header: "Subject",
+        meta: { grow: true },
         cell: ({ row }) => <TruncateCell value={row.original.subject} width="max-w-96" />,
       },
       {
@@ -191,7 +193,7 @@ export function EmailsTable({
   // emails — not just the page on screen.
   const segments = React.useMemo<ListSegment<EmailMessage>[]>(
     () => [
-      { id: "all", label: "All Emails" },
+      { id: "all", label: "All emails" },
       { id: "sent", label: "Sent", filters: [{ field: "status", op: "is", value: "sent" }] },
       {
         id: "pending",
@@ -228,7 +230,7 @@ export function EmailsTable({
    */
   const filterFields = React.useMemo<ListFilterField<EmailMessage>[]>(
     () => [
-      { id: "id", label: "Email Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Email ID", group: "Identity", serverOps: TEXT_OPS },
       {
         id: "subject",
         label: "Subject",
@@ -265,13 +267,13 @@ export function EmailsTable({
       },
       {
         id: "customer",
-        label: "Customer Id",
+        label: "Customer ID",
         group: "Customer",
         serverOps: CUSTOMER_OPS,
         hint: "The customer of this message (cus_…). Some emails have no customer. Use “is empty” to find them.",
       },
 
-      { id: "created_at", label: "Time", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS },
     ],
     [],
   );
@@ -289,8 +291,8 @@ export function EmailsTable({
         initialFilters={initialFilters}
         savedViews={{ entity: "emails", biz }}
         // Sort ids are the API's sortable fields (see EMAIL_SORT_FIELDS).
-        sortOptions={[{ id: "created_at", label: "Time" }]}
-        searchPlaceholder="Search for recipient / subject / id…"
+        sortOptions={[{ id: "created_at", label: "Created" }]}
+        searchPlaceholder="Search by recipient, subject or ID"
         exportName="emails"
         persistKey={`emails:${biz}`}
         rowMenu={(e) => (
@@ -302,7 +304,12 @@ export function EmailsTable({
           <EmptyState
             icon={<Mail />}
             title="No emails"
-            description="No emails match this view or search."
+            description="Emails show here after the system sends an invoice, a receipt or a reminder to a customer."
+            action={
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/businesses/${biz}/settings/emails`}>Email settings</Link>
+              </Button>
+            }
           />
         }
       />

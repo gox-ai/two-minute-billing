@@ -192,7 +192,7 @@ export function PauseDunningButton({
       ) : (
         <button
           type="button"
-          className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+          className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
           onClick={() => setOpen(true)}
         >
           Pause dunning…

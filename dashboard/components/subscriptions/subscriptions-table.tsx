@@ -1,6 +1,5 @@
 "use client";
 
-import { PaletteSearchHint } from "@/components/palette-hints";
 import { gatewayFilterOptions, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
 import * as React from "react";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -27,13 +26,15 @@ import { AddonPeek } from "@/components/subscriptions/subscription-peek";
 import { addonItems, planItem, planLabel } from "@/lib/subscription-plan";
 import { EmptyState } from "@/components/states";
 import { SubscriptionRowMenu } from "@/components/subscriptions/subscription-row-menu";
-import { fmtDate, fmtDateShort, fmtDateTimeShort, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { CreditCard } from "lucide-react";
 import type { Subscription } from "@/lib/api";
 import type { CustomFieldDefinition } from "@/lib/api/custom-fields";
 import { customFieldFilterFields } from "@/lib/custom-field-filters";
 import { CURRENCY_FILTER_HINT, PAYMENT_METHOD_TYPE_OPTIONS } from "@/lib/filter-options";
 import { moneyCell } from "@/lib/table-export";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 
 /**
  * The engine's operator vocabulary per column kind, mirrored from
@@ -150,11 +151,11 @@ function billingPeriodText(s: Subscription): string {
 /** Columns an operator can add from the Columns menu: [id, header, value]. */
 const OPTIONAL_TEXT_COLUMNS: Array<[string, string, (s: Subscription) => string]> = [
   ["subscription_id", "Subscription ID", (s) => s.id],
-  ["customer_email", "Customer Email", (s) => s.customer_email ?? ""],
-  ["plan_price", "Plan Price ID", (s) => planItem(s)?.price ?? ""],
-  ["plan_quantity", "Plan Quantity", (s) => String(planItem(s)?.quantity ?? "")],
+  ["customer_email", "Customer email", (s) => s.customer_email ?? ""],
+  ["plan_price", "Plan price ID", (s) => planItem(s)?.price ?? ""],
+  ["plan_quantity", "Plan quantity", (s) => String(planItem(s)?.quantity ?? "")],
   ["currency", "Currency", (s) => s.currency],
-  ["billing_period", "Billing Period", billingPeriodText],
+  ["billing_period", "Billing period", billingPeriodText],
   [
     "remaining_billing_cycles",
     "Remaining Billing Cycles",
@@ -171,25 +172,25 @@ const OPTIONAL_TEXT_COLUMNS: Array<[string, string, (s: Subscription) => string]
     "Net Terms",
     (s) => (s.net_term_days ? `${s.net_term_days} days` : "Customer setting"),
   ],
-  ["po_number", "PO Number", (s) => s.po_number ?? ""],
-  ["invoice_notes", "Invoice Notes", (s) => s.invoice_notes ?? ""],
-  ["cancel_reason", "Cancellation Reason", (s) => s.cancel_reason ?? ""],
+  ["po_number", "PO number", (s) => s.po_number ?? ""],
+  ["invoice_notes", "Invoice notes", (s) => s.invoice_notes ?? ""],
+  ["cancel_reason", "Cancellation reason", (s) => s.cancel_reason ?? ""],
 ];
 
 /** Optional date columns: [id, header, ISO value]. */
 const OPTIONAL_DATE_COLUMNS: Array<
   [string, string, (s: Subscription) => string | null | undefined]
 > = [
-  ["start_date", "Start Date", (s) => s.start_date],
-  ["started_at", "Started At", (s) => s.started_at],
-  ["activated_at", "Activated At", (s) => s.activated_at],
-  ["trial_start", "Trial Start", (s) => s.trial_start],
-  ["trial_end", "Trial End", (s) => s.trial_end],
-  ["current_period_start", "Current Term Start", (s) => s.current_period_start],
-  ["current_term_end", "Current Term End", (s) => s.current_period_end],
+  ["start_date", "Start date", (s) => s.start_date],
+  ["started_at", "Started at", (s) => s.started_at],
+  ["activated_at", "Activated at", (s) => s.activated_at],
+  ["trial_start", "Trial start", (s) => s.trial_start],
+  ["trial_end", "Trial end", (s) => s.trial_end],
+  ["current_period_start", "Current term start", (s) => s.current_period_start],
+  ["current_term_end", "Current term end", (s) => s.current_period_end],
   // Also a pending cancellation's date, so it can be in the future.
-  ["canceled_at", "Cancellation Date", (s) => s.canceled_at],
-  ["updated_at", "Updated At", (s) => s.updated_at],
+  ["canceled_at", "Cancellation date", (s) => s.canceled_at],
+  ["updated_at", "Updated", (s) => s.updated_at],
 ];
 
 /** The ids of every optional column, so they start hidden. */
@@ -227,7 +228,7 @@ function customFieldText(
 const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => [
   {
     id: "payment_method_type",
-    label: "Payer Payment Method Type",
+    label: "Payer payment method type",
     type: "select" as const,
     group: "Payment",
     options: PAYMENT_METHOD_TYPE_OPTIONS,
@@ -236,7 +237,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_status",
-    label: "Payer Payment Method Status",
+    label: "Payer payment method status",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -244,7 +245,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_role",
-    label: "Payer Payment Method Role",
+    label: "Payer payment method role",
     type: "select" as const,
     group: "Payment",
     options: [
@@ -255,7 +256,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_gateway",
-    label: "Payer Gateway",
+    label: "Payer gateway",
     type: "select" as const,
     group: "Payment",
     // Closed: the gateways this engine has (`GET /v1/gateways`). A value outside it can
@@ -265,7 +266,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_gateway_account",
-    label: "Payer Gateway Account",
+    label: "Payer gateway account",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -273,14 +274,14 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_id",
-    label: "Payer Payment Method Id",
+    label: "Payer payment method ID",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
   },
   {
     id: "payment_method_brand",
-    label: "Payer Card Type",
+    label: "Payer card type",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -288,14 +289,14 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_last4",
-    label: "Payer Card/Account Last 4",
+    label: "Payer card/account last 4",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
   },
   {
     id: "payment_method_exp_month",
-    label: "Payer Month of Expiry",
+    label: "Payer month of expiry",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -305,7 +306,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_exp_year",
-    label: "Payer Year of Expiry",
+    label: "Payer year of expiry",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -313,14 +314,14 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
   },
   {
     id: "payment_method_issuer_country",
-    label: "Payer Issuing Country",
+    label: "Payer issuing country",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
   },
   {
     id: "payment_method_sub_type",
-    label: "Payer Bank Account Type",
+    label: "Payer bank account type",
     type: "text" as const,
     group: "Payment",
     serverOps: ENUM_OPS,
@@ -381,7 +382,7 @@ export function SubscriptionsTable({
     () => [
       {
         id: "subscription",
-        header: "Subscription Info",
+        header: "Subscription",
         accessorFn: (s) => `${planLabel(s)} ${s.id}`,
         meta: {
           exportAs: [
@@ -418,14 +419,13 @@ export function SubscriptionsTable({
               // the pane, while line 2 had ~200px of slack. Same information, no cost.
               sub={
                 labelIsId && addons.length === 0 ? undefined : (
-                  <span className="flex items-center gap-2">
+                  // `min-w-0`: the line shrinks with its cell, so the id shortens in the middle.
+                  <span className="flex min-w-0 items-center gap-2">
                     {labelIsId ? null : (
-                      <span
-                        className="block max-w-64 truncate font-mono text-xs text-muted-foreground"
-                        title={s.id}
-                      >
-                        {s.id}
-                      </span>
+                      <MiddleEllipsis
+                        value={s.id}
+                        className="max-w-64 text-xs text-muted-foreground"
+                      />
                     )}
                     <AddonPeek items={addons} currency={s.currency} />
                   </span>
@@ -443,7 +443,7 @@ export function SubscriptionsTable({
       },
       {
         id: "customer",
-        header: "Customer Info",
+        header: "Customer",
         accessorFn: (s) => s.customer_name || s.customer_email || s.customer || "",
         meta: {
           exportAs: [
@@ -456,9 +456,9 @@ export function SubscriptionsTable({
           if (!s.customer) return <TextCell />;
           const name = s.customer_name || s.customer_email || s.customer;
           const nameIsId = name === s.customer;
-          // Order: name · company · email · phone; `name` already consumed whichever
-          // stood in for it, so it is not repeated below.
-          const secondary = [s.customer_company, s.customer_email, s.customer_phone].filter(
+          // Exactly two lines, so every row is one height: the name, then the first of
+          // company, email, phone that does not repeat it.
+          const second = [s.customer_company, s.customer_email, s.customer_phone].find(
             (v): v is string => !!v && v !== name,
           );
           // Same as the customers list: wrapped at 320px, never cut off.
@@ -472,14 +472,8 @@ export function SubscriptionsTable({
               }
               href={`/businesses/${biz}/customers/${s.customer}`}
               sub={
-                secondary.length > 0 ? (
-                  <>
-                    {secondary.map((v) => (
-                      <span key={v} className={line}>
-                        {v}
-                      </span>
-                    ))}
-                  </>
+                second ? (
+                  <span className={line}>{second}</span>
                 ) : nameIsId ? undefined : (
                   // Nothing else identifies the row: show the id under the name.
                   <span className={cn(line, "font-mono")}>{s.customer}</span>
@@ -509,10 +503,10 @@ export function SubscriptionsTable({
         // export and the client sort agree with the screen.
         id: "current_period_end",
         accessorFn: (s) => nextBillingAt(s) ?? "",
-        header: "Next Billing At",
+        header: "Next billing",
         cell: ({ row }) => {
           const at = nextBillingAt(row.original);
-          return <TextCell>{at ? fmtDateShort(at, tz) : null}</TextCell>;
+          return <TextCell>{at ? fmtDate(at, tz) : null}</TextCell>;
         },
       },
       {
@@ -521,6 +515,7 @@ export function SubscriptionsTable({
         header: mrrCurrency ? `MRR (${mrrCurrency})` : "MRR",
         meta: {
           align: "right",
+          phone: "aside",
           exportAs: [
             // Blank for a cancelled subscription, as on screen.
             moneyCell<Subscription>(
@@ -544,10 +539,10 @@ export function SubscriptionsTable({
       {
         accessorKey: "created_at",
         id: "created_at",
-        header: "Created At",
+        header: "Created",
         cell: ({ row }) => (
           <TextCell>
-            {row.original.created_at ? fmtDateTimeShort(row.original.created_at, tz) : null}
+            {row.original.created_at ? fmtDateTime(row.original.created_at, tz) : null}
           </TextCell>
         ),
       },
@@ -558,12 +553,14 @@ export function SubscriptionsTable({
         id: "status",
         header: "Status",
         enableSorting: false,
+        // The title cell already leads with the status chip.
+        meta: { phone: "hide" },
         accessorFn: (s) => s.status,
         cell: ({ row }) => <StatusBadge status={row.original.status} />,
       },
       {
         id: "recurring_amount",
-        header: "Recurring Amount",
+        header: "Recurring amount",
         enableSorting: false,
         meta: {
           align: "right",
@@ -594,7 +591,7 @@ export function SubscriptionsTable({
         accessorFn: (s) => value(s) ?? "",
         cell: ({ row }) => {
           const at = value(row.original);
-          return <TextCell>{at ? fmtDateShort(at, tz) : null}</TextCell>;
+          return <TextCell>{at ? fmtDate(at, tz) : null}</TextCell>;
         },
       })),
       // One column per active custom field; an archived one is filterable but not shown.
@@ -613,7 +610,7 @@ export function SubscriptionsTable({
 
   const segments = React.useMemo<ListSegment<Subscription>[]>(
     () => [
-      { id: "all", label: "All Subscriptions" },
+      { id: "all", label: "All subscriptions" },
       // Every status segment now filters the API-LEVEL status — the value the row's pill
       // shows — because the engine's `status` filter compares `apiStatusSql` rather than the
       // stored column. So "Active" here means genuinely renewing: a subscription with a
@@ -621,7 +618,7 @@ export function SubscriptionsTable({
       { id: "active", label: "Active", filters: [{ field: "status", op: "is", value: "active" }] },
       {
         id: "in_trial",
-        label: "In Trial",
+        label: "In trial",
         filters: [{ field: "status", op: "is", value: "in_trial" }],
       },
       {
@@ -646,7 +643,7 @@ export function SubscriptionsTable({
       { id: "future", label: "Future", filters: [{ field: "status", op: "is", value: "future" }] },
       {
         id: "renewing_soon",
-        label: "Renewing In 7 Days",
+        label: "Renewing in 7 days",
         // `next_billing_at` is the only date that answers "who is charged next" across every
         // status — `current_period_end` is null for the whole trial. The status filter is
         // what makes this RENEWALS rather than renewals-plus-trial-conversions-plus-starts,
@@ -658,7 +655,7 @@ export function SubscriptionsTable({
       },
       {
         id: "trials_ending",
-        label: "Trials Ending In 7 Days",
+        label: "Trials ending in 7 days",
         filters: [
           { field: "status", op: "is", value: "in_trial" },
           { field: "trial_end", op: "in_next", value: "7" },
@@ -666,7 +663,7 @@ export function SubscriptionsTable({
       },
       {
         id: "cancelling_soon",
-        label: "Cancelling In 30 Days",
+        label: "Cancelling in 30 days",
         // `canceled_at` is a three-way coalesce at the API edge (serialize.ts) that resolves
         // to a PENDING `specific_date` cancel, or to the term end a non-renewing subscription
         // will cancel on — so the forward window alone is the segment. No status filter on
@@ -691,7 +688,7 @@ export function SubscriptionsTable({
    */
   const filterFields = React.useMemo<ListFilterField<Subscription>[]>(
     () => [
-      { id: "id", label: "Subscription Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Subscription ID", group: "Identity", serverOps: TEXT_OPS },
 
       {
         id: "status",
@@ -705,7 +702,7 @@ export function SubscriptionsTable({
         // compares that same derived value, so it belongs in the list.
         options: [
           { value: "future", label: "Future" },
-          { value: "in_trial", label: "In Trial" },
+          { value: "in_trial", label: "In trial" },
           { value: "active", label: "Active" },
           { value: "non_renewing", label: "Non-renewing" },
           { value: "paused", label: "Paused" },
@@ -715,7 +712,7 @@ export function SubscriptionsTable({
       },
       {
         id: "cancel_at_period_end",
-        label: "Cancel At Term End",
+        label: "Cancel at term end",
         type: "boolean",
         group: "Status",
         // Relabelled from "Non-renewing": that is now a STATUS value, and this flag is only
@@ -728,7 +725,7 @@ export function SubscriptionsTable({
       },
       {
         id: "cancel_reason",
-        label: "Cancellation Reason",
+        label: "Cancellation reason",
         group: "Status",
         // Free text rather than a fixed pick-list, despite the column being `kind: 'enum'`
         // (which fixes the OPERATORS, not the values). Two vocabularies land in it: the system
@@ -741,23 +738,23 @@ export function SubscriptionsTable({
       },
       {
         id: "cancel_reason_code",
-        label: "Cancellation Reason Code",
+        label: "Cancellation reason code",
         group: "Status",
         serverOps: TEXT_OPS,
       },
 
-      { id: "customer", label: "Customer Id", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer", label: "Customer ID", group: "Customer", serverOps: TEXT_OPS },
       {
         id: "customer_name",
-        label: "Customer Name",
+        label: "Customer name",
         group: "Customer",
         // Compares the RESOLVED account-holder name the row renders, not `customers.name` —
         // against the bare column a first/last-name customer returned an empty page.
         serverOps: TEXT_OPS,
       },
-      { id: "customer_email", label: "Customer Email", group: "Customer", serverOps: TEXT_OPS },
-      { id: "customer_company", label: "Customer Company", group: "Customer", serverOps: TEXT_OPS },
-      { id: "customer_phone", label: "Customer Phone", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_email", label: "Customer email", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_company", label: "Customer company", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_phone", label: "Customer phone", group: "Customer", serverOps: TEXT_OPS },
 
       { id: "plan", label: "Plan", group: "Plan & items", serverOps: ITEM_OPS },
       {
@@ -770,7 +767,7 @@ export function SubscriptionsTable({
       },
       {
         id: "plan_quantity",
-        label: "Plan Quantity",
+        label: "Plan quantity",
         type: "number",
         group: "Plan & items",
         // Scoped to the PLAN item in SQL, so an add-on quantity can never answer for it.
@@ -814,7 +811,7 @@ export function SubscriptionsTable({
 
       {
         id: "billing_period",
-        label: "Billing Period",
+        label: "Billing period",
         type: "number",
         group: "Billing",
         hint: "The count only. 3 with unit Month is quarterly.",
@@ -822,7 +819,7 @@ export function SubscriptionsTable({
       },
       {
         id: "billing_period_unit",
-        label: "Billing Period Unit",
+        label: "Billing period unit",
         type: "select",
         group: "Billing",
         // Closed set (db/schema/subscriptions.ts), stated rather than derived.
@@ -836,18 +833,18 @@ export function SubscriptionsTable({
       },
       {
         id: "remaining_billing_cycles",
-        label: "Remaining Billing Cycles",
+        label: "Remaining billing cycles",
         type: "number",
         group: "Billing",
         hint: 'Empty means it renews forever, so "is empty" is the no-end-date filter.',
         serverOps: NUMBER_OPS,
       },
-      { id: "po_number", label: "PO Number", group: "Billing", serverOps: TEXT_OPS },
-      { id: "invoice_notes", label: "Invoice Notes", group: "Billing", serverOps: TEXT_OPS },
+      { id: "po_number", label: "PO number", group: "Billing", serverOps: TEXT_OPS },
+      { id: "invoice_notes", label: "Invoice notes", group: "Billing", serverOps: TEXT_OPS },
 
       {
         id: "auto_collection",
-        label: "Auto Collection",
+        label: "Auto collection",
         type: "select",
         group: "Payment",
         options: [
@@ -861,7 +858,7 @@ export function SubscriptionsTable({
       },
       {
         id: "create_pending_invoices",
-        label: "Create Pending Invoices",
+        label: "Create pending invoices",
         type: "boolean",
         group: "Payment",
         // A bool column gets `is` and nothing else from the engine, so there is no operator
@@ -871,14 +868,14 @@ export function SubscriptionsTable({
       },
       {
         id: "net_term_days",
-        label: "Net Term Days",
+        label: "Net term days",
         type: "number",
         group: "Payment",
         serverOps: NUMBER_OPS,
       },
       {
         id: "default_payment_method",
-        label: "Payment Method Id",
+        label: "Payment method ID",
         group: "Payment",
         // Compares the PUBLIC id (`pm_…`) the operator can see, not the uuid column.
         hint: "The card set on this subscription (pm_…). Empty means that we charge the customer's primary payment method.",
@@ -898,26 +895,26 @@ export function SubscriptionsTable({
        */
       ...paymentMethodFields(gatewayCatalog),
 
-      { id: "start_date", label: "Start Date", type: "date", group: "Dates", serverOps: DATE_OPS },
-      { id: "started_at", label: "Started At", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "start_date", label: "Start date", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "started_at", label: "Started at", type: "date", group: "Dates", serverOps: DATE_OPS },
       {
         id: "activated_at",
-        label: "Activated At",
+        label: "Activated at",
         type: "date",
         group: "Dates",
         serverOps: DATE_OPS,
       },
       {
         id: "trial_start",
-        label: "Trial Start",
+        label: "Trial start",
         type: "date",
         group: "Dates",
         serverOps: DATE_OPS,
       },
-      { id: "trial_end", label: "Trial End", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "trial_end", label: "Trial end", type: "date", group: "Dates", serverOps: DATE_OPS },
       {
         id: "current_period_start",
-        label: "Current Term Start",
+        label: "Current term start",
         type: "date",
         group: "Dates",
         // Both term boundaries serialize as null for the whole trial and
@@ -927,7 +924,7 @@ export function SubscriptionsTable({
       },
       {
         id: "current_period_end",
-        label: "Current Term End",
+        label: "Current term end",
         type: "date",
         group: "Dates",
         // Was labelled "Next Billing At" here, which became the wrong field the moment the
@@ -939,7 +936,7 @@ export function SubscriptionsTable({
       },
       {
         id: "next_billing_at",
-        label: "Next Billing At",
+        label: "Next billing at",
         type: "date",
         group: "Dates",
         // The one date that answers "who renews in the next 7 days" across every status.
@@ -948,7 +945,7 @@ export function SubscriptionsTable({
       },
       {
         id: "cancel_scheduled_at",
-        label: "Scheduled Cancellation Date",
+        label: "Scheduled cancellation date",
         type: "date",
         group: "Dates",
         // The other half of "which subscriptions are about to cancel?" — a `specific_date`
@@ -958,7 +955,7 @@ export function SubscriptionsTable({
       },
       {
         id: "canceled_at",
-        label: "Cancelled At",
+        label: "Cancelled at",
         type: "date",
         group: "Dates",
         // A three-way coalesce at the API edge: the actual cancellation, else a pending
@@ -967,12 +964,12 @@ export function SubscriptionsTable({
         hint: "Also finds pending cancellations, so a future window is meaningful.",
         serverOps: DATE_OPS,
       },
-      { id: "created_at", label: "Created At", type: "date", group: "Dates", serverOps: DATE_OPS },
-      { id: "updated_at", label: "Updated At", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS },
+      { id: "updated_at", label: "Updated", type: "date", group: "Dates", serverOps: DATE_OPS },
 
       {
         id: "has_scheduled_changes",
-        label: "Has Scheduled Changes",
+        label: "Has scheduled changes",
         type: "boolean",
         group: "Other",
         hint: "A change still waiting on the billing clock.",
@@ -1004,15 +1001,14 @@ export function SubscriptionsTable({
       savedViews={{ entity: "subscriptions", biz }}
       initialFilters={initialFilters}
       sortOptions={[
-        { id: "created_at", label: "Created At" },
-        { id: "current_period_end", label: "Next Billing At" },
+        { id: "created_at", label: "Created" },
+        { id: "current_period_end", label: "Next billing" },
         { id: "mrr", label: "MRR" },
         { id: "status", label: "Status" },
       ]}
       createAction={createAction("Subscription", `/businesses/${biz}/subscriptions/new`)}
       importAction={importAction("Subscriptions", undefined, "CSV import is not configured yet")}
-      searchPlaceholder="Search for ID / Name / Plan…"
-      searchHint={<PaletteSearchHint />}
+      searchPlaceholder="Search by ID, name or plan"
       exportName="subscriptions"
       persistKey={`subs:${biz}`}
       // Customer ID duplicates the name+email already in Customer Info, and it was
@@ -1032,7 +1028,7 @@ export function SubscriptionsTable({
         <EmptyState
           icon={<CreditCard />}
           title="No subscriptions"
-          description="No subscriptions match this view, filter or search."
+          description="There are no subscriptions in this view."
         />
       }
     />

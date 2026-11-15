@@ -21,6 +21,7 @@ export function CreateDialog({
   triggerLabel,
   triggerVariant = "default",
   triggerSize,
+  triggerIcon,
   title,
   description,
   wide,
@@ -31,6 +32,8 @@ export function CreateDialog({
   triggerVariant?: React.ComponentProps<typeof Button>["variant"];
   /** Match the row it sits in — a per-row trigger in a 44px table row is `sm`. */
   triggerSize?: React.ComponentProps<typeof Button>["size"];
+  /** Leading icon, e.g. the Plus on a list header. */
+  triggerIcon?: React.ReactNode;
   title: string;
   description?: React.ReactNode;
   /** widen the dialog for multi-column / line-item forms */
@@ -44,6 +47,7 @@ export function CreateDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant={triggerVariant} size={triggerSize}>
+          {triggerIcon}
           {triggerLabel}
         </Button>
       </DialogTrigger>

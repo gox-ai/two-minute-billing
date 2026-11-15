@@ -258,6 +258,17 @@ const DEFS = {
     "Create, change and test webhook endpoints",
   ),
   "api_logs:view": d("read", "developer", "Developers", "View API request logs"),
+  "mcp:use": d("read", "any", "Developers", "Connect AI assistants (MCP) to read billing data"),
+  "mcp:connect": d(
+    "write",
+    "any",
+    "Developers",
+    "Approve an AI assistant's request to connect, and disconnect it",
+    true,
+  ),
+  // ── Assistant (a signed-in member only) ──
+  "assistant:view": d("read", "any", "Assistant", "View your assistant conversations", true),
+  "assistant:use": d("write", "any", "Assistant", "Ask the assistant questions", true),
   // ── Team (a signed-in member only) ──
   "members:view": d("read", "admin", "Team", "View team members", true),
   "members:manage": d("write", "admin", "Team", "Invite, change and remove team members", true),

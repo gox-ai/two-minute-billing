@@ -1,11 +1,13 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowRight, Building2, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { HEX_RE, onColor } from "@/lib/brand";
+import { HEX_RE } from "@/lib/brand";
 import { moneyCompact, pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EmptyFigure } from "@/components/patterns/record-page";
+import { BizMark } from "@/components/business-mark";
 import type { RosterRow } from "@/components/analytics/org/business-roster";
 
 /** Cards before the "all" card; with this many or fewer businesses, every one gets a card. */
@@ -19,11 +21,14 @@ export function BusinessCards({
   rows,
   currency,
   allHref,
+  fill = false,
 }: {
   rows: RosterRow[];
   /** The reporting currency every MRR figure is stated in. */
   currency: string | null;
   allHref: string;
+  /** Fewer than four cards fill the row instead of leaving a quarter empty. */
+  fill?: boolean;
 }) {
   if (rows.length === 0) return null;
   const ordered = [...rows].sort(
@@ -34,7 +39,15 @@ export function BusinessCards({
 
   return (
     <section aria-label="Your businesses" className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-6 md:grid-cols-2",
+          fill && shown.length + (fitsAll ? 0 : 1) === 3
+            ? "@min-[56.875rem]/main:grid-cols-3"
+            : "@min-[56.875rem]/main:grid-cols-4",
+          fill && shown.length + (fitsAll ? 0 : 1) <= 2 && "@min-[56.875rem]/main:grid-cols-2",
+        )}
+      >
         {shown.map((r, i) => (
           <BusinessCard key={r.id} row={r} currency={currency} lead={i === 0} />
         ))}
@@ -85,9 +98,14 @@ function BusinessCard({
           />
         </div>
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <span className={cn("font-semibold tabular-nums", lead ? "text-2xl" : "text-lg")}>
-            {mrr != null ? moneyCompact(mrr, currency!) : "—"}
-          </span>
+          {/* An absent figure is the one small muted dash, at the same size on every card. */}
+          {mrr != null ? (
+            <span className={cn("font-semibold tabular-nums", lead ? "text-2xl" : "text-lg")}>
+              {moneyCompact(mrr, currency!)}
+            </span>
+          ) : (
+            <EmptyFigure />
+          )}
           <span className="text-sm text-muted-foreground">
             {mrr != null
               ? `MRR${row.currency ? ` · bills in ${row.currency}` : ""}`
@@ -131,37 +149,16 @@ function BrandBand({ color }: { color?: string | null }) {
   );
 }
 
-/** Its icon; else its initials on its brand colour; else our building mark. */
+/** The same mark as the rail and the business switcher. */
 function BusinessMark({ row, size = "sm" }: { row: RosterRow; size?: "sm" | "lg" }) {
-  const dim = size === "lg" ? "size-10" : "size-8";
-  const box = cn(dim, size === "lg" ? "rounded-lg" : "rounded-md");
-  if (row.iconUrl) {
-    // Square: a mark often draws its own frame, and rounding clips its corners.
-    // eslint-disable-next-line @next/next/no-img-element -- a tenant URL on any host
-    return <img src={row.iconUrl} alt="" className={cn(dim, "shrink-0 object-contain")} />;
-  }
-  if (row.brandColor && HEX_RE.test(row.brandColor)) {
-    return (
-      <span
-        aria-hidden
-        className={cn(box, "flex shrink-0 items-center justify-center text-sm font-semibold")}
-        style={{ backgroundColor: row.brandColor, color: onColor(row.brandColor) }}
-      >
-        {initials(row.name)}
-      </span>
-    );
-  }
   return (
-    <span className={cn(box, "flex shrink-0 items-center justify-center bg-primary/10")}>
-      <Building2 className="size-4 text-primary" aria-hidden />
-    </span>
+    <BizMark
+      name={row.name}
+      iconUrl={row.iconUrl}
+      brandColor={row.brandColor}
+      size={size === "lg" ? "10" : "8"}
+    />
   );
-}
-
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const letters = words.length > 1 ? words[0]![0]! + words[1]![0]! : (words[0] ?? "").slice(0, 2);
-  return letters.toUpperCase();
 }
 
 /**
@@ -196,7 +193,7 @@ export function BusinessPanel({ row, children }: { row: RosterRow; children: Rea
           />
         </span>
       </Link>
-      <div className="grid grid-cols-1 divide-y md:grid-cols-2 xl:grid-cols-4 xl:divide-x xl:divide-y-0">
+      <div className="grid grid-cols-1 divide-y md:grid-cols-2 @min-[56.875rem]/main:grid-cols-4 @min-[56.875rem]/main:divide-x @min-[56.875rem]/main:divide-y-0">
         {children}
       </div>
     </Card>

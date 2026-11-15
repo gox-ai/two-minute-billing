@@ -1,6 +1,7 @@
 import { CommitmentError, getCommitment, setCommitment } from "@/modules/subscriptions/commitment";
 import {
   missingReason,
+  FAILED_CHANGE_CHARGES,
   resolveBillingRulesConfig,
   PLAN_CREDIT_CANCEL_AT_PERIOD_ENDS,
   PLAN_CREDIT_PAUSES,
@@ -88,6 +89,8 @@ import {
 import {
   changeSubscription,
   ProrationError,
+  ChangeRevertedError,
+  PendingChangeError,
   ProrationConflictError,
   defaultInvoiceImmediately,
   type ItemAdd,
@@ -159,6 +162,7 @@ import { CustomFieldError, filterDefinitions } from "@/modules/custom-fields/ser
 import {
   applyManualDiscount,
   applyCouponToSubscription,
+  assertCouponCodeMatchesAnItem,
   removeDiscount,
   CouponError,
 } from "@/modules/coupons/service";
@@ -183,7 +187,9 @@ import {
   reactivateAndBill,
 } from "@/modules/subscriptions/reactivate";
 import {
+  NET_CREDIT_DOCUMENTS,
   resolveLifecycleConfig,
+  type NetCreditDocuments,
   type PlanChangeCoupons,
 } from "@/modules/subscriptions/lifecycle-config";
 import { creditHandlingFor } from "@/modules/subscriptions/downgrade-credit";
@@ -217,7 +223,45 @@ const log = createLogger("subscriptions");
 const bigintOrNull = (v: number | null | undefined): bigint | null | undefined =>
   v === undefined ? undefined : v === null ? null : BigInt(v);
 
-const createSubBody = z
+/** `failed_change_charge: revert` undid the change: 402, naming the voided invoice and why. */
+function changeRevertedReply(reply: FastifyReply, e: ChangeRevertedError) {
+  return reply.code(402).send({
+    error: {
+      type: "payment_error",
+      code: "payment_failed",
+      message: e.message,
+      invoice: e.reverted.invoice,
+      decline_code: e.reverted.declineCode,
+    },
+  });
+}
+
+/**
+ * `failed_change_charge: apply_when_paid` held the change: 402 with `pending_change`. The
+ * change applies when the invoice is paid; `requires_action` carries the intent to authenticate.
+ */
+function pendingChangeReply(reply: FastifyReply, e: PendingChangeError) {
+  const h = e.held;
+  const view = h.intent ? serializePaymentIntent(h.intent) : null;
+  return reply.code(402).send({
+    error: {
+      type: "payment_error",
+      code: h.code,
+      message: e.message,
+      invoice: h.invoice,
+      decline_code: h.declineCode,
+    },
+    pending_change: {
+      id: h.pendingChange,
+      invoice: h.invoice,
+      expires_at: h.expiresAt,
+      payment_in_progress: h.inFlight,
+    },
+    ...(view ? { payment_intent: view, next_action: view.next_action } : {}),
+  });
+}
+
+export const createSubBody = z
   .object({
     /**
      * Caller-supplied subscription id, named at signup. Omit it and you get a fresh
@@ -535,14 +579,16 @@ const pendingDiscountFields = {
 
 /**
  * Business rules a change may override for itself. Omitted = the business rule.
- * `coupons` and `downgrade_credit` change the money, so `/estimate` takes them too.
+ * `coupons`, `downgrade_credit` and `net_credit_documents` change the money or the
+ * documents, so `/estimate` takes them too.
  */
 const changeRuleFields = {
   coupons: z.enum(["keep", "drop", "keep_if_valid"]).optional(),
   downgrade_credit: z.enum(["credit_balance", "refund"]).optional(),
+  net_credit_documents: z.enum(NET_CREDIT_DOCUMENTS).optional(),
 };
 const changeOnlyRuleFields = {
-  on_charge_failure: z.enum(["start_dunning", "next_renewal"]).optional(),
+  on_charge_failure: z.enum(FAILED_CHANGE_CHARGES).optional(),
   plan_credits: z.enum(["full", "prorated", "next_window"]).optional(),
   allowances: z.enum(["new_window", "keep_used", "prorated"]).optional(),
 };
@@ -671,6 +717,11 @@ const changeSubBody = z
      */
     priced_at: z.string().datetime().optional(),
     quote: z.string().max(64).optional(),
+    /**
+     * `apply_when_paid`: the payer is present. A held change whose payment needs
+     * authentication answers 402 `requires_action` with the payment intent to complete.
+     */
+    on_session: z.boolean().optional(),
   })
   .refine((b) => b.changes.length + b.adds.length + b.removes.length > 0, {
     message: "a change needs at least one of changes, adds or removes",
@@ -827,6 +878,8 @@ function priceEdit(input: {
   removeDiscount?: boolean;
   coupons?: PlanChangeCoupons;
   downgradeCredit?: "credit_balance" | "refund";
+  netCreditDocuments?: NetCreditDocuments;
+  legacyInvoiceImmediately?: boolean;
 }) {
   const m = toEngineManualDiscount(input.manualDiscount);
   return estimateChange({
@@ -842,6 +895,10 @@ function priceEdit(input: {
     removeDiscount: input.removeDiscount === true,
     ...(input.coupons ? { planChangeCoupons: input.coupons } : {}),
     ...(input.downgradeCredit ? { downgradeCredit: input.downgradeCredit } : {}),
+    ...(input.netCreditDocuments ? { netCreditDocuments: input.netCreditDocuments } : {}),
+    ...(input.legacyInvoiceImmediately !== undefined
+      ? { legacyInvoiceImmediately: input.legacyInvoiceImmediately }
+      : {}),
     manualDiscount: m
       ? {
           kind: m.kind,
@@ -889,12 +946,6 @@ function resetOverridesFor(
   direction: ChangeDirection,
   d: { plan_credits?: PlanCreditUpgrade; allowances?: AllowanceUpgrade },
 ): { ok: true; overrides?: ResetOverrides } | { ok: false; message: string } {
-  if (direction === "downgrade" && d.plan_credits === "prorated")
-    return {
-      ok: false,
-      message:
-        "We could not apply the change. A downgrade cannot prorate plan credits. Send plan_credits: full or next_window.",
-    };
   if (direction === "downgrade" && d.allowances)
     return {
       ok: false,
@@ -906,9 +957,7 @@ function resetOverridesFor(
   return {
     ok: true,
     overrides: {
-      ...(pc
-        ? { planCredits: { onUpgrade: pc, ...(pc !== "prorated" ? { onDowngrade: pc } : {}) } }
-        : {}),
+      ...(pc ? { planCredits: { onUpgrade: pc, onDowngrade: pc } } : {}),
       ...(d.allowances ? { allowances: { onUpgrade: d.allowances } } : {}),
     },
   };
@@ -1056,13 +1105,8 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           !hasTrial &&
           startsNow &&
           invoiceFirstPeriodNow;
-        if (chargesNow) {
-          await assertChargeableForAutoCollect({
-            organizationId: req.organization!.id,
-            businessId: business.id,
-            customer,
-          });
-        }
+        // The card check waits for the planned first invoice (below): one with nothing
+        // due needs no card.
         // A `payment_intent` on a signup that collects nothing now (trial,
         // future-dated start, auto-collection off, `invoice_immediately: false`) has
         // nowhere to be consumed. Refuse rather than silently ignore an
@@ -1076,6 +1120,22 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
                 "You supplied payment_intent, but this signup does not collect a first payment now",
             },
           });
+        }
+
+        // Before the subscription exists: with nothing charged now, its events are not
+        // buffered, so a coupon refused after create would leave it behind.
+        for (const code of parsed.data.coupon_ids ?? []) {
+          try {
+            await assertCouponCodeMatchesAnItem({
+              organizationId: req.organization!.id,
+              businessId: business.id,
+              code,
+              items: { priceIds: resolved.map((r) => r.price.id), addonsMayFollow: true },
+            });
+          } catch (e) {
+            if (e instanceof CouponError) return badRequest(reply, e.message);
+            throw e;
+          }
         }
 
         // With auto-collection ON the subscription is only PROVISIONAL until the
@@ -1267,6 +1327,22 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             // compensating after the fact produced.
             const plan = await planSubscriptionPeriodInvoice(billInput);
             const plannedDue = plan.mode === "finalize" ? plan.money.amountDue : 0n;
+            if (plannedDue > 0n) {
+              try {
+                await assertChargeableForAutoCollect({
+                  organizationId: req.organization!.id,
+                  businessId: business.id,
+                  customer,
+                });
+              } catch (e) {
+                // Refused like a decline: nothing stays behind.
+                if (e instanceof NoChargeablePaymentMethodError) {
+                  await discardProvisional();
+                  deferred.length = 0;
+                }
+                throw e;
+              }
+            }
             let charge: CompletedCharge | undefined;
 
             // ── Settle by CONSUMING an already-authorized intent ────────────────
@@ -1463,7 +1539,12 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
                   error: {
                     type: "payment_error",
                     code: outcome.failureCode,
-                    message: `We did not create the subscription. The first payment failed: ${outcome.failureMessage}`,
+                    message: `We did not create the subscription. The first payment failed: ${outcome.failureMessage}${
+                      // Off-session, a challenge is a refusal; on-session returns the intent to authenticate.
+                      outcome.failureCode === "requires_action" && !parsed.data.on_session
+                        ? " If the buyer is present, send on_session: true to get the authentication step."
+                        : ""
+                    }`,
                   },
                 });
               }
@@ -1580,6 +1661,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
               default_payment_method: detail.defaultPaymentMethodPublicId,
               ship_to: detail,
               discount: detail.discount,
+              pending_change: detail.pendingChange,
               dues: await subscriptionDues(req.organization!.id, subscription.id),
               recurring_amount_minor: await recurringAmountForSubscription(
                 req.organization!.id,
@@ -1906,6 +1988,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         default_payment_method: detail.defaultPaymentMethodPublicId,
         ship_to: detail,
         discount: detail.discount,
+        pending_change: detail.pendingChange,
         dues,
         recurring_amount_minor: recurring,
         revenue: collected ?? { amount_minor: 0, paid_invoices_count: 0, first_paid_at: null },
@@ -2118,6 +2201,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         d.on_charge_failure ? "on_charge_failure" : null,
         d.coupons ? "coupons" : null,
         d.downgrade_credit ? "downgrade_credit" : null,
+        d.net_credit_documents ? "net_credit_documents" : null,
         d.plan_credits ? "plan_credits" : null,
         d.allowances ? "allowances" : null,
       ].filter((f): f is string => f !== null);
@@ -2224,6 +2308,10 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             removeDiscount: d.remove_discount,
             coupons: d.coupons,
             downgradeCredit: d.downgrade_credit,
+            netCreditDocuments: d.net_credit_documents,
+            legacyInvoiceImmediately:
+              d.invoice_immediately ??
+              (await defaultInvoiceImmediately(req.organization!.id, business.id)),
           });
           if (estimateQuote(est) !== d.quote) return quoteMovedReply(reply);
         }
@@ -2256,7 +2344,9 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           ...(d.on_charge_failure ? { failedChangeCharge: d.on_charge_failure } : {}),
           ...(d.coupons ? { planChangeCoupons: d.coupons } : {}),
           ...(d.downgrade_credit ? { downgradeCredit: d.downgrade_credit } : {}),
+          ...(d.net_credit_documents ? { netCreditDocuments: d.net_credit_documents } : {}),
           ...(reset.overrides ? { resetOverrides: reset.overrides } : {}),
+          ...(d.on_session ? { onSession: true } : {}),
         });
         return reply.code(200).send({
           object: "subscription_change",
@@ -2308,6 +2398,8 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         // A concurrent write invalidated the proration we computed — nothing was
         // applied and nothing was billed, so this is a retryable 409, not a 400.
         if (e instanceof ProrationConflictError) return conflict(reply, e.message);
+        if (e instanceof PendingChangeError) return pendingChangeReply(reply, e);
+        if (e instanceof ChangeRevertedError) return changeRevertedReply(reply, e);
         if (e instanceof ProrationError) {
           return reply
             .code(400)
@@ -2344,49 +2436,6 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       if (!parsed.success) return badRequest(reply, parsed.error);
       const coupon = singleCouponCode(parsed.data);
       if (!coupon.ok) return badRequest(reply, coupon.message);
-      const wallNow = await businessWallClock(business.id);
-      let estimateAt = wallNow;
-      if (parsed.data.change_option === "specific_date") {
-        const d = parsed.data;
-        if (!d.changes_scheduled_at)
-          return badRequest(reply, "change_option=specific_date requires changes_scheduled_at");
-        // Only what `POST …/schedule` can carry: a scheduled change has no discount,
-        // no proration switch and no term reset of its own.
-        if (d.coupon_code || d.coupon_ids?.length || d.manual_discount || d.remove_discount)
-          return badRequest(
-            reply,
-            "a scheduled change cannot add or remove a coupon or manual discount",
-          );
-        if (d.prorate !== undefined || d.reset_term !== undefined)
-          return badRequest(reply, "a scheduled change cannot set prorate or reset_term");
-        if (d.coupons || d.downgrade_credit)
-          return badRequest(reply, "a scheduled change cannot set coupons or downgrade_credit");
-        const at = new Date(d.changes_scheduled_at);
-        const termEnd = subscription.currentPeriodEnd;
-        if (at <= wallNow) return badRequest(reply, "changes_scheduled_at must be in the future");
-        if (!termEnd || at >= termEnd)
-          return badRequest(reply, "changes_scheduled_at must fall inside the current term");
-        estimateAt = at;
-      } else if (parsed.data.changes_scheduled_at) {
-        return badRequest(reply, "changes_scheduled_at needs change_option=specific_date");
-      } else if (parsed.data.change_option === "end_of_term") {
-        // Same input the scheduled-change applier uses: `now` = the effective instant,
-        // no proration or term-reset switch of its own. Discounts stay: the dashboard
-        // applies them now, so they reach the renewal this previews.
-        if (parsed.data.prorate !== undefined || parsed.data.reset_term !== undefined)
-          return badRequest(
-            reply,
-            "a change at the end of the term cannot set prorate or reset_term",
-          );
-        if (parsed.data.coupons || parsed.data.downgrade_credit)
-          return badRequest(
-            reply,
-            "a change at the end of the term cannot set coupons or downgrade_credit",
-          );
-        const termEnd = subscription.currentPeriodEnd ?? subscription.trialEnd;
-        if (!termEnd) return badRequest(reply, "This subscription has no term end.");
-        estimateAt = termEnd;
-      }
       const edit = {
         changes: parsed.data.changes.map((c) => ({
           itemId: c.item,
@@ -2408,12 +2457,73 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         subscription,
         edit,
       );
+      // No change_option: price the timing `/change` would use (the business rule), so a
+      // downgrade the business applies at the term end is not previewed as a credit now.
+      const option =
+        parsed.data.change_option ??
+        (policy.timings.includes("now") ? "immediately" : policy.defaultTiming);
+      const wallNow = await businessWallClock(business.id);
+      let estimateAt = wallNow;
+      if (parsed.data.change_option === "specific_date") {
+        const d = parsed.data;
+        if (!d.changes_scheduled_at)
+          return badRequest(reply, "change_option=specific_date requires changes_scheduled_at");
+        // Only what `POST …/schedule` can carry: a scheduled change has no discount,
+        // no proration switch and no term reset of its own.
+        if (d.coupon_code || d.coupon_ids?.length || d.manual_discount || d.remove_discount)
+          return badRequest(
+            reply,
+            "a scheduled change cannot add or remove a coupon or manual discount",
+          );
+        if (d.prorate !== undefined || d.reset_term !== undefined)
+          return badRequest(reply, "a scheduled change cannot set prorate or reset_term");
+        if (d.coupons || d.downgrade_credit || d.net_credit_documents)
+          return badRequest(
+            reply,
+            "a scheduled change cannot set coupons, downgrade_credit or net_credit_documents",
+          );
+        const at = new Date(d.changes_scheduled_at);
+        const termEnd = subscription.currentPeriodEnd;
+        if (at <= wallNow) return badRequest(reply, "changes_scheduled_at must be in the future");
+        if (!termEnd || at >= termEnd)
+          return badRequest(reply, "changes_scheduled_at must fall inside the current term");
+        estimateAt = at;
+      } else if (parsed.data.changes_scheduled_at) {
+        return badRequest(reply, "changes_scheduled_at needs change_option=specific_date");
+      } else if (option === "end_of_term") {
+        // Same input the scheduled-change applier uses: `now` = the effective instant,
+        // no proration or term-reset switch of its own. Discounts stay: the dashboard
+        // applies them now, so they reach the renewal this previews.
+        // Refused only when asked for: an inferred end-of-term preview ignores them.
+        const asked = parsed.data.change_option !== undefined;
+        if (asked && (parsed.data.prorate !== undefined || parsed.data.reset_term !== undefined))
+          return badRequest(
+            reply,
+            "a change at the end of the term cannot set prorate or reset_term",
+          );
+        if (
+          asked &&
+          (parsed.data.coupons || parsed.data.downgrade_credit || parsed.data.net_credit_documents)
+        )
+          return badRequest(
+            reply,
+            "a change at the end of the term cannot set coupons, downgrade_credit or net_credit_documents",
+          );
+        const termEnd = subscription.currentPeriodEnd ?? subscription.trialEnd;
+        if (!termEnd) return badRequest(reply, "This subscription has no term end.");
+        estimateAt = termEnd;
+      }
       const prorate = prorateFor(policy, direction, parsed.data.prorate);
       // A scheduled change keeps the anchor, as its applier does.
       const resetTerm =
         estimateAt === wallNow
           ? resetTermForPolicy(policy, direction, planMoves, parsed.data.reset_term)
           : undefined;
+      // What a `/change` without `invoice_immediately` uses; it also picks the documents of a
+      // net credit while `net_credit_documents` is not saved.
+      const invoiceNowRule =
+        policy.invoiceImmediately ??
+        (await defaultInvoiceImmediately(req.organization!.id, business.id));
       try {
         const est = await priceEdit({
           organizationId: req.organization!.id,
@@ -2428,6 +2538,8 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           removeDiscount: parsed.data.remove_discount,
           coupons: parsed.data.coupons,
           downgradeCredit: parsed.data.downgrade_credit,
+          netCreditDocuments: parsed.data.net_credit_documents,
+          legacyInvoiceImmediately: invoiceNowRule,
         });
         const rules = resolveBillingRulesConfig(business);
         const scope = await withTenant(req.organization!.id, async (tx) => {
@@ -2462,10 +2574,11 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
               : null,
             allowances:
               scope.allowances && direction !== "downgrade" ? rules.allowances.onUpgrade : null,
+            // The business rule a `/change` without `net_credit_documents` uses; null = not
+            // saved, so `invoice_immediately` picks the documents (the rule before 2026-11-13).
+            net_credit_documents: resolveLifecycleConfig(business).netCreditDocuments,
             // The business rule a `/change` without `invoice_immediately` uses.
-            invoice_immediately:
-              policy.invoiceImmediately ??
-              (await defaultInvoiceImmediately(req.organization!.id, business.id)),
+            invoice_immediately: invoiceNowRule,
           },
         };
       } catch (e) {
@@ -3123,6 +3236,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             default_payment_method: detail!.defaultPaymentMethodPublicId,
             ship_to: detail!,
             discount: detail!.discount,
+            pending_change: detail!.pendingChange,
             dues,
             renewalSkips: await skipViewOf(orgId, detail!.subscription),
           }),
@@ -3136,6 +3250,8 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           },
         });
       } catch (e) {
+        if (e instanceof PendingChangeError) return pendingChangeReply(reply, e);
+        if (e instanceof ChangeRevertedError) return changeRevertedReply(reply, e);
         if (e instanceof ItemReconcileError) return badRequest(reply, e.message);
         if (e instanceof SubscriptionError) return badRequest(reply, e.message);
         if (e instanceof ProrationConflictError) return conflict(reply, e.message);
@@ -3476,6 +3592,8 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             : {}),
         });
       } catch (e) {
+        if (e instanceof PendingChangeError) return pendingChangeReply(reply, e);
+        if (e instanceof ChangeRevertedError) return changeRevertedReply(reply, e);
         if (e instanceof SubscriptionError) return badRequest(reply, e.message);
         throw e;
       }
@@ -4079,6 +4197,58 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
     },
   );
 
+  // `apply_when_paid`: cancel the change held for payment. Its invoice and credit notes are
+  // voided. 409 while a payment for it is in progress; a paid one has already applied.
+  app.delete(
+    "/v1/businesses/:biz/subscriptions/:sub/pending_change",
+    {
+      preHandler: [authenticate, requirePerm("subscriptions:manage"), idempotency],
+      onSend: idempotencyOnSend,
+    },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const subId = (req.params as { sub: string }).sub;
+      const sub = await getSubscriptionByPublicId(req.organization!.id, business.id, subId);
+      if (!sub)
+        return reply.code(404).send({
+          error: {
+            type: "invalid_request_error",
+            message: `We could not find the subscription ${subId}.`,
+          },
+        });
+      const pending = await import("@/modules/subscriptions/pending-change");
+      const row = await withTenant(req.organization!.id, (tx) =>
+        pending.livePendingChange(tx, sub.id),
+      );
+      if (!row)
+        return reply.code(404).send({
+          error: {
+            type: "invalid_request_error",
+            message: `The subscription ${subId} has no pending change.`,
+          },
+        });
+      const out = await pending.endPendingChange(
+        req.organization!.id,
+        business.id,
+        row.id,
+        "cancelled",
+      );
+      if (out === "paid") {
+        await pending.applyPaidPendingChange(req.organization!.id, row.invoiceId);
+        return reply.code(409).send({
+          error: {
+            type: "conflict_error",
+            code: "pending_change_applied",
+            message:
+              "We could not cancel the pending change. Its invoice is paid, so the change is applied.",
+          },
+        });
+      }
+      return reply.code(200).send({ object: "pending_change", id: row.publicId, cancelled: true });
+    },
+  );
+
   app.delete(
     "/v1/businesses/:biz/scheduled_changes/:sch",
     {
@@ -4197,6 +4367,22 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             message: `This reactivation collects no payment. The subscription is ${sub.status}, not cancelled.`,
           },
         });
+      }
+      // Before any charge: `beforeBill` would refuse it only after a charge taken first.
+      if (couponCode) {
+        try {
+          await assertCouponCodeMatchesAnItem({
+            organizationId: req.organization!.id,
+            businessId: business.id,
+            code: couponCode,
+            items: rb.items?.length
+              ? { pricePublicIds: rb.items.map((i) => i.price) }
+              : { subscriptionId: sub.id },
+          });
+        } catch (e) {
+          if (e instanceof CouponError) return badRequest(reply, e.message);
+          throw e;
+        }
       }
       try {
         // Refusal on a failed charge, the stranded-invoice repair and activation charges all

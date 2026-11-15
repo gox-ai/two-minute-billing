@@ -1,4 +1,8 @@
-import { CARD_LIMIT_CODE, CARD_LIMIT_MESSAGE } from "@/modules/invoicing/card-limit";
+import {
+  CARD_LIMIT_CHECKOUT_REASON,
+  CARD_LIMIT_CHECKOUT_STEP,
+  CARD_LIMIT_CODE,
+} from "@/modules/invoicing/card-limit";
 import { createHash, randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { enforceMetadataRules } from "@/modules/metadata-rules/service";
@@ -6,9 +10,11 @@ import { and, desc, eq, gt, gte, inArray, isNull, lte, or, sql } from "drizzle-o
 import { customerCouponCapMessage } from "@/modules/coupons/customer-cap";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { notDeleted } from "@/modules/subscriptions/deleted-sql";
+import { meterBillingConflict } from "@/modules/subscriptions/meter-billing";
 import { publicId } from "@/platform/ids";
 import { config } from "@/platform/config";
 import { formatMoney } from "@/platform/currency";
+import { payerRefusal } from "@/providers/decline-codes";
 import { gatewayDefinition } from "@/providers/gateway-catalog";
 import {
   checkoutSessions,
@@ -24,6 +30,7 @@ import {
   transactions,
   appliedCoupons,
   coupons,
+  couponSetCodes,
   invoiceLineItems,
   payments,
   refunds,
@@ -43,12 +50,18 @@ import {
   type SubscriptionItemInput,
   type ReactivationItemInput,
   requireTerm,
+  advancePeriod,
 } from "@/modules/subscriptions/service";
 import {
   loadLiveItems,
   planItemOperations,
   applyItemOperations,
 } from "@/modules/subscriptions/reconcile";
+import {
+  ChangeRevertedError,
+  PendingChangeError,
+  repeatsPendingChange,
+} from "@/modules/subscriptions/proration";
 import {
   directionOfItemEdit,
   nowNotAllowedMessage,
@@ -57,7 +70,7 @@ import {
   planMovesInEdit,
   resetTermForPolicy,
 } from "@/modules/subscriptions/change-policy";
-import { reactivateAndBill } from "@/modules/subscriptions/reactivate";
+import { currentItems, reactivateAndBill } from "@/modules/subscriptions/reactivate";
 import {
   isBackdateAllowed,
   resolveBackdatingConfig,
@@ -69,7 +82,7 @@ import {
   type CreditDestination,
 } from "@/modules/subscriptions/estimate";
 import { resolveDifferentialAgainstPlanTx } from "@/modules/subscriptions/items";
-import { computeLineAmount, type PriceSnapshot } from "@/modules/catalog/pricing";
+import { isMeteredPrice, packAwareLineAmount, type PriceSnapshot } from "@/modules/catalog/pricing";
 import {
   railsOverCeilingCap,
   resolveMandateHeadroomConfig,
@@ -78,10 +91,17 @@ import {
 import { mandateRefusal } from "@/modules/invoicing/collection";
 import {
   applyCouponToSubscription,
+  assertCouponMatchesAnItem,
+  computeStackedDiscounts,
+  CouponError,
+  type CouponItemSet,
   customerLimitRefusal,
   couponUsableRefusal,
+  type DiscountLine,
   findCouponByCode,
+  priceCouponCodesForInvoice,
   removeDiscount,
+  undoSubscriptionCouponEdit,
 } from "@/modules/coupons/service";
 import {
   isRetentionCouponCode,
@@ -125,6 +145,7 @@ import {
   createPaymentIntent,
   getPaymentIntent,
   serializePaymentIntent,
+  voidPaymentIntent,
   PaymentIntentError,
   type PaymentAttempt,
   type PaymentIntent,
@@ -133,7 +154,21 @@ import { createManualInvoice, voidInvoice } from "@/modules/invoicing/ops";
 import { getBusinessById } from "@/modules/tenancy/service";
 import { emitEvent, flushDeferredEvents, type DeferredEvents } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
-import { businessWallClock } from "@/platform/clock";
+import { businessWallClock, localDatePartsInTz } from "@/platform/clock";
+import {
+  alignTermStart,
+  inclusiveBoundary,
+  loadBillingMode,
+} from "@/modules/subscriptions/billing-mode";
+import type { Interval } from "@/modules/subscriptions/interval";
+import {
+  couponSpan,
+  recurringConsentText as consentSentence,
+  splitCouponsByDuration,
+  type BillingPeriod,
+  type CouponSpan,
+  type CouponSplit,
+} from "@/modules/checkout/payment-schedule";
 import type { CustomerAddress } from "@/modules/customers/service";
 import { createLogger } from "@/platform/logger";
 
@@ -254,6 +289,106 @@ async function assertPlanChangeAllowed(ctx: CheckoutContext) {
   return { ops, rules };
 }
 
+/** The price public ids a subscription holds once `ops` land. */
+function pricesAfterOps(
+  live: Awaited<ReturnType<typeof loadLiveItems>>,
+  ops: ReturnType<typeof planItemOperations>,
+): string[] {
+  const removed = new Set(ops.removals.map((r) => r.itemPublicId));
+  const swapped = new Map(
+    ops.changes.flatMap((c) => (c.newPriceId ? [[c.itemId, c.newPriceId] as const] : [])),
+  );
+  return [
+    ...live
+      .filter((l) => !removed.has(l.itemPublicId))
+      .map((l) => swapped.get(l.itemPublicId) ?? l.pricePublicId),
+    ...ops.additions.map((a) => a.price.publicId),
+  ];
+}
+
+/** The items this session's coupons must match. */
+async function checkoutCouponItems(ctx: CheckoutContext): Promise<CouponItemSet | null> {
+  if (ctx.mode === "create")
+    return { priceIds: ctx.items.map((i) => i.priceId), addonsMayFollow: true };
+  if (ctx.mode === "purchase")
+    return purchaseCouponItems(
+      ctx.organizationId,
+      ctx.items.map((i) => i.priceId),
+    );
+  if (ctx.mode !== "change" || !ctx.subscriptionId) return null;
+  const target = ctx.subscriptionId;
+  const desired = await resolveContextItems(ctx);
+  if (ctx.reactivate) {
+    const items = mergeReactivationItems(
+      await reactivationBase(ctx.organizationId, target),
+      desired,
+      ctx.replaceItemsList,
+    );
+    return items ? { pricePublicIds: items.map((i) => i.price) } : { subscriptionId: target };
+  }
+  const live = await loadLiveItems(ctx.organizationId, target);
+  const ops = planItemOperations(live, desired, { replaceItemsList: ctx.replaceItemsList });
+  return { pricePublicIds: pricesAfterOps(live, ops) };
+}
+
+/** A purchase's invoice lines are exactly its prices, so a coupon is matched as on an invoice. */
+async function purchaseCouponItems(
+  organizationId: string,
+  priceIds: string[],
+): Promise<CouponItemSet> {
+  if (priceIds.length === 0) return { lines: [] };
+  const rows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({
+        id: prices.id,
+        pricePublicId: prices.publicId,
+        productKind: products.kind,
+        productPublicId: products.publicId,
+      })
+      .from(prices)
+      .innerJoin(products, eq(products.id, prices.productId))
+      .where(inArray(prices.id, priceIds)),
+  );
+  return {
+    lines: rows.map((r, index) => ({
+      index,
+      amountMinor: 0n,
+      productKind: r.productKind,
+      productPublicId: r.productPublicId,
+      pricePublicId: r.pricePublicId,
+    })),
+  };
+}
+
+/** Before anything is charged: refuse a session coupon that matches none of the items. */
+async function assertSessionCouponsMatchItems(ctx: CheckoutContext, target: string) {
+  const pending = await couponsToApply(ctx, target);
+  if (pending.length === 0) return;
+  const items = await checkoutCouponItems(ctx);
+  if (!items) return;
+  for (const code of pending) {
+    const coupon = await findCouponByCode({
+      organizationId: ctx.organizationId,
+      businessId: ctx.businessId,
+      code,
+    });
+    if (coupon) await couponItemRefusalAsCheckoutError(ctx.organizationId, coupon, items);
+  }
+}
+
+async function couponItemRefusalAsCheckoutError(
+  organizationId: string,
+  coupon: NonNullable<Awaited<ReturnType<typeof findCouponByCode>>>,
+  items: CouponItemSet,
+): Promise<void> {
+  try {
+    await withTenant(organizationId, (tx) => assertCouponMatchesAnItem(tx, coupon, items));
+  } catch (e) {
+    if (e instanceof CouponError) throw new CheckoutError(e.message);
+    throw e;
+  }
+}
+
 export class CheckoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -356,9 +491,10 @@ export async function createCheckoutSession(input: {
    */
   replaceItemsList?: boolean;
   /**
-   * Metadata to write onto the resulting subscription when this checkout completes —
-   * Valid in BOTH modes: create-mode passes it through to the new subscription,
-   * change-mode applies it to the existing one after its item operations succeed.
+   * Metadata to write when this checkout completes. Create mode passes it to the new
+   * subscription, change mode applies it to the existing one after its item operations
+   * succeed, and purchase mode stores it on the invoice the purchase raises (the app's
+   * order id, read back when `invoice_paid` arrives).
    *
    * Omit to say nothing about metadata. `{}` explicitly sets it to empty — the two are
    * not the same and are not collapsed anywhere along this path.
@@ -380,8 +516,10 @@ export async function createCheckoutSession(input: {
   /** Create mode: details-step defaults (see `CheckoutPrefill`). */
   prefill?: CheckoutPrefill;
   /**
-   * mode='purchase': a KNOWN customer (cus_… public id) buying more — an existing
-   * subscriber's credit pack. Pinned at mint, exactly like a change session's customer.
+   * A KNOWN customer (cus_… public id), pinned at mint like a change session's customer.
+   * mode='purchase': an existing subscriber buying more. mode='create': a new subscription
+   * for a customer the app already created (its email is fixed; the buyer may correct the
+   * billing address).
    */
   customerId?: string;
   /** The payment link this session was opened from (internal id). */
@@ -411,17 +549,14 @@ export async function createCheckoutSession(input: {
   if (input.reactivateFrom && !input.reactivate) {
     throw new CheckoutError("reactivate_from needs reactivate: true");
   }
-  if (input.customerId && mode !== "purchase") {
-    throw new CheckoutError('customer is only valid when mode is "purchase"');
+  if (input.customerId && mode === "change") {
+    throw new CheckoutError('Omit customer when mode is "change". It is the subscription\'s');
+  }
+  if (input.customerId && input.prefill) {
+    throw new CheckoutError("customer names an existing customer, so omit prefill");
   }
   if (mode === "purchase") {
     if (input.subscriptionId) throw new CheckoutError('Omit subscription when mode is "purchase"');
-    // A purchase raises one invoice; nothing applies an invoice-level coupon yet.
-    if ((input.coupons ?? []).length > 0)
-      throw new CheckoutError("You cannot use a coupon on a one-time purchase.");
-    // Metadata lands on a subscription, and a purchase creates none.
-    if (input.metadata !== undefined)
-      throw new CheckoutError('metadata is not valid when mode is "purchase"');
   }
   for (const [field, url] of [
     ["redirect_url", input.redirectUrl],
@@ -602,7 +737,7 @@ export async function createCheckoutSession(input: {
     targetMetadata = (target.metadata as Record<string, unknown> | null) ?? null;
   }
 
-  if (mode === "purchase" && input.customerId) {
+  if (mode !== "change" && input.customerId) {
     const [cus] = await withTenant(input.organizationId, (tx) =>
       tx
         .select({ id: customers.id })
@@ -617,9 +752,29 @@ export async function createCheckoutSession(input: {
     );
     if (!cus) throw new CheckoutError(`No such customer: ${input.customerId}`);
     pinnedCustomerId = cus.id;
+    // As on subscription create: one live subscription per customer bills a meter.
+    if (mode === "create") {
+      const meterIds = resolved.flatMap((r) => (r.price.meterId ? [r.price.meterId] : []));
+      const conflict = meterIds.length
+        ? await withTenant(input.organizationId, (tx) => meterBillingConflict(tx, cus.id, meterIds))
+        : null;
+      if (conflict) throw conflict;
+    }
   }
 
   const effectiveCurrency = targetCurrency ?? itemCurrency;
+  // A change page is checked when the buyer opens and completes it (`coupon_refusals`).
+  const couponItems: CouponItemSet | null =
+    coupons.length === 0
+      ? null
+      : mode === "create"
+        ? { priceIds: resolved.map((r) => r.price.id), addonsMayFollow: true }
+        : mode === "purchase"
+          ? await purchaseCouponItems(
+              input.organizationId,
+              resolved.map((r) => r.price.id),
+            )
+          : null;
   for (const code of coupons) {
     await assertCouponUsableAtCheckout({
       organizationId: input.organizationId,
@@ -627,6 +782,8 @@ export async function createCheckoutSession(input: {
       code,
       currency: effectiveCurrency,
       customerId: pinnedCustomerId,
+      email: input.prefill?.email ?? null,
+      items: couponItems,
     });
   }
 
@@ -636,11 +793,13 @@ export async function createCheckoutSession(input: {
   await withTenant(input.organizationId, async (tx) => {
     // Checked when the operator mints the link, since the buyer cannot fix it at completion.
     // Types only: the buyer's signup cannot supply required keys, and strict is the API's.
-    await enforceMetadataRules(tx, input.businessId, "subscription", input.metadata, {
-      mode: mode === "change" ? "update" : "create",
-      existing: targetMetadata,
-      scope: "supplied_only",
-    });
+    // Subscription rules only: a purchase's metadata goes on its invoice, which has none.
+    if (mode !== "purchase")
+      await enforceMetadataRules(tx, input.businessId, "subscription", input.metadata, {
+        mode: mode === "change" ? "update" : "create",
+        existing: targetMetadata,
+        scope: "supplied_only",
+      });
     const [session] = await tx
       .insert(checkoutSessions)
       .values({
@@ -921,6 +1080,10 @@ export async function assertCouponUsableAtCheckout(input: {
   currency?: string | null;
   /** The payer, when the page already has one — a code they have used up is refused. */
   customerId?: string | null;
+  /** A guest's email when there is no payer yet, for a coupon limited per email. */
+  email?: string | null;
+  /** The items the subscription will hold — an item-scoped coupon must match one. */
+  items?: CouponItemSet | null;
 }): Promise<void> {
   const coupon = await findCouponByCode({
     organizationId: input.organizationId,
@@ -943,13 +1106,15 @@ export async function assertCouponUsableAtCheckout(input: {
       `Coupon ${input.code} is ${coupon.currency} but this checkout bills in ${input.currency}`,
     );
   }
-  // A new-customer page has no payer yet, so nothing to count; completion's apply checks.
-  if (input.customerId) {
+  // A new-customer page with no email has nothing to count; completion's apply checks.
+  if (input.customerId || input.email) {
     const refusal = await withTenant(input.organizationId, (tx) =>
-      customerLimitRefusal(tx, coupon, input.customerId!),
+      customerLimitRefusal(tx, coupon, { customerId: input.customerId, email: input.email }),
     );
     if (refusal) throw new CheckoutError(refusal);
   }
+  if (input.items)
+    await couponItemRefusalAsCheckoutError(input.organizationId, coupon, input.items);
 }
 
 export interface CheckoutContextItem {
@@ -1396,10 +1561,14 @@ export async function completeCheckoutForSetupIntent(input: {
 }
 
 /** Resolve a context's item lines to full price rows + product kind. */
-async function resolveContextItems(
-  ctx: CheckoutContext,
-): Promise<
-  Array<{ price: typeof prices.$inferSelect; quantity: number; kind: string; productName: string }>
+async function resolveContextItems(ctx: CheckoutContext): Promise<
+  Array<{
+    price: typeof prices.$inferSelect;
+    quantity: number;
+    kind: string;
+    productName: string;
+    productPublicId: string;
+  }>
 > {
   return withTenant(ctx.organizationId, async (tx) => {
     const out: Array<{
@@ -1407,6 +1576,7 @@ async function resolveContextItems(
       quantity: number;
       kind: string;
       productName: string;
+      productPublicId: string;
     }> = [];
     for (const line of ctx.items) {
       const [row] = await tx
@@ -1414,6 +1584,7 @@ async function resolveContextItems(
           price: prices,
           kind: products.kind,
           productName: sql<string>`coalesce(${products.externalName}, ${products.name})`,
+          productPublicId: products.publicId,
         })
         .from(prices)
         .innerJoin(products, eq(products.id, prices.productId))
@@ -1425,6 +1596,7 @@ async function resolveContextItems(
         quantity: line.quantity,
         kind: row.kind,
         productName: row.productName,
+        productPublicId: row.productPublicId,
       });
     }
     return out;
@@ -1454,6 +1626,38 @@ function priceAmountSummary(
     intervalCount: price.intervalCount,
     percentageBps: price.percentageBps,
   });
+}
+
+/**
+ * A line's unit price and total as the first invoice rates it. Null where the price has
+ * no single rate (`unit`) or bills on usage not yet measured (`total`): never a guess.
+ * `effectiveAmountMinor` is the differential override, as in `priceAmountSummary`.
+ */
+function lineFigures(
+  price: typeof prices.$inferSelect,
+  quantity: number,
+  effectiveAmountMinor?: bigint | null,
+): { unit_amount_minor: number | null; line_total_minor: number | null } {
+  const rated =
+    effectiveAmountMinor != null ? { ...price, amountMinor: effectiveAmountMinor } : price;
+  const unit =
+    (price.model === "per_unit" || price.model === "flat") && rated.amountMinor != null
+      ? Number(rated.amountMinor)
+      : null;
+  if (isMeteredPrice(price) || price.model === "percentage") {
+    return { unit_amount_minor: unit, line_total_minor: null };
+  }
+  return {
+    unit_amount_minor: unit,
+    line_total_minor: Number(packAwareLineAmount(rated, quantity)),
+  };
+}
+
+/** "month", "3 months" for a recurring price. */
+function periodLabelOf(price: { interval: string | null; intervalCount: number }): string {
+  return price.intervalCount > 1
+    ? `${price.intervalCount} ${price.interval}s`
+    : `${price.interval}`;
 }
 
 /**
@@ -1520,10 +1724,17 @@ function asPriceSnapshot(raw: unknown): PriceSnapshot | null {
 
 /** One displayed line of the checkout. */
 export interface CheckoutItemView {
+  /** The product's buyer-facing name; the interval is stated once, in `amount`. */
   name: string;
   amount: string;
   currency: string;
   quantity: number;
+  /** One unit's price; null when the price has no single rate (usage, tiered). */
+  unit_amount_minor: number | null;
+  /** quantity × unit as billed; null when it cannot be stated before usage. */
+  line_total_minor: number | null;
+  /** "month", "3 months"; null for a one-time item. */
+  interval: string | null;
   /** plan | addon | charge — lets the page group the plan apart from add-ons. */
   kind: string;
   /** The product's picture, or null. */
@@ -1540,6 +1751,9 @@ export interface CheckoutView {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    /** Contact details the merchant set, for the footer. Null when unset. */
+    support_email: string | null;
+    website: string | null;
     /**
      * IANA zone for every date the buyer reads here (today: the renewal date in the
      * change preview). The checkout page lives outside the dashboard tree, so it has
@@ -1570,6 +1784,8 @@ export interface CheckoutView {
   collect_po_number: boolean;
   status: string;
   mode: CheckoutMode;
+  /** The session names a known customer: their email is fixed and not echoed. */
+  customer_pinned: boolean;
   /** Where the page sends the buyer after completing / on cancel; null = stay here. */
   redirect_url: string | null;
   cancel_url: string | null;
@@ -1650,32 +1866,37 @@ export interface CheckoutConsentView {
   marketing_offered: boolean;
 }
 
-/** The billing period of the checkout's recurring plan ("month", "3 months"), or null. */
+/** The billing period of the checkout's recurring plan, or null. */
 function recurringPeriod(
   rows: Array<{
     kind: string;
     price: { type: string; interval: string | null; intervalCount: number };
   }>,
-): string | null {
+): BillingPeriod | null {
   const r =
     rows.find((x) => x.kind === "plan" && x.price.type === "recurring" && x.price.interval) ??
     rows.find((x) => x.price.type === "recurring" && x.price.interval);
   if (!r?.price.interval) return null;
-  return r.price.intervalCount > 1
-    ? `${r.price.intervalCount} ${r.price.interval}s`
-    : r.price.interval;
+  return { interval: r.price.interval, count: r.price.intervalCount };
 }
 
-/** The recurring-charge sentence, with the taxed amount when it is known. */
+/**
+ * The recurring-charge sentence: the REGULAR amount (what is charged once every coupon
+ * that ends has ended), plus the trial and the discounted first periods when there are
+ * any. See `payment-schedule.ts`.
+ */
 export function recurringConsentText(
   businessName: string,
-  period: string,
-  next: { totalMinor: number; currency: string; excludesUsage: boolean } | null | undefined,
+  period: BillingPeriod,
+  next: CheckoutNextPayment | null | undefined,
+  trial?: { count: number; unit: string } | null,
 ): string {
-  const usage = next?.excludesUsage ? ", plus usage," : "";
-  return next
-    ? `I agree that ${businessName} charges me ${formatMoney(next.totalMinor, next.currency)}${usage} every ${period} until I cancel.`
-    : `I agree that ${businessName} charges me for this subscription every ${period} until I cancel.`;
+  return consentSentence(businessName, period, next ?? null, {
+    ...(trial ? { trial } : {}),
+    ...(next?.intro && next.intro.periods != null
+      ? { intro: { totalMinor: next.intro.totalMinor, periods: next.intro.periods } }
+      : {}),
+  });
 }
 
 export interface CheckoutDueToday {
@@ -1685,6 +1906,29 @@ export interface CheckoutDueToday {
   taxMinor: number;
   /** After account credit. */
   amountDueMinor: number;
+  /** The first invoice, itemised as it prints: before discount and tax. Absent in a trial. */
+  subtotalMinor?: number;
+  discountMinor?: number;
+  discountLines?: Array<{ label: string; amountMinor: number }>;
+  taxLines?: Array<{ label: string; amountMinor: number }>;
+  /** The plan's free trial: its length, and the inclusive instant it ends (ISO). */
+  trialPeriod?: { count: number; unit: string };
+  trialEndsAt?: string;
+  /**
+   * When the first charge is taken (ISO): now, or when the trial ends. Absent when the
+   * engine cannot date it the way the subscription will (a customer's own billing date).
+   */
+  firstChargeAt?: string;
+  /**
+   * What the first charge is. Equal to `amountDueMinor` without a trial; in a trial, the
+   * recurring amount the trial-end invoice raises. Null when that cannot be stated (a
+   * one-time item in a trial, an estimate refusal).
+   */
+  firstChargeMinor?: number | null;
+  /** The payment after the first (ISO), when it can be dated. */
+  nextChargeAt?: string;
+  /** The first payment at the regular amount (ISO), when it can be dated. */
+  regularFrom?: string;
 }
 
 export interface CheckoutOfferLine {
@@ -1692,6 +1936,12 @@ export interface CheckoutOfferLine {
   price: string;
   name: string;
   amount: string;
+  /** One unit's price; null when the price has no single rate. */
+  unit_amount_minor: number | null;
+  /** quantity × unit; null when not chosen or not knowable before usage. */
+  line_total_minor: number | null;
+  /** "month", "3 months"; null for a one-time item. */
+  interval: string | null;
   /** In the cart now; 0 = an optional line not chosen. */
   quantity: number;
   /** The buyer may choose any quantity from `min` to `max`. */
@@ -1714,7 +1964,12 @@ export interface CheckoutPurchaseView {
   /** The link names a known customer; the details step edits their address only. */
   customer_pinned: boolean;
   currency: string;
+  /** The lines before any discount. */
   subtotal_minor: number;
+  /** Every coupon's discount; `subtotal - discount + tax = total`. */
+  discount_minor: number;
+  /** One row per coupon that takes something off, labeled as the invoice labels it. */
+  discounts: Array<{ code: string; label: string; amount_minor: number }>;
   tax_minor: number;
   tax_lines: Array<{ label: string; amount_minor: number }>;
   total_minor: number;
@@ -1748,6 +2003,15 @@ export interface CheckoutNextPayment {
    * add-on, 2026-08-28).
    */
   includesExistingItems: boolean;
+  /**
+   * The amount while a coupon that ENDS still applies — create mode only. The fields
+   * above are the REGULAR amount, priced with only the coupons that never end, because
+   * that is what the buyer pays once the discount is over. `periods` = the number of
+   * periods for which every coupon applies (so this figure is true for exactly that many).
+   */
+  intro?: { totalMinor: number; taxMinor: number; amountDueMinor: number; periods: number };
+  /** Change mode: a discount that ends was left out of the regular amount above. */
+  limitedDiscountsExcluded?: boolean;
 }
 
 /**
@@ -1920,9 +2184,11 @@ async function projectedComposition(
  * for mandate sizing, and thrown away. This returns it to the buyer.
  *
  * Two deliberate differences from the mandate sizer, which calls the same estimator:
- *  - **Coupons are priced in.** A ceiling must outlive a coupon (see its docstring); a
- *    QUOTE must match what the card is actually charged, so this passes the session's
- *    codes.
+ *  - **Only coupons that never end are priced in.** A ceiling must outlive a coupon (see
+ *    its docstring); the REGULAR quote must be what the card is charged once a coupon
+ *    that ends has ended. A coupon that applies once or for N periods is quoted
+ *    separately, as `intro` (create mode), so a 10%-once code no longer turns into
+ *    "$226.83 every month" on a page whose second month is $252.04.
  *  - **Recurring lines only.** A one-time fee is collected once, by the immediate
  *    invoice; repeating it in a per-period figure would overstate every renewal.
  *
@@ -1932,7 +2198,7 @@ async function projectedComposition(
  * one caveat that travels with a real figure: metered lines cannot be projected for a
  * period that has not happened, exactly as `estimateRenewal` documents.
  */
-async function projectRecurringPayment(ctx: CheckoutContext): Promise<CheckoutNextPayment | null> {
+async function projectRecurringPayment(ctx: CheckoutContext): Promise<ProjectedRecurring | null> {
   const customerId = ctx.resultingCustomerId;
   if (!customerId) return null;
   try {
@@ -1950,26 +2216,44 @@ async function projectRecurringPayment(ctx: CheckoutContext): Promise<CheckoutNe
             (c) => !ctx.replaceCouponList || ctx.couponCodes.includes(c),
           )
         : [];
-    const est = await estimateNewSubscription({
-      organizationId: ctx.organizationId,
-      businessId: ctx.businessId,
-      customerId,
-      items: recurring,
-      now,
-      couponCodes: [...attached, ...ctx.couponCodes.filter((c) => !attached.includes(c))],
-      attachedCouponCodes: attached,
-    });
-    return {
+    const allCodes = [...attached, ...ctx.couponCodes.filter((c) => !attached.includes(c))];
+    const coupons = await couponSpansFor(ctx, allCodes, attached);
+    const split = splitCouponsByDuration(coupons.spans);
+    const estimate = (codes: string[]) =>
+      estimateNewSubscription({
+        organizationId: ctx.organizationId,
+        businessId: ctx.businessId,
+        customerId,
+        items: recurring,
+        now,
+        couponCodes: codes,
+        attachedCouponCodes: attached.filter((c) => codes.includes(c)),
+      });
+    const est = await estimate(allCodes.filter((c) => split.lasting.includes(c)));
+    const next: CheckoutNextPayment = {
       currency: est.currency,
       subtotalMinor: est.subtotal_minor,
       taxMinor: est.tax_minor,
       taxLines: (est.tax_lines ?? []).map((t) => ({ label: t.label, amountMinor: t.amount_minor })),
       totalMinor: est.total_minor,
       amountDueMinor: est.amount_due_minor ?? est.total_minor,
-      excludesUsage: recurring.some((r) => r.price.model === "usage"),
+      excludesUsage: recurring.some((r) => isMeteredPrice(r.price)),
       // Anything in the projection that this session's own line list does not mention.
       includesExistingItems: composition.length > desired.length,
     };
+    if (split.limited.length > 0 && ctx.mode === "change") next.limitedDiscountsExcluded = true;
+    if (split.limited.length > 0 && ctx.mode === "create" && split.introPeriods != null) {
+      const withAll = await estimate(allCodes);
+      if (withAll.total_minor !== est.total_minor) {
+        next.intro = {
+          totalMinor: withAll.total_minor,
+          taxMinor: withAll.tax_minor,
+          amountDueMinor: withAll.amount_due_minor ?? withAll.total_minor,
+          periods: split.introPeriods,
+        };
+      }
+    }
+    return { next, split, couponLabels: coupons.labels };
   } catch (e) {
     // A quote is a nicety, not a gate: a buyer who cannot see their plan because an
     // estimate failed is worse off than one shown the item list alone.
@@ -1978,21 +2262,163 @@ async function projectRecurringPayment(ctx: CheckoutContext): Promise<CheckoutNe
   }
 }
 
+interface ProjectedRecurring {
+  /** The regular per-period amount, and `intro` while a coupon that ends applies. */
+  next: CheckoutNextPayment;
+  split: CouponSplit;
+  /** Code → the name the invoice prints for it. */
+  couponLabels: Map<string, string>;
+}
+
+/**
+ * How long each code discounts, and the name the invoice prints for it. A code already on
+ * the subscription counts its OWN remaining periods; a new code its catalog duration. A
+ * code we cannot resolve counts as one that ends, so the regular amount never includes it.
+ */
+async function couponSpansFor(
+  ctx: CheckoutContext,
+  codes: string[],
+  attached: string[],
+): Promise<{ spans: CouponSpan[]; labels: Map<string, string> }> {
+  const spans: CouponSpan[] = [];
+  const labels = new Map<string, string>();
+  if (codes.length === 0) return { spans, labels };
+  const remaining = new Map<string, number | null>();
+  if (attached.length > 0 && ctx.subscriptionId) {
+    const rows = await withTenant(ctx.organizationId, (tx) =>
+      tx
+        .select({ code: coupons.code, remaining: appliedCoupons.remainingPeriods })
+        .from(appliedCoupons)
+        .innerJoin(coupons, eq(coupons.id, appliedCoupons.couponId))
+        .where(
+          and(
+            eq(appliedCoupons.subscriptionId, ctx.subscriptionId!),
+            eq(appliedCoupons.status, "active"),
+          ),
+        ),
+    );
+    for (const r of rows) remaining.set(r.code, r.remaining);
+  }
+  for (const code of codes) {
+    const coupon = await findCouponByCode({
+      organizationId: ctx.organizationId,
+      businessId: ctx.businessId,
+      code,
+    });
+    labels.set(code, coupon?.invoiceName ?? coupon?.name ?? code);
+    if (remaining.has(code)) {
+      const r = remaining.get(code);
+      spans.push({ code, periods: r == null ? null : r > 0 ? r : undefined });
+    } else {
+      spans.push(couponSpan(code, coupon));
+    }
+  }
+  return { spans, labels };
+}
+
+/**
+ * When a signup's charges fall, as `createSubscription` will book them: the trial end
+ * (`advancePeriod` from the aligned start, then `inclusiveBoundary`), the first period
+ * end, and the payment from which the regular amount applies. A customer with their own
+ * billing date gets no dates past today: their first term is cut to that date.
+ */
+async function projectSchedule(
+  ctx: CheckoutContext,
+  desired: Array<{ price: typeof prices.$inferSelect }>,
+  hasIntro: boolean,
+  regularAfter: number | null,
+): Promise<
+  Pick<CheckoutDueToday, "trialEndsAt" | "firstChargeAt" | "nextChargeAt" | "regularFrom">
+> {
+  const plan = desired.find((d) => d.price.type === "recurring" && d.price.interval)?.price;
+  if (!plan?.interval) return {};
+  const wall = await businessWallClock(ctx.businessId);
+  const mode = await loadBillingMode(ctx.organizationId, ctx.businessId);
+  const start = alignTermStart(wall, mode);
+  const startDay = localDatePartsInTz(start, mode.timezone).day;
+  const unit = plan.interval as Interval;
+  const anchorDay = unit === "month" || unit === "year" ? startDay : null;
+  if (plan.trialPeriod && plan.trialPeriod > 0) {
+    const boundary = advancePeriod(
+      start,
+      (plan.trialPeriodUnit ?? "day") as Interval,
+      plan.trialPeriod,
+      startDay,
+      mode,
+    );
+    return {
+      trialEndsAt: inclusiveBoundary(boundary, mode).toISOString(),
+      firstChargeAt: boundary.toISOString(),
+      ...(hasIntro ? {} : { regularFrom: boundary.toISOString() }),
+    };
+  }
+  const own =
+    ctx.resultingCustomerId &&
+    (await withTenant(ctx.organizationId, (tx) =>
+      tx
+        .select({ mode: customers.billingDateMode })
+        .from(customers)
+        .where(eq(customers.id, ctx.resultingCustomerId!))
+        .limit(1),
+    ).then((r) => r[0]?.mode === "manually_set"));
+  if (own) return { firstChargeAt: wall.toISOString() };
+  const after = (n: number) => {
+    let d = start;
+    for (let i = 0; i < n; i++) d = advancePeriod(d, unit, plan.intervalCount, anchorDay, mode);
+    return d;
+  };
+  const regularAt = !hasIntro ? 1 : regularAfter;
+  return {
+    firstChargeAt: wall.toISOString(),
+    nextChargeAt: after(1).toISOString(),
+    ...(regularAt != null ? { regularFrom: after(regularAt).toISOString() } : {}),
+  };
+}
+
 /**
  * What a signup charges TODAY: the first invoice, one-time items and attached charges
- * included, tax included. Null without a customer (no address, so no tax) or when the
- * estimator refuses — "say nothing" rather than a guess, like the per-period figure.
+ * included, tax included, itemised as it prints. Null without a customer (no address, so
+ * no tax) or when the estimator refuses — "say nothing" rather than a guess, like the
+ * per-period figure. In a trial nothing is charged today; the trial's length, its end and
+ * the first charge are stated instead.
  */
-async function projectFirstPayment(ctx: CheckoutContext): Promise<CheckoutDueToday | null> {
+async function projectFirstPayment(
+  ctx: CheckoutContext,
+  recurring?: ProjectedRecurring | null,
+): Promise<CheckoutDueToday | null> {
   const customerId = ctx.resultingCustomerId;
-  if (!customerId) return null;
   try {
     const desired = await resolveContextItems(ctx);
     if (desired.length === 0) return null;
     const currency = desired[0]!.price.currency;
-    const trialPeriod = desired.find((d) => d.price.type === "recurring")?.price.trialPeriod ?? 0;
-    if (trialPeriod > 0)
-      return { currency, trial: true, totalMinor: 0, taxMinor: 0, amountDueMinor: 0 };
+    const plan = desired.find((d) => d.price.type === "recurring")?.price;
+    // A trial is stated before the buyer's details: it needs no address. Money does.
+    if (!customerId && !(plan?.trialPeriod && plan.trialPeriod > 0)) return null;
+    const trialPeriod = plan?.trialPeriod ?? 0;
+    const hasIntro = recurring?.next.intro != null;
+    const schedule = await projectSchedule(
+      ctx,
+      desired,
+      hasIntro,
+      recurring?.split.regularAfter ?? null,
+    ).catch(() => ({}));
+    if (trialPeriod > 0) {
+      // The trial-end invoice bills the recurring lines. A one-time item in a trial is not
+      // something this page can date or price honestly, so it states no amount then.
+      const oneTime = desired.some((d) => d.price.type !== "recurring");
+      const next = recurring?.next;
+      return {
+        currency,
+        trial: true,
+        totalMinor: 0,
+        taxMinor: 0,
+        amountDueMinor: 0,
+        trialPeriod: { count: trialPeriod, unit: plan?.trialPeriodUnit ?? "day" },
+        firstChargeMinor: oneTime || !next ? null : (next.intro?.totalMinor ?? next.totalMinor),
+        ...schedule,
+      };
+    }
+    if (!customerId) return null;
     const est = await estimateNewSubscription({
       organizationId: ctx.organizationId,
       businessId: ctx.businessId,
@@ -2001,12 +2427,35 @@ async function projectFirstPayment(ctx: CheckoutContext): Promise<CheckoutDueTod
       now: await businessWallClock(ctx.businessId),
       couponCodes: ctx.couponCodes,
     });
+    const promo = est.promotional_discount_minor ?? 0;
+    const couponOff = est.discount_minor - promo;
+    const labels = recurring?.couponLabels;
+    const amountDue = est.amount_due_minor ?? est.total_minor;
     return {
       currency: est.currency,
       trial: false,
       totalMinor: est.total_minor,
       taxMinor: est.tax_minor,
-      amountDueMinor: est.amount_due_minor ?? est.total_minor,
+      amountDueMinor: amountDue,
+      subtotalMinor: est.subtotal_minor,
+      discountMinor: est.discount_minor,
+      discountLines: [
+        ...(couponOff > 0
+          ? [
+              {
+                label:
+                  ctx.couponCodes.length === 1
+                    ? (labels?.get(ctx.couponCodes[0]!) ?? ctx.couponCodes[0]!)
+                    : "Discounts",
+                amountMinor: couponOff,
+              },
+            ]
+          : []),
+        ...(promo > 0 ? [{ label: "Promotional credits", amountMinor: promo }] : []),
+      ],
+      taxLines: (est.tax_lines ?? []).map((t) => ({ label: t.label, amountMinor: t.amount_minor })),
+      firstChargeMinor: amountDue,
+      ...schedule,
     };
   } catch (e) {
     log.warn("checkout first-payment projection failed", { error: (e as Error)?.message });
@@ -2322,6 +2771,13 @@ export function gatewayRailCapMinor(
  */
 export interface CheckoutChangePreview {
   currency: string;
+  /**
+   * `apply_when_paid`: the invoice this change waits on, from this session or an earlier one
+   * that asked for the same change; the figures are its. Paying it applies the change.
+   */
+  heldInvoice?: string;
+  /** When the held change expires unpaid (ISO): its invoice is voided then. */
+  heldExpiresAt?: string;
   subtotalMinor: number;
   taxMinor: number;
   totalMinor: number;
@@ -2441,6 +2897,9 @@ export interface CheckoutChangePreview {
    * a test that fails the moment they disagree.
    */
   nextRenewalTotalMinor?: number;
+  /** When that renewal is raised (ISO), and what it collects after this change's credit. */
+  nextRenewalAt?: string;
+  nextRenewalAmountDueMinor?: number;
   /** `totalMinor` > 0 → charged now; < 0 → credited to the customer's balance. */
   immediateCharge: boolean;
   /**
@@ -2474,6 +2933,11 @@ export interface CheckoutChangeView {
   /** Set when completing REACTIVATES a cancelled subscription: its new term's start (null = on completion). */
   reactivation?: { startsAt: string | null };
   currentPlan: { name: string; amount: string } | null;
+  /**
+   * The session asks for the items the subscription already has: no item is added,
+   * removed or changed. The page says so instead of drawing a swap.
+   */
+  itemsUnchanged?: boolean;
   /** Items this change DROPS. Rendered as struck-through rows so a removal is visible;
    *  without it an unchecked add-on vanished with no sign anything had happened. */
   removedItems?: Array<{ name: string; amount: string; quantity: number }>;
@@ -2564,6 +3028,8 @@ export async function addCheckoutCoupon(ctx: CheckoutContext, code: string): Pro
     code: trimmed,
     currency: await checkoutCurrency(ctx),
     customerId: ctx.resultingCustomerId,
+    email: ctx.prefill?.email ?? null,
+    items: await checkoutCouponItems(ctx),
   });
 
   const next = [...ctx.couponCodes, trimmed];
@@ -2621,6 +3087,58 @@ export async function removeCheckoutCoupon(ctx: CheckoutContext, code: string): 
 }
 
 /** An estimate as the review page shows it. Handles → names, against the prices involved. */
+/**
+ * The held invoice as a change preview, when this session's change waits for payment: held by
+ * this session, or by any earlier request for the same change (`repeat`, the request the
+ * confirm sends), which the confirm pays rather than replaces.
+ */
+async function heldChangePreview(
+  ctx: CheckoutContext,
+  target: string,
+  preview: CheckoutChangePreview,
+  repeat: Parameters<typeof repeatsPendingChange>[0] | null,
+): Promise<CheckoutChangePreview> {
+  const { heldQuote, livePendingChange } = await import("@/modules/subscriptions/pending-change");
+  const row = await withTenant(ctx.organizationId, (tx) => livePendingChange(tx, target));
+  if (!row) return preview;
+  const restore = (row.restore ?? null) as { checkoutSession?: string } | null;
+  const ours =
+    restore?.checkoutSession === ctx.sessionPublicId ||
+    (repeat != null && (await repeatsPendingChange(repeat)));
+  const q = ours ? await withTenant(ctx.organizationId, (tx) => heldQuote(tx, row)) : null;
+  if (!q) return preview;
+  return {
+    ...preview,
+    subtotalMinor: q.subtotalMinor,
+    invoiceSubtotalMinor: q.subtotalMinor,
+    taxMinor: q.taxMinor,
+    taxLines: q.taxLines,
+    invoiceTotalMinor: q.invoiceTotalMinor,
+    promotionalDiscountMinor: q.promotionalDiscountMinor,
+    creditsAppliedMinor: q.otherCreditsMinor,
+    creditNoteTotalMinor: q.changeCreditMinor || undefined,
+    creditAppliedToThisInvoiceMinor: q.changeCreditMinor || undefined,
+    refundableCreditAddedMinor: undefined,
+    creditAppliedToOpenInvoicesMinor: undefined,
+    creditReturnedToBucketsMinor: undefined,
+    creditStrandedMinor: undefined,
+    creditDestinations: q.changeCreditMinor
+      ? [
+          {
+            kind: "refundable",
+            destination: "this_invoice",
+            amount_minor: q.changeCreditMinor,
+          },
+        ]
+      : undefined,
+    totalMinor: q.amountDueMinor,
+    amountDueMinor: q.amountDueMinor,
+    lines: humanizeLineDescriptions(q.lines, []),
+    heldInvoice: q.invoice,
+    heldExpiresAt: q.expiresAt.toISOString(),
+  };
+}
+
 function changePreviewFromEstimate(
   est: Awaited<ReturnType<typeof estimateChange>>,
   knownPrices: Array<typeof prices.$inferSelect>,
@@ -2664,6 +3182,12 @@ function changePreviewFromEstimate(
       : {}),
     ...(est.credit_stranded_minor ? { creditStrandedMinor: est.credit_stranded_minor } : {}),
     ...(est.next_renewal ? { nextRenewalTotalMinor: est.next_renewal.total_minor } : {}),
+    ...(est.next_renewal?.date
+      ? {
+          nextRenewalAt: est.next_renewal.date,
+          nextRenewalAmountDueMinor: est.next_renewal.amount_due_minor,
+        }
+      : {}),
     immediateCharge: est.immediate_charge,
     dueAtTrialEnd: est.due_at_trial_end ?? null,
     termReset: est.term_reset,
@@ -2673,6 +3197,34 @@ function changePreviewFromEstimate(
       est.lines.map((l) => ({ description: l.description, amountMinor: l.amount_minor })),
       knownPrices,
     ),
+  };
+}
+
+/**
+ * Proration lines name a PRICE ("Remaining time on Growth Monthly ×1"); the buyer's page
+ * names products, with the interval stated once. Swap each price's display name for its
+ * product's, longest first, and only where the two differ.
+ */
+function withProductNames(
+  preview: CheckoutChangePreview,
+  known: Array<{ price: typeof prices.$inferSelect; product: string | null | undefined }>,
+): CheckoutChangePreview {
+  const swaps = new Map<string, string>();
+  for (const k of known) {
+    const shown = k.price.externalName ?? k.price.name;
+    if (shown && k.product && shown !== k.product) swaps.set(shown, k.product);
+  }
+  if (swaps.size === 0) return preview;
+  const names = [...swaps.keys()].sort((a, b) => b.length - a.length);
+  return {
+    ...preview,
+    lines: preview.lines.map((l) => {
+      let description = l.description;
+      for (const n of names) {
+        if (description.includes(n)) description = description.split(n).join(swaps.get(n)!);
+      }
+      return { ...l, description };
+    }),
   };
 }
 
@@ -2691,6 +3243,7 @@ async function sessionCouponRefusals(ctx: CheckoutContext): Promise<Record<strin
       : ctx.couponCodes;
   if (pending.length === 0) return {};
   const currency = await checkoutCurrency(ctx);
+  const items = await checkoutCouponItems(ctx);
   const out: Record<string, string> = {};
   for (const code of pending) {
     try {
@@ -2700,6 +3253,8 @@ async function sessionCouponRefusals(ctx: CheckoutContext): Promise<Record<strin
         code,
         currency,
         customerId: ctx.resultingCustomerId,
+        email: ctx.prefill?.email ?? null,
+        items,
       });
     } catch (e) {
       if (!(e instanceof CheckoutError)) throw e;
@@ -2735,6 +3290,7 @@ async function checkoutCurrency(ctx: CheckoutContext): Promise<string | null> {
 interface OfferRule {
   priceId: string;
   pricePublicId: string;
+  price: typeof prices.$inferSelect;
   kind: string;
   name: string;
   amount: string;
@@ -2759,8 +3315,10 @@ async function offerRules(ctx: CheckoutContext): Promise<OfferRule[]> {
   return rows.map((r) => ({
     priceId: r.price.id,
     pricePublicId: r.price.publicId,
+    price: r.price,
     kind: r.kind,
-    name: r.price.externalName ?? r.product.externalName ?? r.product.name,
+    // The product's name, as on the checkout and the pricing page (see `itemViews`).
+    name: r.product.externalName ?? r.product.name,
     amount: priceAmountSummary(r.price, null),
     linkQuantity: r.item.quantity,
     min: r.item.minQuantity,
@@ -2789,11 +3347,15 @@ async function checkoutOffer(ctx: CheckoutContext): Promise<CheckoutOfferView | 
   return {
     lines: rules.map((r) => {
       const range = allowedRange(r);
+      const quantity = inCart.get(r.priceId) ?? 0;
       return {
         price: r.pricePublicId,
         name: r.name,
         amount: r.amount,
-        quantity: inCart.get(r.priceId) ?? 0,
+        quantity,
+        ...lineFigures(r.price, Math.max(quantity, 1)),
+        ...(quantity === 0 ? { line_total_minor: null } : {}),
+        interval: r.price.type === "recurring" && r.price.interval ? periodLabelOf(r.price) : null,
         adjustable: range.adjustable,
         min: range.min,
         max: range.max,
@@ -2864,21 +3426,68 @@ export async function setCheckoutItemQuantity(
 async function purchaseLines(ctx: CheckoutContext): Promise<{
   currency: string;
   lines: InvoiceLineInput[];
+  /** The same lines as coupon matching sees them. */
+  discountLines: DiscountLine[];
 } | null> {
   const desired = await resolveContextItems(ctx);
   if (desired.length === 0) return null;
+  const lines: InvoiceLineInput[] = desired.map((d) => ({
+    // What the buyer bought: the price's own customer-facing name, else the product's.
+    description: d.price.externalName ?? d.productName,
+    amountMinor: packAwareLineAmount(d.price, d.quantity),
+    priceId: d.price.id,
+    quantity: d.quantity,
+    kind: "one_time",
+  }));
   return {
     currency: desired[0]!.price.currency,
-    lines: desired.map((d) => ({
-      // What the buyer bought: the price's own customer-facing name, else the product's.
-      description: d.price.externalName ?? d.productName,
-      amountMinor: computeLineAmount(d.price, d.quantity),
-      priceId: d.price.id,
-      quantity: d.quantity,
-      kind: "one_time",
+    lines,
+    discountLines: desired.map((d, index) => ({
+      index,
+      amountMinor: lines[index]!.amountMinor,
+      productKind: d.kind,
+      productPublicId: d.productPublicId,
+      pricePublicId: d.price.publicId,
     })),
   };
 }
+
+/**
+ * A purchase's coupon discount before the buyer exists: the invoice's own checks and
+ * stacking, with no payer. `sessionCouponRefusals` has already left out the codes the
+ * per-customer cap refuses, when an email is known.
+ */
+async function guestPurchaseDiscount(
+  ctx: CheckoutContext,
+  built: { currency: string; discountLines: DiscountLine[] },
+): Promise<{ totalMinor: bigint; rows: Array<{ code: string; label: string; minor: bigint }> }> {
+  if (ctx.couponCodes.length === 0) return { totalMinor: 0n, rows: [] };
+  return withTenant(ctx.organizationId, async (tx) => {
+    const stack = await priceCouponCodesForInvoice(tx, {
+      organizationId: ctx.organizationId,
+      businessId: ctx.businessId,
+      // No payer yet: an empty id counts no per-customer limit.
+      customerId: "",
+      currency: built.currency,
+      codes: ctx.couponCodes,
+      lines: built.discountLines,
+    });
+    const res = computeStackedDiscounts(stack, built.discountLines, built.currency);
+    return {
+      totalMinor: res.totalMinor,
+      rows: res.rows.map((r) => ({
+        code: r.couponPublicId,
+        label: r.label,
+        minor: r.discountMinor,
+      })),
+    };
+  });
+}
+
+const discountRows = (rows: Array<{ code: string; label: string; minor: bigint }>) =>
+  rows
+    .filter((r) => r.minor > 0n)
+    .map((r) => ({ code: r.code, label: r.label, amount_minor: Number(r.minor) }));
 
 /** What a purchase costs today. Tax needs the buyer's address, so it waits for the details step. */
 async function purchaseView(ctx: CheckoutContext): Promise<CheckoutPurchaseView | null> {
@@ -2892,6 +3501,7 @@ async function purchaseView(ctx: CheckoutContext): Promise<CheckoutPurchaseView 
     customer_pinned: ctx.customerPinned,
     currency: built.currency,
   };
+  // Before any discount: the page shows the discount rows under it.
   const subtotal = built.lines.reduce((n, l) => n + l.amountMinor, 0n);
   if (ctx.resultingCustomerId) {
     try {
@@ -2901,10 +3511,15 @@ async function purchaseView(ctx: CheckoutContext): Promise<CheckoutPurchaseView 
         customerId: ctx.resultingCustomerId,
         currency: built.currency,
         lines: built.lines,
+        coupons: ctx.couponCodes,
       });
       return {
         ...common,
-        subtotal_minor: Number(p.subtotalMinor),
+        subtotal_minor: Number(subtotal),
+        discount_minor: Number(p.discountMinor),
+        discounts: discountRows(
+          p.discounts.map((d) => ({ code: d.code, label: d.label, minor: d.discountMinor })),
+        ),
         tax_minor: Number(p.taxMinor),
         tax_lines: p.taxLines.map((t) => ({
           label: t.description,
@@ -2918,13 +3533,23 @@ async function purchaseView(ctx: CheckoutContext): Promise<CheckoutPurchaseView 
       log.warn("checkout purchase preview failed", { error: (e as Error)?.message });
     }
   }
+  let discount: Awaited<ReturnType<typeof guestPurchaseDiscount>> = { totalMinor: 0n, rows: [] };
+  try {
+    discount = await guestPurchaseDiscount(ctx, built);
+  } catch (e) {
+    if (!(e instanceof CouponError)) throw e;
+    log.warn("checkout purchase discount refused", { error: e.message });
+  }
+  const net = Number(subtotal - discount.totalMinor);
   return {
     ...common,
     subtotal_minor: Number(subtotal),
+    discount_minor: Number(discount.totalMinor),
+    discounts: discountRows(discount.rows),
     tax_minor: 0,
     tax_lines: [],
-    total_minor: Number(subtotal),
-    amount_due_minor: Number(subtotal),
+    total_minor: net,
+    amount_due_minor: net,
     tax_known: false,
   };
 }
@@ -3018,11 +3643,14 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       const finalAmount = effective ?? r.price.amountMinor;
       if (storefrontConfig.hideZeroValueLines && finalAmount === 0n) continue;
       itemViews.push({
-        // A price with no name of its own is shown by its product's, never its code.
-        name: r.price.externalName ?? r.price.name ?? r.productName,
+        // One naming rule for buyers, here and on the payment link and pricing page: the
+        // product's name, with the interval stated once, in `amount`.
+        name: r.productName,
         amount: priceAmountSummary(r.price, effective),
         currency: r.price.currency,
         quantity: r.quantity,
+        ...lineFigures(r.price, r.quantity, effective),
+        interval: r.price.type === "recurring" && r.price.interval ? periodLabelOf(r.price) : null,
         kind: r.kind,
         image_url: r.imageUrl,
       });
@@ -3035,12 +3663,13 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         icon_url: biz.iconUrl,
         favicon_url: biz.faviconUrl,
         brand_color: biz.brandColor,
+        support_email: biz.supportEmail ?? null,
+        website: biz.website ?? null,
         timezone: biz.timezone,
       },
       items: itemViews,
       coupons: sessionCtx.couponCodes,
-      // A purchase has no coupon path yet (see `createCheckoutSession`).
-      allow_coupons: ctx.mode === "purchase" ? false : biz.allowCustomerCoupons,
+      allow_coupons: biz.allowCustomerCoupons,
       coupon_refusals: refusals,
       // Effective: tax-locked keys already `mandatory` (0334). A customer the session did
       // not create keeps their own address book: no shipping section (see the customer route).
@@ -3057,6 +3686,12 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       consentBase: {
         period:
           ctx.mode === "create" && storefrontConfig.recurringConsent ? recurringPeriod(rows) : null,
+        trial: (() => {
+          const plan = rows.find((r) => r.price.type === "recurring")?.price;
+          return plan?.trialPeriod && plan.trialPeriod > 0
+            ? { count: plan.trialPeriod, unit: plan.trialPeriodUnit ?? "day" }
+            : null;
+        })(),
         termsUrl: storefrontConfig.termsUrl,
         privacyUrl: storefrontConfig.privacyUrl,
         termsRequired: storefrontConfig.requireTerms && ctx.mode !== "change",
@@ -3064,6 +3699,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       },
       status: ctx.status,
       mode: ctx.mode,
+      customer_pinned: ctx.customerPinned,
       // The session's own redirect wins; else the product's after-payment page — the plan's,
       // or the first line's. Only an http(s) URL: older rows predate the field's validation.
       redirect_url:
@@ -3078,13 +3714,19 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
   if (!base) return null;
   // Both modes: a signup needs the taxed total as much as a change does, and it is the
   // same composition arithmetic either way.
-  const nextPayment = await projectRecurringPayment(ctx);
+  const recurring = await projectRecurringPayment(ctx);
+  const nextPayment = recurring?.next ?? null;
   const offer = ctx.paymentLinkId ? await checkoutOffer(ctx) : null;
-  const dueToday = ctx.mode === "create" ? await projectFirstPayment(ctx) : null;
+  const dueToday = ctx.mode === "create" ? await projectFirstPayment(ctx, recurring) : null;
   const { consentBase, ...baseView } = base;
   const consent: CheckoutConsentView = {
     recurring_text: consentBase.period
-      ? recurringConsentText(baseView.business.name, consentBase.period, nextPayment)
+      ? recurringConsentText(
+          baseView.business.name,
+          consentBase.period,
+          nextPayment,
+          consentBase.trial,
+        )
       : null,
     terms_url: consentBase.termsUrl,
     privacy_url: consentBase.privacyUrl,
@@ -3156,6 +3798,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       .select({
         price: prices,
         kind: products.kind,
+        productName: sql<string>`coalesce(${products.externalName}, ${products.name})`,
         itemPublicId: subscriptionItems.publicId,
         snapshot: subscriptionItems.priceSnapshot,
       })
@@ -3198,6 +3841,8 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         planRows.map((r) => [r.itemPublicId, asPriceSnapshot(r.snapshot)] as const),
       ),
       livePrices: planRows.map((r) => r.price),
+      planName: planRow?.productName ?? null,
+      productNameByPrice: new Map(planRows.map((r) => [r.price.id, r.productName] as const)),
       hasPaymentMethod: pms.length > 0,
       charged,
     };
@@ -3205,6 +3850,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
   if (!detail) return view;
 
   let preview: CheckoutChangePreview | undefined;
+  let repeat: Parameters<typeof repeatsPendingChange>[0] | null = null;
   let blocked: { code: string; message: string } | null = null;
   /**
    * Items this operation DROPS, so the review page can say so.
@@ -3218,20 +3864,17 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
    * price is by definition still on the subscription at preview time, so it is in that set.
    */
   let removedItems: Array<{ name: string; amount: string; quantity: number }> = [];
+  let itemsUnchanged = false;
   if (ctx.reactivate) {
     // A cancelled subscription has no term to prorate: the quote is the fresh term the
     // completion bills, over the same merged item set, from the same start.
     try {
       const desired = await resolveContextItems(ctx);
       const base = await reactivationBase(ctx.organizationId, target);
+      // Nothing listed: the lines are kept, so quote them at their frozen price, as billed.
       const items =
         mergeReactivationItems(base, desired, ctx.replaceItemsList) ??
-        base.map((b) => ({
-          price: b.pricePublicId,
-          quantity: b.quantity,
-          unitPriceMinor: b.unitPriceMinor,
-          freeQuantity: b.freeQuantity,
-        }));
+        (await currentItems(ctx.organizationId, target));
       const est = await estimateReactivate({
         organizationId: ctx.organizationId,
         businessId: ctx.businessId,
@@ -3239,10 +3882,16 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         items,
         now: ctx.reactivateFrom ?? (await businessWallClock(ctx.businessId)),
       });
-      preview = changePreviewFromEstimate(est, [
-        ...detail.livePrices,
-        ...desired.map((d) => d.price),
-      ]);
+      preview = withProductNames(
+        changePreviewFromEstimate(est, [...detail.livePrices, ...desired.map((d) => d.price)]),
+        [
+          ...detail.livePrices.map((p) => ({
+            price: p,
+            product: detail.productNameByPrice.get(p.id),
+          })),
+          ...desired.map((d) => ({ price: d.price, product: d.productName })),
+        ],
+      );
     } catch (e) {
       log.warn("checkout reactivation estimate failed", { error: (e as Error)?.message });
     }
@@ -3253,6 +3902,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       const { changes, additions, removals } = planItemOperations(live, desired, {
         replaceItemsList: ctx.replaceItemsList,
       });
+      itemsUnchanged = changes.length === 0 && additions.length === 0 && removals.length === 0;
       /**
        * A removal is quoted from the item's `price_snapshot`, not the catalog — the same
        * figure the credit beneath the row is rated from, so the card cannot show a composition
@@ -3289,7 +3939,11 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
           removals.map(async (r) => {
             const price = detail.livePrices.find((p) => p.publicId === r.pricePublicId);
             if (!price) return { name: r.pricePublicId, amount: "", quantity: r.quantity };
-            const name = price.externalName ?? price.name ?? price.publicId;
+            const name =
+              detail.productNameByPrice.get(price.id) ??
+              price.externalName ??
+              price.name ??
+              price.publicId;
             const snap = detail.snapshotByItem.get(r.itemPublicId);
             if (snap) return { name, amount: snapshotAmountSummary(snap), quantity: r.quantity };
             // Non-addons resolve to null inside the helper, so the plan line needs no guard.
@@ -3334,6 +3988,20 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         // its refusal, so the page can warn before Confirm.
         const rules = await checkoutChangePolicy(ctx, target, { changes, additions, removals });
         blocked = planChangeRefusal(rules);
+        // The change request the confirm sends (`applyItemOperations` under apply_when_paid).
+        const rides = changes.length > 0 || additions.length > 0;
+        repeat = {
+          organizationId: ctx.organizationId,
+          businessId: ctx.businessId,
+          subscriptionId: target,
+          now,
+          changes,
+          adds: additions.map((a) => ({ priceId: a.price.publicId, quantity: a.quantity })),
+          removes: rides ? removals.map((r) => r.itemPublicId) : [],
+          resetTerm: checkoutResetTerm(ctx, rules),
+          prorate: prorateFor(rules.policy, rules.direction),
+          invoiceImmediately: true,
+        };
         const est = await estimateChange({
           organizationId: ctx.organizationId,
           businessId: ctx.businessId,
@@ -3351,11 +4019,21 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
           // attached are the subscription's own discounts, which the estimate reads itself.
           couponCodes: await couponsToApply(ctx, target),
         });
-        preview = changePreviewFromEstimate(est, [
-          ...detail.livePrices,
-          ...desired.map((d) => d.price),
-        ]);
+        // Lines name the PRODUCT, as the rest of the page does.
+        preview = withProductNames(
+          changePreviewFromEstimate(est, [...detail.livePrices, ...desired.map((d) => d.price)]),
+          [
+            ...detail.livePrices.map((p) => ({
+              price: p,
+              product: detail.productNameByPrice.get(p.id),
+            })),
+            ...desired.map((d) => ({ price: d.price, product: d.productName })),
+          ],
+        );
       }
+      // This session's change is held for payment (`apply_when_paid`): the retry pays that
+      // invoice, so the page shows it. A re-price would miss the unused-time credit already on it.
+      if (preview) preview = await heldChangePreview(ctx, target, preview, repeat);
     } catch (e) {
       // A preview is a nicety, not a gate — never block the page on it. Logged at warn
       // because a preview that fails for everyone is a broken estimate endpoint.
@@ -3388,8 +4066,12 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         : {}),
       currentPlan: detail.planPrice
         ? {
+            // The product's name, the same rule as the new lines below it.
             name:
-              detail.planPrice.externalName ?? detail.planPrice.name ?? detail.planPrice.publicId,
+              detail.planName ??
+              detail.planPrice.externalName ??
+              detail.planPrice.name ??
+              detail.planPrice.publicId,
             // Same catalog-vs-snapshot trap as the removed rows, one row up. A plan is never
             // differential so it never read ₹0, but a grandfathered subscription — the
             // ordinary case for any catalog price that has moved since signup — was quoted
@@ -3402,6 +4084,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       ...(preview ? { preview } : {}),
       ...(ctx.reactivate ? {} : { blocked }),
       ...(removedItems.length > 0 ? { removedItems } : {}),
+      ...(itemsUnchanged ? { itemsUnchanged } : {}),
       hasPaymentMethod: detail.hasPaymentMethod,
       ...(detail.charged
         ? {
@@ -3874,7 +4557,7 @@ async function applySessionCoupons(
   ctx: CheckoutContext,
   target: string,
   now: Date,
-  opts: { suppressAll: boolean; itemsWillAnnounce?: boolean },
+  opts: { suppressAll: boolean; itemsWillAnnounce?: boolean; skipItemMatch?: boolean },
 ): Promise<void> {
   const active = await withTenant(ctx.organizationId, (tx) =>
     tx
@@ -3911,6 +4594,7 @@ async function applySessionCoupons(
       now,
       suppressSubscriptionChanged:
         opts.suppressAll || !!opts.itemsWillAnnounce || i < toApply.length - 1,
+      ...(opts.skipItemMatch ? { skipItemMatch: true } : {}),
     });
   }
 }
@@ -3918,8 +4602,8 @@ async function applySessionCoupons(
 /**
  * Completion of a reactivating session: the cancelled subscription is rebuilt with the
  * session's items, its coupons applied, and its fresh term billed — through the same
- * `reactivateAndBill` as the operator route, so a failed charge refuses exactly as it does
- * there (the subscription is cancelled again and the session reopens for another card).
+ * `reactivateAndBill` as the operator route. The charge is always taken first: a decline
+ * leaves the subscription cancelled and the session open for another card.
  */
 async function completeReactivation(
   ctx: CheckoutContext,
@@ -3956,6 +4640,7 @@ async function completeReactivation(
         .where(eq(subscriptions.id, target)),
     );
   }
+  await assertSessionCouponsMatchItems(ctx, target);
   const items = mergeReactivationItems(
     await reactivationBase(ctx.organizationId, target),
     await resolveContextItems(ctx),
@@ -3972,6 +4657,9 @@ async function completeReactivation(
     subscription: sub,
     now: args.now,
     ...(ctx.reactivateFrom ? { termStart: ctx.reactivateFrom } : {}),
+    // The buyer is on the page to pay: a decline keeps the subscription cancelled and the
+    // page open for another card, whatever the business rule for operator reactivations.
+    onChargeFailure: "refuse",
     withOptions: true,
     items,
     // The session's coupons not already on the subscription, so a charge taken first is
@@ -4009,7 +4697,29 @@ async function completePlanChange(
 
   // Billing rules (checked again here: `completeCheckout` checked them before vaulting).
   const { ops, rules } = await assertPlanChangeAllowed(ctx);
+  // The coupons go on before the items move, so they are checked against the result here.
+  await assertSessionCouponsMatchItems(ctx, target);
 
+  // What a reverted change puts back (`failed_change_charge: revert`): the writes below that
+  // come before the change.
+  const prior = await withTenant(ctx.organizationId, async (tx) => ({
+    sub: (
+      await tx
+        .select({
+          defaultPaymentMethodId: subscriptions.defaultPaymentMethodId,
+          poNumber: subscriptions.poNumber,
+        })
+        .from(subscriptions)
+        .where(eq(subscriptions.id, target))
+        .limit(1)
+    )[0],
+    coupons: (
+      await tx
+        .select({ id: appliedCoupons.id })
+        .from(appliedCoupons)
+        .where(and(eq(appliedCoupons.subscriptionId, target), eq(appliedCoupons.status, "active")))
+    ).map((r) => r.id),
+  }));
   if (args.newPmId) {
     await withTenant(ctx.organizationId, (tx) =>
       tx
@@ -4054,7 +4764,11 @@ async function completePlanChange(
    * ignore a repeat, but it cannot react to silence. `coupon_applied` still fires per coupon
    * either way.
    */
-  await applySessionCoupons(ctx, target, args.now, { suppressAll: false, itemsWillAnnounce });
+  await applySessionCoupons(ctx, target, args.now, {
+    suppressAll: false,
+    itemsWillAnnounce,
+    skipItemMatch: true,
+  });
 
   /**
    * The instant before anything is billed, so the invoice check below can tell the
@@ -4079,6 +4793,46 @@ async function completePlanChange(
     prorate: prorateFor(rules.policy, rules.direction),
     // Metadata last, once the change is billed — see `finishChangeResult`.
     ...(ctx.metadata !== null ? { metadata: ctx.metadata } : {}),
+    // `apply_when_paid`: a void of the held invoice takes off what this session wrote.
+    pendingSource: "checkout",
+    pendingRestore: {
+      checkoutSession: ctx.sessionPublicId,
+      coupons: prior.coupons,
+      ...(prior.sub && (args.newPmId || args.poNumber) ? { subscription: prior.sub } : {}),
+    },
+  }).catch(async (e: unknown) => {
+    // `apply_when_paid`: nothing changed yet and the invoice stays open. The session stays
+    // open too: a retry with this or another card pays the same invoice.
+    if (e instanceof PendingChangeError)
+      throw new CheckoutPaymentRefusedError(
+        e.held.inFlight
+          ? "Your payment is in progress. Your plan changes when the payment is complete."
+          : payerRefusal(
+              "We could not change your plan.",
+              e.held.code === "requires_action"
+                ? "Your bank asks you to confirm this payment."
+                : (e.held.declineMessage ?? "The payment was not completed."),
+            ),
+      );
+    // `failed_change_charge: revert`: the plan did not change and nothing is owed. The coupons,
+    // card and PO number this session wrote come off too, and the refusal keeps the session
+    // open to retry, as a signup's does.
+    if (!(e instanceof ChangeRevertedError)) throw e;
+    await withTenant(ctx.organizationId, async (tx) => {
+      if (prior.sub && (args.newPmId || args.poNumber))
+        await tx
+          .update(subscriptions)
+          .set({ ...prior.sub, updatedAt: new Date() })
+          .where(eq(subscriptions.id, target));
+      await undoSubscriptionCouponEdit(tx, {
+        organizationId: ctx.organizationId,
+        subscriptionId: target,
+        before: prior.coupons,
+      });
+    });
+    throw new CheckoutPaymentRefusedError(
+      payerRefusal("We could not change your plan.", e.reverted.declineMessage),
+    );
   });
 
   return finishChangeResult(ctx, target, billedFrom, { metadataWritten: true });
@@ -4528,6 +5282,35 @@ async function completedPurchaseResult(
   };
 }
 
+/** Mixed session: flag the redemptions of the codes the buyer typed on this invoice. */
+async function markTypedRedemptions(tx: Tx, invoiceId: string, typed: string[]): Promise<void> {
+  const lowered = typed.map((c) => c.toLowerCase());
+  await tx
+    .update(appliedCoupons)
+    .set({ enteredByCustomer: true })
+    .where(
+      and(
+        eq(appliedCoupons.invoiceId, invoiceId),
+        or(
+          inArray(
+            appliedCoupons.couponId,
+            tx
+              .select({ id: coupons.id })
+              .from(coupons)
+              .where(inArray(sql`lower(${coupons.code})`, lowered)),
+          ),
+          inArray(
+            appliedCoupons.id,
+            tx
+              .select({ id: couponSetCodes.appliedCouponId })
+              .from(couponSetCodes)
+              .where(inArray(sql`lower(${couponSetCodes.code})`, lowered)),
+          ),
+        ),
+      ),
+    );
+}
+
 const PURCHASE_ACTION_MESSAGE = "This payment needs your authentication before we can complete it";
 
 /**
@@ -4558,7 +5341,7 @@ async function applyCheckoutClientResult(
   }
   if (applied?.outcome === "failed")
     throw new CheckoutError(
-      `We could not take your payment. ${applied.failure!.message} We did not charge you. Try again, or use a different payment method.`,
+      payerRefusal("We could not take your payment.", applied.failure!.message),
     );
   return getPaymentIntent(ctx.organizationId, ctx.businessId, piId);
 }
@@ -4570,7 +5353,13 @@ async function applyCheckoutClientResult(
  */
 export function purchaseIntentRefusal(e: unknown): CheckoutError | null {
   return e instanceof PaymentIntentError && e.code === CARD_LIMIT_CODE
-    ? new CheckoutError(CARD_LIMIT_MESSAGE)
+    ? new CheckoutError(
+        payerRefusal(
+          "We could not complete your purchase.",
+          CARD_LIMIT_CHECKOUT_REASON,
+          CARD_LIMIT_CHECKOUT_STEP,
+        ),
+      )
     : null;
 }
 
@@ -4607,14 +5396,35 @@ async function completePurchase(
   if (input.pmId && resolveStorefrontConfig(biz).oneTimeSavePaymentMethod === "never") {
     throw new CheckoutError("This business does not save payment methods for one-time purchases.");
   }
-  const preview = await previewInvoiceFromLines({
-    organizationId: ctx.organizationId,
-    businessId: ctx.businessId,
-    customerId: customer.id,
-    currency: built.currency,
-    lines: built.lines,
-  });
-  const dueMinor = preview.amountDueMinor;
+  const codes = ctx.couponCodes;
+  const typed = codes.filter((c) =>
+    ctx.customerCouponCodes.some((t) => t.toLowerCase() === c.toLowerCase()),
+  );
+  // The same codes price the intent and the invoice, so the amounts match.
+  const dueNow = () =>
+    previewInvoiceFromLines({
+      organizationId: ctx.organizationId,
+      businessId: ctx.businessId,
+      customerId: customer.id,
+      currency: built.currency,
+      lines: built.lines,
+      coupons: codes,
+    }).then(
+      (p) => p.amountDueMinor,
+      (e: unknown) => {
+        throw e instanceof CouponError ? new CheckoutError(e.message) : e;
+      },
+    );
+
+  /** A refusal after the gateway authorised the intent: release the hold first. */
+  const releaseHold = async (intentPublicId: string) => {
+    try {
+      await voidPaymentIntent(ctx.organizationId, ctx.businessId, intentPublicId);
+    } catch (e) {
+      // A gateway that cannot void (the hold lapses on its own) or an intent already closed.
+      log.error(e, { event: "checkout_purchase_release_failed", intent: intentPublicId });
+    }
+  };
 
   const raiseInvoice = () =>
     createManualInvoice({
@@ -4626,7 +5436,22 @@ async function completePurchase(
       applyTax: true,
       collect: false,
       ...(input.poNumber ? { poNumber: input.poNumber } : {}),
-    }).then((r) => r.invoice);
+      ...(ctx.metadata ? { metadata: ctx.metadata } : {}),
+      // Redeemed in the invoice transaction: every check runs again here.
+      ...(codes.length > 0
+        ? { coupons: { codes, enteredByCustomer: typed.length === codes.length } }
+        : {}),
+      ...(typed.length > 0 && typed.length < codes.length
+        ? {
+            inTx: (tx: Tx, created: { invoice: { id: string } }) =>
+              markTypedRedemptions(tx, created.invoice.id, typed),
+          }
+        : {}),
+    })
+      .then((r) => r.invoice)
+      .catch((e: unknown) => {
+        throw e instanceof CouponError ? new CheckoutError(e.message) : e;
+      });
 
   const settle = async (invoice: { id: string; publicId: string }): Promise<CheckoutResult> => {
     await withTenant(ctx.organizationId, (tx) =>
@@ -4661,13 +5486,15 @@ async function completePurchase(
   };
 
   const refused = (reason: string) =>
-    new CheckoutPaymentRefusedError(
-      `We could not take your payment. ${reason} We did not charge you. Try again, or use a different payment method.`,
-    );
+    new CheckoutPaymentRefusedError(payerRefusal("We could not take your payment.", reason));
 
   /** Raise the invoice and consume the authorised intent into it. */
   const finish = async (intentPublicId: string): Promise<CheckoutResult> => {
-    const invoice = await raiseInvoice();
+    const invoice = await raiseInvoice().catch(async (e: unknown) => {
+      // A coupon refused in the invoice transaction: nothing was raised.
+      if (e instanceof CheckoutError) await releaseHold(intentPublicId);
+      throw e;
+    });
     let failure: string | null = null;
     try {
       const consumed = await consumePaymentIntent(
@@ -4702,8 +5529,7 @@ async function completePurchase(
     // Same answer for "unknown" and "someone else's": a public link is not an oracle.
     if (!intent || intent.customerId !== customer.id)
       throw new CheckoutError(`No such payment intent: ${input.paymentIntentId}`);
-    if (intent.amountMinor == null || BigInt(intent.amountMinor) !== dueMinor)
-      throw new CheckoutError("The amount due changed after you started the payment. Start again.");
+    const heldMinor = intent.amountMinor;
     if (input.clientResult)
       intent =
         (await applyCheckoutClientResult(ctx, intent.publicId, input.clientResult)) ?? intent;
@@ -4712,9 +5538,19 @@ async function completePurchase(
     if (!ready)
       // The storefront matches this text to retry a return that beat the gateway's webhook.
       throw new CheckoutError("Complete the payment step first.");
+    // The gateway holds the buyer's money from here: every refusal releases it.
+    const due = await dueNow().catch(async (e: unknown) => {
+      if (e instanceof CheckoutError) await releaseHold(ready.publicId);
+      throw e;
+    });
+    if (heldMinor == null || BigInt(heldMinor) !== due) {
+      await releaseHold(ready.publicId);
+      throw new CheckoutError("The amount due changed after you started the payment. Start again.");
+    }
     return finish(ready.publicId);
   }
 
+  const dueMinor = await dueNow();
   // Nothing to collect (account credit covers it): the invoice settles on its own.
   if (dueMinor <= 0n) return settle(await raiseInvoice());
 
@@ -5124,7 +5960,7 @@ async function completeCheckoutInner(
           // matches "Complete the authentication first" to retry a return that beat it.
           if (intent && !(await authorizeFromGateway(ctx.organizationId, ctx.businessId, intent)))
             await refuse(
-              `Payment intent ${piId} is ${intent.status}. Complete the authentication first.`,
+              "Your bank has not approved the payment yet. Complete the authentication first.",
             );
 
           const committed = await commitSubscriptionPeriodInvoice(plan, {
@@ -5200,8 +6036,11 @@ async function completeCheckoutInner(
             deferred.length = 0;
             // The outer catch releases the session claim, so the buyer can try
             // another card on the same link.
+            const lead = "We could not start your subscription.";
             throw new CheckoutPaymentRefusedError(
-              `Your payment was declined, so we did not create the subscription: ${outcome.payerMessage}`,
+              outcome.failureCode === CARD_LIMIT_CODE
+                ? payerRefusal(lead, CARD_LIMIT_CHECKOUT_REASON, CARD_LIMIT_CHECKOUT_STEP)
+                : payerRefusal(lead, outcome.payerMessage),
             );
           }
           // A pending/unknown gateway outcome is NOT a refusal: the money may
@@ -5295,11 +6134,44 @@ async function completeCheckoutInner(
     ctx.status = "completed";
     ctx.resultingSubscriptionId = subscription.id;
 
+    // A first charge that is still pending (its answer lost, or a gateway that settles
+    // later) is not a finished payment: the buyer's page says so instead of "complete".
+    const pendingFirst = await withTenant(ctx.organizationId, async (tx) => {
+      const [open] = await tx
+        .select({
+          id: invoices.id,
+          publicId: invoices.publicId,
+          due: invoices.amountDueMinor,
+          cur: invoices.currency,
+        })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.subscriptionId, subscription.id),
+            inArray(invoices.status, [...OPEN_INVOICE_STATUSES]),
+            gt(invoices.amountDueMinor, 0n),
+          ),
+        )
+        .orderBy(desc(invoices.createdAt))
+        .limit(1);
+      if (!open) return null;
+      const outcome = await collectionOutcomeFor(tx, open.id);
+      return outcome.state === "processing"
+        ? {
+            id: open.publicId,
+            amountDueMinor: Number(open.due),
+            currency: open.cur,
+            state: outcome.state,
+          }
+        : null;
+    });
+
     return {
       subscriptionId: subscription.publicId,
       customerId: customer.publicId,
       ...(consumedIntentId ? { paymentIntentId: consumedIntentId } : {}),
       ...(consumedPaymentError ? { paymentError: consumedPaymentError } : {}),
+      ...(pendingFirst && !consumedPaymentError ? { unpaidInvoice: pendingFirst } : {}),
     };
   } catch (e) {
     // An unexpected failure after the subscription was written leaves it in

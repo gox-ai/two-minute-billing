@@ -32,8 +32,14 @@ Every control is off until a business configures one (`businesses.usage_controls
 - Usage is never refused at ingest. A hard limit refuses at the access check only.
 - A limit tier never goes down (`customer_limit_tier_reached` is append-only).
 - Each alert threshold fires at most once per subject and period, and resolves at most once.
-- Credit from an automatic top-up is granted only after its payment succeeds. A decline voids
-  the invoice and turns automatic top-up off; there is no retry.
+- Credit from an automatic top-up is granted only after its payment succeeds. A soft decline
+  is tried again on the business's schedule (`credit_config.auto_topup_retry_hours`, default
+  `[4, 12]`, per payment method kind in `auto_topup_retry_hours_by_method`; at most 5 tries in
+  72 hours); a hard decline (smart dunning's `classifyDecline`, or no payment method), the last
+  try, or `auto_topup_retries: false` at the first decline voids the invoice and turns
+  automatic top-up off. With `credit_config.auto_topup_on_hard_decline: keep_enabled` a hard
+  decline only fails the run; a threshold top-up waits for the balance to rise above the
+  threshold and fall again.
 - Σ interim subtotals + final subtotal = the single-invoice subtotal, per item, to the minor unit.
 - The price-change preview writes nothing (`set transaction read only`).
 - A widget token reads one customer only, and no write route accepts it. A browser gets the data
@@ -90,6 +96,42 @@ Every control is off until a business configures one (`businesses.usage_controls
   origins.
 
 ## Changelog
+- 2026-11-14 — `credit_config.auto_topup_on_hard_decline` (`disable` unset | `keep_enabled`):
+  with `keep_enabled` a hard decline fails the run and voids its invoice, the config stays
+  active, `credit_auto_topup_failed` carries `stays_enabled: true` (the email says the top-up
+  stays on) and no `credit_auto_topup_hard_declined` is sent. A threshold config then waits
+  (`waitsForCrossing`: the last run failed hard after the config's last change) until the
+  balance is above the threshold, which bumps `updated_at` (`rearm`); the next crossing runs.
+  Gate: `verify:auto-topup` § 2b.
+- 2026-11-13 (0530) — Retries of a soft decline for every automatic top-up, money or unit, on by
+  default. `credit_config.auto_topup_retries` (false = off at the first decline, as before for
+  money), `auto_topup_retry_hours` (delays in hours, each from the try before; ≤ 4, total ≤ 72;
+  default [4, 12]) and `auto_topup_retry_hours_by_method` (`card`, `bank_debit`). A PATCH that
+  omits them keeps them. Soft versus hard is smart dunning's `classifyDecline`
+  (`subscriptions/decline-policy.ts`); it replaces `isTerminalDeclineCode` + the gateway's
+  `retriable: false`. `max_attempts` of `credit_auto_topup_retry_scheduled` = delays + 1.
+- 2026-11-13 (0527) — Automatic top-up for a credit unit with no money rate. Config:
+  `pack_price` (a one-time pack that grants the unit), `pack_quantity` (method `fixed`) or
+  `target_units` (method `target`: whole packs to reach at least N), `threshold_units`,
+  `purchase_limits` (`hour` / `day` / `week` / `month`: `count`, `amount_minor`; hour and week
+  are the last 60 minutes and 7 days, day and month the business calendar; also honoured by a
+  money top-up; unset = no change). The threshold is copied to `credit_unit_balances`
+  (`syncGateThreshold`); the credit gate marks `topup_due_at` in its own take, and the
+  `credit_auto_topups` pass buys (`packTopup`); the pass also acts with no mark when the
+  balance is at or below the threshold (a grant expired, a hold). One open run per config, as
+  before. The pack line makes the grant, with the pack's own expiry. Declines: a soft decline
+  goes back to `created` with `charge_after` (`TOPUP_RETRY`: 3 tries in 24 hours, after 4 and
+  12 hours; the dunning schedule is in days and does not fit) and emits
+  `credit_auto_topup_retry_scheduled`; a hard decline (`isTerminalDeclineCode`, or the
+  gateway's `retriable: false`) or the last try turns the top-up off with
+  `credit_auto_topup_hard_declined` / `credit_auto_topup_retries_exhausted` and
+  `credit_auto_topup_failed` (the email). A money top-up still turns off at its first
+  decline. The lead-time rule is in money and skips such a config. Portal:
+  `portalUnitTopups`, `credit_config.portal_auto_topup`.
+  Cover: `verify:credit-holds-units` § 9, `test/unit/credit-holds-units.test.ts`.
+- 2026-11-13 — `GET …/customers/{cus}/credit_runway?unit=` gives the runway in units for a unit
+  with no rate (`credits/reports.ts` `measureUnitRunway`). Without `unit`, unchanged.
+- 2026-11-12 — Buyer refusals name "this business", not "your provider".
 - 2026-11-03 — Each credit auto top-up runs in its own span (`withSpan` around `chargeRun`),
   so its transaction's gateway-log link shows that top-up, not the whole clock pass.
 - 2026-11-02 — Automatic top-up selects its first method for the run's currency
@@ -110,3 +152,8 @@ Every control is off until a business configures one (`businesses.usage_controls
   automatic top-up mails only `credit_auto_topup_failed`; a time-travel step runs the check;
   interim lines carry their units and "this invoice"; responses and events give ISO 8601
   times; a grant names its `auto_top_up_run`.
+- **2026-11-13 (spend counts money overage)** — `measureSpend` and `measureSpendBetween` add
+  `overageSpend`: the money a price bills for usage beyond the credits of a credit-cost meter
+  (spend limits, spend alerts, burn and runway). Left out: a property-scoped measure (the
+  events carry no property split), an overshoot (not billed), `usage_quantity` alerts (already
+  count every unit) and threshold invoicing (an interim invoice does not bill this usage).

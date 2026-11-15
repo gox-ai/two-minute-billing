@@ -8,6 +8,8 @@
  *  - `restateTrailingDays` recomputes the last 35 days, and the coarse periods containing
  *    them, so anything touching the past month repairs itself overnight. An OLDER day that
  *    received a backdated transaction or MRR movement since it was stored is restated too.
+ *  - The same pass restates the daily usage cost fold (`usage_cost_daily`) over those days:
+ *    an event may arrive up to 35 days late, so the trailing window holds every late event.
  *  - `scanMetricDrift` recomputes a few OLDER sampled days and records where the headline
  *    figures no longer match what is stored — history the restatement does not reach.
  *    `metric_daily_reproducible` (ops invariants) reads that record.
@@ -19,6 +21,7 @@ import { createLogger } from "@/platform/logger";
 import { computeMetricPeriod } from "./compute";
 import { bulkFillMetricDays, bulkFillCoarseGrains } from "./bulk-fill";
 import { businessesWithSubscriptions, dayFor, type CronBusiness } from "./cron";
+import { foldUsageCostDays } from "@/modules/metering/cost-fold";
 
 const log = createLogger("metrics.daily.maintenance");
 
@@ -163,6 +166,28 @@ export async function restateTrailingDays(
       failed++;
       log.error("metric_daily restatement failed for one business", {
         event: "metric_daily_restate_failed",
+        businessId: b.id,
+        error_message: (e as Error).message,
+      });
+    }
+    try {
+      const t1 = Date.now();
+      const fold = await foldUsageCostDays({
+        organizationId: b.organizationId,
+        businessId: b.id,
+        days,
+        timezone: b.timezone,
+      });
+      log.info("usage cost fold restated", {
+        event: "usage_cost_fold_restated",
+        businessId: b.id,
+        rows: fold.rows,
+        ms: Date.now() - t1,
+      });
+    } catch (e) {
+      failed++;
+      log.error("usage cost fold failed for one business", {
+        event: "usage_cost_fold_failed",
         businessId: b.id,
         error_message: (e as Error).message,
       });

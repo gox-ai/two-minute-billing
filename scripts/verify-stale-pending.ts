@@ -2278,10 +2278,11 @@ const intentRow = async (orgId: string, id: string) =>
 
   // tmtest answers a status poll from its own store and logs no request, so read the span
   // the poll RUNS in; a real adapter's request log takes exactly that (providers/http.ts).
+  // Only this charge's polls: the sweep's other passes may poll rows left by earlier suites.
   const pollSpans: (string | undefined)[] = [];
   const realFetch = TmtestProvider.prototype.fetchChargeStatus;
   TmtestProvider.prototype.fetchChargeStatus = function (input) {
-    pollSpans.push(getSpanId());
+    if (input.providerChargeId === live.idAtGateway) pollSpans.push(getSpanId());
     return realFetch.call(this, input);
   };
   // Targeted: bypasses the grace window, so it really does reach the gateway.

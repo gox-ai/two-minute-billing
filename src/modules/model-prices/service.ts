@@ -14,12 +14,14 @@ import { publicId } from "@/platform/ids";
 import { writeAuditLog } from "@/modules/audit/service";
 import { rowsOf } from "@/modules/metering/usage-sql";
 import { USED_WITHIN_DAYS } from "./notices";
+import { isModelPriceUnit, MODEL_PRICE_UNITS, normalizeTier, TIER_RE } from "./units";
 import {
   LIST_CURRENCY,
   MODEL_PRICES_LICENCE,
   MODEL_PRICES_SOURCE_NAME,
   readModelPriceSource,
 } from "./sync";
+import { MEDIA_SOURCE_LICENCE } from "./parse-media";
 
 export class CostOverrideRuleError extends Error {
   constructor(message: string) {
@@ -42,6 +44,9 @@ interface PriceRow {
   provider: string;
   model: string;
   token_type: string;
+  unit: string;
+  quality: string;
+  resolution: string;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: string;
@@ -59,6 +64,9 @@ interface CostRow {
   provider: string | null;
   model: string;
   token_type: string;
+  unit: string;
+  quality: string;
+  resolution: string;
   currency: string;
   unit_amount_decimal: string;
   quantity_divisor: string;
@@ -72,13 +80,27 @@ const iso = (v: string | Date | null | undefined) =>
   v == null ? null : (v instanceof Date ? v : new Date(v)).toISOString();
 const decimal = (v: string) => formatFixed12(fixed12FromNumeric(v));
 
+/** Kind, unit and tier as the API returns them. `price_kind` is `token_type` under its new name. */
+const keyFields = (r: {
+  token_type: string;
+  unit: string;
+  quality: string;
+  resolution: string;
+}) => ({
+  token_type: r.token_type,
+  price_kind: r.token_type,
+  unit: r.unit,
+  quality: r.quality || null,
+  resolution: r.resolution || null,
+});
+
 export function serializeModelPrice(r: PriceRow) {
   return {
     object: "model_price" as const,
     id: r.public_id,
     provider: r.provider,
     model: r.model,
-    token_type: r.token_type,
+    ...keyFields(r),
     currency: r.currency.trim(),
     unit_amount_decimal: decimal(r.unit_amount_decimal),
     quantity_divisor: Number(r.quantity_divisor),
@@ -98,7 +120,7 @@ export function serializeCostOverride(r: CostRow) {
     id: r.public_id,
     provider: r.provider,
     model: r.model,
-    token_type: r.token_type,
+    ...keyFields(r),
     currency: r.currency.trim(),
     unit_amount_decimal: decimal(r.unit_amount_decimal),
     quantity_divisor: Number(r.quantity_divisor),
@@ -110,12 +132,13 @@ export function serializeCostOverride(r: CostRow) {
 }
 
 const PRICE_COLS = sql`p.id, p.public_id, p.provider, p.model, p.token_type,
-  p.currency::text as currency, p.unit_amount_decimal::text as unit_amount_decimal,
+  p.unit, p.quality, p.resolution, p.currency::text as currency, p.unit_amount_decimal::text as unit_amount_decimal,
   p.quantity_divisor::text as quantity_divisor,
   case when p.effective_from = '-infinity' then null else p.effective_from::text end as effective_from,
   p.source, p.source_version, p.source_effective_from::text as source_effective_from, p.rounded`;
 
-const COST_COLS = sql`id, public_id, provider, model, token_type, currency::text as currency,
+const COST_COLS = sql`id, public_id, provider, model, token_type, unit, quality, resolution,
+  currency::text as currency,
   unit_amount_decimal::text as unit_amount_decimal, quantity_divisor::text as quantity_divisor,
   effective_from, effective_to, note, created_at`;
 
@@ -167,6 +190,7 @@ export interface ListModelPricesQuery {
   provider?: string;
   model?: string;
   tokenType?: string;
+  unit?: string;
   q?: string;
   hasCost?: boolean;
   used?: boolean;
@@ -185,25 +209,36 @@ export async function listModelPrices(organizationId: string, q: ListModelPrices
     const used = onlyUsed
       ? await usedModelValues(tx, organizationId, new Date(), q.businessId)
       : [];
-    let after: { provider: string; model: string; token_type: string } | undefined;
+    type After = {
+      provider: string;
+      model: string;
+      token_type: string;
+      unit: string;
+      quality: string;
+      resolution: string;
+    };
+    let after: After | undefined;
     if (q.startingAfter) {
-      [after] = rowsOf<{ provider: string; model: string; token_type: string }>(
-        await tx.execute(sql`select provider, model, token_type from model_prices
-          where public_id = ${q.startingAfter}`),
+      [after] = rowsOf<After>(
+        await tx.execute(sql`select provider, model, token_type, unit, quality, resolution
+          from model_prices where public_id = ${q.startingAfter}`),
       );
     }
     const like = q.q ? `%${q.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
     const rows = rowsOf<PriceRow & { cost: CostRow | null }>(
       await tx.execute(sql`
         with cur as (
-          select distinct on (p.provider, p.model, p.token_type, p.currency) ${PRICE_COLS}
+          select distinct on (p.provider, p.model, p.token_type, p.unit, p.quality, p.resolution,
+            p.currency) ${PRICE_COLS}
           from model_prices p
           where p.effective_from <= ${at}::timestamptz
             ${q.provider ? sql`and p.provider = ${q.provider}` : sql``}
             ${q.model ? sql`and p.model = ${q.model}` : sql``}
             ${q.tokenType ? sql`and p.token_type = ${q.tokenType}` : sql``}
+            ${q.unit ? sql`and p.unit = ${q.unit}` : sql``}
             ${like ? sql`and (p.model ilike ${like} or p.provider ilike ${like})` : sql``}
-          order by p.provider, p.model, p.token_type, p.currency, p.effective_from desc
+          order by p.provider, p.model, p.token_type, p.unit, p.quality, p.resolution, p.currency,
+            p.effective_from desc
         )
         select * from (
           select cur.*, m.last_seen_at, m.aliases,
@@ -212,22 +247,27 @@ export async function listModelPrices(organizationId: string, q: ListModelPrices
                where o.organization_id = ${organizationId}
                  and (o.model = cur.model or o.model = any(m.aliases))
                  and o.token_type = cur.token_type
+                 -- A unit-less meter costs a request key from a token cost row (as before 0524).
+                 and (o.unit = cur.unit or (o.unit = 'token' and cur.unit = 'request'))
+                 and o.quality = cur.quality and o.resolution = cur.resolution
                  and (o.provider is null or o.provider = cur.provider)
                  and o.effective_from <= ${at}::timestamptz
                  and (o.effective_to is null or o.effective_to > ${at}::timestamptz)
-               order by (o.provider is null), (o.currency <> ${LIST_CURRENCY}), o.effective_from desc
+               order by (o.unit <> cur.unit), (o.provider is null), (o.currency <> ${LIST_CURRENCY}), o.effective_from desc
                limit 1) c) as cost
           from cur join model_price_models m on m.provider = cur.provider and m.model = cur.model
         ) x
         where true
           ${
             after
-              ? sql`and (x.provider, x.model, x.token_type) > (${after.provider}, ${after.model}, ${after.token_type})`
+              ? sql`and (x.provider, x.model, x.token_type, x.unit, x.quality, x.resolution)
+                  > (${after.provider}, ${after.model}, ${after.token_type}, ${after.unit},
+                     ${after.quality}, ${after.resolution})`
               : sql``
           }
           ${onlyUsed ? sql`and (x.model = any(${textArray(used)}) or x.aliases && ${textArray(used)})` : sql``}
           ${q.hasCost ? sql`and x.cost is not null` : sql``}
-        order by x.provider, x.model, x.token_type
+        order by x.provider, x.model, x.token_type, x.unit, x.quality, x.resolution
         limit ${q.limit + 1}`),
     );
     const page = rows.slice(0, q.limit);
@@ -254,10 +294,14 @@ export async function getModelPrice(organizationId: string, id: string) {
   });
 }
 
-/** Every dated list row for a model (both dates), and the organization's cost rows for it. */
+/**
+ * Every dated list row for a model (both dates), and the organization's cost rows for it. Costs
+ * match as in `listModelPrices`: the model or one of its aliases, and a token cost for a
+ * request key.
+ */
 export async function modelPriceHistory(
   organizationId: string,
-  key: { provider?: string; model: string; tokenType?: string },
+  key: { provider?: string; model: string; tokenType?: string; unit?: string },
 ) {
   return withTenant(organizationId, async (tx) => {
     const prices = rowsOf<PriceRow>(
@@ -265,14 +309,25 @@ export async function modelPriceHistory(
         where p.model = ${key.model}
           ${key.provider ? sql`and p.provider = ${key.provider}` : sql``}
           ${key.tokenType ? sql`and p.token_type = ${key.tokenType}` : sql``}
-        order by p.provider, p.token_type, p.effective_from asc`),
+          ${key.unit ? sql`and p.unit = ${key.unit}` : sql``}
+        order by p.provider, p.token_type, p.unit, p.quality, p.resolution, p.effective_from asc`),
     );
     const costs = rowsOf<CostRow>(
       await tx.execute(sql`select ${COST_COLS} from model_cost_overrides
-        where organization_id = ${organizationId} and model = ${key.model}
+        where organization_id = ${organizationId}
+          and (model = ${key.model} or model in (
+            select unnest(m.aliases) from model_price_models m where m.model = ${key.model}
+              ${key.provider ? sql`and m.provider = ${key.provider}` : sql``}))
           ${key.provider ? sql`and (provider is null or provider = ${key.provider})` : sql``}
           ${key.tokenType ? sql`and token_type = ${key.tokenType}` : sql``}
-        order by token_type, effective_from asc`),
+          ${
+            key.unit === "request"
+              ? sql`and unit in ('request', 'token')`
+              : key.unit
+                ? sql`and unit = ${key.unit}`
+                : sql``
+          }
+        order by token_type, unit, quality, resolution, effective_from asc`),
     );
     return {
       object: "model_price_history" as const,
@@ -292,9 +347,48 @@ export function nextSyncAt(now: Date): Date {
   return t;
 }
 
-/** Where the list comes from and how fresh it is. */
+/** One feed of the list, with its own state. */
+interface SourceInfo {
+  source: string;
+  url: string;
+  licence: string;
+  /** `all`, or `media` (images, video, audio, characters; it wins a media price both give). */
+  prices: "all" | "media";
+  checked_at: string | null;
+  last_success_at: string | null;
+  check_error: string | null;
+  upstream_version: string | null;
+}
+
+/**
+ * Where the list comes from and how fresh it is. The top-level fields are the first feed (as
+ * before the second); `sources` lists every feed with its own state.
+ */
 export async function modelPriceSourceInfo(organizationId: string, now = new Date()) {
   const s = await readModelPriceSource();
+  const sources: SourceInfo[] = [
+    {
+      source: MODEL_PRICES_SOURCE_NAME,
+      url: s.url,
+      licence: MODEL_PRICES_LICENCE,
+      prices: "all",
+      checked_at: iso(s.checkedAt),
+      last_success_at: iso(s.lastSuccessAt),
+      check_error: s.checkError,
+      upstream_version: s.upstreamVersion,
+    },
+  ];
+  if (s.media)
+    sources.push({
+      source: s.media.source,
+      url: s.media.url,
+      licence: MEDIA_SOURCE_LICENCE,
+      prices: "media",
+      checked_at: iso(s.media.checkedAt),
+      last_success_at: iso(s.media.lastSuccessAt),
+      check_error: s.media.checkError,
+      upstream_version: s.media.upstreamVersion,
+    });
   const providers = await withTenant(organizationId, async (tx) =>
     rowsOf<{ provider: string }>(
       await tx.execute(sql`select distinct provider from model_price_models order by provider`),
@@ -312,6 +406,7 @@ export async function modelPriceSourceInfo(organizationId: string, now = new Dat
     held: s.held !== null,
     next_check_at: nextSyncAt(now).toISOString(),
     providers,
+    sources,
   };
 }
 
@@ -321,6 +416,11 @@ export interface CostOverrideInput {
   provider?: string | null;
   model: string;
   tokenType: string;
+  /** Default `token`. */
+  unit?: string;
+  /** '' or absent = no tier. */
+  quality?: string | null;
+  resolution?: string | null;
   currency: string;
   unitAmountDecimal: string;
   quantityDivisor: string;
@@ -358,6 +458,19 @@ export async function createCostOverride(
     );
   }
   if (unit < 0n) throw new CostOverrideRuleError("unit_amount_decimal cannot be negative.");
+  const priceUnit = input.unit ?? "token";
+  if (!isModelPriceUnit(priceUnit))
+    throw new CostOverrideRuleError(`unit must be one of ${MODEL_PRICE_UNITS.join(", ")}.`);
+  const quality = normalizeTier(input.quality);
+  const resolution = normalizeTier(input.resolution);
+  for (const [name, v] of [
+    ["quality", quality],
+    ["resolution", resolution],
+  ] as const)
+    if (!TIER_RE.test(v))
+      throw new CostOverrideRuleError(
+        `${name} can have 40 characters at most: lower-case letters, digits, "_", "." and "-".`,
+      );
   if (!/^[1-9][0-9]{0,11}$/.test(input.quantityDivisor))
     throw new CostOverrideRuleError(
       "quantity_divisor must be a whole number from 1 to 999999999999.",
@@ -375,9 +488,11 @@ export async function createCostOverride(
       const [row] = rowsOf<CostRow>(
         await tx.execute(sql`
           insert into model_cost_overrides (organization_id, public_id, provider, model, token_type,
-            currency, unit_amount_decimal, quantity_divisor, effective_from, effective_to, note)
+            unit, quality, resolution, currency, unit_amount_decimal, quantity_divisor,
+            effective_from, effective_to, note)
           values (${organizationId}, ${id}, ${input.provider ?? null}, ${input.model},
-            ${input.tokenType}, ${input.currency.toUpperCase()}, ${formatFixed12(unit)}::numeric,
+            ${input.tokenType}, ${priceUnit}, ${quality}, ${resolution},
+            ${input.currency.toUpperCase()}, ${formatFixed12(unit)}::numeric,
             ${input.quantityDivisor}::bigint, ${start.toISOString()}::timestamptz,
             ${input.effectiveTo ? input.effectiveTo.toISOString() : null}::timestamptz,
             ${input.note ?? null})
@@ -410,17 +525,41 @@ export async function listCostOverrides(
     model?: string;
     provider?: string;
     tokenType?: string;
+    unit?: string;
+    /** Text in the model or provider id. */
+    q?: string;
+    /**
+     * false = only rows whose key has no row on the price list now, so the list read shows
+     * them beside no price; true = only the others.
+     */
+    listed?: boolean;
     limit: number;
     startingAfter?: string;
   },
 ) {
+  // The key match of `listModelPrices`, from the cost row's side.
+  const listedBy = (model: SQL) => sql`exists (
+    select 1 from model_prices p
+      join model_price_models m on m.provider = p.provider and m.model = p.model
+    where ${model}
+      and p.token_type = o.token_type
+      and (p.unit = o.unit or (o.unit = 'token' and p.unit = 'request'))
+      and p.quality = o.quality and p.resolution = o.resolution
+      and (o.provider is null or o.provider = p.provider)
+      and p.effective_from <= ${new Date().toISOString()}::timestamptz)`;
+  const isListed = sql`(${listedBy(sql`p.model = o.model`)}
+    or ${listedBy(sql`o.model = any(m.aliases)`)})`;
+  const like = q.q ? `%${q.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
   return withTenant(organizationId, async (tx) => {
     const rows = rowsOf<CostRow>(
-      await tx.execute(sql`select ${COST_COLS} from model_cost_overrides
+      await tx.execute(sql`select ${COST_COLS} from model_cost_overrides o
         where organization_id = ${organizationId}
           ${q.model ? sql`and model = ${q.model}` : sql``}
           ${q.provider ? sql`and provider = ${q.provider}` : sql``}
           ${q.tokenType ? sql`and token_type = ${q.tokenType}` : sql``}
+          ${q.unit ? sql`and unit = ${q.unit}` : sql``}
+          ${like ? sql`and (model ilike ${like} or provider ilike ${like})` : sql``}
+          ${q.listed === undefined ? sql`` : q.listed ? sql`and ${isListed}` : sql`and not ${isListed}`}
           ${q.startingAfter ? sql`and public_id < ${q.startingAfter}` : sql``}
         order by public_id desc limit ${q.limit + 1}`),
     );

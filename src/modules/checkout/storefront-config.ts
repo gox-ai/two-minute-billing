@@ -47,7 +47,8 @@
  * subscription: `reactivateSubscription` reports `billable` for that case and the caller
  * has to charge the new period, which needs the business's charges-handling decision and
  * can fail at the gateway. That is a checkout, not a one-click portal action, so the route
- * refuses it with a message pointing at the merchant.
+ * refuses it. `allow_restart` (2026-11-10) is that checkout: the portal mints a restart
+ * session and the buyer pays the new term on the hosted page (`subscriptions/restart.ts`).
  *
  * `cancel_timing` is the MERCHANT's choice, never the buyer's, and is not accepted as a
  * request parameter. A buyer picking "immediately" would decide whether the merchant keeps
@@ -143,6 +144,20 @@ export interface StorefrontConfig {
    * restarting it charges money immediately. See the file docblock.
    */
   allowReactivate: boolean;
+  /**
+   * May a buyer restart an ENDED subscription? Default FALSE. The portal sends them to a
+   * restart checkout, which charges the new term before the subscription is active again.
+   */
+  allowRestart: boolean;
+  /**
+   * The price a restart bills. `current` = the plan's catalogue price today (a custom
+   * price set on the subscription is kept); `keep` = the price the subscription had.
+   */
+  restartPrice: "current" | "keep";
+  /** Days after the end in which a buyer may restart (1–3650). Null = any time. */
+  restartWindowDays: number | null;
+  /** `pay_first` = unpaid invoices of the subscription block the restart until paid. */
+  restartOpenInvoices: "pay_first" | "allow";
   /**
    * May a buyer skip an upcoming renewal of their own subscription? Default FALSE. Capped by
    * `skipRenewalLimit` skips per 12 months; operators are not capped.
@@ -247,6 +262,10 @@ export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
   cancelTiming: "end_of_term",
   allowPauseResume: false,
   allowReactivate: false,
+  allowRestart: false,
+  restartPrice: "current",
+  restartWindowDays: null,
+  restartOpenInvoices: "pay_first",
   allowSkipRenewal: false,
   skipRenewalLimit: 3,
   portalLinkErrorHtml: null,
@@ -309,6 +328,7 @@ export const NEW_BUSINESS_STOREFRONT_CONFIG = {
   portal_email_code: true,
   portal_hide_zero_invoices: true,
   portal_hide_voided_invoices: true,
+  allow_restart: true,
 } as const;
 
 /**
@@ -335,6 +355,10 @@ interface StoredStorefrontConfig {
   cancel_timing?: unknown;
   allow_pause_resume?: unknown;
   allow_reactivate?: unknown;
+  allow_restart?: unknown;
+  restart_price?: unknown;
+  restart_window_days?: unknown;
+  restart_open_invoices?: unknown;
   allow_skip_renewal?: unknown;
   skip_renewal_limit?: unknown;
   portal_link_error_html?: unknown;
@@ -464,6 +488,21 @@ export function resolveStorefrontConfig(
         : DEFAULT_STOREFRONT_CONFIG.cancelTiming,
     allowPauseResume: flag(raw?.allow_pause_resume, DEFAULT_STOREFRONT_CONFIG.allowPauseResume),
     allowReactivate: flag(raw?.allow_reactivate, DEFAULT_STOREFRONT_CONFIG.allowReactivate),
+    allowRestart: flag(raw?.allow_restart, DEFAULT_STOREFRONT_CONFIG.allowRestart),
+    restartPrice:
+      raw?.restart_price === "current" || raw?.restart_price === "keep"
+        ? raw.restart_price
+        : DEFAULT_STOREFRONT_CONFIG.restartPrice,
+    restartWindowDays:
+      Number.isInteger(raw?.restart_window_days) &&
+      (raw!.restart_window_days as number) >= 1 &&
+      (raw!.restart_window_days as number) <= 3650
+        ? (raw!.restart_window_days as number)
+        : DEFAULT_STOREFRONT_CONFIG.restartWindowDays,
+    restartOpenInvoices:
+      raw?.restart_open_invoices === "pay_first" || raw?.restart_open_invoices === "allow"
+        ? raw.restart_open_invoices
+        : DEFAULT_STOREFRONT_CONFIG.restartOpenInvoices,
     allowSkipRenewal: flag(raw?.allow_skip_renewal, DEFAULT_STOREFRONT_CONFIG.allowSkipRenewal),
     skipRenewalLimit:
       Number.isInteger(raw?.skip_renewal_limit) &&

@@ -27,7 +27,7 @@ export function CustomerFormLoading() {
         <Skeleton className="h-7 w-48" />
         <Skeleton className="h-3.5 w-96 max-w-full" />
       </div>
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <CardBones fields={6} />
           <CardBones fields={5} />

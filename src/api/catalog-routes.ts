@@ -418,7 +418,7 @@ function tierListBadRequest(reply: FastifyReply, e: TierListError, snake = false
   return badRequest(reply, new z.ZodError(tierZodIssues(e.issues, snake)));
 }
 
-const createPriceBody = z
+export const createPriceBody = z
   .object({
     product: z.string().min(1).max(100),
     // CAT-0 slug id, same contract as products/groups: caller-named, else auto-derived
@@ -559,7 +559,7 @@ const lockedMeterField = z
       "You cannot change the meter, amount source or divisor of a price. Create a new price.",
   });
 
-const updatePriceBody = z.object({
+export const updatePriceBody = z.object({
   ...Object.fromEntries(LOCKED_USAGE_FIELDS.map((f) => [f, lockedUsageField])),
   ...Object.fromEntries(LOCKED_METER_FIELDS.map((f) => [f, lockedMeterField])),
   name: z.string().max(200).nullable().optional(),

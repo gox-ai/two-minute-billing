@@ -5,6 +5,7 @@ import { type ColumnDef } from "@tanstack/react-table";
 import { Gauge } from "lucide-react";
 import {
   ListPage,
+  createAction,
   type ListFilterField,
   type ListPageHeader,
   type ListSegment,
@@ -12,7 +13,7 @@ import {
 import { InfoCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDateShort } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { useBusinessTz } from "@/components/business-tz";
 import { meterAggregationLabel } from "@/lib/meters";
 import type { Meter } from "@/lib/api/meters";
@@ -82,7 +83,7 @@ export function MetersTable({
         accessorKey: "created_at",
         header: "Created",
         cell: ({ row }) => (
-          <TextCell className="tabular-nums">{fmtDateShort(row.original.created_at, tz)}</TextCell>
+          <TextCell className="tabular-nums">{fmtDate(row.original.created_at, tz)}</TextCell>
         ),
       },
     ],
@@ -122,8 +123,8 @@ export function MetersTable({
       data={rows}
       segments={segments}
       filterFields={filterFields}
-      createAction={canManage ? { label: "Create meter", href: `${base}/new` } : undefined}
-      searchPlaceholder="Search for ID, name or event name…"
+      createAction={canManage ? createAction("meter", `${base}/new`) : undefined}
+      searchPlaceholder="Search by ID, name or event name"
       exportName="meters"
       persistKey={`meters:${biz}`}
       rowHref={(m) => `${base}/${m.id}`}

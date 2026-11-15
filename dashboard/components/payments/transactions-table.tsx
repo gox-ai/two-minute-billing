@@ -11,13 +11,17 @@ import {
   type ListPageHeader,
 } from "@/components/patterns/list-page";
 import { makeListSource } from "@/lib/list-source";
-import { IdCell, MoneyCell, TextCell, TruncateCell } from "@/components/patterns/list-cells";
+import { MiddleEllipsis, IdText } from "@/components/patterns/id-text";
+import { IdCell, MoneyCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
+import { brandLabel, enumLabel } from "@/lib/labels";
 import { CustomerInfoCell } from "@/components/patterns/customer-info-cell";
 import type { Transaction } from "@/lib/api/payments";
-import { ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight, Receipt, User } from "lucide-react";
+import { RowMenu, copyIdItem } from "@/components/patterns/row-menu";
 import { useBusinessTz } from "@/components/business-tz";
 import { paymentMarkLabel, type PaymentMarkKey } from "@/components/brand/payment-mark";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
@@ -25,6 +29,7 @@ import { paymentMethodTypeLabel } from "@/lib/filter-options";
 import { moneyCell } from "@/lib/table-export";
 import { GatewayLabel } from "@/components/partner-logo";
 import {
+  gatewayDisplayName,
   gatewayFilterOptions,
   gatewayObjectUrl,
   type GatewayCatalogEntry,
@@ -174,9 +179,12 @@ export function TransactionsTable({
         cell: ({ row }) => (
           <Link
             href={`/businesses/${biz}/transactions/${row.original.id}`}
-            className="font-mono text-xs text-primary hover:underline"
+            data-record-title
+            // One box, so it can carry a shared view-transition name.
+            className="inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline"
           >
-            {row.original.id}
+            {enumLabel(row.original.type)} of{" "}
+            {money(row.original.amount_minor, row.original.currency)}
           </Link>
         ),
       },
@@ -184,6 +192,8 @@ export function TransactionsTable({
         id: "customer",
         header: "Customer",
         accessorFn: (t) => `${t.customer_name ?? ""} ${t.customer_email ?? ""}`.trim(),
+        // A long email wraps inside 208px; the default view then fits a 1280px screen.
+        meta: { cellClassName: "max-w-52 wrap-anywhere whitespace-normal" },
         cell: ({ row }) => {
           const t = row.original;
           if (!t.customer) return <TextCell />;
@@ -200,9 +210,7 @@ export function TransactionsTable({
       {
         accessorKey: "type",
         header: "Type",
-        cell: ({ row }) => (
-          <span className="text-sm capitalize">{row.original.type.replace(/_/g, " ")}</span>
-        ),
+        cell: ({ row }) => <span className="text-sm">{enumLabel(row.original.type)}</span>,
       },
       {
         accessorKey: "status",
@@ -215,6 +223,7 @@ export function TransactionsTable({
         accessorFn: (t) => t.amount_minor,
         meta: {
           align: "right",
+          phone: "aside",
           exportAs: [
             moneyCell<Transaction>(
               "Amount",
@@ -230,7 +239,7 @@ export function TransactionsTable({
       },
       {
         id: "payment_method",
-        header: "Payment Method",
+        header: "Payment method",
         accessorFn: (t) =>
           t.payment_method
             ? `${t.payment_method.brand ?? ""} ${t.payment_method.last4 ?? ""}`
@@ -256,7 +265,7 @@ export function TransactionsTable({
               {/* No `type` on a transaction's payment_method — brand carries it (a UPI
                   mandate reports brand 'upi'), and a last4 means a card regardless. */}
               <InstrumentMark brand={pm.brand} last4={pm.last4} className="h-3.5 w-6" />
-              <span className="capitalize">{pm.brand ?? "Card"}</span>
+              <span>{pm.brand ? brandLabel(pm.brand) : "Card"}</span>
               {pm.last4 ? <span className="text-muted-foreground">ending {pm.last4}</span> : null}
             </span>
           );
@@ -268,7 +277,11 @@ export function TransactionsTable({
         accessorFn: (t) => t.gateway_key ?? "—",
         cell: ({ row }) =>
           row.original.gateway_key ? (
-            <GatewayLabel gatewayKey={row.original.gateway_key} className="text-sm" />
+            <GatewayLabel
+              gatewayKey={row.original.gateway_key}
+              name={gatewayDisplayName(row.original.gateway_key, gatewayCatalog)}
+              className="text-sm"
+            />
           ) : (
             <span className="text-sm">—</span>
           ),
@@ -278,17 +291,26 @@ export function TransactionsTable({
          * The provider's own id for the charge — how a row is found from a bank
          * statement. It LINKS to that charge on the gateway's dashboard where we have
          * a confirmed URL for the gateway and id shape, and is plain text otherwise
-         * (see `gatewayObjectUrl`). Truncated with the full id in the tooltip: a Stripe
-         * intent is 27 chars and a tmtest id 37, which would push Amount off-screen.
+         * (see `gatewayObjectUrl`). Never truncated; the full id also sits in a tooltip.
          */
         id: "id_at_gateway",
-        header: "Gateway Charge Id",
+        header: "Gateway charge ID",
         accessorFn: (t) => t.id_at_gateway ?? "",
         cell: ({ row }) => {
           const t = row.original;
-          const href = gatewayObjectUrl(t.gateway_key, t.id_at_gateway, livemode);
-          return (
-            <IdCell id={t.id_at_gateway} width="w-36" {...(href ? { href, external: true } : {})} />
+          const href = gatewayObjectUrl(gatewayCatalog, t.gateway_key, t.id_at_gateway, livemode);
+          if (!t.id_at_gateway) return <IdCell id={null} />;
+          return href ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted-foreground hover:text-primary hover:underline"
+            >
+              <MiddleEllipsis value={t.id_at_gateway} className="text-xs" />
+            </a>
+          ) : (
+            <IdText id={t.id_at_gateway} />
           );
         },
       },
@@ -298,8 +320,9 @@ export function TransactionsTable({
         accessorFn: (t) => t.invoice ?? "—",
         cell: ({ row }) => (
           <IdCell
-            id={row.original.invoice}
+            id={row.original.invoice_number ?? row.original.invoice}
             href={`/businesses/${biz}/invoices/${row.original.invoice}`}
+            plain={!!row.original.invoice_number}
           />
         ),
       },
@@ -315,16 +338,20 @@ export function TransactionsTable({
         cell: ({ row }) => {
           const { error_code: code, error_text: text } = row.original;
           if (!code && !text) return <TextCell>{null}</TextCell>;
-          // One line, cut at the column; the full "(code) message" is the tooltip.
+          // The message, then the gateway's code under it: two lines, like the customer cell.
           return (
-            <TruncateCell
-              value={[code ? `(${code})` : null, text].filter(Boolean).join(" ")}
-              width="max-w-md"
-              className="text-foreground"
-            >
-              {code ? <span className="text-muted-foreground">({code}) </span> : null}
-              {text}
-            </TruncateCell>
+            <span className="flex flex-col gap-0.5">
+              {text ? (
+                <span className="block min-h-6 max-w-64 text-sm/6 wrap-break-word whitespace-normal">
+                  {text}
+                </span>
+              ) : null}
+              {code ? (
+                <span className="flex h-5 items-center font-mono text-xs text-muted-foreground">
+                  {code}
+                </span>
+              ) : null}
+            </span>
           );
         },
       },
@@ -332,7 +359,7 @@ export function TransactionsTable({
         accessorKey: "created_at",
         id: "created_at",
         header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
     ],
     // `tz` is deliberately absent, as it was: it comes from context and re-reads on
@@ -342,7 +369,7 @@ export function TransactionsTable({
 
   const segments = React.useMemo<ListSegment<Transaction>[]>(
     () => [
-      { id: "all", label: "All Transactions" },
+      { id: "all", label: "All transactions" },
       {
         id: "payments",
         label: "Payments",
@@ -362,7 +389,7 @@ export function TransactionsTable({
       { id: "failed", label: "Failed", filters: [{ field: "status", op: "is", value: "failed" }] },
       {
         id: "needs_attention",
-        label: "Needs Attention",
+        label: "Needs attention",
         filters: [{ field: "status", op: "is", value: "needs_attention" }],
       },
       // Recent failures, not all failures. A money log keeps every decline forever, so
@@ -411,10 +438,10 @@ export function TransactionsTable({
    */
   const filterFields = React.useMemo<ListFilterField<Transaction>[]>(
     () => [
-      { id: "id", label: "Transaction Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Transaction ID", group: "Identity", serverOps: TEXT_OPS },
       {
         id: "id_at_gateway",
-        label: "Gateway Charge Id",
+        label: "Gateway charge ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: "The ID of the charge at the provider. Use it to find a row from a bank statement or the gateway dashboard.",
@@ -422,31 +449,31 @@ export function TransactionsTable({
       },
       {
         id: "trace_id",
-        label: "Trace Id",
+        label: "Trace ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: "The run that made this attempt. The gateway request log and the events from the same run show the same ID.",
         keywords: "correlation run request log",
       },
-      { id: "invoice", label: "Invoice Id", group: "Identity", serverOps: TEXT_OPS },
-      { id: "subscription", label: "Subscription Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "invoice", label: "Invoice ID", group: "Identity", serverOps: TEXT_OPS },
+      { id: "subscription", label: "Subscription ID", group: "Identity", serverOps: TEXT_OPS },
       {
         id: "credit_note",
-        label: "Credit Note Id",
+        label: "Credit note ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: "The credit note that the refund is for.",
       },
       {
         id: "reference_payment",
-        label: "Reference Payment Id",
+        label: "Reference payment ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: "The payment that a refund or reversal reverses.",
       },
       {
         id: "payment_intent",
-        label: "Payment Intent Id",
+        label: "Payment intent ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: "The 3DS intent (pi_…) for this attempt. Most renewals do not have one.",
@@ -478,26 +505,26 @@ export function TransactionsTable({
         hint: "The retry verdict from the gateway. It is empty on rows that are not failures. Those rows match neither Yes nor No.",
         keywords: "hard decline dunning retry",
       },
-      { id: "error_code", label: "Error Code", group: "Status", serverOps: TEXT_OPS },
+      { id: "error_code", label: "Error code", group: "Status", serverOps: TEXT_OPS },
       {
         id: "error_text",
-        label: "Error Message",
+        label: "Error message",
         group: "Status",
         serverOps: TEXT_OPS,
         hint: "Gateways use one code for many types of refusal. The message text tells them apart.",
         keywords: "decline reason failure",
       },
 
-      { id: "customer", label: "Customer Id", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer", label: "Customer ID", group: "Customer", serverOps: TEXT_OPS },
       {
         id: "customer_name",
-        label: "Customer Name",
+        label: "Customer name",
         group: "Customer",
         serverOps: TEXT_OPS,
         hint: "Matches the name that this log shows. This is the company name, or the first and last name.",
         keywords: "company holder",
       },
-      { id: "customer_email", label: "Customer Email", group: "Customer", serverOps: TEXT_OPS },
+      { id: "customer_email", label: "Customer email", group: "Customer", serverOps: TEXT_OPS },
 
       // `number`, not `money`: this log holds every currency the business charges in, and
       // a major-unit box needs ONE exponent to be honest — ₹12.99 and ¥1299 are both 1299
@@ -539,7 +566,7 @@ export function TransactionsTable({
       },
       {
         id: "updated_at",
-        label: "Last Updated",
+        label: "Last updated",
         type: "date",
         group: "Dates",
         serverOps: DATE_OPS,
@@ -558,7 +585,7 @@ export function TransactionsTable({
       },
       {
         id: "gateway_account",
-        label: "Gateway Account Id",
+        label: "Gateway account ID",
         group: "Gateway",
         serverOps: TEXT_OPS,
         hint: "The account at that provider (gwa_…). A business can have several accounts. You reconcile each account separately.",
@@ -570,7 +597,7 @@ export function TransactionsTable({
       // reachable through "is one of".
       {
         id: "payment_method_brand",
-        label: "Card Brand",
+        label: "Card brand",
         type: "select",
         group: "Payment method",
         options: BRAND_OPTIONS,
@@ -579,13 +606,13 @@ export function TransactionsTable({
       },
       {
         id: "payment_method_last4",
-        label: "Card Last 4",
+        label: "Card last 4",
         group: "Payment method",
         serverOps: TEXT_OPS,
       },
       {
         id: "payment_method_type",
-        label: "Instrument Type",
+        label: "Instrument type",
         type: "select",
         group: "Payment method",
         options: pmTypeOptions(gatewayCatalog),
@@ -613,15 +640,55 @@ export function TransactionsTable({
         { id: "amount_minor", label: "Amount" },
         { id: "status", label: "Status" },
       ]}
-      searchPlaceholder="Search for ID / customer / gateway / invoice…"
+      searchPlaceholder="Search by ID, customer, gateway or invoice"
       exportName="transactions"
       persistKey={`transactions:${biz}`}
+      // Off by default so the table fits its card at 1440px; all stay in the chooser. Type is
+      // also in the title ("Payment of $29.00").
+      initialHidden={["id_at_gateway", "gateway", "payment_method", "invoice", "type", "amount"]}
       rowHref={(t) => `/businesses/${biz}/transactions/${t.id}`}
+      rowMenu={(t) => (
+        <RowMenu
+          label={`${enumLabel(t.type)} of ${money(t.amount_minor, t.currency)}`}
+          groups={[
+            {
+              label: "References",
+              items: [
+                t.invoice
+                  ? {
+                      label: "View invoice",
+                      icon: <Receipt className="size-4" />,
+                      href: `/businesses/${biz}/invoices/${t.invoice}`,
+                    }
+                  : null,
+                t.customer
+                  ? {
+                      label: "View customer",
+                      icon: <User className="size-4" />,
+                      href: `/businesses/${biz}/customers/${t.customer}`,
+                    }
+                  : null,
+              ],
+            },
+            {
+              label: "Quick actions",
+              items: [
+                {
+                  label: "View transaction",
+                  icon: <ArrowLeftRight className="size-4" />,
+                  href: `/businesses/${biz}/transactions/${t.id}`,
+                },
+                copyIdItem("transaction", t.id),
+              ],
+            },
+          ]}
+        />
+      )}
       emptyState={
         <EmptyState
           icon={<ArrowLeftRight />}
           title="No transactions"
-          description="No transactions match this view, filter or search."
+          description="There are no transactions in this view."
         />
       }
     />

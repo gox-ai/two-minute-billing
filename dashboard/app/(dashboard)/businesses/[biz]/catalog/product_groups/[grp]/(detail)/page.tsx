@@ -1,5 +1,13 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses, listProducts, listPrices, getProductGroup, fmtDate } from "@/lib/api";
+import {
+  listBusinesses,
+  listProducts,
+  listPrices,
+  getProductGroup,
+  fmtDate,
+  isApiNotFound,
+} from "@/lib/api";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -34,7 +42,7 @@ export const dynamic = "force-dynamic";
 
 const KIND_LABEL: Record<string, string> = {
   plan: "Plan",
-  addon: "Addon",
+  addon: "Add-on",
   charge: "One-time product",
 };
 
@@ -61,11 +69,15 @@ export default async function ProductGroupDetailPage({
       getProductGroupStats(biz, grp).catch(() => null),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Product group" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="product group"
+          back={{ label: "View product groups", href: `/businesses/${biz}/catalog/product_groups` }}
+          retry
         />
       </>
     );
@@ -103,8 +115,8 @@ export default async function ProductGroupDetailPage({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
-          { label: "Product Groups", href: `${catalog}/product_groups` },
+          { label: "Product catalog" },
+          { label: "Product groups", href: `${catalog}/product_groups` },
           { label: group.name },
         ]}
         right={<PageRefresh />}
@@ -200,7 +212,7 @@ export default async function ProductGroupDetailPage({
                   </TableRow>
                 ))}
               >
-                <Table className="table-fixed max-lg:min-w-2xl">
+                <Table phone="stack" className="table-fixed max-lg:min-w-2xl">
                   <colgroup>
                     <col className={stats ? "w-[31%]" : "w-[40%]"} />
                     <col className="w-[14%]" />
@@ -218,7 +230,7 @@ export default async function ProductGroupDetailPage({
                       {stats ? (
                         <TableHead className="text-right">Active subscriptions</TableHead>
                       ) : null}
-                      <TableHead className="pr-5" />
+                      <TableHead phone="aside" className="pr-5" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>

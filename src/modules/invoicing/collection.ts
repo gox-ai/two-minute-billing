@@ -1478,6 +1478,8 @@ export interface CompletedCharge {
   outcome: "succeeded" | "pending";
   /** For `pending`: which unsettled transaction status to record. */
   pendingStatus?: "in_progress" | "timeout" | "needs_attention";
+  /** A lost answer: what the lost-answer sweep finds the charge by. */
+  lost?: LostChargeHandle | null;
 }
 
 export type PreChargeOutcome =
@@ -1744,6 +1746,30 @@ export async function chargeBeforeSubscriptionInvoice(input: {
           failureMessage: e.message,
           payerMessage: PAYER_SAFE_INTERNAL_FAILURE,
           pm,
+        };
+      }
+      // The answer was lost: the money may have moved. Not a decline, so the signup
+      // stands as pending and the lost-answer sweep settles it, as for an invoice.
+      if (e instanceof ProviderIndeterminateError) {
+        log.error(e, {
+          event: "gateway_first_charge_indeterminate",
+          subscription: subscription.publicId,
+          payment_method: pm.publicId,
+          gateway: pm.providerKey,
+        });
+        const lost = lostChargeHandle(e);
+        return {
+          kind: "charged",
+          charge: {
+            pm,
+            account: lost?.account ?? null,
+            gatewayKey: lost?.gatewayKey ?? pm.providerKey,
+            result: { status: "pending", providerChargeId: strandedObjectId(e) ?? "" },
+            amountMinor: input.amountMinor,
+            outcome: "pending",
+            pendingStatus: "timeout",
+            lost,
+          },
         };
       }
       throw e;

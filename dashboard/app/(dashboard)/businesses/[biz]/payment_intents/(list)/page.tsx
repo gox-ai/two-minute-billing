@@ -1,5 +1,6 @@
 import { listBusinesses } from "@/lib/api";
 import { listPaymentIntents } from "@/lib/api/payments";
+import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import {
   getPaymentsAnalytics,
   isPaymentsAnalyticsRange,
@@ -14,7 +15,6 @@ import {
 } from "@/components/analytics/payments-analytics-block";
 import { ErrorState } from "@/components/states";
 import { requirePermission } from "@/lib/session";
-import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -42,9 +42,12 @@ const DEFAULT_RANGE: PaymentsAnalyticsRange = "this_month";
 const ANALYTICS: PaymentsAnalyticsConfig = {
   lead: "gross_volume",
   tiles: ["successful_payments", "pending_payment_intents", "failed_amount", "failure_rate"],
-  charts: [{ key: "failed_transactions", label: "Failure Trend" }],
+  charts: [{ key: "failed_transactions", label: "Failure trend" }],
   breakdowns: ["gateways"],
-  labels: { gross_volume: "Total Revenue" },
+  labels: { gross_volume: "Total revenue" },
+  // Every figure here reads the transaction log, so it counts payments that never had an
+  // intent (intents exist only for 3DS and off-session challenges). Say so beside the list.
+  note: "These figures include all payment attempts in the transaction log. Some of these attempts do not have a payment intent.",
 };
 
 export default async function PaymentIntentsPage({
@@ -65,9 +68,10 @@ export default async function PaymentIntentsPage({
   const tab = search.tab === "list" ? "list" : "dashboard";
   const range = isPaymentsAnalyticsRange(search.range) ? search.range : DEFAULT_RANGE;
 
-  const [businesses, intents] = await Promise.all([
+  const [businesses, intents, gatewayCatalog] = await Promise.all([
     listBusinesses(),
     listPaymentIntents(biz, { limit: 50 }),
+    getGatewayCatalogOrEmpty(),
   ]);
   const name = businesses.data.find((b) => b.id === biz)?.name ?? biz;
 
@@ -88,30 +92,34 @@ export default async function PaymentIntentsPage({
 
   return (
     <>
-      <PageHeader
-        title="Payment Intents"
-        breadcrumbs={[{ label: name, href: `/businesses/${biz}` }, { label: "Payment intents" }]}
-      />
-
-      <DashboardTabs
-        basePath={`/businesses/${biz}/payment_intents`}
-        search={search}
-        listLabel="All Payment Intents"
-        active={tab}
-      />
-
-      {/* The list renders on BOTH tabs; the Dashboard tab only ADDS this block above it. */}
-      {analyticsError ? (
-        <ErrorState
-          className="mb-6"
-          title="We could not load the payments dashboard"
-          description={<span className="font-mono text-xs">{analyticsError}</span>}
-        />
-      ) : null}
-      {analytics ? <PaymentsAnalyticsBlock data={analytics} config={ANALYTICS} /> : null}
-
+      {/* The list draws the page header (count and Refresh beside the title, as on every
+          other list); the tabs and the Dashboard tab's block sit between it and the list. */}
       <PaymentIntentsTable
+        page={{
+          title: "Payment intents",
+          breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Payment intents" }],
+          refreshesPage: true,
+          notice: (
+            <>
+              <DashboardTabs
+                basePath={`/businesses/${biz}/payment_intents`}
+                search={search}
+                listLabel="All payment intents"
+                active={tab}
+              />
+              {analyticsError ? (
+                <ErrorState
+                  className="mb-6"
+                  title="We could not load the payments dashboard"
+                  description={<span className="font-mono text-xs">{analyticsError}</span>}
+                />
+              ) : null}
+              {analytics ? <PaymentsAnalyticsBlock data={analytics} config={ANALYTICS} /> : null}
+            </>
+          ),
+        }}
         biz={biz}
+        gatewayCatalog={gatewayCatalog}
         rows={intents.data}
         total={intents.total ?? intents.data.length}
         hasMore={intents.has_more}

@@ -37,18 +37,29 @@ function HeaderBones({ actions = 0 }: { actions?: number }) {
 
 /**
  * A table on its own surface — the same `rounded-xl border bg-card` the real
- * DataTable uses, so the shimmer occupies exactly the box the data will.
+ * DataTable uses, so the shimmer occupies exactly the box the data will. It is
+ * `@container/list` too, so it stacks by the list's own rule (`list-narrow`).
  */
 function TableBones({ rows = 8, cols = 5 }: { rows?: number; cols?: number }) {
   return (
-    <div className="overflow-hidden rounded-xl border bg-card">
-      <div className="flex gap-6 border-b px-4 py-3.5">
+    <div className="@container/list">
+      <PhoneListBones rows={rows} />
+      <DesktopTableBones rows={rows} cols={cols} />
+    </div>
+  );
+}
+
+function DesktopTableBones({ rows, cols }: { rows: number; cols: number }) {
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card list-narrow:hidden">
+      {/* The list's own geometry: a 44px head, then 56px two-line rows. */}
+      <div className="flex h-11 items-center gap-6 border-b px-4">
         {Array.from({ length: cols }).map((_, c) => (
           <Skeleton key={c} className="h-3 flex-1" />
         ))}
       </div>
       {Array.from({ length: rows }).map((_, r) => (
-        <div key={r} className="flex items-center gap-6 border-b px-4 py-3.5 last:border-0">
+        <div key={r} className="flex h-14 items-center gap-6 border-b px-4 last:border-0">
           {Array.from({ length: cols }).map((_, c) => (
             // The first column carries a two-line identity cell in every list we
             // render, so it is taller. Uniform bars read as a different table.
@@ -57,6 +68,46 @@ function TableBones({ rows = 8, cols = 5 }: { rows?: number; cols?: number }) {
               {c === 0 ? <Skeleton className="h-2.5 w-2/3" /> : null}
             </div>
           ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * In a narrow card `DataTable` draws stacked rows: the toolbar (search on its own row, then
+ * the controls), then per row a title and its figure, a second line, and label/value lines.
+ */
+function PhoneListBones({ rows }: { rows: number }) {
+  return (
+    <div className="hidden overflow-hidden rounded-xl border bg-card list-narrow:block">
+      <div className="space-y-2 border-b px-3.5 py-3">
+        <Skeleton className="h-8 w-full" />
+        <div className="flex gap-2">
+          <Skeleton className="h-8 flex-1" />
+          <Skeleton className="size-8" />
+          <Skeleton className="size-8" />
+          <Skeleton className="size-8" />
+        </div>
+      </div>
+      {Array.from({ length: rows }).map((_, r) => (
+        <div key={r} className="space-y-2 border-b px-3.5 py-3 last:border-0">
+          <div className="flex items-center justify-between gap-3">
+            <Skeleton className="h-3.5 w-2/5" />
+            <Skeleton className="h-3.5 w-16" />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <Skeleton className="h-2.5 w-1/3" />
+            <Skeleton className="h-4 w-14 rounded-full" />
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <Skeleton className="h-2.5 w-14" />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-2.5 w-14" />
+            <Skeleton className="h-3 w-2/5" />
+          </div>
         </div>
       ))}
     </div>
@@ -80,27 +131,38 @@ function KpiBones({ count = 5 }: { count?: number }) {
   );
 }
 
-/** List archetype: toolbar, then a table. `stats` adds a KPI row above it. */
+/**
+ * List archetype: toolbar, then a table. `stats` adds a KPI row above it.
+ *
+ * `actions` is the number of buttons the page's header really has (Refresh, Create, …).
+ * It defaults to none: every list used to promise two, including the read-only logs.
+ */
 export function ListLoading({
   cols = 5,
   rows = 8,
   stats = 0,
+  actions = 0,
 }: {
   cols?: number;
   rows?: number;
   stats?: number;
+  actions?: number;
 }) {
   return (
     <div aria-busy="true" aria-label="Loading list">
-      <HeaderBones actions={2} />
+      <HeaderBones actions={actions} />
       {stats > 0 ? <KpiBones count={stats} /> : null}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Skeleton className="h-8 w-36" />
-        <Skeleton className="h-8 w-24" />
-        <Skeleton className="h-8 w-72" />
-        <Skeleton className="ms-auto h-8 w-40" />
+      {/* As wide as the list card, so the bones stack where the list will. */}
+      <div className="@container/list">
+        {/* The stacked shape draws its toolbar inside the card, as the list does. */}
+        <div className="mb-3 flex flex-wrap items-center gap-2 list-narrow:hidden">
+          <Skeleton className="h-8 w-36" />
+          <Skeleton className="h-8 w-24" />
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="ms-auto h-8 w-40" />
+        </div>
+        <TableBones rows={rows} cols={cols} />
       </div>
-      <TableBones rows={rows} cols={cols} />
     </div>
   );
 }
@@ -127,7 +189,7 @@ export function ListLoading({
  * `TabRail` and renders no left rail. Check the rendered page, not the source.
  *
  * `anchorRail` mirrors `TabRail` (`lg:` and up) and `actionRail` mirrors
- * `ActionRail` (`xl:` and up) — the same breakpoints the real components use, so
+ * `ActionRail` (a 56.875rem page column and up) — the same breakpoints the real components use, so
  * the skeleton never promises a column the viewport will not get either.
  */
 export function DetailLoading({
@@ -170,7 +232,7 @@ export function DetailLoading({
         </div>
 
         {actionRail ? (
-          <div className="hidden w-60 shrink-0 space-y-4 xl:block">
+          <div className="hidden w-60 shrink-0 space-y-4 @min-[56.875rem]/main:block">
             {Array.from({ length: 3 }).map((_, g) => (
               <div key={g} className="space-y-2 border-b pb-4 last:border-0">
                 <Skeleton className="h-2.5 w-20" />
@@ -286,7 +348,7 @@ export function RecordLoading({
           <Skeleton className="h-9 w-24" />
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 @min-[56.875rem]/main:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="rounded-xl border bg-card p-6">
             <Skeleton className="h-3 w-24" />
@@ -296,7 +358,7 @@ export function RecordLoading({
         ))}
       </div>
       <ZoneBones>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones table rows={variant === "customer" ? 3 : 2} />
           {variant === "customer" ? (
             <CardBones rows={2} />
@@ -342,7 +404,7 @@ export function RecordLoading({
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones rows={4} />
           <CardBones rows={2} />
         </div>
@@ -390,7 +452,7 @@ function RecordTopBones({ tiles = 0, actions = 0 }: { tiles?: number; actions?: 
       </div>
       {tiles ? (
         <div
-          className={`grid grid-cols-1 gap-6 md:grid-cols-2${tiles > 2 ? " xl:grid-cols-4" : ""}`}
+          className={`grid grid-cols-1 gap-6 md:grid-cols-2${tiles > 2 ? " @min-[56.875rem]/main:grid-cols-4" : ""}`}
         >
           {Array.from({ length: tiles }).map((_, i) => (
             <div key={i} className="rounded-xl border bg-card p-6">
@@ -411,7 +473,7 @@ export function PaymentIntentLoading() {
     <div aria-busy="true" aria-label="Loading" className="flex flex-col gap-4">
       <RecordTopBones actions={1} />
       <ZoneBones>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones rows={6} />
           <CardBones rows={3} />
         </div>
@@ -430,7 +492,7 @@ export function TaxRegionLoading() {
     <div aria-busy="true" aria-label="Loading" className="flex flex-col gap-4">
       <RecordTopBones />
       <ZoneBones>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones rows={3} />
           <div className="flex min-w-0 flex-col gap-4">
             <CardBones rows={2} />
@@ -460,14 +522,14 @@ export function CouponLoading() {
           <CardBones rows={4} />
           <CardBones rows={5} />
         </div>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones table rows={3} />
           <CardBones table rows={1} />
         </div>
         <CardBones table rows={3} />
       </ZoneBones>
       <ZoneBones>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones rows={4} />
           <CardBones rows={2} />
         </div>
@@ -553,6 +615,44 @@ export function ProductGroupLoading() {
   );
 }
 
+/**
+ * Transactions and payment intents: a segmented Dashboard | List pill, then the
+ * payments dashboard (lead chart, four tiles, breakdowns) over the list's table.
+ */
+export function PaymentsDashboardLoading({ cols = 6 }: { cols?: number }) {
+  return (
+    <div aria-busy="true" aria-label="Loading dashboard">
+      <HeaderBones />
+      <div className="mb-6 inline-flex gap-1 rounded-xl border bg-muted/60 p-1">
+        <Skeleton className="h-8 w-28 rounded-md" />
+        <Skeleton className="h-8 w-28 rounded-md" />
+      </div>
+      <div className="mb-4 rounded-xl border bg-card p-5">
+        <Skeleton className="h-3.5 w-28" />
+        <Skeleton className="mt-2.5 h-7 w-36" />
+        <Skeleton className="mt-4 h-[190px] w-full rounded-xl" />
+      </div>
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-xl border bg-card p-5">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-3 h-6 w-28" />
+          </div>
+        ))}
+      </div>
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-xl border bg-card p-5">
+            <Skeleton className="h-3.5 w-36" />
+            <Skeleton className="mt-4 h-[140px] w-full rounded-xl" />
+          </div>
+        ))}
+      </div>
+      <TableBones rows={6} cols={cols} />
+    </div>
+  );
+}
+
 export function DashboardLoading({ charts = 6 }: { charts?: number }) {
   return (
     <div aria-busy="true" aria-label="Loading dashboard">
@@ -583,7 +683,7 @@ export function DashboardLoading({ charts = 6 }: { charts?: number }) {
             <Skeleton className="mt-2.5 h-7 w-32" />
             {/* The plot area is one block, not bars: a bar-chart shimmer where a
                 line chart is coming is the same lie in miniature. */}
-            <Skeleton className="mt-4 h-[190px] w-full rounded-lg" />
+            <Skeleton className="mt-4 h-[190px] w-full rounded-xl" />
           </div>
         ))}
       </div>
@@ -658,7 +758,8 @@ export function RouteLoading() {
  * record's zones, then Activity | Comments (not on a transaction).
  */
 function DocumentRecordBones({ variant }: { variant: "invoice" | "credit_note" | "transaction" }) {
-  const split = "grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]";
+  const split =
+    "grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]";
   return (
     <div aria-busy="true" aria-label="Loading" className="flex flex-col gap-4">
       <RecordTopBones actions={variant === "transaction" ? 0 : 2} />

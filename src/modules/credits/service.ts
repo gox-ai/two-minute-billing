@@ -7,7 +7,7 @@
  */
 import { isExactWindowGrant } from "./reset-windows";
 import { missingMeters, resolveGrantScopes } from "./scope";
-import { and, asc, desc, eq, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { withTenant, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
 import { stampNow } from "@/platform/clock";
@@ -18,22 +18,35 @@ import { buildEventData } from "@/modules/events/registry";
 import { lockCustomerBalances } from "@/modules/customers/balances-read";
 import { slugify, validateSlug } from "@/modules/catalog/service";
 import {
+  businesses,
   CREDIT_LEDGER_ACCOUNTS,
   creditAutoTopupRuns,
   creditGrantMovements,
   creditGrants,
+  creditAutoTopups,
+  creditUnitBalances,
+  creditUsageSettlements,
   creditUnits,
   customers,
   invoices,
   ledgerEntries,
   prices,
+  subscriptionItems,
+  subscriptions,
   type CreditApplicability,
   type CreditOnExhausted,
   type CreditTaxTreatment,
 } from "@db/schema";
 import type { GrantDraw, PlannerGrant } from "./planner";
-import { faceMinorFor, formatRateE12, formatSteps, MONEY_RATE, type CreditUnitRate } from "./units";
-import { checkGrantLimit, recordLargeGrant } from "./grant-limits";
+import { faceMinorFor, formatRateE12, formatSteps, isUnrated, unitRate } from "./units";
+import {
+  checkGrantLimit,
+  checkUnitGrantLimit,
+  recordLargeGrant,
+  unitAmountText,
+} from "./grant-limits";
+import { recordVoidReason, type VoidReasonInput } from "./void-reasons";
+import { restoreExpiresAt } from "./policy";
 
 const log = createLogger("credits");
 
@@ -72,13 +85,17 @@ export class CreditConflictError extends Error {
 const A = CREDIT_LEDGER_ACCOUNTS;
 /** The promotional expense account a promotional grant is booked against (as today's bucket). */
 const PROMO_EXPENSE = "promotional_credit";
-const RESTORE_EXPIRY_MONTHS = 12;
 
-export function unitRate(
-  u: Pick<CreditUnit, "minorPerUnitE12" | "decimals"> | null,
-): CreditUnitRate {
-  return u ? { minorPerUnitE12: u.minorPerUnitE12, decimals: u.decimals } : MONEY_RATE;
+async function creditConfigOf(tx: Tx, businessId: string) {
+  const [b] = await tx
+    .select({ cfg: businesses.creditConfig })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  return b?.cfg ?? null;
 }
+
+export { isUnrated, unitRate };
 
 // ── Units ─────────────────────────────────────────────────────────────────────
 
@@ -89,7 +106,8 @@ export function serializeCreditUnit(u: CreditUnit) {
     name: u.name,
     plural_name: u.pluralName,
     currency: u.currency,
-    minor_per_unit: formatRateE12(u.minorPerUnitE12),
+    minor_per_unit: u.minorPerUnitE12 === null ? null : formatRateE12(u.minorPerUnitE12),
+    rated: u.minorPerUnitE12 !== null,
     decimals: u.decimals,
     locked: u.lockedAt !== null,
     locked_at: u.lockedAt?.toISOString() ?? null,
@@ -151,12 +169,13 @@ export interface CreditUnitInput {
   name: string;
   pluralName?: string;
   currency: string;
-  minorPerUnitE12: bigint;
+  /** Null = no money rate. */
+  minorPerUnitE12: bigint | null;
   decimals?: number;
 }
 
 function unitIssue(d: Partial<CreditUnitInput>): string | null {
-  if (d.minorPerUnitE12 !== undefined && d.minorPerUnitE12 <= 0n)
+  if (d.minorPerUnitE12 != null && d.minorPerUnitE12 <= 0n)
     return "We could not save the credit unit. The rate must be more than 0.";
   if (
     d.decimals !== undefined &&
@@ -251,6 +270,22 @@ export async function updateCreditUnit(input: {
       throw new CreditConflictError(
         "We could not change the credit unit. A credit grant uses this unit. Create a new unit.",
       );
+    // An automatic top-up is set in money (a unit with a rate) or in units with a pack (a unit
+    // with none): the unit keeps what it has.
+    if (
+      "minorPerUnitE12" in frozen &&
+      (frozen.minorPerUnitE12 === null) !== (cur.minorPerUnitE12 === null)
+    ) {
+      const [topup] = await tx
+        .select({ id: creditAutoTopups.id })
+        .from(creditAutoTopups)
+        .where(eq(creditAutoTopups.unitId, cur.id))
+        .limit(1);
+      if (topup)
+        throw new CreditConflictError(
+          "We could not change the credit unit. An automatic top-up uses this unit. Remove the automatic top-up first.",
+        );
+    }
     Object.assign(set, frozen);
     if (Object.keys(set).length === 0) return cur;
     const [u] = await tx.update(creditUnits).set(set).where(eq(creditUnits.id, cur.id)).returning();
@@ -327,12 +362,17 @@ export async function grantRemaining(
 export async function recordGrantMovement(
   tx: Tx,
   input: {
-    grant: Pick<CreditGrant, "id" | "organizationId" | "businessId" | "customerId">;
+    grant: Pick<
+      CreditGrant,
+      "id" | "organizationId" | "businessId" | "customerId" | "unitId" | "unitRated"
+    >;
     kind: MovementKind;
     units: bigint;
     faceMinor: bigint;
     costMinor?: bigint;
     invoiceId?: string | null;
+    /** A draw made by a usage settlement (0526). */
+    settlementId?: string | null;
     ledgerTransactionId?: string | null;
   },
 ): Promise<CreditGrantMovement> {
@@ -349,10 +389,101 @@ export async function recordGrantMovement(
       faceMinor: input.faceMinor,
       costMinor: input.costMinor ?? 0n,
       invoiceId: input.invoiceId ?? null,
+      settlementId: input.settlementId ?? null,
       ledgerTransactionId: input.ledgerTransactionId ?? null,
     })
     .returning();
+  await moveUnitBalance(tx, input.grant, input.units, input.kind);
   return m!;
+}
+
+const OPENING_KINDS: ReadonlySet<MovementKind> = new Set([
+  "grant",
+  "activate",
+  "restore",
+  "rollover_in",
+]);
+
+/**
+ * Keep `credit_unit_balances` in step with a movement of a grant in a unit with no rate. The
+ * row holds only grants that may pay now: one whose first movement is written before its
+ * start is marked `out_of_balance`, and the gate brings it in at its start
+ * (`bringUnitBalanceToNow`). Takes the row's lock before it reads the mark, so the gate and
+ * a movement never disagree. Every movement is written by `recordGrantMovement`.
+ */
+async function moveUnitBalance(
+  tx: Tx,
+  g: Pick<
+    CreditGrant,
+    "id" | "organizationId" | "businessId" | "customerId" | "unitId" | "unitRated"
+  >,
+  units: bigint,
+  kind: MovementKind,
+): Promise<void> {
+  if (g.unitRated || !g.unitId) return;
+  const [row] = await tx
+    .insert(creditUnitBalances)
+    .values({
+      organizationId: g.organizationId,
+      businessId: g.businessId,
+      customerId: g.customerId,
+      unitId: g.unitId,
+      availableSteps: 0n,
+    })
+    .onConflictDoUpdate({
+      target: [creditUnitBalances.customerId, creditUnitBalances.unitId],
+      set: { updatedAt: sql`app_now()` },
+    })
+    .returning({ id: creditUnitBalances.id });
+  const [state] = await tx
+    .select({ out: creditGrants.outOfBalance, effectiveAt: creditGrants.effectiveAt })
+    .from(creditGrants)
+    .where(eq(creditGrants.id, g.id))
+    .limit(1);
+  let out = state?.out ?? false;
+  if (
+    !out &&
+    state &&
+    OPENING_KINDS.has(kind) &&
+    state.effectiveAt.getTime() > stampNow(g.businessId).getTime()
+  ) {
+    // Only a grant's first movement: a later one belongs to a grant the row already holds.
+    const seen = await tx
+      .select({ id: creditGrantMovements.id })
+      .from(creditGrantMovements)
+      .where(eq(creditGrantMovements.grantId, g.id))
+      .limit(2);
+    if (seen.length <= 1) {
+      await tx.update(creditGrants).set({ outOfBalance: true }).where(eq(creditGrants.id, g.id));
+      out = true;
+    }
+  }
+  if (out || units === 0n) return;
+  await tx
+    .update(creditUnitBalances)
+    .set({
+      availableSteps: sql`${creditUnitBalances.availableSteps} + ${units}`,
+      updatedAt: sql`app_now()`,
+    })
+    .where(eq(creditUnitBalances.id, row!.id));
+}
+
+/** The real-time balance of a unit with no rate, in steps. No row = 0. */
+export async function unitBalanceSteps(
+  tx: Tx,
+  input: { customerId: string; unitId: string },
+): Promise<bigint> {
+  const [row] = await tx
+    .select({ steps: creditUnitBalances.availableSteps })
+    .from(creditUnitBalances)
+    .where(
+      and(
+        eq(creditUnitBalances.customerId, input.customerId),
+        eq(creditUnitBalances.unitId, input.unitId),
+      ),
+    )
+    .limit(1);
+  return row?.steps ?? 0n;
 }
 
 async function post(
@@ -418,6 +549,8 @@ export interface InsertCreditGrantInput {
     ledger: boolean;
     /** A restore: the invoice it gives back, and the posting that moved the money. */
     invoiceId?: string;
+    /** A restore made by a correcting settlement (0530). */
+    settlementId?: string;
     ledgerTransactionId?: string | null;
   };
   /** Emit `credit_grant_created`. Default true. */
@@ -471,8 +604,10 @@ export async function insertCreditGrant(
     throw new CreditRuleError(
       "We could not create the credit grant. The priority must be from 0 to 100.",
     );
-  const face = input.faceMinor ?? faceMinorFor(input.amount, unitRate(unit));
-  if (face <= 0n)
+  // No rate: the credit has no money value. Its money is the cost basis only.
+  const rated = !isUnrated(unit);
+  const face = rated ? (input.faceMinor ?? faceMinorFor(input.amount, unitRate(unit))) : 0n;
+  if (rated && face <= 0n)
     throw new CreditRuleError(
       "We could not create the credit grant. The amount is worth less than one minor unit of money.",
     );
@@ -499,6 +634,16 @@ export async function insertCreditGrant(
   }
   const status = input.status ?? "active";
 
+  // A plan reset with an unbilled negative balance: `forgive` writes it off first (0530).
+  if (input.source === "plan_cycle" && unit && !rated && status === "active") {
+    const { forgiveAtPlanReset } = await import("./overage");
+    await forgiveAtPlanReset(tx, {
+      customerId: input.customerId,
+      unitId: unit.id,
+      reference: input.sourceRef ?? null,
+    });
+  }
+
   if (unit && !unit.lockedAt)
     await tx
       .update(creditUnits)
@@ -516,6 +661,7 @@ export async function insertCreditGrant(
       unitId: unit?.id ?? null,
       amount: input.amount,
       faceMinor: face,
+      unitRated: rated,
       costBasisMinor: cost,
       category,
       priority,
@@ -551,6 +697,7 @@ export async function insertCreditGrant(
       faceMinor: face,
       costMinor: cost,
       invoiceId: input.opening?.invoiceId ?? null,
+      settlementId: input.opening?.settlementId ?? null,
       ledgerTransactionId: ledgerTx ?? input.opening?.ledgerTransactionId ?? null,
     });
   }
@@ -606,12 +753,22 @@ export async function createPromotionalGrant(input: {
         `We could not create the credit grant. The credit unit ${unit.key} is priced in ${unit.currency}.`,
       );
     // Free credit: the business's per-grant maximum and alert threshold, on the money value.
+    // A unit with no rate has no money value: its limit is in units (`unit_grant_limits`).
     const faceMinor = faceMinorFor(input.amount, unitRate(unit));
-    const alert = await checkGrantLimit(
-      tx,
-      { businessId: input.businessId, currency, amountMinor: faceMinor, kind: "credit_grant" },
-      (m) => new CreditRuleError(m),
-    );
+    const unitAlert = isUnrated(unit)
+      ? await checkUnitGrantLimit(
+          tx,
+          { businessId: input.businessId, unit: unit!, amount: input.amount },
+          (m) => new CreditRuleError(m),
+        )
+      : null;
+    const alert = isUnrated(unit)
+      ? null
+      : await checkGrantLimit(
+          tx,
+          { businessId: input.businessId, currency, amountMinor: faceMinor, kind: "credit_grant" },
+          (m) => new CreditRuleError(m),
+        );
     const grant = await insertCreditGrant(tx, {
       organizationId: input.organizationId,
       businessId: input.businessId,
@@ -640,6 +797,23 @@ export async function createPromotionalGrant(input: {
         currency,
         alertAboveMinor: alert.alertAboveMinor,
       });
+    if (unitAlert)
+      await recordLargeGrant(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        customerId: customer.id,
+        kind: "credit_grant",
+        reference: grant.publicId,
+        amountMinor: 0n,
+        currency,
+        alertAboveMinor: unitAlert.alertAboveUnits,
+        units: {
+          unit: unit!.key,
+          amountSteps: input.amount,
+          amount: unitAmountText(input.amount, unit!),
+          alertAbove: unitAmountText(BigInt(unitAlert.alertAboveUnits), unit!),
+        },
+      });
     return grant;
   });
 }
@@ -663,18 +837,42 @@ export class CreditNotFoundError extends Error {
 }
 
 /**
+ * Usage paid in credits is taken at ingest and drawn from the grants later. Before a path
+ * reads what a grant in a unit with no rate has left, draw it. True = leave the grant alone:
+ * it waits in its grace window (`usage-settlement.ts`). A unit with a rate returns at once.
+ */
+export async function settleOwnUnitFirst(
+  tx: Tx,
+  grant: CreditGrant,
+  kind: "expire" | "void" | "rollover",
+): Promise<boolean> {
+  if (grant.unitRated || !grant.unitId) return false;
+  const { beforeOwnUnitGrantChange } = await import("./usage-settlement");
+  return beforeOwnUnitGrantChange(tx, { grant, kind });
+}
+
+/**
  * Book what is left of a grant out of it and close it: `expire` or `void`.
  *  - promotional: Dr credit_grants_promotional / Cr promotional_credit (face; the expense reverses);
  *  - paid, expire: Dr credit_grants_paid / Cr credit_breakage (cost);
  *  - paid, void: no posting here; a credit note posts its own reclass.
- * Takes the customer balance lock. Returns the movement, or null when nothing was left.
+ * Takes the customer balance lock. Returns the movement, or null when nothing was left, or
+ * when an expiry in a unit that pays usage waits for the end of its grace window.
  */
 export async function bookGrantRemainder(
   tx: Tx,
-  input: { grant: CreditGrant; kind: "expire" | "void"; emit?: boolean },
+  input: {
+    grant: CreditGrant;
+    kind: "expire" | "void";
+    emit?: boolean;
+    /** A paid grant voided with no refund (0530): its cost goes to breakage, with the reason. */
+    withoutRefund?: { reason: string };
+  },
 ): Promise<CreditGrantMovement | null> {
   const g = input.grant;
   await lockCustomerBalances(tx, g.customerId);
+  // A unit that pays usage: settle first; an expiry may wait for late events (0526).
+  if (await settleOwnUnitFirst(tx, g, input.kind)) return null;
   const left = (await grantRemaining(tx, [g.id])).get(g.id)!;
   let movement: CreditGrantMovement | null = null;
   if (left.units > 0n || left.face > 0n || left.cost > 0n) {
@@ -684,7 +882,7 @@ export async function bookGrantRemainder(
             { account: A.promotional, direction: "debit", amountMinor: left.face },
             { account: PROMO_EXPENSE, direction: "credit", amountMinor: left.face },
           ]
-        : input.kind === "expire"
+        : input.kind === "expire" || input.withoutRefund
           ? [
               { account: A.paid, direction: "debit", amountMinor: left.cost },
               { account: A.breakage, direction: "credit", amountMinor: left.cost },
@@ -699,6 +897,31 @@ export async function bookGrantRemainder(
       costMinor: -left.cost,
       ledgerTransactionId: ledgerTx,
     });
+    if (input.withoutRefund) {
+      const { recordZeroOut } = await import("./overage");
+      const [c] = await tx
+        .select({ publicId: customers.publicId })
+        .from(customers)
+        .where(eq(customers.id, g.customerId));
+      await recordZeroOut(tx, {
+        organizationId: g.organizationId,
+        businessId: g.businessId,
+        customer: c?.publicId ?? "",
+        unit: g.unitId
+          ? ((
+              await tx
+                .select({ key: creditUnits.key })
+                .from(creditUnits)
+                .where(eq(creditUnits.id, g.unitId))
+            )[0]?.key ?? "")
+          : g.currency,
+        units: left.units.toString(),
+        reason: "manual",
+        resourceType: "credit_grant",
+        resourceId: g.publicId,
+        detail: { note: input.withoutRefund.reason, cost_minor: Number(left.cost) },
+      });
+    }
   }
   const [updated] = await tx
     .update(creditGrants)
@@ -715,13 +938,23 @@ export async function bookGrantRemainder(
   return movement;
 }
 
-/** Void a promotional grant by hand. A paid grant leaves only through a credit note. */
+/**
+ * Void a promotional grant by hand. A paid grant leaves through a credit note, or with
+ * `withoutRefund` (0530): its cost goes to breakage and the reason is kept in the audit row.
+ */
 export async function voidCreditGrant(input: {
   organizationId: string;
   businessId: string;
   customerPublicId: string;
   grantPublicId: string;
+  /** Stored in the void's transaction (0529). */
+  reason?: VoidReasonInput;
+  withoutRefund?: { reason: string };
 }): Promise<CreditGrant> {
+  if (input.withoutRefund && !input.withoutRefund.reason.trim())
+    throw new CreditRuleError(
+      "We could not void the credit grant. Give a reason to void paid credit with no refund.",
+    );
   return withTenant(input.organizationId, async (tx) => {
     const customer = await customerByPublicId(tx, input.businessId, input.customerPublicId);
     await lockCustomerBalances(tx, customer.id);
@@ -738,13 +971,20 @@ export async function voidCreditGrant(input: {
       .for("update")
       .limit(1);
     if (!g) throw new CreditNotFoundError(`No such credit grant: ${input.grantPublicId}`);
-    if (g.category !== "promotional")
+    if (g.category !== "promotional" && !input.withoutRefund)
       throw new CreditConflictError(
         "We could not void the credit grant. Paid credit is removed with a credit note on its invoice.",
       );
     if (g.status !== "active")
-      throw new CreditConflictError(`We could not void the credit grant. It is ${g.status}.`);
-    await bookGrantRemainder(tx, { grant: g, kind: "void" });
+      throw new CreditConflictError(
+        "We could not void the credit grant. We can void only an active grant.",
+      );
+    await bookGrantRemainder(tx, {
+      grant: g,
+      kind: "void",
+      ...(input.withoutRefund ? { withoutRefund: input.withoutRefund } : {}),
+    });
+    if (input.reason) await recordVoidReason(tx, { ...input, grantId: g.id, ...input.reason });
     const [after] = await tx.select().from(creditGrants).where(eq(creditGrants.id, g.id));
     return after!;
   });
@@ -1072,8 +1312,7 @@ export async function restoreGrantDraws(
       });
       continue;
     }
-    const expiresAt = new Date(now);
-    expiresAt.setUTCMonth(expiresAt.getUTCMonth() + RESTORE_EXPIRY_MONTHS);
+    const expiresAt = restoreExpiresAt(await creditConfigOf(tx, input.businessId), now);
     const fresh = await insertCreditGrant(tx, {
       organizationId: g.organizationId,
       businessId: g.businessId,
@@ -1194,7 +1433,313 @@ export async function voidPendingGrantsForInvoice(
   return voided.length;
 }
 
+/**
+ * Plan credits held for an unpaid invoice (`plan_credits.grant_when: invoice_paid`), now
+ * paid: each grant opens as it would have at issue and keeps its window. A window that ended
+ * before the payment is voided: nothing is left to spend it on.
+ */
+export async function activatePendingPlanGrants(
+  tx: Tx,
+  input: { invoiceId: string; paidAt: Date },
+): Promise<number> {
+  const held = await tx
+    .select()
+    .from(creditGrants)
+    .where(
+      and(
+        eq(creditGrants.invoiceId, input.invoiceId),
+        eq(creditGrants.status, "pending"),
+        eq(creditGrants.source, "plan_cycle"),
+      ),
+    )
+    .for("update");
+  return activateHeldPlanGrants(tx, held, input.paidAt);
+}
+
+/**
+ * A mid-term change's plan grants held for its invoice (`grant_when: invoice_paid`, held with
+ * no invoice yet): link them to the change invoice, or open them now when it is paid or there is
+ * none (nothing charged now). A void, or a revert, voids them.
+ */
+export async function settleHeldChangeGrants(
+  tx: Tx,
+  input: { subscriptionId: string; invoiceId: string | null },
+): Promise<void> {
+  const items = await tx
+    .select({ id: subscriptionItems.id })
+    .from(subscriptionItems)
+    .where(eq(subscriptionItems.subscriptionId, input.subscriptionId));
+  if (!items.length) return;
+  const held = await tx
+    .select()
+    .from(creditGrants)
+    .where(
+      and(
+        inArray(
+          creditGrants.subscriptionItemId,
+          items.map((i) => i.id),
+        ),
+        eq(creditGrants.source, "plan_cycle"),
+        eq(creditGrants.status, "pending"),
+        isNull(creditGrants.invoiceId),
+      ),
+    )
+    .for("update");
+  if (!held.length) return;
+  const [inv] = input.invoiceId
+    ? await tx
+        .select({ status: invoices.status, paidAt: invoices.paidAt })
+        .from(invoices)
+        .where(eq(invoices.id, input.invoiceId))
+        .limit(1)
+    : [];
+  if (!inv || inv.status === "paid") {
+    await activateHeldPlanGrants(tx, held, inv?.paidAt ?? stampNow(held[0]!.businessId));
+    return;
+  }
+  const ids = held.map((g) => g.id);
+  if (inv.status === "voided") {
+    const gone = await tx
+      .update(creditGrants)
+      .set({ status: "voided", invoiceId: input.invoiceId })
+      .where(inArray(creditGrants.id, ids))
+      .returning();
+    for (const g of gone) await emitGrantEvent(tx, "credit_grant_voided", g, { reason: "void" });
+    return;
+  }
+  await tx
+    .update(creditGrants)
+    .set({ invoiceId: input.invoiceId })
+    .where(inArray(creditGrants.id, ids));
+  // Paid between the read above and the link (a webhook): activation found nothing to open.
+  const [now] = await tx
+    .select({ status: invoices.status, paidAt: invoices.paidAt })
+    .from(invoices)
+    .where(eq(invoices.id, input.invoiceId!))
+    .limit(1);
+  if (now?.status === "paid")
+    await activatePendingPlanGrants(tx, {
+      invoiceId: input.invoiceId!,
+      paidAt: now.paidAt ?? stampNow(held[0]!.businessId),
+    });
+}
+
+async function activateHeldPlanGrants(tx: Tx, held: CreditGrant[], paidAt: Date): Promise<number> {
+  const input = { paidAt };
+  let activated = 0;
+  for (const g of held) {
+    const over = !!g.expiresAt && g.expiresAt.getTime() <= input.paidAt.getTime();
+    const [row] = await tx
+      .update(creditGrants)
+      .set({ status: over ? "voided" : "active" })
+      .where(eq(creditGrants.id, g.id))
+      .returning();
+    if (over) {
+      await emitGrantEvent(tx, "credit_grant_voided", row!, { reason: "window_ended" });
+      continue;
+    }
+    const ledgerTx = await post(tx, g, "credit_grant", g.publicId, [
+      { account: PROMO_EXPENSE, direction: "debit", amountMinor: g.faceMinor },
+      { account: A.promotional, direction: "credit", amountMinor: g.faceMinor },
+    ]);
+    await recordGrantMovement(tx, {
+      grant: row!,
+      kind: "grant",
+      units: g.amount,
+      faceMinor: g.faceMinor,
+      ledgerTransactionId: ledgerTx,
+    });
+    await emitGrantEvent(tx, "credit_grant_activated", row!);
+    activated++;
+  }
+  return activated;
+}
+
+/**
+ * A subscription was cancelled for non-payment. Its held plan credits are voided, and under
+ * `plan_credits.on_unpaid_cancel: void_unused` so is what is left of the plan credits granted
+ * from the oldest unpaid period on. Rolled-over credit came from a paid period and stays.
+ */
+export async function voidUnpaidPlanCredits(
+  tx: Tx,
+  input: { subscriptionId: string; voidUnused: boolean },
+): Promise<{ held: number; voided: number }> {
+  const out = { held: 0, voided: 0 };
+  const items = await tx
+    .select({ id: subscriptionItems.id })
+    .from(subscriptionItems)
+    .where(eq(subscriptionItems.subscriptionId, input.subscriptionId));
+  if (!items.length) return out;
+  const ofSub = and(
+    inArray(
+      creditGrants.subscriptionItemId,
+      items.map((i) => i.id),
+    ),
+    eq(creditGrants.source, "plan_cycle"),
+  );
+  const held = await tx
+    .update(creditGrants)
+    .set({ status: "voided" })
+    .where(and(ofSub, eq(creditGrants.status, "pending")))
+    .returning();
+  for (const g of held) await emitGrantEvent(tx, "credit_grant_voided", g, { reason: "not_paid" });
+  out.held = held.length;
+  if (!input.voidUnused) return out;
+  // The customer lock before the grant rows (the one lock order of the credit paths).
+  const [owner] = await tx
+    .select({ customerId: subscriptions.customerId })
+    .from(subscriptions)
+    .where(eq(subscriptions.id, input.subscriptionId))
+    .limit(1);
+  if (owner) await lockCustomerBalances(tx, owner.customerId);
+  const [unpaid] = await tx
+    .select({ from: sql<Date | null>`min(${invoices.periodStart})` })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.subscriptionId, input.subscriptionId),
+        inArray(invoices.status, ["payment_due", "not_paid"]),
+      ),
+    );
+  if (!unpaid?.from) return out;
+  const live = await tx
+    .select()
+    .from(creditGrants)
+    .where(
+      and(
+        ofSub,
+        eq(creditGrants.status, "active"),
+        gte(creditGrants.effectiveAt, new Date(unpaid.from)),
+        sql`${creditGrants.sourceRef} not like '%:rollover:%'`,
+        sql`${creditGrants.sourceRef} not like '%:wroll:%'`,
+      ),
+    )
+    .for("update");
+  for (const g of live) {
+    await bookGrantRemainder(tx, { grant: g, kind: "void" });
+    out.voided++;
+  }
+  return out;
+}
+
+/**
+ * A plan change was reverted (its invoice failed for good): void the plan-credit grants the
+ * change opened, and give the old price's grants back as they were before it. `prior` is the
+ * open grants read before the change. A grant still open gets its old expiry back; one whose
+ * end is already booked comes back as a `restore` grant with what it had left, to the same
+ * expiry. Caller holds the subscription.
+ */
+export async function revertPlanChangeCredits(
+  tx: Tx,
+  input: {
+    customerId: string;
+    itemIds: string[];
+    prior: Array<{ id: string; expiresAt: Date | null; metadata: unknown }>;
+    now: Date;
+  },
+): Promise<{ voided: number; restored: number }> {
+  const out = { voided: 0, restored: 0 };
+  if (!input.itemIds.length) return out;
+  await lockCustomerBalances(tx, input.customerId);
+  const priorById = new Map(input.prior.map((p) => [p.id, p]));
+  const open = await tx
+    .select()
+    .from(creditGrants)
+    .where(
+      and(
+        inArray(creditGrants.subscriptionItemId, input.itemIds),
+        eq(creditGrants.source, "plan_cycle"),
+        inArray(creditGrants.status, ["active", "pending"]),
+      ),
+    )
+    .for("update");
+  for (const g of open) {
+    if (priorById.has(g.id)) continue;
+    if (g.status === "pending") {
+      const [row] = await tx
+        .update(creditGrants)
+        .set({ status: "voided" })
+        .where(eq(creditGrants.id, g.id))
+        .returning();
+      await emitGrantEvent(tx, "credit_grant_voided", row!, { reason: "change_reverted" });
+    } else await bookGrantRemainder(tx, { grant: g, kind: "void" });
+    out.voided++;
+  }
+  if (!input.prior.length) return out;
+  const before = await tx
+    .select({ g: creditGrants, u: creditUnits })
+    .from(creditGrants)
+    .leftJoin(creditUnits, eq(creditUnits.id, creditGrants.unitId))
+    .where(
+      inArray(
+        creditGrants.id,
+        input.prior.map((p) => p.id),
+      ),
+    );
+  for (const { g, u } of before) {
+    const p = priorById.get(g.id)!;
+    const [ended] = await tx
+      .select()
+      .from(creditGrantMovements)
+      .where(
+        and(
+          eq(creditGrantMovements.grantId, g.id),
+          inArray(creditGrantMovements.kind, ["expire", "void"]),
+        ),
+      )
+      .orderBy(desc(creditGrantMovements.createdAt))
+      .limit(1);
+    if (!ended && (g.status === "active" || g.status === "pending")) {
+      const same = (g.expiresAt?.getTime() ?? null) === (p.expiresAt?.getTime() ?? null);
+      if (same && JSON.stringify(g.metadata) === JSON.stringify(p.metadata)) continue;
+      await tx
+        .update(creditGrants)
+        .set({ expiresAt: p.expiresAt, metadata: p.metadata as Record<string, unknown> | null })
+        .where(eq(creditGrants.id, g.id));
+      out.restored++;
+      continue;
+    }
+    // The end is booked (a same-instant change books it at once). Only promotional plan
+    // credit comes back: its expiry posted to promotional expense, which the opening reverses.
+    if (!ended || ended.kind !== "expire" || g.category !== "promotional") continue;
+    if (p.expiresAt && p.expiresAt.getTime() <= input.now.getTime()) continue;
+    const units = -ended.units;
+    if (units <= 0n) continue;
+    const fresh = await insertCreditGrant(tx, {
+      organizationId: g.organizationId,
+      businessId: g.businessId,
+      customerId: g.customerId,
+      currency: g.currency,
+      unit: u,
+      amount: units,
+      faceMinor: -ended.faceMinor,
+      category: "promotional",
+      priority: g.priority,
+      effectiveAt: input.now,
+      expiresAt: p.expiresAt,
+      applicability: g.applicability,
+      source: "restore",
+      subscriptionItemId: g.subscriptionItemId,
+      restoredFromId: g.id,
+      onExhausted: g.onExhausted,
+      opening: { kind: "restore", ledger: true },
+      emit: false,
+    });
+    await emitGrantEvent(tx, "credit_grant_restored", fresh, {
+      units,
+      face_minor: -ended.faceMinor,
+      restored_from: g.publicId,
+    });
+    out.restored++;
+  }
+  return out;
+}
+
 // ── Credit notes on a pack line (design §3.8, Ex 5) ──────────────────────────
+
+/** A full pack refund (0530): only an active pack in a unit with no rate. */
+export const fullRefundable = (g: Pick<CreditGrant, "status" | "unitRated" | "unitId">) =>
+  g.status === "active" && !g.unitRated && !!g.unitId;
 
 export interface PackLineCredit {
   grant: CreditGrant;
@@ -1232,6 +1777,16 @@ export async function packLineCredits(
     tx,
     grants.map((g) => g.id),
   );
+  // A unit that pays usage: credits the gate took and no settlement drew yet are used.
+  for (const g of grants.filter((x) => x.status === "active" && !x.unitRated && x.unitId)) {
+    const { grantsLeftAfterSettlement } = await import("./usage-settlement");
+    const settled = await grantsLeftAfterSettlement(tx, {
+      customerId: g.customerId,
+      unitId: g.unitId!,
+    });
+    const s = settled.get(g.id);
+    if (s) left.set(g.id, { ...left.get(g.id)!, units: s.units, cost: s.cost });
+  }
   for (const l of input.lines) {
     const g = grants.find((x) => x.sourceRef === l.id || x.sourceRef === l.publicId);
     if (!g) continue;
@@ -1253,17 +1808,64 @@ export async function packLineCredits(
  */
 export async function voidPackUnitsForCreditNote(
   tx: Tx,
-  input: { pack: PackLineCredit; netMinor: bigint; creditNotePublicId: string },
+  input: {
+    pack: PackLineCredit;
+    netMinor: bigint;
+    creditNotePublicId: string;
+    /** `full` (0530): a pack in a unit with no rate may be refunded past its unused cost. */
+    packRefund?: "full";
+  },
 ): Promise<void> {
   const { pack } = input;
   const g = pack.grant;
-  const net = input.netMinor < pack.unusedCostMinor ? input.netMinor : pack.unusedCostMinor;
-  if (net <= 0n) return;
+  const full = input.packRefund === "full" && fullRefundable(g);
+  const cap = full ? g.costBasisMinor : pack.unusedCostMinor;
+  const asked = input.netMinor < cap ? input.netMinor : cap;
+  if (asked <= 0n) return;
   await lockCustomerBalances(tx, g.customerId);
-  const r = pack.remaining;
-  const whole = net === pack.unusedCostMinor;
-  const units = whole ? r.units : (r.units * net) / pack.unusedCostMinor;
-  const face = whole ? r.face : (r.face * net) / pack.unusedCostMinor;
+  let r = pack.remaining;
+  let unused = pack.unusedCostMinor;
+  // A unit that pays usage: draw what the gate took, then read the grant again. Usage that
+  // arrived after the note's cap was read may have spent what the note gives back.
+  if (g.status === "active" && !g.unitRated) {
+    await settleOwnUnitFirst(tx, g, "void");
+    r = (await grantRemaining(tx, [g.id])).get(g.id)!;
+    unused = r.cost > 0n ? r.cost : 0n;
+    if (!full && asked > unused)
+      throw new CreditConflictError(
+        "We could not create the credit note. Usage spent credits of this pack at the same time. Try again.",
+      );
+  }
+  // A full refund: the unused cost first, then the used part, drawn again from other grants.
+  const net = asked < unused ? asked : unused;
+  const usedNet = full ? asked - net : 0n;
+  if (net > 0n) await voidUnusedPackPart(tx, { ...input, net, unused, r });
+  if (usedNet > 0n) {
+    const { redrawForFullRefund } = await import("./overage");
+    await redrawForFullRefund(tx, {
+      grantId: g.id,
+      units: (g.amount * usedNet) / g.costBasisMinor,
+      creditNotePublicId: input.creditNotePublicId,
+      now: stampNow(g.businessId),
+    });
+  }
+}
+
+async function voidUnusedPackPart(
+  tx: Tx,
+  input: {
+    pack: PackLineCredit;
+    creditNotePublicId: string;
+    net: bigint;
+    unused: bigint;
+    r: GrantRemaining;
+  },
+): Promise<void> {
+  const g = input.pack.grant;
+  const { net, unused, r } = input;
+  const whole = net === unused;
+  const units = whole ? r.units : (r.units * net) / unused;
+  const face = whole ? r.face : (r.face * net) / unused;
   const account = g.status === "pending" ? A.pending : A.paid;
   const ledgerTx = await post(tx, g, "credit_note", input.creditNotePublicId, [
     { account, direction: "debit", amountMinor: net },
@@ -1412,7 +2014,8 @@ async function emitGrantEvent(
     | "credit_grant_created"
     | "credit_grant_expired"
     | "credit_grant_voided"
-    | "credit_grant_restored",
+    | "credit_grant_restored"
+    | "credit_grant_activated",
   g: CreditGrant,
   extra?: Record<string, unknown>,
 ): Promise<void> {
@@ -1534,15 +2137,25 @@ export async function listCreditTransactions(input: {
     if (input.startingAfter)
       conds.push(sql`${creditGrantMovements.publicId} < ${input.startingAfter}`);
     const rows = await tx
-      .select({ m: creditGrantMovements, g: creditGrants, u: creditUnits, inv: invoices.publicId })
+      .select({
+        m: creditGrantMovements,
+        g: creditGrants,
+        u: creditUnits,
+        inv: invoices.publicId,
+        settlement: creditUsageSettlements.publicId,
+      })
       .from(creditGrantMovements)
       .innerJoin(creditGrants, eq(creditGrants.id, creditGrantMovements.grantId))
       .leftJoin(creditUnits, eq(creditUnits.id, creditGrants.unitId))
       .leftJoin(invoices, eq(invoices.id, creditGrantMovements.invoiceId))
+      .leftJoin(
+        creditUsageSettlements,
+        eq(creditUsageSettlements.id, creditGrantMovements.settlementId),
+      )
       .where(and(...conds))
       .orderBy(desc(creditGrantMovements.publicId))
       .limit(input.limit + 1);
-    const page = rows.slice(0, input.limit).map(({ m, g, u, inv }) => {
+    const page = rows.slice(0, input.limit).map(({ m, g, u, inv, settlement }) => {
       const decimals = u?.decimals ?? 0;
       return {
         object: "credit_transaction",
@@ -1558,6 +2171,8 @@ export async function listCreditTransactions(input: {
         face_minor: Number(m.faceMinor),
         cost_minor: Number(m.costMinor),
         invoice: inv ?? null,
+        // A draw of usage paid in credits names its settlement (0526).
+        settlement: settlement ?? null,
         created_at: m.createdAt.toISOString(),
       };
     });

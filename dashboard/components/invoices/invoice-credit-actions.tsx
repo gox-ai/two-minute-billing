@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import * as React from "react";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
@@ -101,7 +102,7 @@ function ReasonFields({ required = {} }: { required?: RequiredReasons }) {
         </Field>
       ) : (
         <Field name="reason" label="Note" help="Optional. We store this text on the credit note.">
-          <Input name="reason" maxLength={500} placeholder="optional" />
+          <Input name="reason" maxLength={500} />
         </Field>
       )}
       {/* Goes to the Comments timeline, not the record. */}
@@ -110,7 +111,7 @@ function ReasonFields({ required = {} }: { required?: RequiredReasons }) {
         label="Comment"
         help="Optional. We add this text to the Comments timeline."
       >
-        <Input name="comment" maxLength={500} placeholder="optional" />
+        <Input name="comment" maxLength={500} />
       </Field>
     </>
   );
@@ -183,16 +184,14 @@ export function CreateCreditNoteDialog({
               help={`Creditable: ${money(creditableMinor, currency)}. Lower it to credit part of the invoice.`}
             />
             <ReasonFields required={requiredReasons} />
-            <DialogFooter className="items-center sm:justify-between">
-              <a href={advancedHref} className="text-sm text-primary hover:underline">
-                Advanced: edit line items ›
-              </a>
-              <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                  Cancel
-                </Button>
-                <SubmitButton>Create credit note</SubmitButton>
-              </div>
+            <Link href={advancedHref} className="block text-sm text-primary hover:underline">
+              Advanced: edit line items ›
+            </Link>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <SubmitButton>Create credit note</SubmitButton>
             </DialogFooter>
           </ActionForm>
         </DialogContent>
@@ -301,7 +300,7 @@ export function RecordInvoiceOfflineRefundDialog({
         Record an offline refund
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Record an offline refund</DialogTitle>
             <DialogDescription>
@@ -312,38 +311,40 @@ export function RecordInvoiceOfflineRefundDialog({
           <ActionForm
             action={recordInvoiceOfflineRefundAction}
             onSuccess={() => setOpen(false)}
-            className="space-y-4"
+            className="flex min-h-0 flex-1 flex-col gap-4"
           >
             <input type="hidden" name="biz" value={biz} />
             <input type="hidden" name="invoice" value={invoice} />
-            <AmountField
-              currency={currency}
-              maxMinor={refundableMinor}
-              help={`Up to ${money(refundableMinor, currency)} is creditable.`}
-            />
-            <Field name="method" label="Refund method">
-              <SelectField
-                name="method"
-                defaultValue="cash"
-                ariaLabel="Refund method"
-                options={offlineMethodOptions()}
+            <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6">
+              <AmountField
+                currency={currency}
+                maxMinor={refundableMinor}
+                help={`Up to ${money(refundableMinor, currency)} is creditable.`}
               />
-            </Field>
-            <Field
-              name="date"
-              label="Refund date"
-              help="The date when you returned the money. Leave blank to use the current time."
-            >
-              <DateTimeField name="date" />
-            </Field>
-            <Field
-              name="reference"
-              label="Reference number"
-              help="Optional. For example, a check number or a bank transaction ID."
-            >
-              <Input name="reference" placeholder="optional" />
-            </Field>
-            <ReasonFields required={requiredReasons} />
+              <Field name="method" label="Refund method">
+                <SelectField
+                  name="method"
+                  defaultValue="cash"
+                  ariaLabel="Refund method"
+                  options={offlineMethodOptions()}
+                />
+              </Field>
+              <Field
+                name="date"
+                label="Refund date"
+                help="The date when you returned the money. Leave blank to use the current time."
+              >
+                <DateTimeField name="date" />
+              </Field>
+              <Field
+                name="reference"
+                label="Reference number"
+                help="Optional. For example, a check number or a bank transaction ID."
+              >
+                <Input name="reference" />
+              </Field>
+              <ReasonFields required={requiredReasons} />
+            </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel
@@ -384,7 +385,7 @@ export function RecordInvoiceOfflinePaymentDialog({
         Record an offline payment
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Record an offline payment</DialogTitle>
             <DialogDescription>
@@ -395,45 +396,47 @@ export function RecordInvoiceOfflinePaymentDialog({
           <ActionForm
             action={recordOfflinePaymentAction}
             onSuccess={() => setOpen(false)}
-            className="space-y-4"
+            className="flex min-h-0 flex-1 flex-col gap-4"
           >
             <input type="hidden" name="biz" value={biz} />
             <input type="hidden" name="inv" value={invoice} />
-            <OfflinePaymentAmount
-              dueMinor={dueMinor}
-              currency={currency}
-              writeOffLimitMinor={writeOffLimitMinor}
-            />
-            {/* The engine builds `offline_${method}` as the gateway key — see lib/offline-methods. */}
-            <Field name="method" label="Payment method">
-              <SelectField
-                name="method"
-                defaultValue="cash"
-                ariaLabel="Payment method"
-                options={offlineMethodOptions()}
+            <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6">
+              <OfflinePaymentAmount
+                dueMinor={dueMinor}
+                currency={currency}
+                writeOffLimitMinor={writeOffLimitMinor}
               />
-            </Field>
-            <Field
-              name="date"
-              label="Payment date"
-              help="The date when the money arrived. Leave blank to use the current time."
-            >
-              <DateTimeField name="date" />
-            </Field>
-            <Field
-              name="reference"
-              label="Reference number"
-              help="Optional. For example, a check number or a bank transaction ID."
-            >
-              <Input name="reference" placeholder="optional" maxLength={100} />
-            </Field>
-            <Field
-              name="comment"
-              label="Note"
-              help="Optional. We add this text to the Comments timeline."
-            >
-              <Input name="comment" maxLength={500} placeholder="optional" />
-            </Field>
+              {/* The engine builds `offline_${method}` as the gateway key — see lib/offline-methods. */}
+              <Field name="method" label="Payment method">
+                <SelectField
+                  name="method"
+                  defaultValue="cash"
+                  ariaLabel="Payment method"
+                  options={offlineMethodOptions()}
+                />
+              </Field>
+              <Field
+                name="date"
+                label="Payment date"
+                help="The date when the money arrived. Leave blank to use the current time."
+              >
+                <DateTimeField name="date" />
+              </Field>
+              <Field
+                name="reference"
+                label="Reference number"
+                help="Optional. For example, a check number or a bank transaction ID."
+              >
+                <Input name="reference" maxLength={100} />
+              </Field>
+              <Field
+                name="comment"
+                label="Note"
+                help="Optional. We add this text to the Comments timeline."
+              >
+                <Input name="comment" maxLength={500} />
+              </Field>
+            </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel
@@ -478,12 +481,7 @@ function OfflinePaymentAmount({
         label="Amount"
         help={`Leave blank to record the full ${money(dueMinor, currency)} still due.`}
       >
-        <MoneyInput
-          name="amount_minor"
-          currency={currency}
-          placeholder="full"
-          onMinorChange={setAmount}
-        />
+        <MoneyInput name="amount_minor" currency={currency} onMinorChange={setAmount} />
       </Field>
       {showShortfall ? (
         <div className="space-y-2">

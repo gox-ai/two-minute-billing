@@ -1,5 +1,14 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses, getProduct, getPrice, fmtDate, fmtDateTime, type Price } from "@/lib/api";
+import {
+  listBusinesses,
+  getProduct,
+  getPrice,
+  fmtDate,
+  fmtDateTime,
+  type Price,
+  isApiNotFound,
+} from "@/lib/api";
 import { allows, requirePermission } from "@/lib/session";
 import { canPreviewRateChange } from "@/lib/usage-controls";
 import { RatePreviewButton } from "@/components/usage-controls/rate-preview-dialog";
@@ -73,11 +82,15 @@ export default async function PriceDetail({
       getPriceStats(biz, price).catch(() => null),
     ]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader title="Price" />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="price"
+          back={{ label: "View prices", href: `/businesses/${biz}/catalog/prices` }}
+          retry
         />
       </>
     );
@@ -92,6 +105,8 @@ export default async function PriceDetail({
   const detailHref = `/businesses/${biz}/catalog/products/${prod}`;
   const editHref = `${detailHref}/prices/${price}/edit`;
   const displayName = p.external_name || p.name || p.id;
+  // Currency and cadence follow the name only when the name does not already say them.
+  const titleExtras = [p.currency, freqLabel(p)].filter((w) => !nameSays(displayName, w));
   const recurring = p.type !== "one_time" && !!p.interval;
   const lastModified = p.updated_at ?? p.created_at;
   const metaKeys = p.metadata ? Object.keys(p.metadata).length : 0;
@@ -167,7 +182,7 @@ export default async function PriceDetail({
       <RecordCrumbs
         items={[
           { label: bizName, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: meta.plural, href: `/businesses/${biz}/catalog/${meta.page}` },
           { label: product.name, href: detailHref },
           { label: `${p.currency}, ${freqLabel(p)}` },
@@ -176,11 +191,7 @@ export default async function PriceDetail({
       />
 
       <RecordHeader
-        title={
-          <>
-            ‘{displayName}’ {p.currency}, {freqLabel(p)}
-          </>
-        }
+        title={titleExtras.length ? `${displayName} · ${titleExtras.join(", ")}` : displayName}
         chips={
           <>
             <StatusChip status={active ? "active" : "archived"} />
@@ -276,7 +287,9 @@ export default async function PriceDetail({
                                 : "—"
                               : t.unitAmountMinor != null
                                 ? money(t.unitAmountMinor, p.currency)
-                                : "—"}
+                                : t.flatAmountMinor != null
+                                  ? "Flat fee"
+                                  : "—"}
                           </TableCell>
                           <TableCell className="pr-5 text-right tabular-nums">
                             {t.flatAmountMinor != null ? money(t.flatAmountMinor, p.currency) : "—"}
@@ -291,21 +304,13 @@ export default async function PriceDetail({
               )}
             </RecordCard>
           ) : (
-            <RecordCard id="pricing" title="Pricing">
+            <RecordCard id="pricing" title="Amount">
               <Facts
                 rows={[
                   {
                     label: "Price",
-                    value: (
-                      <span className="font-medium tabular-nums">
-                        {priceDisplay(p)}{" "}
-                        {p.amount_minor != null ? (
-                          <span className="text-muted-foreground">{p.currency}</span>
-                        ) : null}
-                      </span>
-                    ),
+                    value: <span className="font-medium tabular-nums">{priceDisplay(p)}</span>,
                   },
-                  { label: "Pricing model", value: MODEL_LABEL[p.model] ?? p.model },
                   ...terms,
                 ]}
               />
@@ -392,7 +397,7 @@ export default async function PriceDetail({
           <RecordCard id="accounting" title="Accounting">
             <Facts
               rows={[
-                { label: "SKU / Alternative Name", value: p.sku || "—" },
+                { label: "SKU / alternative name", value: p.sku || "—" },
                 { label: "Account name", value: p.accounting_code || "—" },
                 { label: "Class", value: p.accounting_category_code || "—" },
               ]}
@@ -420,6 +425,18 @@ export default async function PriceDetail({
       </Zone>
     </div>
   );
+}
+
+/** Does `name` contain `phrase` as whole words, ignoring case? */
+function nameSays(name: string, phrase: string): boolean {
+  const words = (x: string) =>
+    x
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean);
+  const n = words(name).join(" ");
+  const w = words(phrase).join(" ");
+  return !!w && ` ${n} `.includes(` ${w} `);
 }
 
 /** The "Amount" row of a meter price that does not bill from a plain rate. */

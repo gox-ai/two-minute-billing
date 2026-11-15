@@ -23,6 +23,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/states";
 import { archiveTaxRegion, restoreTaxRegion } from "@/app/actions";
 import { REGIME_LABEL, intraTotalBps, interTotalBps, pct } from "@/lib/tax-format";
+import { regionName } from "@/lib/countries";
 import type { TaxRegion } from "@/lib/api";
 
 /**
@@ -37,12 +38,15 @@ export function TaxRegionsTable({
   rows,
   /** The page's own "Add region" dialog, so the zero-state can be the button. */
   createAction,
+  createSlot,
 }: {
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
   biz: string;
   rows: TaxRegion[];
   createAction?: React.ReactNode;
+  /** The header's solid create button; `createAction` is the empty state's quiet one. */
+  createSlot?: React.ReactNode;
 }) {
   const router = useRouter();
   const [confirming, setConfirming] = React.useState<TaxRegion | null>(null);
@@ -50,7 +54,9 @@ export function TaxRegionsTable({
   async function runArchiveToggle(r: TaxRegion) {
     const res = await (r.enabled ? archiveTaxRegion : restoreTaxRegion)(biz, r.id);
     if (res.ok) {
-      toast.success(r.enabled ? `Archived ${r.country}` : `Restored ${r.country}`);
+      toast.success(
+        r.enabled ? `Archived ${regionName(r.country)}` : `Restored ${regionName(r.country)}`,
+      );
       router.refresh();
     } else {
       toast.error(res.error ?? "We could not change the region.");
@@ -62,7 +68,9 @@ export function TaxRegionsTable({
       {
         accessorKey: "country",
         header: "Country",
-        cell: ({ row }) => <span className="text-sm font-medium">{row.original.country}</span>,
+        cell: ({ row }) => (
+          <span className="text-sm font-medium">{regionName(row.original.country)}</span>
+        ),
       },
       {
         id: "regime",
@@ -126,7 +134,7 @@ export function TaxRegionsTable({
 
   const segments = React.useMemo<ListSegment<TaxRegion>[]>(
     () => [
-      { id: "all", label: "All Regions" },
+      { id: "all", label: "All regions" },
       { id: "enabled", label: "Enabled", match: (r) => r.enabled },
       { id: "archived", label: "Archived", match: (r) => !r.enabled },
       // The one broken state this screen can have: an enabled region with no component
@@ -134,7 +142,7 @@ export function TaxRegionsTable({
       // column says "Not configured" instead of 0.00%.
       {
         id: "unconfigured",
-        label: "Enabled, No Rate",
+        label: "Enabled, no rate",
         match: (r) => r.enabled && r.components.length === 0,
       },
     ],
@@ -159,7 +167,7 @@ export function TaxRegionsTable({
           .map((v) => ({ value: v, label: v })),
         value: (r) => r.country,
       },
-      { id: "id", label: "Region Id", group: "Identity", value: (r) => r.id },
+      { id: "id", label: "Region ID", group: "Identity", value: (r) => r.id },
       {
         id: "enabled",
         label: "Enabled",
@@ -269,7 +277,7 @@ export function TaxRegionsTable({
       },
       {
         id: "created_at",
-        label: "Created At",
+        label: "Created at",
         type: "date",
         group: "Dates",
         value: (r) => r.created_at,
@@ -288,7 +296,8 @@ export function TaxRegionsTable({
         segments={segments}
         filterFields={filterFields}
         savedViews={{ entity: "tax_regions", biz }}
-        searchPlaceholder="Search regions…"
+        createSlot={createSlot}
+        searchPlaceholder="Search by country"
         exportName="tax-regions"
         persistKey={`tax-regions:${biz}`}
         defaultSort={{ id: "country", desc: false }}
@@ -297,7 +306,7 @@ export function TaxRegionsTable({
           <DropdownMenu>
             <DropdownMenuTrigger
               className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              aria-label={`Actions for ${r.country}`}
+              aria-label={`Actions for ${regionName(r.country)}`}
             >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
@@ -333,8 +342,8 @@ export function TaxRegionsTable({
         onOpenChange={(o) => !o && setConfirming(null)}
         title={
           confirming?.enabled
-            ? `Archive ${confirming?.country}?`
-            : `Restore ${confirming?.country}?`
+            ? `Archive ${regionName(confirming?.country)}?`
+            : `Restore ${regionName(confirming?.country)}?`
         }
         description={
           confirming?.enabled

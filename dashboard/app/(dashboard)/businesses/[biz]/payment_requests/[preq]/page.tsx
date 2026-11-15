@@ -1,3 +1,5 @@
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
   listBusinesses,
@@ -65,17 +67,17 @@ export default async function PaymentRequestPage({
   try {
     [businesses, r] = await Promise.all([listBusinesses(), getPaymentRequest(biz, preq)]);
   } catch (e) {
-    return (
-      <ErrorState description={<span className="font-mono text-xs">{(e as Error).message}</span>} />
-    );
-  }
-  if (!r)
+    if (isApiNotFound(e)) notFound();
     return (
       <ErrorState
-        title="Not found"
-        description={`We could not find the payment request ${preq}.`}
+        error={e}
+        thing="payment request"
+        back={{ label: "View payment requests", href: `/businesses/${biz}/payment_requests` }}
+        retry
       />
     );
+  }
+  if (!r) notFound();
 
   const business = businesses.data.find((b) => b.id === biz);
   const name = business?.name ?? biz;

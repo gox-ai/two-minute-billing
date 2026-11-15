@@ -18,6 +18,9 @@ import { cn } from "@/lib/utils";
  * place, it sat inside the header's stacking context (its entrance animation makes
  * one) and opened BEHIND the cards below it; inside a card it was clipped by the
  * card's `overflow-hidden`.
+ *
+ * A menu to assistive tech: `menu` / `menuitem` roles, arrow keys, Home and End. Opened
+ * from the keyboard, focus moves to the first item; Escape returns it to the trigger.
  */
 export function MoreMenu({
   label = "More",
@@ -42,6 +45,35 @@ export function MoreMenu({
 
   React.useEffect(() => setMounted(true), []);
 
+  const items = React.useCallback(
+    () =>
+      [...(panel.current?.querySelectorAll<HTMLElement>("a[href], button") ?? [])].filter(
+        (el) => !el.matches(":disabled, [aria-disabled=true]"),
+      ),
+    [],
+  );
+  // The items are the caller's own links and buttons: they take the role on open.
+  const keyboardOpen = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) return;
+    for (const el of items()) el.setAttribute("role", "menuitem");
+    if (keyboardOpen.current) items()[0]?.focus({ preventScroll: true });
+    keyboardOpen.current = false;
+  }, [open, items]);
+
+  const onPanelKey = (e: React.KeyboardEvent) => {
+    const list = items();
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    const go = (i: number) => {
+      e.preventDefault();
+      list[(i + list.length) % list.length]?.focus({ preventScroll: true });
+    };
+    if (e.key === "ArrowDown") go(at + 1);
+    else if (e.key === "ArrowUp") go(at < 0 ? -1 : at - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(-1);
+  };
+
   const place = React.useCallback(() => {
     const r = trigger.current?.getBoundingClientRect();
     if (!r) return;
@@ -62,7 +94,9 @@ export function MoreMenu({
       if (!trigger.current?.contains(t) && !panel.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      if (panel.current?.contains(document.activeElement)) trigger.current?.focus();
+      setOpen(false);
     };
     // The panel is fixed to the viewport; the page scrolls inside <main>, so any
     // scroll moves the trigger away from it.
@@ -85,7 +119,10 @@ export function MoreMenu({
     <div
       ref={panel}
       id={panelId}
+      role="menu"
+      aria-label={label}
       hidden={!open}
+      onKeyDown={onPanelKey}
       style={pos ? { top: pos.top, right: pos.right, maxHeight: pos.maxHeight } : undefined}
       // Close once an item handled its click; a dialog it opened is portalled out.
       onClick={(e) => {
@@ -115,9 +152,14 @@ export function MoreMenu({
         variant="outline"
         size={icon ? "sm" : "default"}
         aria-label={icon ? label : undefined}
+        aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => setOpen((o) => !o)}
+        onClick={(e) => {
+          // `detail` is 0 for a click from Enter or Space.
+          keyboardOpen.current = e.detail === 0;
+          setOpen((o) => !o);
+        }}
         className={icon ? "px-2" : undefined}
       >
         {icon ? (
@@ -146,10 +188,16 @@ export function MoreSection({
   heading?: string;
   children: React.ReactNode;
 }) {
+  const id = React.useId();
   return (
-    <div className="flex flex-col border-b pb-1.5 not-first:pt-1.5 last:border-0 last:pb-0">
+    <div
+      role="group"
+      aria-labelledby={heading ? id : undefined}
+      className="flex flex-col border-b pb-1.5 not-first:pt-1.5 last:border-0 last:pb-0"
+    >
+      {/* The row menu's label style: sentence case, 12px, muted. */}
       {heading ? (
-        <span className="px-2.5 pt-1.5 pb-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+        <span id={id} className="px-2.5 pt-1.5 pb-1 text-xs text-muted-foreground">
           {heading}
         </span>
       ) : null}

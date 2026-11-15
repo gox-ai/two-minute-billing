@@ -30,6 +30,7 @@ import {
   deleteTaxStateRegistration,
 } from "@/app/actions";
 import { componentBps, intraTotalBps, interTotalBps, pct, pctValue } from "@/lib/tax-format";
+import { regionName } from "@/lib/countries";
 import type { TaxRegion } from "@/lib/api";
 
 /**
@@ -65,112 +66,138 @@ export function TaxRateVector({ biz, region }: { biz: string; region: TaxRegion 
   const configured = region.components.filter((c) => c.state_code === null);
 
   return (
-    <RecordCard id="rates" title={isGst ? "GST rates" : "Tax rate"}>
-      {configured.length === 0 ? (
-        <Alert tone="warning" className="mb-4">
-          No rates are configured. Invoices for this country now have 0% tax.
-        </Alert>
-      ) : null}
-
-      <ActionForm action={saveTaxComponentsAction} className="space-y-4">
-        <input type="hidden" name="biz" value={biz} />
-        <input type="hidden" name="txg" value={region.id} />
-        <input type="hidden" name="regime" value={region.regime} />
-
-        {isGst ? (
-          <>
-            <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
-              These rates apply to supplies made anywhere in {region.country}. Override a specific
-              state below.
-            </p>
-            <div className="flex flex-wrap items-start gap-4">
-              <Field name="cgst" label="CGST %" required className="w-28">
-                <Input
+    // The form wraps the card so Save can sit in its header: outline, because the page's
+    // one filled Save is the settings bar at the foot.
+    <ActionForm action={saveTaxComponentsAction} className="grid min-w-0">
+      <input type="hidden" name="biz" value={biz} />
+      <input type="hidden" name="txg" value={region.id} />
+      <input type="hidden" name="regime" value={region.regime} />
+      <RecordCard
+        id="rates"
+        title={isGst ? "GST rates" : "Tax rate"}
+        actions={
+          <SubmitButton size="sm" variant="outline">
+            Save rates
+          </SubmitButton>
+        }
+      >
+        {configured.length === 0 ? (
+          <Alert tone="warning" className="mb-4">
+            No rates are configured. Invoices for this country now have 0% tax.
+          </Alert>
+        ) : null}
+        <div className="space-y-4">
+          {isGst ? (
+            <>
+              <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
+                These rates apply to supplies made anywhere in {regionName(region.country)}.
+                Override a specific state below.
+              </p>
+              <div className="flex flex-wrap items-start gap-4">
+                <Field
                   name="cgst"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step="0.01"
-                  value={cgst}
-                  onChange={(e) => setCgst(e.target.value)}
+                  label="CGST %"
                   required
-                  className="tabular-nums"
-                />
-              </Field>
-              <Field name="sgst" label="SGST/UTGST %" required className="w-32">
-                <Input
+                  className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+                >
+                  <Input
+                    name="cgst"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={cgst}
+                    onChange={(e) => setCgst(e.target.value)}
+                    required
+                    className="tabular-nums"
+                  />
+                </Field>
+                <Field
                   name="sgst"
+                  label="SGST/UTGST %"
+                  required
+                  className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+                >
+                  <Input
+                    name="sgst"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={sgst}
+                    onChange={(e) => setSgst(e.target.value)}
+                    required
+                    className="tabular-nums"
+                  />
+                </Field>
+                <Field
+                  name="cess"
+                  label="Cess %"
+                  help="Optional."
+                  className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+                >
+                  <Input
+                    name="cess"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={cess}
+                    onChange={(e) => setCess(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </Field>
+              </div>
+              {/* A filled well, not a dashed box — marks this as derived, per the design system. */}
+              <div className="max-w-prose rounded-md bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                Within {region.home_state_code ?? "your state"}:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  CGST {num(cgst)}% + SGST/UTGST {num(sgst)}%
+                  {num(cess) > 0 ? ` + Cess ${num(cess)}%` : ""} = {total}%
+                </span>
+                <br />
+                To other states:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  IGST {num(cgst) + num(sgst)}%{num(cess) > 0 ? ` + Cess ${num(cess)}%` : ""} ={" "}
+                  {total}%
+                </span>
+                <br />
+                IGST is CGST + SGST/UTGST. An inter-state supply has the same total tax.
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-wrap items-start gap-4">
+              <Field name="name" label="Tax name" required className="w-72">
+                <Input
+                  name="name"
+                  defaultValue={configured[0]?.name ?? ""}
+                  placeholder="VAT"
+                  maxLength={60}
+                  required
+                />
+              </Field>
+              <Field
+                name="rate"
+                label="Rate %"
+                required
+                className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+              >
+                <Input
+                  name="rate"
                   type="number"
                   min={0}
                   max={100}
                   step="0.01"
-                  value={sgst}
-                  onChange={(e) => setSgst(e.target.value)}
+                  defaultValue={configured[0] ? pctValue(configured[0].rate_bps) : ""}
                   required
                   className="tabular-nums"
                 />
               </Field>
-              <Field name="cess" label="Cess %" help="Optional." className="w-28">
-                <Input
-                  name="cess"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step="0.01"
-                  value={cess}
-                  onChange={(e) => setCess(e.target.value)}
-                  className="tabular-nums"
-                />
-              </Field>
             </div>
-            {/* A filled well, not a dashed box — marks this as derived, per the design system. */}
-            <div className="max-w-prose rounded-md bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-              Within {region.home_state_code ?? "your state"}:{" "}
-              <span className="font-medium text-foreground tabular-nums">
-                CGST {num(cgst)}% + SGST/UTGST {num(sgst)}%
-                {num(cess) > 0 ? ` + Cess ${num(cess)}%` : ""} = {total}%
-              </span>
-              <br />
-              To other states:{" "}
-              <span className="font-medium text-foreground tabular-nums">
-                IGST {num(cgst) + num(sgst)}%{num(cess) > 0 ? ` + Cess ${num(cess)}%` : ""} ={" "}
-                {total}%
-              </span>
-              <br />
-              IGST is CGST + SGST/UTGST. An inter-state supply has the same total tax.
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-wrap items-start gap-4">
-            <Field name="name" label="Tax name" required className="w-48">
-              <Input
-                name="name"
-                defaultValue={configured[0]?.name ?? ""}
-                placeholder="VAT"
-                maxLength={60}
-                required
-              />
-            </Field>
-            <Field name="rate" label="Rate %" required className="w-28">
-              <Input
-                name="rate"
-                type="number"
-                min={0}
-                max={100}
-                step="0.01"
-                defaultValue={configured[0] ? pctValue(configured[0].rate_bps) : ""}
-                required
-                className="tabular-nums"
-              />
-            </Field>
-          </div>
-        )}
-
-        <div className="flex justify-end">
-          <SubmitButton>Save rates</SubmitButton>
+          )}
         </div>
-      </ActionForm>
-    </RecordCard>
+      </RecordCard>
+    </ActionForm>
   );
 }
 
@@ -244,12 +271,13 @@ export function StateRegistrations({ biz, region }: { biz: string; region: TaxRe
         </p>
       ) : (
         <>
-          <Table className="table-fixed">
+          <Table phone="stack" className="table-fixed">
+            {/* Fixed widths fit a GSTIN and a percentage; the state takes the rest. */}
             <colgroup>
               <col />
-              <col className="w-[34%]" />
-              <col className="w-[18%]" />
-              <col className="w-[18%]" />
+              <col className="w-40" />
+              <col className="w-24" />
+              <col className="w-24" />
               <col className="w-14" />
             </colgroup>
             <TableHeader>
@@ -258,7 +286,7 @@ export function StateRegistrations({ biz, region }: { biz: string; region: TaxRe
                 <TableHead>Registration number</TableHead>
                 <TableHead className="text-right">Intra-state</TableHead>
                 <TableHead className="text-right">Inter-state</TableHead>
-                <TableHead className="pr-5" />
+                <TableHead phone="aside" className="pr-5" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -271,10 +299,12 @@ export function StateRegistrations({ biz, region }: { biz: string; region: TaxRe
                   : interTotalBps(region.components);
                 return (
                   <TableRow key={s.id}>
-                    <TableCell className="pl-5 font-medium whitespace-normal">
+                    <TableCell className="pl-5 font-medium wrap-normal whitespace-normal">
                       {s.state_code}
                       {s.state_name ? (
-                        <span className="ml-2 text-xs text-muted-foreground">{s.state_name}</span>
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {s.state_name}
+                        </span>
                       ) : null}
                     </TableCell>
                     <TableCell className="font-mono text-xs wrap-anywhere whitespace-normal">
@@ -419,7 +449,7 @@ export function StateRateOverride({ biz, region }: { biz: string; region: TaxReg
             label="State"
             required
             help={states.length ? `Registered: ${states.join(", ")}` : "Any state in this region."}
-            className="w-64"
+            className="w-72"
           >
             <StateSelect
               name="state_code"
@@ -428,7 +458,12 @@ export function StateRateOverride({ biz, region }: { biz: string; region: TaxReg
               ariaLabel="State to override"
             />
           </Field>
-          <Field name="cgst" label="CGST %" required className="w-28">
+          <Field
+            name="cgst"
+            label="CGST %"
+            required
+            className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+          >
             <Input
               name="cgst"
               type="number"
@@ -439,7 +474,12 @@ export function StateRateOverride({ biz, region }: { biz: string; region: TaxReg
               className="tabular-nums"
             />
           </Field>
-          <Field name="sgst" label="SGST/UTGST %" required className="w-32">
+          <Field
+            name="sgst"
+            label="SGST/UTGST %"
+            required
+            className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+          >
             <Input
               name="sgst"
               type="number"
@@ -450,7 +490,11 @@ export function StateRateOverride({ biz, region }: { biz: string; region: TaxReg
               className="tabular-nums"
             />
           </Field>
-          <Field name="cess" label="Cess %" className="w-28">
+          <Field
+            name="cess"
+            label="Cess %"
+            className="min-w-30 [&_input]:w-30 [&_label]:whitespace-nowrap"
+          >
             <Input
               name="cess"
               type="number"
@@ -462,7 +506,7 @@ export function StateRateOverride({ biz, region }: { biz: string; region: TaxReg
           </Field>
         </div>
         <div className="flex justify-end">
-          <SubmitButton>
+          <SubmitButton variant="outline">
             <Plus className="size-4" />
             Save override
           </SubmitButton>

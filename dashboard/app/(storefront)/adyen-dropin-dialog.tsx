@@ -3,8 +3,15 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
+import { adyenError, adyenNoResult, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog } from "./payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+} from "./payment-dialog";
+import { sdkAmountLabel } from "./storefront-text";
 
 /**
  * Adyen Web Drop-in (sessions flow), pinned to an exact version with SRI. The card fields are
@@ -55,7 +62,7 @@ function loadAdyenWeb(): Promise<void> {
     el.onload = () => resolve();
     el.onerror = () => {
       loading = null;
-      reject(new Error("We could not connect to Adyen. Check your connection. Then try again."));
+      reject(new Error("We could not load the payment form. Reload the page. Then try again."));
     };
     document.head.appendChild(el);
   });
@@ -67,9 +74,11 @@ function AdyenDropinDialog({
   params,
   purpose,
   amountLabel,
+  businessName,
   onSettle,
 }: {
   open: boolean;
+  businessName: string;
   params: {
     clientKey: string;
     environment: string;
@@ -108,11 +117,7 @@ function AdyenDropinDialog({
           status: "completed",
           clientResult: { sessionId: params.sessionId, sessionResult: outcome.sessionResult },
         });
-      else
-        onSettle({
-          status: "failed",
-          message: `We could not complete the payment. Try again, or use a different ${setup ? "card" : "payment method"}.`,
-        });
+      else onSettle({ status: "failed", message: adyenNoResult(outcome.resultCode, purpose) });
     };
     (async () => {
       try {
@@ -126,8 +131,12 @@ function AdyenDropinDialog({
           session: { id: params.sessionId, sessionData: params.sessionData },
           onPaymentCompleted: (result: SessionOutcome) => finish(result),
           onPaymentFailed: (result: SessionOutcome) => finish(result),
-          onError: () => {
-            if (!cancelled) setError(openFailed);
+          // Before the mount it is the form that failed; after, the payment. Either way the
+          // buyer reads Adyen's own words here, not only inside Drop-in.
+          onError: (error: unknown) => {
+            if (cancelled) return;
+            const said = adyenError(error, dropin ? "pay" : "open", purpose);
+            if (said) setError(said);
           },
         });
         if (cancelled || !container.current) return;
@@ -143,7 +152,7 @@ function AdyenDropinDialog({
       cancelled = true;
       dropin?.unmount();
     };
-  }, [open, params, onSettle, setup]);
+  }, [open, params, onSettle, setup, purpose]);
 
   return (
     <PaymentDialog
@@ -157,12 +166,16 @@ function AdyenDropinDialog({
       }
     >
       <div ref={container} className="min-h-40" />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2">
+      <PaymentPrivacyNote
+        business={businessName}
+        instrument={bank ? (card ? "other" : "bank") : setup ? "card" : "other"}
+      />
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
           Cancel
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }
@@ -194,12 +207,9 @@ export function openAdyenDropin(
   if (!p.clientKey || !p.sessionId || !p.sessionData)
     return Promise.resolve({
       status: "failed",
-      message: `We could not open the ${context.purpose === "setup" ? "card" : "payment"} form. Contact the business.`,
+      message: `We could not open the ${context.purpose === "setup" ? "card" : "payment"} form. ${contactBusiness(context.businessName)}`,
     });
-  const amountLabel =
-    typeof params.amount === "string" && typeof params.currency === "string"
-      ? `${params.amount} ${params.currency}`
-      : null;
+  const amountLabel = sdkAmountLabel(params.amount, params.currency);
   return new Promise((resolve) => {
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -212,6 +222,7 @@ export function openAdyenDropin(
           params={p}
           purpose={context.purpose}
           amountLabel={amountLabel}
+          businessName={context.businessName}
           onSettle={settle}
         />,
       );

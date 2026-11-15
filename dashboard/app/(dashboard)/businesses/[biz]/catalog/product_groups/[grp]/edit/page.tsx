@@ -38,8 +38,8 @@ export default async function EditProductGroupPage({
         title="Edit product group"
         breadcrumbs={[
           { label: name, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
-          { label: "Product Groups", href: listHref },
+          { label: "Product catalog" },
+          { label: "Product groups", href: listHref },
           { label: group.name },
         ]}
       />

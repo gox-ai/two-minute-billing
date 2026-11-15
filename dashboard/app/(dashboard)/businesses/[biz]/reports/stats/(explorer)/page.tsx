@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
+import { sentenceCase } from "@/lib/labels";
+import { reportCrumbs } from "@/lib/report-crumbs";
 import Link from "next/link";
-import { listReports } from "@/lib/api";
+import { listBusinesses, listReports } from "@/lib/api";
 import { listMeasures } from "@/lib/analytics-api";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
@@ -94,7 +96,10 @@ export default async function WidgetsPage({
     redirect(`/businesses/${biz}/reports/stats/${report}${qs ? `?${qs}` : ""}`);
   }
 
-  const crumbs = [{ label: "Reports", href: `/businesses/${biz}/reports` }];
+  const crumbs = reportCrumbs(biz, undefined, "Stats");
+  const bizName = await listBusinesses()
+    .then((r) => r.data.find((b) => b.id === biz)?.name)
+    .catch(() => undefined);
 
   let measures: MeasureMeta[];
   let reports: Awaited<ReturnType<typeof listReports>>;
@@ -136,7 +141,7 @@ export default async function WidgetsPage({
     });
     return {
       id: m.id,
-      name: m.name,
+      name: sentenceCase(m.name),
       description: m.description,
       source: "measure",
       family: familyOf(unitLabel, basisLabel, false),
@@ -171,7 +176,7 @@ export default async function WidgetsPage({
             : "Over a period";
     return {
       id: r.key,
-      name: r.name,
+      name: sentenceCase(r.name),
       description: r.description,
       source: "report",
       family: familyOf(unitLabel, basisLabel, gridOnly),
@@ -198,7 +203,7 @@ export default async function WidgetsPage({
       <PageHeader
         title="Stats"
         description="All the measures and reports that this business can open or put on a board, in one list."
-        breadcrumbs={crumbs}
+        breadcrumbs={reportCrumbs(biz, bizName, "Stats")}
         className="mb-0"
         actions={
           <Button asChild variant="outline">

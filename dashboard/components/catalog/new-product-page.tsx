@@ -6,7 +6,7 @@ import { productImageSupport } from "@/lib/api/product-images";
 
 const META = {
   plan: { noun: "plan", plural: "Plans", page: "plans" },
-  addon: { noun: "addon", plural: "Addons", page: "addons" },
+  addon: { noun: "add-on", plural: "Add-ons", page: "addons" },
   charge: { noun: "one-time product", plural: "One-time products", page: "charges" },
 } as const;
 
@@ -50,7 +50,7 @@ export async function NewProductPage({
       listHref={listHref}
       crumbs={[
         { label: business?.name ?? biz, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: meta.plural, href: listHref },
         { label: `New ${meta.noun}` },
       ]}

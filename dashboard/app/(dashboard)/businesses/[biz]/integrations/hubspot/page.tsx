@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getBusiness } from "@/lib/api/business-settings";
 import { getHubSpot, listHubSpotRuns, type HubSpotSyncRun } from "@/lib/api/hubspot";
 import { requirePermission } from "@/lib/session";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState } from "@/components/states";
 import { Alert } from "@/components/ui/alert";
@@ -63,7 +63,7 @@ function Stat({
   tone?: "warning" | "destructive";
 }) {
   return (
-    <div className="rounded-lg bg-muted/50 px-4 py-3">
+    <div className="rounded-xl bg-muted/50 px-4 py-3">
       <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
         {label}
       </div>
@@ -191,7 +191,9 @@ export default async function HubSpotSettingsPage({
               </ul>
               {hs.configured ? (
                 <Button asChild>
-                  <a href={connectHref}>Connect HubSpot</a>
+                  <a data-document-link href={connectHref}>
+                    Connect HubSpot
+                  </a>
                 </Button>
               ) : null}
             </div>
@@ -211,7 +213,7 @@ export default async function HubSpotSettingsPage({
         <Alert tone="error" title="HubSpot access is revoked.">
           Nothing syncs until you reconnect the portal. We keep the changes made until then, and
           send them when you reconnect.{" "}
-          <a href={connectHref} className="font-medium underline">
+          <a data-document-link href={connectHref} className="font-medium underline">
             Reconnect HubSpot
           </a>
         </Alert>

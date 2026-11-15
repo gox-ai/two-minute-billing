@@ -1,6 +1,7 @@
 import * as React from "react";
 import Link from "next/link";
-import { ArrowUpRight, ChevronRight, Info } from "lucide-react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { PageHeader, type Crumb } from "@/components/page-header";
 import { SubmitButton } from "@/components/form/submit-button";
@@ -14,7 +15,7 @@ import { SettingError } from "./setting-error";
 
 /**
  * The settings-page layout: header → at most one "Needs attention" band → cards on
- * the left, a "Your setup" summary (+ the page's Save) on the right at xl.
+ * the left, a "Your setup" summary on the right in a wide column → one sticky Save bar.
  *
  * Shape of a one-form page:
  *
@@ -22,7 +23,7 @@ import { SettingError } from "./setting-error";
  *     <ActionForm action={…}>
  *       <SettingsColumns summary={<SettingsSummary items={…} />} save={{ note: "…" }}>
  *         <SettingsCard title="…">
- *           <SettingRow label="…" help="…" control={…} consequence="…" />
+ *           <SettingRow label="…" help="…" placement="end" control={<SelectAnswer …/>} />
  *         </SettingsCard>
  *       </SettingsColumns>
  *     </ActionForm>
@@ -71,15 +72,40 @@ export function SettingsPage({
 export interface SettingsSaveProps {
   /** Button label. Default "Save". */
   label?: string;
-  /** One line under the button, e.g. when the change takes effect. */
+  /** One line at the bar's left, e.g. when the change takes effect. */
   note?: React.ReactNode;
 }
 
 /**
- * 8/4 at xl: cards on the left, `summary` sticky on the right. Below xl it is one
- * column with the summary after the cards. With `save`, the Save sits at the foot of
- * the summary at xl and in a sticky bottom bar below it — so it must be the LAST
- * thing on the page (the bar bleeds into the shell's padding).
+ * The page's one Save: a sticky bar at the foot of the page, at every width (the create
+ * forms' bar). It must be the LAST thing inside the page's one form, because it bleeds
+ * into the shell's padding. `children` go before Save (a dirty count, Discard).
+ */
+export function SettingsSaveBar({
+  label = "Save",
+  note,
+  disabled,
+  children,
+}: SettingsSaveProps & { disabled?: boolean; children?: React.ReactNode }) {
+  return (
+    <div
+      data-action-bar
+      // The shell's padding, whatever Billy adds to it: flush with main's foot (layout.tsx).
+      className="sticky bottom-0 z-10 -mx-5 -mb-(--main-pb) flex flex-wrap items-center gap-x-3 gap-y-2 border-t bg-card px-5 py-3 md:-mx-10 md:px-10"
+    >
+      {note ? <p className="m-0 min-w-0 flex-1 text-xs text-muted-foreground">{note}</p> : null}
+      <div className="ml-auto flex items-center gap-2">
+        {children}
+        <SubmitButton disabled={disabled}>{label}</SubmitButton>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 8/4 in a wide column: cards on the left, `summary` sticky on the right. Narrower it is one
+ * column with the summary after the cards. With `save`, the page's Save renders in the
+ * sticky bottom bar — so this must be the LAST thing in the page's form.
  */
 export function SettingsColumns({
   summary,
@@ -90,44 +116,22 @@ export function SettingsColumns({
   save?: SettingsSaveProps;
   children: React.ReactNode;
 }) {
-  const saveBlock = (where: "aside" | "bar") =>
-    save ? (
-      <div
-        className={cn(
-          "flex flex-col gap-2",
-          where === "aside" ? "hidden border-t px-5 py-4 xl:flex" : "items-stretch",
-        )}
-      >
-        <SubmitButton className="w-full">{save.label ?? "Save"}</SubmitButton>
-        {save.note ? (
-          <span className={cn("text-xs text-muted-foreground", where === "bar" && "text-center")}>
-            {save.note}
-          </span>
-        ) : null}
-      </div>
-    ) : null;
-
   return (
     <>
-      <Row span={summary || save ? "8/4" : "12"}>
+      <Row span={summary ? "8/4" : "12"}>
         <div className="flex min-w-0 flex-col gap-5">{children}</div>
-        {summary || save ? (
+        {summary ? (
           <div className="min-w-0">
             <aside
               aria-label="Your setup"
-              className="anim-rise overflow-hidden rounded-xl border bg-card xl:sticky xl:top-4"
+              className="anim-rise overflow-hidden rounded-xl border bg-card @min-[59.5rem]/main:sticky @min-[59.5rem]/main:top-[calc(var(--compact-h,0px)+1rem)]"
             >
               {summary}
-              {saveBlock("aside")}
             </aside>
           </div>
         ) : null}
       </Row>
-      {save ? (
-        <div className="sticky bottom-0 z-10 -mx-5 -mb-8 border-t bg-card px-5 py-3 md:-mx-10 md:-mb-10 md:px-10 xl:hidden">
-          {saveBlock("bar")}
-        </div>
-      ) : null}
+      {save ? <SettingsSaveBar {...save} /> : null}
     </>
   );
 }
@@ -221,7 +225,12 @@ export interface SettingRowProps {
   className?: string;
 }
 
-/** One setting: label, help line, control, consequence, optional "More". */
+/**
+ * One setting. `end` (the settings-row style): label and help on the left, the answer at
+ * the card's right edge — a `SelectAnswer`, a `ToggleAnswer`, or a short boxed input on
+ * the 80/120/288 scale. `below` is only for a block that needs the full width (an
+ * address, a list, a textarea).
+ */
 export function SettingRow({
   label,
   htmlFor,
@@ -235,31 +244,33 @@ export function SettingRow({
   className,
 }: SettingRowProps) {
   const title = htmlFor ? (
-    <label htmlFor={htmlFor} className="text-sm font-semibold">
+    <label htmlFor={htmlFor} className="text-sm font-medium">
       {label}
     </label>
   ) : (
-    <p className="m-0 text-sm font-semibold">{label}</p>
+    <p className="m-0 text-sm font-medium">{label}</p>
   );
   const helpLine = help ? (
-    <p className="m-0 text-sm leading-normal text-muted-foreground">{help}</p>
+    <p className="m-0 text-xs leading-normal text-muted-foreground">{help}</p>
   ) : null;
 
   return (
     <div className={cn("flex flex-col gap-3 px-5 py-4", className)}>
       {placement === "end" ? (
-        <div className="flex items-start gap-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             {title}
             {helpLine}
           </div>
-          {control ? <div className="shrink-0 pt-0.5">{control}</div> : null}
+          {control ? (
+            <div className="flex max-w-full min-w-0 shrink-0 sm:justify-end">{control}</div>
+          ) : null}
         </div>
       ) : (
         <div className="flex min-w-0 flex-col gap-1.5">
           {title}
-          {control ? <div className="min-w-0">{control}</div> : null}
           {helpLine}
+          {control ? <div className="min-w-0 pt-1">{control}</div> : null}
         </div>
       )}
       {errorFor ? <SettingError name={errorFor} /> : null}
@@ -270,7 +281,7 @@ export function SettingRow({
   );
 }
 
-/** "What this value does" — a quiet filled well with an info glyph. */
+/** "What this value does" — the neutral `Alert`. */
 export function Consequence({
   children,
   className,
@@ -279,15 +290,9 @@ export function Consequence({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "flex items-start gap-2 rounded-lg border bg-muted/50 px-3 py-2.5 text-sm leading-normal text-foreground/85",
-        className,
-      )}
-    >
-      <Info aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <div className="min-w-0">{children}</div>
-    </div>
+    <Alert tone="neutral" className={className}>
+      {children}
+    </Alert>
   );
 }
 
@@ -310,13 +315,10 @@ export function More({
   );
 }
 
-/** A small uppercase field label for a control that sits under a row title. */
+/** A small sentence-case label for a control that sits under a row title. */
 export function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
   return (
-    <label
-      htmlFor={htmlFor}
-      className="text-xs font-medium tracking-[0.06em] text-muted-foreground uppercase"
-    >
+    <label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
       {children}
     </label>
   );
@@ -344,12 +346,12 @@ export function SettingsLinkRow({
   badge?: React.ReactNode;
 }) {
   const Icon = external ? ArrowUpRight : ChevronRight;
-  // The current value is a soft pill, so it reads as a reading, not as more copy.
+  // The current value on a muted ground with no border: a reading, not a button.
   const pill = (cls: string) =>
     value ? (
       <span
         className={cn(
-          "rounded-full border bg-muted/50 px-2.5 py-0.5 text-sm wrap-anywhere text-foreground/85",
+          "rounded-md bg-muted px-2 py-0.5 text-sm wrap-anywhere text-foreground/85",
           cls,
         )}
       >
@@ -359,7 +361,7 @@ export function SettingsLinkRow({
   return (
     <Link
       href={href}
-      className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+      className="group flex items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
     >
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-2">

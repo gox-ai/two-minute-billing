@@ -8,9 +8,8 @@ import {
   pageCoupons,
   COUPON_PAGE_SPECS,
   COUPON_SORT_FIELDS,
-  type CouponConstraint,
 } from "@/modules/coupons/service";
-import type { coupons } from "@db/schema";
+import { serializeCoupon } from "./coupon-routes";
 import { resolveBusiness, requirePerm } from "./helpers";
 import { catalogListEnvelope, catalogPageQuery, wantsListQuery } from "./catalog-list";
 
@@ -18,55 +17,6 @@ import { catalogListEnvelope, catalogPageQuery, wantsListQuery } from "./catalog
 // NOTE: there is deliberately NO payments listing — transactions are the
 // user-facing money log; the payments table is internal
 // ledger machinery.
-
-/**
- * This is the ONLY coupon read endpoint, so the dashboard's coupon DETAIL page is built from
- * a row of this list — `lib/api/coupons.ts:getCoupon` finds itself in it. Every field the
- * detail page shows therefore has to be here; `apply_on`, `invoice_name`, `valid_from`,
- * `redeem_by`, `duration_in_periods` and `code` were not, so those rows rendered their
- * em-dash fallbacks over data that existed.
- *
- * `item_constraints` is `null` — meaning "not applicable" — for an `invoice_amount` coupon,
- * which the matcher never consults, and an ARRAY for an `each_specified_item` one. A kind
- * absent from the array is an implicit `none` (`couponMatchesLine`), not `all`.
- */
-function serializeCoupon(
-  c: typeof coupons.$inferSelect,
-  now?: Date,
-  constraints?: CouponConstraint[],
-) {
-  return {
-    object: "coupon",
-    id: c.code,
-    code: c.code,
-    name: c.name,
-    kind: c.kind,
-    percent_off_bps: c.percentOffBps,
-    amount_off_minor: c.amountOffMinor != null ? Number(c.amountOffMinor) : null,
-    currency: c.currency,
-    duration_type: c.durationType,
-    duration_in_periods: c.durationInPeriods,
-    apply_on: c.applyOn,
-    invoice_name: c.invoiceName,
-    valid_from: c.validFrom,
-    redeem_by: c.redeemBy,
-    times_redeemed: c.timesRedeemed,
-    max_redemptions: c.maxRedemptions,
-    max_redemptions_per_customer: c.maxRedemptionsPerCustomer,
-    active: c.active,
-    status: couponStatus(c, now),
-    metadata: c.metadata,
-    item_constraints:
-      c.applyOn === "each_specified_item"
-        ? (constraints ?? []).map((k) => ({
-            item_kind: k.itemKind,
-            constraint_type: k.constraintType,
-            product_ids: k.productIds ?? [],
-            price_ids: k.priceIds ?? [],
-          }))
-        : null,
-  };
-}
 
 export async function registerPortalRoutes(app: FastifyInstance) {
   app.get(

@@ -1,5 +1,5 @@
-import { ListLoading } from "@/components/patterns/route-loading";
+import { PaymentsDashboardLoading } from "@/components/patterns/route-loading";
 
 export default function Loading() {
-  return <ListLoading stats={4} cols={5} />;
+  return <PaymentsDashboardLoading cols={7} />;
 }

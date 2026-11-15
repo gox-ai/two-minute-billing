@@ -1,6 +1,8 @@
 "use client";
 
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import * as React from "react";
+import { enumLabel } from "@/lib/labels";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   ListPage,
@@ -12,13 +14,15 @@ import { makeListSource } from "@/lib/list-source";
 import { InfoCell, TextCell } from "@/components/patterns/list-cells";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/states";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { EVENT_TYPES } from "@/lib/api/event-types";
 import type { EventRecord } from "@/lib/api/developer";
-import { Activity } from "lucide-react";
+import { Activity, User } from "lucide-react";
+import { RowMenu, copyIdItem } from "@/components/patterns/row-menu";
 import { useBusinessTz } from "@/components/business-tz";
 import { accountHolderName } from "@/lib/names";
+import { eventUser } from "@/components/audit/labels";
 
 /**
  * The engine's operator tables, copied verbatim from `src/platform/list-query.ts`
@@ -88,12 +92,15 @@ const asString = (v: unknown): string | null => (typeof v === "string" && v ? v 
  * `loadCustomerSnapshot`) when present, falling back to the resource pointer
  * when there's no customer in content.
  */
-function customerInfo(ev: EventRecord): string {
-  return customerInfoParts(ev).text;
+function customerInfo(ev: EventRecord, names: Record<string, string>): string {
+  return customerInfoParts(ev, names).text;
 }
 
 /** The label, and whether it is an id (rendered mono) rather than a name. */
-function customerInfoParts(ev: EventRecord): { text: string; mono: boolean } {
+function customerInfoParts(
+  ev: EventRecord,
+  names: Record<string, string>,
+): { text: string; mono: boolean } {
   const content = ev.content as Record<string, unknown> | null;
   const customer =
     content && typeof content === "object"
@@ -111,12 +118,24 @@ function customerInfoParts(ev: EventRecord): { text: string; mono: boolean } {
     if (id) return { text: id, mono: true };
   }
   if (ev.resource) {
-    return {
-      text: `${ev.resource.type ?? "resource"}${ev.resource.id ? ` ${ev.resource.id}` : ""}`,
-      mono: false,
-    };
+    // A gateway account reads by its label; any other resource by its plain type name.
+    const named = ev.resource.id ? names[ev.resource.id] : undefined;
+    const type = (ev.resource.type ?? "resource").replace(/_/g, " ");
+    return { text: named ? `${enumLabel(type)}: ${named}` : enumLabel(type), mono: false };
   }
   return { text: "—", mono: false };
+}
+
+/** The customer the event is about: its content snapshot, else a customer resource. */
+function eventCustomerId(ev: EventRecord): string | null {
+  const content = ev.content as Record<string, unknown> | null;
+  const customer =
+    content && typeof content === "object"
+      ? (content.customer as Record<string, unknown> | undefined)
+      : undefined;
+  const fromContent = customer ? asString(customer.id) : null;
+  if (fromContent) return fromContent;
+  return ev.resource?.type === "customer" ? (ev.resource.id ?? null) : null;
 }
 
 /** Human label: admin_console → "Admin console". */
@@ -139,9 +158,12 @@ export function EventsTable({
   hasMore,
   nextCursor,
   initialFilters,
+  gatewayNames = {},
 }: {
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
+  /** `gwa_` id → account label, for system events about a gateway account. */
+  gatewayNames?: Record<string, string>;
   biz: string;
   /** First page, server-rendered. */
   rows: EventRecord[];
@@ -167,7 +189,7 @@ export function EventsTable({
             <InfoCell
               title={eventName(ev.event_type)}
               href={`/businesses/${biz}/events/${ev.id}`}
-              sub={ev.id}
+              sub={<MiddleEllipsis value={ev.id} className="text-xs" />}
               // Only when the status says something. Every row carried a "Not
               // Configured" pill otherwise — 100 identical chips that push the
               // event name right and bury the rows where a delivery actually failed.
@@ -182,10 +204,10 @@ export function EventsTable({
       },
       {
         id: "customer_info",
-        header: "Customer Info",
-        accessorFn: (e) => customerInfo(e),
+        header: "Customer",
+        accessorFn: (e) => customerInfo(e, gatewayNames),
         cell: ({ row }) => {
-          const { text, mono } = customerInfoParts(row.original);
+          const { text, mono } = customerInfoParts(row.original, gatewayNames);
           return (
             <TextCell className={cn("block max-w-80 wrap-anywhere", mono && "font-mono text-xs")}>
               {text}
@@ -197,22 +219,30 @@ export function EventsTable({
         id: "user",
         header: "User",
         accessorFn: (e) => e.user ?? "",
-        cell: ({ row }) => (
-          <span
-            className="block max-w-40 truncate font-mono text-xs text-muted-foreground"
-            title={row.original.user ?? undefined}
-          >
-            {row.original.user ?? "—"}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const { text, mono } = eventUser(row.original.user);
+          return (
+            <span
+              className={cn(
+                "block max-w-40 truncate text-sm text-muted-foreground",
+                mono && "font-mono text-xs",
+              )}
+              title={row.original.user ?? undefined}
+            >
+              {text}
+            </span>
+          );
+        },
       },
       {
         accessorKey: "occurred_at",
         id: "occurred_at",
-        header: "Occurred On",
+        header: "Created",
+        // A log is scanned by time: on a phone it sits opposite the event name.
+        meta: { phone: "aside" },
         cell: ({ row }) => (
           <TextCell className="whitespace-nowrap">
-            {fmtDateTimeShort(row.original.occurred_at, tz)}
+            {fmtDateTime(row.original.occurred_at, tz)}
           </TextCell>
         ),
       },
@@ -235,7 +265,7 @@ export function EventsTable({
     () => [
       // Both sides of the union: each table has its own public id (`evt_…` / `ievt_…`)
       // and the serializer prints both as `id`.
-      { id: "id", label: "Event Id", group: "Identity", serverOps: TEXT_OPS },
+      { id: "id", label: "Event ID", group: "Identity", serverOps: TEXT_OPS },
       {
         id: "type",
         label: "Event type",
@@ -258,7 +288,7 @@ export function EventsTable({
       },
       {
         id: "resource_id",
-        label: "Resource Id",
+        label: "Resource ID",
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: NATIVE_ONLY,
@@ -287,7 +317,7 @@ export function EventsTable({
       },
       {
         id: "trace_id",
-        label: "Trace Id",
+        label: "Trace ID",
         group: "Other",
         serverOps: TEXT_OPS,
         hint: `The RUN. Lists only the events that one clock tick or request caused. A created_at window can also include events from a concurrent tick. ${NATIVE_ONLY}`,
@@ -321,15 +351,48 @@ export function EventsTable({
       savedViews={{ entity: "events", biz }}
       initialFilters={initialFilters}
       defaultSort={{ id: "occurred_at", desc: true }}
-      searchPlaceholder="Search for event id / resource / actor…"
+      searchPlaceholder="Search by event ID, resource or actor"
       exportName="events"
       persistKey={`events:${biz}`}
       rowHref={(e) => `/businesses/${biz}/events/${e.id}`}
+      rowMenu={(e) => {
+        const customer = eventCustomerId(e);
+        return (
+          <RowMenu
+            label={eventName(e.event_type)}
+            groups={[
+              {
+                label: "References",
+                items: [
+                  customer
+                    ? {
+                        label: "View customer",
+                        icon: <User className="size-4" />,
+                        href: `/businesses/${biz}/customers/${customer}`,
+                      }
+                    : null,
+                ],
+              },
+              {
+                label: "Quick actions",
+                items: [
+                  {
+                    label: "View event",
+                    icon: <Activity className="size-4" />,
+                    href: `/businesses/${biz}/events/${e.id}`,
+                  },
+                  copyIdItem("event", e.id),
+                ],
+              },
+            ]}
+          />
+        );
+      }}
       emptyState={
         <EmptyState
           icon={<Activity />}
           title="No events"
-          description="No events match this view or search."
+          description="There are no events in this view."
         />
       }
     />

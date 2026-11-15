@@ -1,5 +1,6 @@
 "use client";
 
+import { plural } from "@/lib/labels";
 import * as React from "react";
 import { LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -256,8 +257,14 @@ export function BoardSurface({
             <React.Fragment key="tabs">{tabs}</React.Fragment>
             <div className="mb-5 flex flex-wrap items-center gap-3">
               {/* A server-rendered element arriving as a prop is not marked as a keyed child,
-                  so each is wrapped here rather than sitting bare in this list. */}
-              <React.Fragment key="controls">{controls}</React.Fragment>
+                  so each is wrapped here rather than sitting bare in this list. On a phone the
+                  controls dissolve into this row, so the period and the download share a line
+                  and the grain takes the next. */}
+              {controls ? (
+                <div className="contents *:max-sm:contents">
+                  <React.Fragment key="controls">{controls}</React.Fragment>
+                </div>
+              ) : null}
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <React.Fragment key="download">{download}</React.Fragment>
                 {canEdit && tiles.length > 0 ? (
@@ -299,12 +306,7 @@ export function BoardSurface({
         ) : footer || shown.length > 0 ? (
           <div className="mt-4 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{footer}</span>
-            {shown.length > 0 ? (
-              <span>
-                {shown.length} {shown.length === 1 ? "widget" : "widgets"} · board{" "}
-                <span className="font-mono">{boardId}</span>
-              </span>
-            ) : null}
+            {shown.length > 0 ? <span>{plural(shown.length, "widget")}</span> : null}
           </div>
         ) : null}
       </ArrangingContext.Provider>

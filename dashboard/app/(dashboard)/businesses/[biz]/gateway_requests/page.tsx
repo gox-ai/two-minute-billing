@@ -46,7 +46,7 @@ export default async function GatewayRequestsPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Gateway Requests" />
+        <PageHeader title="Gateway requests" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -61,7 +61,7 @@ export default async function GatewayRequestsPage({
       {/* The list chrome stays visible at zero rows — the table owns its empty state. */}
       <GatewayRequestsTable
         page={{
-          title: "Gateway Requests",
+          title: "Gateway requests",
           breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Gateway requests" }],
         }}
         gatewayCatalog={gatewayCatalog}

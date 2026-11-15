@@ -14,7 +14,7 @@ import { makeListSource } from "@/lib/list-source";
 import { MoneyCell, TextCell } from "@/components/patterns/list-cells";
 import { CustomerInfoCell } from "@/components/patterns/customer-info-cell";
 import { EmptyState } from "@/components/states";
-import { fmtDate, fmtDateTimeShort } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { useBusinessTz } from "@/components/business-tz";
 import type { Receipt, ReceiptScope } from "@/lib/api/receipts";
 import { receiptPdfHref } from "@/lib/receipt-links";
@@ -88,7 +88,7 @@ export function ReceiptsTable({
         id: "amount_minor",
         header: "Amount",
         enableSorting: false,
-        meta: { align: "right" },
+        meta: { align: "right", phone: "aside" },
         accessorFn: (r) => r.amount_minor,
         cell: ({ row }) => (
           <MoneyCell minor={row.original.amount_minor} currency={row.original.currency} />
@@ -141,7 +141,7 @@ export function ReceiptsTable({
         id: "created_at",
         header: "Created",
         accessorFn: (r) => r.created_at,
-        cell: ({ row }) => <TextCell>{fmtDateTimeShort(row.original.created_at, tz)}</TextCell>,
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
       {
         id: "pdf",
@@ -151,6 +151,7 @@ export function ReceiptsTable({
         cell: ({ row }) =>
           row.original.number ? (
             <a
+              data-document-link
               href={receiptPdfHref(biz, row.original.id)}
               className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
               aria-label={`Download receipt ${row.original.number} as PDF`}

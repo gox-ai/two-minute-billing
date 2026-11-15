@@ -3,12 +3,14 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Alert } from "@/components/ui/alert";
 import { ActionForm } from "@/components/form/action-form";
 import { actionError, type ActionResult } from "@/lib/action-result";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -103,22 +105,27 @@ export function EditMetadataDialog({
             <input key={k} type="hidden" name={k} value={v} />
           ))}
           {error ? <Alert tone="error">{error}</Alert> : null}
-          <Textarea
-            name="metadata"
-            rows={10}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            spellCheck={false}
-            aria-label="JSON metadata"
-            placeholder={'{\n  "key": "value"\n}'}
-            className="font-mono text-xs"
-          />
-          <div className="flex justify-end gap-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="metadata-json" className="text-sm font-medium">
+              JSON metadata
+            </Label>
+            <Textarea
+              id="metadata-json"
+              name="metadata"
+              rows={10}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+              placeholder={'{\n  "key": "value"\n}'}
+              className="font-mono text-xs"
+            />
+          </div>
+          <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button type="submit">Save metadata</Button>
-          </div>
+          </DialogFooter>
         </ActionForm>
       </DialogContent>
     </Dialog>

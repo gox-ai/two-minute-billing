@@ -95,3 +95,4 @@ taskset -c 0-3 pnpm tsx scripts/loadtest/nightly.ts            # S4: nightly met
 ## Codegen / docs
 
 `pnpm sdk:generate` (OpenAPI → `sdk/`; run after touching routes).
+

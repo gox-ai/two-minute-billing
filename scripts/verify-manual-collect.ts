@@ -232,9 +232,11 @@ const describe = (ps: Array<typeof payments.$inferSelect>) =>
       pays[0]!.status === "failed",
     `${res.statusCode} status=${row.status} ${describe(pays)}`,
   );
+  // The invoice's first failure is its original attempt, by hand or not: it counts as 1.
+  // Only hand attempts on an invoice already in dunning hold the count (§1).
   ok(
-    "2D: …and it is a manual attempt (attempt_count 0)",
-    row.attemptCount === 0,
+    "2D: …and, as the invoice's first failure, it counts as attempt 1",
+    row.attemptCount === 1,
     `${row.attemptCount}`,
   );
 }

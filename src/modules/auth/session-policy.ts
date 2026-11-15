@@ -7,32 +7,24 @@ import { FIXED_ROLES } from "./permissions";
 import { TwoFactorSetupRequiredError } from "./org-two-factor";
 
 /**
- * An organization's dashboard session policy (0482): idle timeout, absolute lifetime and the
- * roles that must use two-factor authentication. Each column overrides the deployment value
- * (`SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_TTL_HOURS`, `MFA_REQUIRED_ROLES`) but can only
- * make it STRICTER: the effective window is the shorter one and the roles are the union. NULL
- * is the deployment value, so an organization that never sets one is unchanged.
+ * An organization's dashboard session policy (0482). Only `mfa_required_roles` is the
+ * organization's: the roles that must use two-factor authentication, added to the deployment's
+ * `MFA_REQUIRED_ROLES`. The idle timeout and the absolute lifetime are set by the installation
+ * only (`SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_TTL_HOURS`, decision 2026-11-06). The
+ * organization columns from 0482 stay in the schema and are no longer read or written.
  */
 export interface OrgSessionPolicy {
-  sessionIdleMinutes: number | null;
-  sessionAbsoluteTtlHours: number | null;
   mfaRequiredRoles: string[] | null;
 }
 
-/** The shortest idle timeout an organization may set: a person must be able to read a page. */
-export const MIN_IDLE_MINUTES = 5;
-/** The shortest absolute lifetime. */
-export const MIN_ABSOLUTE_HOURS = 1;
-
-const stricter = (deployment: number, org: number | null | undefined) =>
-  org != null && Number.isInteger(org) && org >= 1 ? Math.min(deployment, org) : deployment;
-
-export function effectiveIdleMinutes(org?: Partial<OrgSessionPolicy> | null): number {
-  return stricter(config.SESSION_IDLE_MINUTES, org?.sessionIdleMinutes);
+/** The installation's idle timeout. The organization argument is ignored. */
+export function effectiveIdleMinutes(_org?: unknown): number {
+  return config.SESSION_IDLE_MINUTES;
 }
 
-export function effectiveAbsoluteTtlHours(org?: Partial<OrgSessionPolicy> | null): number {
-  return stricter(config.SESSION_ABSOLUTE_TTL_HOURS, org?.sessionAbsoluteTtlHours);
+/** The installation's absolute session lifetime. The organization argument is ignored. */
+export function effectiveAbsoluteTtlHours(_org?: unknown): number {
+  return config.SESSION_ABSOLUTE_TTL_HOURS;
 }
 
 /** The deployment's roles plus the organization's, lower-cased and distinct. */
@@ -42,25 +34,8 @@ export function rolesRequiringMfa(org?: Partial<OrgSessionPolicy> | null): strin
   return [...out];
 }
 
-/**
- * Refuse a policy that is looser than the deployment's or names an unknown role. Returns the
- * message to show, or null when the policy can be saved. Null fields are always valid.
- */
+/** Refuse a role that does not exist. Returns the message to show, or null. */
 export function sessionPolicyError(p: OrgSessionPolicy): string | null {
-  const idle = p.sessionIdleMinutes;
-  if (idle != null) {
-    if (!Number.isInteger(idle) || idle < MIN_IDLE_MINUTES)
-      return `The idle timeout must be ${MIN_IDLE_MINUTES} minutes or more.`;
-    if (idle > config.SESSION_IDLE_MINUTES)
-      return `The idle timeout cannot be more than ${config.SESSION_IDLE_MINUTES} minutes, the limit of this installation.`;
-  }
-  const abs = p.sessionAbsoluteTtlHours;
-  if (abs != null) {
-    if (!Number.isInteger(abs) || abs < MIN_ABSOLUTE_HOURS)
-      return `The session lifetime must be ${MIN_ABSOLUTE_HOURS} hour or more.`;
-    if (abs > config.SESSION_ABSOLUTE_TTL_HOURS)
-      return `The session lifetime cannot be more than ${config.SESSION_ABSOLUTE_TTL_HOURS} hours, the limit of this installation.`;
-  }
   for (const r of p.mfaRequiredRoles ?? [])
     if (!(FIXED_ROLES as readonly string[]).includes(r))
       return `${r} is not a role. Select from ${FIXED_ROLES.join(", ")}.`;
@@ -70,17 +45,11 @@ export function sessionPolicyError(p: OrgSessionPolicy): string | null {
 /** The organization's stored policy, or every field null. */
 export async function organizationSessionPolicy(organizationId: string): Promise<OrgSessionPolicy> {
   const [row] = await systemDb
-    .select({
-      sessionIdleMinutes: organizations.sessionIdleMinutes,
-      sessionAbsoluteTtlHours: organizations.sessionAbsoluteTtlHours,
-      mfaRequiredRoles: organizations.mfaRequiredRoles,
-    })
+    .select({ mfaRequiredRoles: organizations.mfaRequiredRoles })
     .from(organizations)
     .where(eq(organizations.id, organizationId))
     .limit(1);
   return {
-    sessionIdleMinutes: row?.sessionIdleMinutes ?? null,
-    sessionAbsoluteTtlHours: row?.sessionAbsoluteTtlHours ?? null,
     mfaRequiredRoles: row?.mfaRequiredRoles?.length ? row.mfaRequiredRoles : null,
   };
 }
@@ -88,7 +57,7 @@ export async function organizationSessionPolicy(organizationId: string): Promise
 export class SessionPolicyError extends Error {}
 
 /**
- * Save the organization's policy. Refuses a looser value (`sessionPolicyError`), and a role list
+ * Save the organization's policy. Refuses an unknown role (`sessionPolicyError`), and a role list
  * that includes the caller's own role while the caller has no 2FA, which would lock them out
  * of the API on save. Takes effect on each session's next request.
  */
@@ -118,19 +87,12 @@ export async function setOrganizationSessionPolicy(input: {
   }
 
   const before = await organizationSessionPolicy(input.organizationId);
-  const same =
-    before.sessionIdleMinutes === next.sessionIdleMinutes &&
-    before.sessionAbsoluteTtlHours === next.sessionAbsoluteTtlHours &&
-    (before.mfaRequiredRoles ?? []).join() === (next.mfaRequiredRoles ?? []).join();
+  const same = (before.mfaRequiredRoles ?? []).join() === (next.mfaRequiredRoles ?? []).join();
   if (same) return { changed: false, policy: before };
 
   const [org] = await systemDb
     .update(organizations)
-    .set({
-      sessionIdleMinutes: next.sessionIdleMinutes,
-      sessionAbsoluteTtlHours: next.sessionAbsoluteTtlHours,
-      mfaRequiredRoles: next.mfaRequiredRoles,
-    })
+    .set({ mfaRequiredRoles: next.mfaRequiredRoles })
     .where(eq(organizations.id, input.organizationId))
     .returning({ publicId: organizations.publicId });
   const [actor] = await systemDb
@@ -153,9 +115,5 @@ export async function setOrganizationSessionPolicy(input: {
 
 /** The API shape of a policy. */
 export function policyView(p: OrgSessionPolicy) {
-  return {
-    session_idle_minutes: p.sessionIdleMinutes,
-    session_absolute_ttl_hours: p.sessionAbsoluteTtlHours,
-    mfa_required_roles: p.mfaRequiredRoles ?? [],
-  };
+  return { mfa_required_roles: p.mfaRequiredRoles ?? [] };
 }

@@ -320,7 +320,7 @@ export interface paths {
         put?: never;
         /**
          * Send a usage event
-         * @description The event's `key` makes the call safe to retry: a repeat key returns the stored event with status `duplicate` and changes nothing, even if its timestamp or values differ. Keys are kept 35 days. The `Idempotency-Key` header is not used. The event is stored before we answer. An event whose customer key matches no customer is kept as unmatched and bills once you add the key to a customer. Needs `usage_events:manage`.
+         * @description The event's `key` makes the call safe to retry: a repeat key returns the stored event with status `duplicate` and changes nothing, even if its timestamp or values differ. Keys are kept 35 days. The `Idempotency-Key` header is not used. The event is stored before we answer. An event whose customer key matches no customer is kept as unmatched and bills once you add the key to a customer. Needs `usage_events:manage`. **A meter with a credit cost.** The event's credits are taken from the customer's balance in the same transaction that stores the event. A credit grant pays only while its window contains the time the event arrives: a grant that starts later does not pay, and a grant that ended pays only a late event, as described below. When the customer does not have sufficient credit, the policy decides. Under `bill` with a money price (the meter's own usage price on the customer's subscription, else the credit unit's price per credit) the event is accepted: credits pay what they can and the rest is billed on the next invoice of the subscription (`credit.credits_uncovered`). Otherwise the balance may go below zero down to the overdraft limit (default 0); the next grant or top-up pays that part first. Past the limit the answer is 402 `insufficient_credit`: the event is stored, it is not billed, and a `credit_usage_refused` event is written, with the `policy` that applied. A repeat of its key answers 402 again. An event that arrives within the business's `late_event_grace_hours` (default 12) of its `timestamp` is paid first by a credit grant that was live at that timestamp, even if the grant ended since; a later event is paid by the balance at arrival. Send `backfill: true` to record usage and spend no credits.
          */
         post: {
             parameters: {
@@ -365,6 +365,15 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
+                /** @description `insufficient_credit`: a meter with a credit cost, and the customer does not have sufficient credit. The event is stored and is not billed. */
+                402: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
                 /** @description The event was refused: `timestamp_too_old`, `timestamp_in_future` or `invalid_value`. */
                 422: {
                     headers: {
@@ -402,7 +411,7 @@ export interface paths {
         put?: never;
         /**
          * Send up to 500 usage events
-         * @description One result for each event, in order. A refused event does not stop the others. The batch counts as one request against the rate limit. 400 only for a malformed body or more than 500 events.
+         * @description One result for each event, in order. A refused event does not stop the others. The batch counts as one request against the rate limit. 400 only for a malformed body or more than 500 events. An event refused with `insufficient_credit` (a meter with a credit cost) is stored and is not billed.
          */
         post: {
             parameters: {
@@ -466,7 +475,7 @@ export interface paths {
         put?: never;
         /**
          * Void a usage event
-         * @description Allowed while no finalized invoice bills the event's period. The event stays on record with `voided_at`; send a replacement with a new key. `timestamp` is required for an event older than 35 days.
+         * @description Allowed while no finalized invoice bills the event's period. The event stays on record with `voided_at`; send a replacement with a new key. `timestamp` is required for an event older than 35 days. Credits the event took go back to the customer's balance. Credits a settlement already drew are given back by a correcting settlement: the grant gets them back (a grant that ended since gives them as a new grant that expires in 12 months) and the revenue they booked is reversed. Refused while an invoice bills the event's usage beyond the credits: issue a credit note instead.
          */
         post: {
             parameters: {
@@ -505,7 +514,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description An invoice already bills its period. Issue a credit note instead. */
+                /** @description An invoice already bills its period or its usage beyond the credits (issue a credit note instead). */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -676,6 +685,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/meters/{meter}/credit_cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Retrieve a meter's credit cost */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The meter's id: the slug you chose. */
+                    meter: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The credit cost. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MeterCreditCost"];
+                    };
+                };
+                /** @description No such meter, or the meter has no credit cost. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description A price on a subscription bills the meter. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        /**
+         * Set a meter's credit cost
+         * @description States what one unit of the meter costs in credits of a credit unit that has no money rate, for example `1` credit for an image and `0.5` for an edit. From then on each usage event of the meter takes its credits from the customer's balance when it arrives. `overrides` change the cost for a plan or for one subscription: a subscription's cost applies first, then a plan's, then the meter's. The request replaces the whole cost: an override that is not in `overrides` is removed. A usage price of the meter (a rate, not event amounts) then bills only the usage that credits do not pay. Refused for a credit unit that has a money rate, for a meter that a price on a subscription already bills in money, and for a meter that does not count events or add a value. Needs `meters:manage`.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The meter's id: the slug you chose. */
+                    meter: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MeterCreditCostSet"];
+                };
+            };
+            responses: {
+                /** @description The credit cost. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MeterCreditCost"];
+                    };
+                };
+                /** @description The body is not correct, or the credit unit has a money rate. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such meter, credit unit, product or subscription. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description A price on a subscription bills the meter in money, or the meter was paid in a different unit. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /**
+         * Remove a meter's credit cost
+         * @description Events received from then on spend no credits. Credits already taken stay taken. Refused while a price on a subscription bills the meter. Needs `meters:manage`.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The meter's id: the slug you chose. */
+                    meter: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The credit cost was removed. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MeterCreditCostDeleted"];
+                    };
+                };
+                /** @description No such meter, or the meter has no credit cost. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organization/model_prices": {
         parameters: {
             query?: never;
@@ -685,7 +864,7 @@ export interface paths {
         };
         /**
          * List model prices
-         * @description The list price per model and token type at `as_of` (default now), with your cost in effect at the same instant.
+         * @description The list price per model, price kind and unit at `as_of` (default now), with your cost in effect at the same instant.
          */
         get: {
             parameters: {
@@ -694,8 +873,15 @@ export interface paths {
                     provider?: string;
                     /** @description Only this model id. */
                     model?: string;
-                    /** @description Only this token type, for example `input`. */
+                    /** @description Only this price kind, for example `input`. */
                     token_type?: string;
+                    /** @description The same as `token_type`. Set one of them. */
+                    price_kind?: string;
+                    /**
+                     * @description Only this unit, for example `audio_second`.
+                     * @enum {string}
+                     */
+                    unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
                     /** @description Text in the model or provider id. */
                     q?: string;
                     /** @description Only rows with your cost. */
@@ -757,7 +943,7 @@ export interface paths {
         };
         /**
          * Price history of a model
-         * @description Every dated list row of a model, both dates on each, and your cost rows for it.
+         * @description Every dated list row of a model, both dates on each, and your cost rows for it. Your cost rows match as on the list: a cost stored under an alias of the model is included, and `unit=request` includes `token` costs, which price a request row that has no request cost.
          */
         get: {
             parameters: {
@@ -766,8 +952,15 @@ export interface paths {
                     model: string;
                     /** @description Only this provider. */
                     provider?: string;
-                    /** @description Only this token type. */
+                    /** @description Only this price kind, for example `input`. */
                     token_type?: string;
+                    /** @description The same as `token_type`. Set one of them. */
+                    price_kind?: string;
+                    /**
+                     * @description Only this unit, for example `audio_second`.
+                     * @enum {string}
+                     */
+                    unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
                 };
                 header?: never;
                 path?: never;
@@ -812,7 +1005,7 @@ export interface paths {
         };
         /**
          * Price list source
-         * @description Where the list comes from, its license, and how fresh it is. When `held` is true, a sync changed prices sharply and waits until the source keeps them for 6 hours; bills use the last prices until then.
+         * @description Where the list comes from, its license, and how fresh it is, for each feed in `sources`. When `held` is true, a sync changed prices sharply (or the two feeds give one price more than 25% apart) and waits until the source keeps them for 6 hours; bills use the last prices until then.
          */
         get: {
             parameters: {
@@ -950,8 +1143,19 @@ export interface paths {
                     model?: string;
                     /** @description Only this provider. */
                     provider?: string;
-                    /** @description Only this token type. */
+                    /** @description Only this price kind, for example `input`. */
                     token_type?: string;
+                    /** @description The same as `token_type`. Set one of them. */
+                    price_kind?: string;
+                    /**
+                     * @description Only this unit, for example `audio_second`.
+                     * @enum {string}
+                     */
+                    unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+                    /** @description Text in the model or provider id. */
+                    q?: string;
+                    /** @description `false`: only costs whose model, price kind, unit and tier have no row on the price list, so `GET /v1/organization/model_prices` does not show them. `true`: only the others. */
+                    listed?: boolean;
                     /** @description Page size, 1–500 (default 100). */
                     limit?: number;
                     /** @description Cursor: the last row's `id` from the previous page. */
@@ -977,7 +1181,7 @@ export interface paths {
         put?: never;
         /**
          * Set your cost
-         * @description Record the price you pay for a model and token type. It starts now or later and never reaches back over usage that is already costed. To change a cost, end the current row and add a new one. The model can be one the list does not have. Needs `model_prices:manage`.
+         * @description Record the price you pay for a model, price kind and unit, with an optional quality or resolution tier. It starts now or later and never reaches back over usage that is already costed. To change a cost, end the current row and add a new one. The model can be one the list does not have. Needs `model_prices:manage`.
          */
         post: {
             parameters: {
@@ -1314,7 +1518,7 @@ export interface paths {
         };
         /**
          * Usage margin
-         * @description Over meter usage lines of finalized invoices (not voided) dated in the range: revenue = line amount − its discount − its credit notes, before tax; margin = revenue − cost. A line with no full cost is counted in `lines_without_cost` and left out of revenue and cost. One row per group and currency; currencies are never added together. Needs `usage_margin:view`.
+         * @description Over meter usage lines of finalized invoices (not voided) dated in the range: revenue = line amount − its discount − its credit notes, before tax; margin = revenue − cost. A line with no full cost is counted in `lines_without_cost` and left out of revenue and cost. One row per group and currency; currencies are never added together. `scope=all` also counts usage that no invoice line bills (cost only): its cost per day, from the event's own cost or your cost (else the list), as on a usage line. A day of usage is cost only when no usage line of an invoice that is not voided covers that day for the customer and meter, and no live subscription will bill it. By customer and by plan, `total_revenue_minor` holds every revenue line in the range (plan fees, usage, one-time sales), after discounts and credit notes, before tax. The cost-only figures are written each night for the days up to yesterday. The fields of `scope=billed` keep their meaning in both scopes. Needs `usage_margin:view`.
          */
         get: {
             parameters: {
@@ -1330,10 +1534,15 @@ export interface paths {
                      */
                     to: string;
                     /**
-                     * @description Default `customer`.
+                     * @description Default `customer`. `plan`: the plan of the invoice's subscription, and for cost-only usage the plan of the customer's subscription live that day; `""` = no plan.
                      * @enum {string}
                      */
-                    group_by?: "customer" | "model" | "meter";
+                    group_by?: "customer" | "model" | "meter" | "plan";
+                    /**
+                     * @description `billed` (default): usage lines only. `all`: also usage no invoice line bills, and every revenue line by customer and plan.
+                     * @enum {string}
+                     */
+                    scope?: "billed" | "all";
                     /** @description One currency only. */
                     currency?: string;
                     /** @description One customer's id (cus_…). */
@@ -1429,7 +1638,7 @@ export interface paths {
         put?: never;
         /**
          * Create a credit unit
-         * @description Your own unit of credit. The first grant in the unit fixes `currency`, `minor_per_unit` and `decimals`. Needs `credits:manage`.
+         * @description Your own unit of credit. Send `minor_per_unit` to give the unit a money rate. Send `minor_per_unit: null` for a unit with no rate: its credits are counted in units only, and a grant in it has no money value. `minor_per_unit` is required: a request without the field is refused with 400 (send a rate, or null for a unit with no money value). The first grant in the unit fixes `currency`, `minor_per_unit` and `decimals`. Needs `credits:manage`.
          */
         post: {
             parameters: {
@@ -1844,8 +2053,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Void a promotional credit grant
-         * @description Books out what remains of a promotional grant. A paid grant leaves only through a credit note on its invoice, so the money side has a document. Needs `credits:manage`.
+         * Void a credit grant
+         * @description Books out what remains of a promotional grant. A paid grant leaves through a credit note on its invoice, so the money side has a document. To void a paid grant with no refund, send `without_refund: true` with a `reason`: the cost of the unused credit is written off as breakage. Needs `credits:manage`.
          */
         post: {
             parameters: {
@@ -1864,7 +2073,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CreditGrantVoid"];
+                };
+            };
             responses: {
                 /** @description The voided grant. */
                 200: {
@@ -1873,6 +2086,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["CreditGrant"];
+                    };
+                };
+                /** @description `without_refund` with no `reason`, or on a promotional grant. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
                     };
                 };
                 /** @description No such credit grant. */
@@ -1884,7 +2106,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description The grant is paid, or not active. */
+                /** @description The grant is paid and `without_refund` is not set, or it is not active. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -1895,6 +2117,66 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/credit_usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List credit usage
+         * @description The settlements of usage paid in credits, newest first. Usage of a meter with a credit cost takes its credits when each event arrives; a settlement then draws them from the customer's credit grants, each hour and in the period invoice, and posts the cost of paid credit as revenue. Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Page size, 1 to 1000. Default 50. */
+                    limit?: number;
+                    /** @description The `next_cursor` of the previous page. */
+                    starting_after?: string;
+                    /** @description Only settlements of this meter. */
+                    meter?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The customer's id (cus_…). */
+                    cus: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The settlements. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditUsageList"];
+                    };
+                };
+                /** @description No such customer. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1981,7 +2263,7 @@ export interface paths {
         put?: never;
         /**
          * Hold credit
-         * @description Reserves an estimated amount before a call, so parallel calls cannot spend the same credit. Refused with 402 and a `code`: `in_flight_limit` when open holds would pass the business's share of the balance, `insufficient_credit` when the customer's policy blocks and the amount is more than is available. A hold that is not captured or released expires after `expires_in` seconds (default: the business's hold time, 60). Needs `credit_holds:manage`.
+         * @description Reserves an estimated amount before a call, so parallel calls cannot spend the same credit. Refused with 402 and a `code`: `in_flight_limit` when open holds plus this amount would pass the business's share of the balance (`credit_config.in_flight_share_bps`, default 50%; it applies with no hold open too), `insufficient_credit` when the customer's policy blocks and the amount is more than is available. A hold that is not captured or released expires after `expires_in` seconds (default: the business's hold time, 60). A meter that is paid in credits takes a hold in units: send `quantity` (the meter quantity the work will use; the meter's credit cost for this customer converts it) or `units` (credits), and no `amount_minor`. The units are reserved at once: no usage event and no other hold can spend them. Such a hold is refused with `insufficient_credit` when the balance does not cover it, also under the `bill` policy: a hold reserves credits the customer has, never money overage or an overdraft. The customer needs no subscription. Needs `credit_holds:manage`.
          */
         post: {
             parameters: {
@@ -2169,7 +2451,7 @@ export interface paths {
         put?: never;
         /**
          * Capture a credit hold
-         * @description Records the real usage and closes the hold in one step: send the usage event itself (`usage_event`, the body of `POST …/usage_events`) or the `key` of one already sent (`usage_event_id`). The hold stops counting and the event starts counting together. Usage above the hold is accepted; past the overdraft limit the hold is marked `overdraft` and the rest bills on the next invoice. Needs `credit_holds:manage`.
+         * @description Records the real usage and closes the hold in one step: send the usage event itself (`usage_event`, the body of `POST …/usage_events`) or the `key` of one already sent (`usage_event_id`). The hold stops counting and the event starts counting together. Usage above the hold is accepted; past the overdraft limit the hold is marked `overdraft` and the rest bills on the next invoice. A hold in units: its units go back to the balance and the event takes what it costs, in one step. An event that costs less leaves the rest in the balance. An event that costs more takes what the balance has; the rest is billed in money when the policy is `bill` and the meter or the unit has a money price (`credits_uncovered`), else it takes the balance below zero and the next grant pays it first; the hold is marked `overdraft`. With `usage_event_id`, an event that was refused for credit while the hold was open is paid now. A hold in money does not cover an event of a meter that is paid in credits: when the balance is short the capture is refused with 402 `insufficient_credit` and the hold stays open. A hold in units can be used in steps: send `final: false` and the hold stays open with the units that the event did not use (`remaining_units`). Each step has its own `Idempotency-Key`. A step that leaves no units closes the hold. Release the hold to give back the rest. If a credit grant expires while the hold is open, the held units from that grant stay reserved for the hold: a capture still uses them, and a release or the hold's expiry lets them expire with the grant. Needs `credit_holds:manage`.
          */
         post: {
             parameters: {
@@ -2203,6 +2485,15 @@ export interface paths {
                 };
                 /** @description The body is not correct. */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description `insufficient_credit`: the event uses a meter that is paid in credits, and this hold does not cover it. */
+                402: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2245,6 +2536,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/credit_holds/{hold}/extend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extend a credit hold
+         * @description Moves the expiry of a hold in units later, for work that runs in steps: the hold then expires `expires_in` seconds from now. The new expiry must be later than the current expiry. The held units do not change. A hold in money cannot be extended. Needs `credit_holds:manage`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The credit hold's id (chd_…). */
+                    hold: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreditHoldExtend"];
+                };
+            };
+            responses: {
+                /** @description The hold with its new expiry. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditHold"];
+                    };
+                };
+                /** @description The body is not correct, or the hold is in money. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such credit hold. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The hold is already captured, released or expired. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/credit_holds/{hold}/release": {
         parameters: {
             query?: never;
@@ -2256,7 +2625,7 @@ export interface paths {
         put?: never;
         /**
          * Release a credit hold
-         * @description Frees the held amount at once. Needs `credit_holds:manage`.
+         * @description Frees the held amount at once. A hold in units gives back the units that it still reserves. Units from a credit grant that expired while the hold was open expire with that grant. Needs `credit_holds:manage`.
          */
         post: {
             parameters: {
@@ -2319,7 +2688,7 @@ export interface paths {
         };
         /**
          * Check access
-         * @description May this customer spend now? Always 200: read `allowed` and `code`. Checks, first failure wins: `no_subscription`, `not_entitled`, `spend_limit_reached`, `in_flight_limit` (only with `estimate`), `insufficient_credit` (only when the customer's policy is to block), then `ok`. Writes nothing. 95% of access checks answer in less than 100 ms, measured at our server. Network time is not included. Needs `credits:view`.
+         * @description May this customer spend now? Always 200: read `allowed` and `code`. Checks, first failure wins: `no_subscription` (no live subscription has a price on the meter, even with paid credit), `not_entitled`, `spend_limit_reached`, `in_flight_limit` (only with `estimate` under a block policy; checked before credit, so a small balance can answer it in place of `insufficient_credit`), `insufficient_credit` (only when the customer's policy is to block), then `ok`. A meter that is paid in credits answers in units and needs no subscription: `no_subscription` is not checked, `not_entitled` applies only when a subscription has a feature for the meter, and `credits` gives the balance that a usage event can spend at this instant, with the open holds taken off. Send `estimate_quantity` or `estimate_units`. With no estimate, the check uses one event of a `count` meter, else the smallest part of a credit. `insufficient_credit` answers as the event would be answered: under `bill` with a money price (the meter's own usage price, else the unit's overage price) the estimate is allowed, and inside the overdraft limit too. Under `bill` with no money price it is refused as under `block`. A customer with no subscription is always `block` (`on_exhausted.source` = `no_subscription`). Writes nothing. Needs `credits:view`.
          */
         get: {
             parameters: {
@@ -2328,6 +2697,10 @@ export interface paths {
                     meter?: string;
                     /** @description The estimated cost in minor units. */
                     estimate?: number;
+                    /** @description A meter that is paid in credits: the meter quantity the call will use, as a decimal. */
+                    estimate_quantity?: string;
+                    /** @description A meter that is paid in credits: the credits the call will use, as a decimal. */
+                    estimate_units?: string;
                     /** @description A usage property value, for scoped spend limits. Up to 10. */
                     "scope[<property>]"?: string;
                 };
@@ -2399,6 +2772,10 @@ export interface paths {
                     meter?: string;
                     /** @description The estimated cost in minor units. */
                     estimate?: number;
+                    /** @description A meter that is paid in credits: the meter quantity the call will use, as a decimal. */
+                    estimate_quantity?: string;
+                    /** @description A meter that is paid in credits: the credits the call will use, as a decimal. */
+                    estimate_units?: string;
                     /** @description A usage property value, for scoped spend limits. Up to 10. */
                     "scope[<property>]"?: string;
                 };
@@ -3566,6 +3943,8 @@ export interface paths {
                 query?: {
                     /** @description The balance currency. Default: the customer's. */
                     currency?: string;
+                    /** @description A credit unit with no rate: the runway in its units, from the balance the gate offers and the units used in the last 7 days. */
+                    unit?: string;
                 };
                 header?: never;
                 path: {
@@ -3578,13 +3957,13 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description The runway estimate. */
+                /** @description The runway estimate, in money, or in units with `unit`. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["CreditRunway"];
+                        "application/json": components["schemas"]["CreditRunway"] | components["schemas"]["CreditRunwayUnits"];
                     };
                 };
                 /** @description No such customer. */
@@ -3655,7 +4034,7 @@ export interface paths {
         };
         /**
          * Set a customer's automatic top-up
-         * @description Buys credit when the live balance is at or below `threshold_minor`, or on a schedule. `fixed` buys `amount_minor` (a multiple of it, so the balance lands above the threshold); `target` buys up to `target_minor`. Each run stays inside the business's top-up limits, the monthly cap and `max_runs_per_day`; on an INR card or UPI mandate a run is at most ₹15,000. Credit is granted only when the purchase invoice is paid. A decline voids the invoice and turns automatic top-up off. On a payment method that needs an advance notice, a threshold below the notice lead's usage at the current rate is refused. Needs `usage_controls:manage`.
+         * @description Buys credit when the live balance is at or below `threshold_minor`, or on a schedule. `fixed` buys `amount_minor` (a multiple of it, so the balance lands above the threshold); `target` buys up to `target_minor`. Each run stays inside the business's top-up limits, the monthly cap and `max_runs_per_day`; on an INR card or UPI mandate a run is at most ₹15,000. Credit is granted only when the purchase invoice is paid. A decline voids the invoice and turns automatic top-up off. On a payment method that needs an advance notice, a threshold below the notice lead's usage at the current rate is refused. A credit unit with no money rate: send `pack_price` (an active credit pack that grants the unit) and, for a threshold top-up, `threshold_units`; do not send `amount_minor`, `threshold_minor` or `grant`. With `method: fixed` a run buys `pack_quantity` packs (or a multiple, so the balance lands above the threshold). With `method: target` a run buys the whole packs that take the balance to `target_units` or more. A run starts when the credits that a usage event can spend are at or below `threshold_units`; the check is part of each usage event. Only one top-up runs at a time for a customer and unit. The limits stay in money and never split a pack; `purchase_limits` adds a count and an amount for each hour, day, week and month. The credits arrive when the invoice is paid, with the pack's own expiry: until then a usage event that the balance does not cover is refused. A decline that can change is tried again, 3 tries in 24 hours at most (`credit_auto_topup_retry_scheduled`). A decline that cannot change, or the third failed try, turns automatic top-up off (`credit_auto_topup_hard_declined`, `credit_auto_topup_retries_exhausted`, each with `credit_auto_topup_failed`). The notice lead rule is not checked for a threshold in credits. Needs `usage_controls:manage`.
          */
         put: {
             parameters: {
@@ -3696,7 +4075,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description No such customer, credit unit or payment method. */
+                /** @description No such customer, credit unit, price or payment method. */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -6961,6 +7340,23 @@ export interface paths {
                         tax_behavior?: "inclusive" | "exclusive" | null;
                         /** @description The dunning policy (dpol_…) for this customer's invoices. null uses the business dunning settings. */
                         dunning_policy?: string | null;
+                        /** @description Credit policy for this customer: an override of what happens when credit is used up (ignored after `override_expires_at`), and an overdraft limit per currency. Replaced whole; null = the business's settings. */
+                        credit_settings?: {
+                            /**
+                             * @description What happens when the credit is used up, for a business with blocking on. Null = not set here.
+                             * @enum {string}
+                             */
+                            on_exhausted?: "block" | "bill" | null;
+                            /**
+                             * Format: date-time
+                             * @description The override expires time (ISO-8601 UTC).
+                             */
+                            override_expires_at?: string | null;
+                            /** @description Per currency (`{"USD": 500}`). */
+                            overdraft_limit_minor?: {
+                                [key: string]: number;
+                            };
+                        } | null;
                     };
                 };
             };
@@ -7798,7 +8194,7 @@ export interface paths {
         put?: never;
         /**
          * Mint a hosted-checkout session (subscribe, or change an existing subscription)
-         * @description Returns a short-lived bearer token (returned exactly once) and the /checkout/s/<token> link a BUYER opens; the org API key never reaches their browser. mode='create' (default) subscribes a new customer to the items. mode='change' requires `subscription` and, on completion, upserts the items onto THAT subscription (plan swap / quantity change / add-ons) and applies the coupons. In change mode the customer is pinned to the subscription's owner at mint time and cannot be reassigned by the buyer. Items and coupons are validated AT MINT (a bogus price or coupon 404s here rather than failing the buyer mid-flow). A change session may carry only coupons; a create session needs at least one item. Unlisted items on the target are left alone unless replace_items_list is true. With reactivate:true a change session targets a CANCELLED subscription and completing it reactivates it with a fresh term, billed on the spot; a failed charge refuses it when the business requires a successful charge to reactivate.
+         * @description Returns a short-lived bearer token (returned exactly once) and the /checkout/s/<token> link a BUYER opens; the org API key never reaches their browser. mode='create' (default) subscribes a new customer to the items, or, with `customer_id`, a customer you already created. mode='change' requires `subscription` and, on completion, upserts the items onto THAT subscription (plan swap / quantity change / add-ons) and applies the coupons. In change mode the customer is pinned to the subscription's owner at mint time and cannot be reassigned by the buyer. Items and coupons are validated AT MINT (a bogus price or coupon 404s here rather than failing the buyer mid-flow). A change session may carry only coupons; a create session needs at least one item. Unlisted items on the target are left alone unless replace_items_list is true. With reactivate:true a change session targets a CANCELLED subscription and completing it reactivates it with a fresh term, billed on the spot. The charge is taken first: a failed charge leaves the subscription cancelled and the page open for another payment method.
          */
         post: {
             parameters: {
@@ -7830,15 +8226,15 @@ export interface paths {
                              */
                             quantity?: number;
                         }[];
-                        /** @description Coupon codes to apply on completion. Plain coupon codes or coupon-set codes. */
+                        /** @description Coupon codes to apply on completion. Plain coupon codes or coupon-set codes. mode='purchase': the codes discount the purchase's one invoice, and each coupon applies once. A purchase that a coupon makes free completes with no payment step, and its invoice is paid. */
                         coupons?: string[];
                         /**
-                         * @description create subscribes a new customer; change changes an existing subscription; purchase sells one-time prices only (a paid invoice, no subscription).
+                         * @description create subscribes a new customer (or the `customer_id` customer); change changes an existing subscription; purchase sells one-time prices only (a paid invoice, no subscription).
                          * @default create
                          * @enum {string}
                          */
                         mode?: "create" | "change" | "purchase";
-                        /** @description cus_… — mode='purchase' only: an existing customer buying more. The buyer cannot change this customer's email. */
+                        /** @description cus_… — an existing customer of this business (404 when not found). mode='create': completing subscribes THIS customer instead of creating one, so the app can create the customer first (for usage billing) and still send the buyer to hosted checkout. A create session is refused with 409 when a live subscription of this customer already bills a meter that the items bill. mode='purchase': the customer buys one-time items. The hosted page does not show or change the customer's email; it prefills their billing address, and the buyer can correct it. Not with mode='change' (400), nor with `customer` or `billing_address` (400). */
                         customer_id?: string;
                         /** @description sub_… — REQUIRED when mode='change', rejected otherwise. */
                         subscription?: string;
@@ -7879,11 +8275,11 @@ export interface paths {
                         cancel_url?: string;
                         /** @description Your own context, stored with the session and returned by GET. Never interpreted. */
                         pass_thru_content?: string;
-                        /** @description Metadata to write onto the resulting subscription when this checkout completes. Valid in both modes, and REPLACED wholesale rather than merged. Applied only after completion succeeds, so a change that moves both items and a flag can be sent as one call and lands as both or neither. Send {} to clear; omit the key to leave the subscription's metadata untouched. */
+                        /** @description Metadata written when this checkout completes. mode='create' and 'change': onto the resulting subscription, REPLACED wholesale rather than merged. Applied only after completion succeeds, so a change that moves both items and a flag can be sent as one call and lands as both or neither. Send {} to clear; omit the key to leave the subscription's metadata untouched. mode='purchase': stored on the invoice the purchase raises, so a webhook handler can read back your own reference (for example `{"order_id": "…"}`) from the paid invoice. */
                         metadata?: {
                             [key: string]: unknown;
                         };
-                        /** @description mode='create' only. Defaults for the buyer's details step, shown as editable values. The buyer's own submit creates the customer; nothing is written at mint. */
+                        /** @description mode='create' only, without `customer_id`. Defaults for the buyer's details step, shown as editable values. The buyer's own submit creates the customer; nothing is written at mint. */
                         customer?: {
                             /**
                              * Format: email
@@ -7893,7 +8289,7 @@ export interface paths {
                             /** @description The customer's tax registration number. */
                             tax_registration_number?: string;
                         };
-                        /** @description mode='create' only. Billing-address defaults for the details step (same fields the buyer submits). Format-checked here; required fields are enforced on the buyer's submit. */
+                        /** @description mode='create' only, without `customer_id`. Billing-address defaults for the details step (same fields the buyer submits). Format-checked here; required fields are enforced on the buyer's submit. */
                         billing_address?: {
                             /** @description First line of the billing address. */
                             line1?: string;
@@ -8097,7 +8493,7 @@ export interface paths {
         put?: never;
         /**
          * Create a subscription (bills active subs in advance)
-         * @description When the new subscription auto-collects and bills a period NOW (no trial, starts immediately, `invoice_immediately` is not false), the customer must already have a USABLE payment method — not `expired`, not `invalid` — or the create is refused with 400 `payment_error` / `no_chargeable_payment_method`. Add a card first, or pass `auto_collection: "off"`. This refusal is newer than the endpoint: it was added with the mandate-expiry work so a subscription cannot be created already uncollectable. A declined first charge refuses the create (402, nothing is created) unless `on_charge_failure` is `dun`: then the subscription is created and dunning collects the open invoice.
+         * @description When the new subscription auto-collects and bills a period NOW (no trial, starts immediately, `invoice_immediately` is not false) and the first invoice has an amount due, the customer must already have a USABLE payment method — not `expired`, not `invalid` — or the create is refused with 400 `payment_error` / `no_chargeable_payment_method`. Add a card first, or pass `auto_collection: "off"`. This refusal is newer than the endpoint: it was added with the mandate-expiry work so a subscription cannot be created already uncollectable. A declined first charge refuses the create (402, nothing is created) unless `on_charge_failure` is `dun`: then the subscription is created and dunning collects the open invoice.
          */
         post: {
             parameters: {
@@ -9285,6 +9681,15 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
+                /** @description `billing_rules_config.failed_change_charge: apply_when_paid` (or `on_charge_failure: apply_when_paid`): the invoice was raised but not paid, so nothing changed yet. `error.code` = `payment_failed` (declined, or a slow payment still in progress) or `requires_action` (the payer must authenticate; with `on_session: true` the response carries `payment_intent` and `next_action`). `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`. The change applies, priced as of this request, when that invoice is paid: repeat this request with a working card, pay the invoice, or complete the intent with `POST …/invoices/{inv}/collect`. `revert`: the charge hard-declined, so the change was undone and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the voided invoice and `error.decline_code` the decline. */
+                402: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
                 /** @description Refused by the business's plan-change gate (`error.code` = `invoices_unpaid`), or a concurrent write */
                 409: {
                     headers: {
@@ -9369,6 +9774,15 @@ export interface paths {
                 };
                 /** @description The desired list could not be reconciled (unknown price, a removal that cannot be credited, or an invalid option combination) */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description `billing_rules_config.failed_change_charge: apply_when_paid`: the whole edit (swap, adds and removals) is ONE held change with ONE invoice, raised but not paid, so nothing changed yet; `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`, and repeating this request pays the same invoice. `revert`: the charge hard-declined, so the plan change, or the item add, was undone and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the invoice and `error.decline_code` the decline. */
+                402: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -9823,6 +10237,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/mrr_bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * MRR bridge
+         * @description How MRR moved over a range of days: opening MRR, the change by reason (new, expansion, reactivation, resume, contraction, pause, churn) with the largest movements behind each, and closing MRR. Built from the MRR movements ledger, where the sum of the changes in a range equals the change in MRR across it.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description First day, YYYY-MM-DD in the business timezone. Default: 29 days before end. */
+                    start?: string;
+                    /** @description Last day, YYYY-MM-DD in the business timezone. Default: today. */
+                    end?: string;
+                    /** @description ISO currency. Default: the business currency. */
+                    currency?: string;
+                    /** @description Largest movements listed per reason. Default 5. */
+                    top?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description MRR bridge */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description Always mrr_bridge.
+                             * @enum {string}
+                             */
+                            object: "mrr_bridge";
+                            /** @description The business id. */
+                            business?: string;
+                            /** @description ISO currency of every amount. */
+                            currency: string;
+                            /** @description First day of the range. */
+                            start?: string;
+                            /** @description Last day of the range. */
+                            end?: string;
+                            /**
+                             * Format: date-time
+                             * @description The range start as an instant.
+                             */
+                            from?: string;
+                            /**
+                             * Format: date-time
+                             * @description The range end as an instant (exclusive).
+                             */
+                            to?: string;
+                            /** @description MRR at the start of the range. */
+                            opening_mrr_minor: number;
+                            /** @description The total change over the range. */
+                            change_minor: number;
+                            /** @description MRR at the end of the range. */
+                            closing_mrr_minor: number;
+                            /** @description Change under a reason not listed. Absent when none. */
+                            unclassified_minor?: number;
+                            /** @description The change split by reason. */
+                            reasons: ({
+                                /** @description new, expansion, reactivation, resume, contraction, pause or churn. */
+                                reason?: string;
+                                /** @description The change from this reason. */
+                                mrr_delta_minor?: number;
+                                /** @description How many movements. */
+                                movements?: number;
+                                /** @description The largest movements, by size. */
+                                largest?: ({
+                                    /** @description The subscription id. */
+                                    subscription?: string | null;
+                                    /** @description The customer id. */
+                                    customer?: string | null;
+                                    /** @description The customer's name. */
+                                    customer_name?: string | null;
+                                    /** @description The plan after the move (id, name). */
+                                    plan?: Record<string, never> | null;
+                                    /** @description The plan before, when it changed. */
+                                    previous_plan?: Record<string, never> | null;
+                                    /** @description MRR before the move. */
+                                    previous_mrr_minor?: number;
+                                    /** @description MRR after the move. */
+                                    new_mrr_minor?: number;
+                                    /** @description The change. */
+                                    mrr_delta_minor?: number;
+                                    /**
+                                     * Format: date-time
+                                     * @description When it happened.
+                                     */
+                                    occurred_at?: string;
+                                })[];
+                            })[];
+                        };
+                    };
+                };
+                /** @description Invalid range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/metrics": {
         parameters: {
             query?: never;
@@ -10172,7 +10711,7 @@ export interface paths {
                      */
                     grain?: "day" | "week" | "month" | "quarter" | "year";
                     /**
-                     * @description A named window. With `business`, it is cut on that business's local dates. Without it, each business's figures stay on its own local dates and the window ends on the last day EVERY business has reached, so a total never mixes one business's today with another's yesterday; the returned `timezone` is then the organization's, a label. The resolved `start`, `end`, `timezone` and `timezone_source` come back on the response. `this_quarter` and `this_year` run from the start of the current FISCAL quarter/year. Mutually exclusive with `start`/`end`.
+                     * @description A named window. With `business`, it is cut on that business's local dates. Without it, each business is read over the window resolved at its OWN local today, so an organization figure is the sum of the business figures. The periods are labelled on the earliest of those todays, a date every business has reached; a business already on a later date puts those later days in the last period, so the last period never holds some businesses alone. The returned `timezone` is then the organization's, a label. The resolved `start`, `end`, `timezone` and `timezone_source` come back on the response. `this_quarter` and `this_year` run from the start of the current FISCAL quarter/year. Mutually exclusive with `start`/`end`.
                      * @default 12m
                      * @enum {string}
                      */
@@ -11016,6 +11555,12 @@ export interface paths {
                          * @example pm_…
                          */
                         payment_method?: string;
+                        /** @description Coupon codes or coupon-set codes to redeem on this invoice. Each coupon applies once, whatever its duration, and the discount comes off before tax. A fixed-amount coupon must be in the invoice currency. An item-scoped coupon must match a line that has a `price`. Voiding the invoice gives the redemption back. */
+                        coupons?: string[];
+                        /** @description Your own key-value data, stored on the invoice and returned with it. Never interpreted. */
+                        metadata?: {
+                            [key: string]: unknown;
+                        };
                     };
                 };
             };
@@ -11029,7 +11574,7 @@ export interface paths {
                         "application/json": components["schemas"]["Invoice"];
                     };
                 };
-                /** @description Invalid */
+                /** @description Invalid body, or a coupon the invoice refuses: unknown, not usable now, at a redemption limit, in another currency, or matching no line */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -11288,6 +11833,217 @@ export interface paths {
                     };
                     content: {
                         "application/pdf": string;
+                    };
+                };
+                /** @description No such invoice */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/invoices/{inv}/explanation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Explain an invoice
+         * @description Why the invoice is what it is, from its stored lines: the totals ladder with a check that it adds up, the facts behind each line (kind, period, price, discounts, tax or why it was not taxed), and what changed from the same subscription's previous invoice, grouped by price. Nothing is recomputed.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The invoice id (inv_…). */
+                    inv: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Invoice explanation */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description Always invoice_explanation.
+                             * @enum {string}
+                             */
+                            object: "invoice_explanation";
+                            /** @description The invoice id. */
+                            invoice: string;
+                            /** @description The invoice number, once issued. */
+                            number?: string | null;
+                            /** @description The invoice status. */
+                            status?: string;
+                            /** @description ISO currency of every amount. */
+                            currency: string;
+                            /**
+                             * Format: date-time
+                             * @description Start of the billed period.
+                             */
+                            period_start?: string | null;
+                            /**
+                             * Format: date-time
+                             * @description End of the billed period.
+                             */
+                            period_end?: string | null;
+                            /** @description The stored totals, in minor units, and whether they add up. */
+                            totals: {
+                                /** @description Lines less item-level discounts. */
+                                subtotal_minor?: number;
+                                /** @description Discounts inside the subtotal. */
+                                item_level_discount_minor?: number;
+                                /** @description Discounts applied to the subtotal. */
+                                document_level_discount_minor?: number;
+                                /** @description The sum of the tax lines. */
+                                tax_minor?: number;
+                                /** @description The sum of the rounding lines. */
+                                rounding_minor?: number;
+                                /** @description The invoice total. */
+                                total_minor?: number;
+                                /** @description Credits applied to the invoice. */
+                                credits_applied_minor?: number;
+                                /** @description Payments applied to the invoice. */
+                                amount_paid_minor?: number;
+                                /** @description Tax withheld by the customer. */
+                                withholding_minor?: number;
+                                /** @description What is still owed. */
+                                amount_due_minor?: number;
+                                /** @description The rule the totals must satisfy, in words. */
+                                identity?: string;
+                                /** @description Whether the stored totals satisfy the rule. */
+                                holds?: boolean;
+                            };
+                            /** @description Each line with the facts behind it. */
+                            lines: ({
+                                /** @description The line id. */
+                                id?: string;
+                                /** @description The line text on the invoice. */
+                                description?: string;
+                                /** @description recurring, proration, usage, one_time, discount, tax or rounding. */
+                                kind?: string;
+                                /** @description What this kind of line is for. */
+                                why?: string | null;
+                                /** @description The price that produced the line. */
+                                price?: string | null;
+                                /** @description The quantity billed. */
+                                quantity?: number;
+                                /** @description The line amount before discounts. */
+                                amount_minor?: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Start of the period the line covers.
+                                 */
+                                period_start?: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description End of the period the line covers.
+                                 */
+                                period_end?: string | null;
+                                /** @description Days the line covers. */
+                                period_days?: number | null;
+                                /** @description Discount on this line. */
+                                discount_minor?: number;
+                                /** @description The discounts that reduced this line. */
+                                discounted_by?: ({
+                                    /** @description The discount's name. */
+                                    label?: string | null;
+                                    /** @description The coupon, if a coupon gave it. */
+                                    coupon_code?: string | null;
+                                    /** @description item_level or document_level. */
+                                    scope?: string;
+                                })[];
+                                /** @description Tax charged on this line. */
+                                tax_amount_minor?: number | null;
+                                /** @description Why the line has no tax, when it has none. */
+                                untaxed_because?: string | null;
+                            })[];
+                            /** @description Every discount on the invoice. */
+                            discounts: ({
+                                /** @description The discount's name. */
+                                label?: string | null;
+                                /** @description coupon, manual, promotional_credits or credit_grants. */
+                                source?: string | null;
+                                /** @description The coupon, if a coupon gave it. */
+                                coupon_code?: string | null;
+                                /** @description item_level or document_level. */
+                                scope?: string;
+                                /** @description The discount amount. */
+                                amount_minor?: number;
+                                /** @description The lines it reduced. */
+                                line_item_ids?: string[];
+                            })[];
+                            /** @description The tax decision recorded on the invoice. */
+                            tax: {
+                                /** @description The tax treatment applied. */
+                                treatment?: string | null;
+                                /** @description The place of supply used. */
+                                place_of_supply_code?: string | null;
+                                /** @description The seller's state, where it matters. */
+                                seller_state_code?: string | null;
+                                /** @description Where the tax decision came from. */
+                                origin?: Record<string, never> | null;
+                                /** @description The customer's tax id at issue. */
+                                customer_tax_id?: Record<string, never> | null;
+                            };
+                            /** @description The change from the same subscription's previous invoice. Null when there is none. */
+                            compared_to_previous: {
+                                /** @description The previous invoice id. */
+                                previous_invoice?: string;
+                                /** @description Its number. */
+                                previous_number?: string | null;
+                                /** @description Its total. */
+                                previous_total_minor?: number;
+                                /** @description This total less the previous total. */
+                                total_delta_minor?: number;
+                                /** @description The change in discounts. */
+                                discount_delta_minor?: number;
+                                /** @description The change in tax. */
+                                tax_delta_minor?: number;
+                                /** @description Charges that were added, removed or changed, largest first. */
+                                line_changes?: ({
+                                    /** @description The line kind. */
+                                    kind?: string;
+                                    /** @description The price. */
+                                    price?: string | null;
+                                    /** @description The line text. */
+                                    description?: string;
+                                    /**
+                                     * @description What happened to the charge.
+                                     * @enum {string}
+                                     */
+                                    change?: "added" | "removed" | "changed";
+                                    /** @description Quantity and amount_minor on the previous invoice. */
+                                    before?: Record<string, never> | null;
+                                    /** @description Quantity and amount_minor on this invoice. */
+                                    after?: Record<string, never> | null;
+                                    /** @description The change in amount. */
+                                    delta_minor?: number;
+                                })[];
+                            } | null;
+                        };
                     };
                 };
                 /** @description No such invoice */
@@ -11725,7 +12481,73 @@ export interface paths {
                              */
                             object?: "list";
                             /** @description The invoices that are waiting for a retry. */
-                            data?: Record<string, never>[];
+                            data?: ({
+                                /**
+                                 * @description The object type; always `retry`.
+                                 * @enum {string}
+                                 */
+                                object?: "retry";
+                                /**
+                                 * @description The invoice's id (inv_…).
+                                 * @example inv_…
+                                 */
+                                invoice?: string;
+                                /** @description The invoice number. */
+                                invoice_number?: string | null;
+                                /** @description The invoice status. */
+                                status?: string;
+                                /** @description in_progress | parked | succeeded | exhausted | stopped. Null until dunning first touches the invoice. */
+                                dunning_status?: string | null;
+                                /** @description The retry's currency (ISO-4217 code). */
+                                currency?: string;
+                                /** @description The amount due in minor units (integer), e.g. 2900 = $29.00. */
+                                amount_due_minor?: number;
+                                /**
+                                 * @description `reminder` when auto-collection is off (the subscription's setting, else the customer's): dunning sends payment reminders and never charges, so `attempt_count` stays 0 and `next_attempt_at` is the next reminder. `charge` for a retried payment.
+                                 * @enum {string}
+                                 */
+                                collection?: "charge" | "reminder";
+                                /** @description Charge attempts made. Always 0 on a `reminder` row. */
+                                attempt_count?: number;
+                                /**
+                                 * Format: date-time
+                                 * @description The next retry, or the next reminder on a `reminder` row. A time in the past is due: the next clock tick acts on it.
+                                 */
+                                next_attempt_at?: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description The retry started time (ISO-8601 UTC).
+                                 */
+                                retry_started_at?: string;
+                                /**
+                                 * @description The customer's id (cus_…).
+                                 * @example cus_…
+                                 */
+                                customer?: string | null;
+                                /** @description The customer name. */
+                                customer_name?: string | null;
+                                /** @description The customer's email address. */
+                                customer_email?: string | null;
+                                /** @description The last error code. */
+                                last_error_code?: string | null;
+                                /** @description The last error id. */
+                                last_error_id?: string | null;
+                                /** @description The last error text. */
+                                last_error_text?: string | null;
+                                /** @description true = soft, false = hard, null = never recorded. */
+                                last_failure_retriable?: boolean | null;
+                                /**
+                                 * Format: date-time
+                                 * @description The last failure time (ISO-8601 UTC).
+                                 */
+                                last_failure_at?: string | null;
+                                /** @description The gateway that processed the payment. */
+                                gateway_key?: string | null;
+                                /** @description The payment method brand. */
+                                payment_method_brand?: string | null;
+                                /** @description The payment method last 4. */
+                                payment_method_last4?: string | null;
+                            })[];
                             /** @description Whether more rows exist after this page. */
                             has_more?: boolean;
                             /** @description Pass as `starting_after` to get the next page. Null on the last page. */
@@ -16620,7 +17442,7 @@ export interface paths {
                      */
                     use_existing_balances?: "true" | "false";
                     /**
-                     * @description `true` adds the metered usage recorded so far in the current term, with its minimum-spend true-up, when this renewal is the invoice that bills it. Coupons, credits and tax then apply as on the real invoice. Default `false`: the fixed-charge estimate.
+                     * @description `true` adds the metered usage recorded so far in the current term, with its minimum-spend true-up, when this renewal is the invoice that bills it. It also adds one line for each meter that is paid in credits and has usage more than the credit balance that a money price bills. Coupons, credits and tax then apply as on the real invoice. Default `false`: the fixed-charge estimate.
                      * @enum {string}
                      */
                     include_usage_so_far?: "true" | "false";
@@ -17251,6 +18073,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/subscriptions/{sub}/pending_change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel the change held for payment
+         * @description `billing_rules_config.failed_change_charge: apply_when_paid`: cancel the subscription's pending change. Its invoice and the credit notes the change raised are voided, and nothing in it applies. 409 `pending_change_payment_in_progress` while a payment for it is in progress; 409 `pending_change_applied` when the invoice is already paid (the change is applied).
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description Subscription id (sub_…) */
+                    sub: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cancelled: `{ object: "pending_change", id, cancelled: true }` */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such subscription, or it has no pending change */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description A payment for the pending change is in progress, or it is already paid */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/scheduled_changes/{sch}": {
         parameters: {
             query?: never;
@@ -17367,6 +18252,15 @@ export interface paths {
                 };
                 /** @description Invalid */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description `billing_rules_config.failed_change_charge: apply_when_paid`: the item's invoice was raised but not paid, so no item was added yet; `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`, and repeating this request pays the same invoice. `revert`: the charge hard-declined, so the item was removed again and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the invoice and `error.decline_code` the decline. */
+                402: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -18272,7 +19166,7 @@ export interface paths {
         };
         /**
          * Retrieve usage so far in the current billing window
-         * @description Read-only; nothing is stored. Rates the usage recorded in the window the next invoice bills, as that invoice will rate it (free units, tiers, packages, percentages), and adds tax with the customer's tax settings. Discounts and credits are not applied (`discounts_applied: false`); for the exact next invoice, call `renewal_estimate?include_usage_so_far=true`. Usage already settled early (an item removed, a term reset) is listed in `settled_charges` and counted in the totals, since the next invoice bills it. `window` is null when no invoice will bill usage (a trial, a cancelled subscription, or a window already billed); during a trial, `trial` lists the units recorded, with no amount.
+         * @description Read-only; nothing is stored. Rates the usage recorded in the window the next invoice bills, as that invoice will rate it (free units, tiers, packages, percentages), and adds tax with the customer's tax settings. Discounts and credits are not applied (`discounts_applied: false`); for the exact next invoice, call `renewal_estimate?include_usage_so_far=true`. Usage already settled early (an item removed, a term reset) is listed in `settled_charges` and counted in the totals, since the next invoice bills it. For a meter that is paid in credits, `credit_usage` gives the quantity that credits paid, the quantity that a money price bills with its amount (counted in the totals), and the credits below a zero balance that are not billed. `window` is null when no invoice will bill usage (a trial, a cancelled subscription, or a window already billed); during a trial, `trial` lists the units recorded, with no amount.
          */
         get: {
             parameters: {
@@ -23626,7 +24520,7 @@ export interface paths {
                         "application/json": components["schemas"]["WebhookEndpoint"];
                     };
                 };
-                /** @description Invalid body */
+                /** @description Invalid body, or an unknown event type */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -23770,6 +24664,13 @@ export interface paths {
                         url?: string;
                         /** @description biz_… id to scope; null to receive all events again. Must be in the endpoint’s own partition — livemode is immutable and cannot be patched. */
                         business?: string | null;
+                        /** @description The event types this endpoint receives. Omit or null = every type, including types added later. Each entry must be a type from the event reference (400 otherwise). */
+                        event_types?: string[] | null;
+                        /**
+                         * @description The webhook endpoint's description.
+                         * @example Order fulfilment
+                         */
+                        description?: string | null;
                     };
                 };
             };
@@ -23783,7 +24684,7 @@ export interface paths {
                         "application/json": components["schemas"]["WebhookEndpoint"];
                     };
                 };
-                /** @description Cross-partition re-scope, or livemode passed (immutable) */
+                /** @description Cross-partition re-scope, livemode passed (immutable), or an unknown event type */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -27613,6 +28514,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/emails/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Email delivery report
+         * @description Billing email counts by week and by email type for the last `weeks` weeks, this week included. Weeks run Monday to Sunday in the business time zone, and an email counts in the week it was queued. `delivered` and `not_delivered` follow the same rules as `/emails/activity`. A complaint counts in `complained` only, not in `bounced`. There is no open or click tracking.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description How many weeks to count, this week included.
+                     * @default 12
+                     */
+                    weeks?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `email_delivery_report`.
+                             * @enum {string}
+                             */
+                            object?: "email_delivery_report";
+                            /** @description How many weeks the report covers. */
+                            weeks?: number;
+                            /** @description The business time zone the weeks are counted in. */
+                            timezone?: string;
+                            /**
+                             * Format: date
+                             * @description The first day of the first week (YYYY-MM-DD).
+                             */
+                            from?: string;
+                            /** @description One row for each week, the oldest first. */
+                            weekly?: {
+                                /**
+                                 * Format: date
+                                 * @description The Monday that starts the week (YYYY-MM-DD).
+                                 */
+                                week_start?: string;
+                                /** @description The delivered. */
+                                delivered?: number;
+                                /** @description The not delivered. */
+                                not_delivered?: number;
+                                /** @description The pending. */
+                                pending?: number;
+                                /** @description The failed. */
+                                failed?: number;
+                                /** @description The bounced. */
+                                bounced?: number;
+                                /** @description The complained. */
+                                complained?: number;
+                                /** @description The skipped. */
+                                skipped?: number;
+                            }[];
+                            /** @description One row for each email type with email in the period. */
+                            by_type?: {
+                                /** @description The email type. */
+                                type?: string;
+                                /** @description The delivered. */
+                                delivered?: number;
+                                /** @description The not delivered. */
+                                not_delivered?: number;
+                                /** @description The pending. */
+                                pending?: number;
+                                /** @description The failed. */
+                                failed?: number;
+                                /** @description The bounced. */
+                                bounced?: number;
+                                /** @description The complained. */
+                                complained?: number;
+                                /** @description The skipped. */
+                                skipped?: number;
+                            }[];
+                            /** @description The counts for the whole period. */
+                            totals?: {
+                                /** @description The delivered. */
+                                delivered?: number;
+                                /** @description The not delivered. */
+                                not_delivered?: number;
+                                /** @description The pending. */
+                                pending?: number;
+                                /** @description The failed. */
+                                failed?: number;
+                                /** @description The bounced. */
+                                bounced?: number;
+                                /** @description The complained. */
+                                complained?: number;
+                                /** @description The skipped. */
+                                skipped?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description weeks is not a whole number from 1 to 52 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such business */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/emails/reminders": {
         parameters: {
             query?: never;
@@ -27870,7 +28910,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
                 };
                 cookie?: never;
             };
@@ -27914,7 +28954,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
                 };
                 cookie?: never;
             };
@@ -27972,7 +29012,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
                 };
                 cookie?: never;
             };
@@ -28039,7 +29079,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
                 };
                 cookie?: never;
             };
@@ -28786,13 +29826,20 @@ export interface paths {
                          * @description The email type to send.
                          * @enum {string}
                          */
-                        type: "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent";
+                        type: "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart";
                         /** @description Customer id (cus_…). Required for `payment_method_request`; derived from the record otherwise. */
                         customer?: string;
-                        /** @description Invoice id (inv_…). Required for `invoice_sent` and `payment_request`. */
+                        /** @description Invoice id (inv_…). Required for `invoice_sent` and `payment_request`. The invoice must be final: a `pending` invoice is refused with a 400, because its amount and due date can still change. */
                         invoice?: string;
                         /** @description Credit note id (cn_…). Required for `credit_note_sent`. */
                         credit_note?: string;
+                        /** @description Subscription id (sub_…). Required for `subscription_restart`, and the subscription must have ended. The email carries a restart checkout: the customer pays for a new term, and the subscription starts again only when that payment succeeds. */
+                        subscription?: string;
+                        /**
+                         * @description `subscription_restart` only. `current` (default) bills the new term at the plan's price today, a custom price on the subscription kept; `keep` bills the price the subscription had.
+                         * @enum {string}
+                         */
+                        restart_price?: "current" | "keep";
                         /**
                          * Format: email
                          * @description Override the recipient. Defaults to the customer's billing email; does not change what is stored on the customer.
@@ -28830,7 +29877,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Missing record, unknown type, or no recipient */
+                /** @description Missing record, unknown type, no recipient, or an invoice that is not final (`pending`) */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -28887,6 +29934,8 @@ export interface paths {
                     before?: string;
                     /** @description Only the disputes on this payment (`pay_…`). An unknown payment gives an empty list. */
                     payment?: string;
+                    /** @description Only this customer's disputes (`cus_…`). An unknown customer gives an empty list. */
+                    customer?: string;
                 };
                 header?: never;
                 path: {
@@ -30793,6 +31842,152 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/discounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply a coupon to a customer
+         * @description The coupon discounts the customer's invoices: subscription invoices, one-off invoices, one-time purchases and automatic top-ups. Its duration counts the invoices it discounts: `once` discounts the next one, `repeating` the next `duration_in_periods`, `forever` every invoice until you remove it. The business setting `billing_rules_config.customer_coupons` sets how it combines with other coupons: `fallback` (the default) applies it only to an invoice that no other coupon discounts; `stack` adds it to the other coupons. A fixed-amount coupon does not discount an invoice in another currency. A coupon can be active on a customer only once.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description Customer id (cus_…) */
+                    cus: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The coupon code, or a code from a coupon set. */
+                        coupon: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Coupon applied */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CustomerDiscount"];
+                    };
+                };
+                /** @description Coupon not usable: unknown, archived, expired, at its redemption limit, or already applied to this customer */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such customer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/discounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a coupon from a customer
+         * @description Later invoices are not discounted by it. Invoices already raised keep their discount.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description Customer id (cus_…) */
+                    cus: string;
+                    /** @description The customer discount id (`disc_…`). */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Removed */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such customer, or no active discount with this id */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -33569,7 +34764,21 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": Record<string, never>;
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The rows on this page. */
+                            data?: components["schemas"]["AuditLog"][];
+                            /** @description Whether more rows exist after this page. */
+                            has_more?: boolean;
+                            /** @description Pass as `starting_after` to get the next page. Null on the last page. */
+                            next_cursor?: Record<string, never>;
+                            /** @description Total number of matching rows. */
+                            total?: Record<string, never>;
+                        };
                     };
                 };
             };
@@ -33797,7 +35006,21 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": Record<string, never>;
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The rows on this page. */
+                            data?: components["schemas"]["AuditLog"][];
+                            /** @description Whether more rows exist after this page. */
+                            has_more?: boolean;
+                            /** @description Pass as `starting_after` to get the next page. Null on the last page. */
+                            next_cursor?: Record<string, never>;
+                            /** @description Total number of matching rows. */
+                            total?: Record<string, never>;
+                        };
                     };
                 };
                 /** @description No such business */
@@ -34133,6 +35356,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/transfer_configurations/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Build a transfer plan (all-mode key only)
+         * @description Stores every object and setting the copy would touch, each with its action, as a run in the `planned` state. Writes no configuration. Review the items with `GET …/{job}/items`, leave items out with `POST …/{job}/items`, then start the copy with `POST …/{job}/apply`.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of the run in the response. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TransferRequest"] & {
+                        /** @description Per section: `skip` keeps an object that exists in the destination, `update` writes over it. */
+                        conflict_policy?: {
+                            [key: string]: "skip" | "update";
+                        };
+                        /** @description Item keys to leave out of the plan. */
+                        exclude?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description The planned run */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid body, or a blocker */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key and the admin permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such destination business */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The destination changed after the plan was built, or another transfer into it is running */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/transfer_configurations/{job}": {
         parameters: {
             query?: never;
@@ -34140,10 +35461,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a transfer configuration job */
+        /**
+         * Get a transfer configuration job
+         * @description An async run also carries `summary`: item counts per result (`new`, `updated`, `deleted`, `unchanged`, `kept`, `blocked`, `left_out`), the same per pair and section with the progress of the queued items and `applied` (the items the copy wrote, as `new`, `updated` and `deleted`), `retryable` (the items a retry queues again) and, for an all-mode caller, `blocked` (each blocked item that is not left out, with its messages; the apply refuses while one remains). An all-mode caller also gets every item in `items`, unless `items=none`. Page the items with `GET …/{job}/items`.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of an async run. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
                 header?: never;
                 path: {
                     /** @description Business id (biz_…) */
@@ -34162,6 +35492,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid query */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
                     };
                 };
                 /** @description No such transfer */
@@ -34183,6 +35522,475 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/transfer_configurations/{job}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the copy of a planned transfer (all-mode key only)
+         * @description Queues the run. The worker applies its items one by one. Refused while a blocked item is not left out. A live destination needs `confirm` and a signed-in owner or admin to change its records.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of the run in the response. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The transfer job's id. */
+                    job: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The destination business's name, typed exactly. Needed when the run writes into a live business. */
+                        confirm?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description The run */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key and the admin permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such transfer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The destination changed after the plan was built, or another transfer into it is running */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/transfer_configurations/{job}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the failed items of a transfer run (all-mode key only)
+         * @description Queues the run's retryable items again. Items that were applied stay as they are.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of the run in the response. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The transfer job's id. */
+                    job: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The destination business's name, typed exactly. Needed when the run writes into a live business. */
+                        confirm?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description The run */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key and the admin permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such transfer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No item failed, or the destination changed after the plan was built */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/transfer_configurations/{job}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a transfer run (all-mode key only)
+         * @description Stops a planned or running run. Items already applied stay applied.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of the run in the response. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The transfer job's id. */
+                    job: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            responses: {
+                /** @description The run */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key and the admin permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such transfer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The run has ended */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/transfer_configurations/{job}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the items of an async transfer run (all-mode key only)
+         * @description One page of the run's items in plan order, each in the shape of the run's `items`. Filters combine. A result is what the plan does with the item: a left-out item is `left_out` and a blocked one `blocked`, whatever its action.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Only this section, e.g. `coupons`. */
+                    section?: string;
+                    /**
+                     * @description Only items with this result. `changes` is the items that write to the destination: `new`, `updated` and `deleted`.
+                     * @enum {string}
+                     */
+                    result?: "new" | "updated" | "deleted" | "unchanged" | "kept" | "blocked" | "left_out" | "changes";
+                    /**
+                     * @description Only items the apply queued: all of them (`queued`), the ones not done yet (`open`), or one status.
+                     * @enum {string}
+                     */
+                    status?: "queued" | "open" | "done" | "failed" | "skipped";
+                    /** @description Only items whose label contains this text, in any case. */
+                    q?: string;
+                    /** @description Maximum number of items to return. Default 100. */
+                    limit?: number;
+                    /** @description The `next_cursor` of the previous page. */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The transfer job's id. */
+                    job: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A page of items */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The items: `key`, `pair`, `section`, `kind`, `label`, `action`, `excluded`, `blocked`, `depends_on`, `diff`, `messages`, `status`, `skip_reason`, `error`, `attempts`, `started_at`, `finished_at`. */
+                            data?: Record<string, never>[];
+                            /** @description True when there are more items after this page. */
+                            has_more?: boolean;
+                            /** @description Pass as `starting_after` for the next page. */
+                            next_cursor?: string | null;
+                        };
+                    };
+                };
+                /** @description Invalid query */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such transfer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Leave items out of a planned transfer, or put them back (all-mode key only)
+         * @description `exclude` leaves the named item keys out of the copy. `include` puts them back. Only a run that has not started takes changes.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `none` leaves the items out of the run in the response. Default `all`.
+                     * @enum {string}
+                     */
+                    items?: "all" | "none";
+                };
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The transfer job's id. */
+                    job: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Item keys to leave out. */
+                        exclude?: string[];
+                        /** @description Item keys to put back. */
+                        include?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description The run */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferJob"];
+                    };
+                };
+                /** @description Invalid body, or a key that is not in the plan */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires an all-mode API key and the admin permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such transfer */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The run has started */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/time_travel/start": {
         parameters: {
             query?: never;
@@ -34192,7 +36000,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start Time Travel (test businesses, all-mode key only) */
+        /** Start Time Travel (test businesses, test key) */
         post: {
             parameters: {
                 query?: never;
@@ -34236,7 +36044,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Requires an all-mode API key */
+                /** @description A live key cannot use the test tools */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -34271,7 +36079,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Travel the simulated clock forward (test businesses, all-mode key only) */
+        /** Travel the simulated clock forward (test businesses, test key) */
         post: {
             parameters: {
                 query?: never;
@@ -34317,7 +36125,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Requires an all-mode API key */
+                /** @description A live key cannot use the test tools */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -34352,7 +36160,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop Time Travel (test businesses, all-mode key only) */
+        /** Stop Time Travel (test businesses, test key) */
         post: {
             parameters: {
                 query?: never;
@@ -34384,7 +36192,7 @@ export interface paths {
                         "application/json": Record<string, never>;
                     };
                 };
-                /** @description Requires an all-mode API key */
+                /** @description A live key cannot use the test tools */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -34421,7 +36229,7 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete test data (test businesses, all-mode key only)
+         * Delete test data (test businesses, test key)
          * @description Deletes every customer of a test business and the subscriptions, invoices, payments and credit notes under them, and stops Time Travel. The catalog, settings, gateways, API keys and webhook endpoints are kept.
          */
         delete: {
@@ -34462,7 +36270,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Requires an all-mode API key */
+                /** @description A live key cannot use the test tools */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -34482,6 +36290,88 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/test_data/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a test business (test businesses, test key)
+         * @description Puts a test business back to how a new test mode of its live business starts. Deletes the customers and every subscription, invoice, payment and credit note, the catalog, coupons, taxes, dunning, webhook endpoints, gateways and email settings, and stops Time Travel. Copies the settings of the live business again, adds a new TM Test Gateway and starts the document numbers again at 1. The business id stays the same, so test keys and a stored business id keep working. Team members, API keys and the audit log are kept. A test business without a live business cannot be reset.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The business was reset */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `test_data_reset`.
+                             * @enum {string}
+                             */
+                            object?: "test_data_reset";
+                            /** @description The id of the business that was reset (biz_…). */
+                            business?: string;
+                            /** @description Number of rows deleted. */
+                            deleted?: number;
+                        };
+                    };
+                };
+                /** @description The business is a live business, or has no live business */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description A live key cannot use the test tools */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -35050,7 +36940,7 @@ export interface paths {
                         default_invoice_notes?: string | null;
                         /** @description Days from the invoice date until payment is due, by default. */
                         default_due_days?: number | null;
-                        /** @description Extra minutes before a period's usage closes, for apps that buffer events. Usage closes about 6 minutes after the period ends plus this wait, never more than 30 minutes. */
+                        /** @description The usage grace window in minutes, 0 to 43200 (30 days), for apps that send events late. A metered subscription renews on time and its new period's plan credits start on time; only the invoice of the period that closed waits, for this long after the period ends plus about 6 minutes, so usage that arrives in the grace bills on it. The wait is never more than half the plan's billing interval or half the new period. Usage that arrives after the invoice finalizes bills on the next invoice. Only an invoice with metered usage waits. 0 = the invoice finalizes about 6 minutes after the period ends. */
                         usage_close_delay_minutes?: number;
                         /** @description Days after a failed charge on which to retry it. */
                         dunning_retry_days?: number[] | null;
@@ -35067,6 +36957,33 @@ export interface paths {
                         card_payment_limits?: {
                             [key: string]: number;
                         } | null;
+                        credit_config?: components["schemas"]["CreditConfig"];
+                        /** @description The billing frequencies a price of this business may use. `null`: any frequency. */
+                        billing_frequencies?: ({
+                            /**
+                             * @description The billing interval.
+                             * @enum {string}
+                             */
+                            interval: "day" | "week" | "month" | "year";
+                            /** @description The count. */
+                            count: number;
+                        })[] | null;
+                        /**
+                         * @description Whose name, address and tax id head the invoices: this business's, or the organization's registered entity.
+                         * @enum {string}
+                         */
+                        invoice_issuer?: "business" | "organization";
+                        /** @description Mandate sizing (card and UPI mandates). `headroom_bps`: the mandate ceiling as a multiple of the largest expected charge, in basis points (default 13000 = 1.3×); `rail_ceiling_cap_minor`: the highest ceiling asked for. Each key overrides on its own; `null`: the defaults. */
+                        mandate_config?: {
+                            /** @description The headroom in basis points (100 = 1%). */
+                            headroom_bps?: number;
+                            /** @description The rail ceiling cap in minor units (integer), e.g. 2900 = $29.00. */
+                            rail_ceiling_cap_minor?: number;
+                        } | null;
+                        /** @description What printed invoices, credit notes and receipts show. Groups: `common` (address_format, custom_address, show_customer_id, show_subscription_id, show_customer_info, show_shipping_info, show_payment_stub, show_exchange_rate), `signature` (image_url, caption, position), `payment_instructions` (mode, personalize), `invoice` (title, show_status, show_billing_period, show_next_billing, show_credit_note_number, show_custom_fields, numbering), `credit_note` (title, show_status, show_service_period, show_invoice_date, service_period_basis, notes, numbering), `receipt` (numbering). Send the whole object: it replaces the stored one. `null` clears it. */
+                        invoice_customization?: {
+                            [key: string]: unknown;
+                        } | null;
                         /** @description Credits Flexibility — whether refundable credits and excess payments are AUTO-applied to an invoice, configured per credit kind and per invoice class. Every slot is optional: an absent one means auto-apply with no ceiling, which is the engine default and the behaviour of every business that has never set this. `null` resets the whole setting. Promotional credit is not covered (it is applied pre-tax and is already capped at the discounted subtotal). */
                         credits_flexibility?: {
                             refundable?: components["schemas"]["CreditsFlexibilitySlots"];
@@ -35079,7 +36996,7 @@ export interface paths {
                              * @enum {string}
                              */
                             mode?: "fixed" | "smart";
-                            /** @description Retry offsets. Offset N is counted from the Nth failure, not from the due date. */
+                            /** @description Retry offsets, each counted from the invoice's due date: offset N is the Nth retry. */
                             retries?: {
                                 /** @description Days to wait before this retry. */
                                 after_days: number;
@@ -35251,10 +37168,14 @@ export interface paths {
                                 refund?: boolean;
                             };
                             /**
-                             * @description When the invoice a subscription change raises and collects at once fails. `start_dunning` (default) retries it on the dunning schedule; `next_renewal` holds the first retry until the current term ends, also when the gateway reports the failure later; a change that resets the term (for example monthly to yearly) starts dunning at once. The change stays in place either way.
+                             * @description When the invoice a subscription change (or an item add) raises and collects at once fails. `start_dunning` (default) retries it on the dunning schedule, and a hard decline that ends dunning at once runs the dunning final action at once; `next_renewal` holds the first retry until the current term ends, also when the gateway reports the failure later; a change that resets the term (for example monthly to yearly) starts dunning at once. With those two the change stays in place. `revert`: a hard decline that ends dunning at once undoes the change — the items, term and plan credits go back, the invoice and the change's credit notes are voided, and the request answers 402 `payment_failed`; a change that also adds or removes items, changes discounts or settles metered usage cannot be undone exactly and gets the dunning final action instead. A soft decline is retried with `start_dunning`, `next_renewal` and `revert`. `apply_when_paid` (the value a new business gets): the change applies only when its invoice is paid. The request raises and collects the invoice, priced as of the request; if it is not paid, nothing changes, the request answers 402 with `pending_change`, the subscription shows `pending_change`, and dunning does not retry the invoice. Paying it later (a repeat of the request, the invoice's collect or pay, a completed authentication, a slow payment that settles) applies the change as of the request. It expires, and its invoice and credit notes are voided, at the earliest of the term end and `pending_change_expiry_hours` (`pending_change_expiry_hours_slow` for a bank debit, a mandate or an offline invoice); another change, a cancel, a pause or a void of the invoice ends it too. A change whose shape cannot be held exactly (a discount edit, a deferred or metered settlement, a one-time fee, a term reset with a commitment) applies at once and is settled as `revert`.
                              * @enum {string}
                              */
-                            failed_change_charge?: "start_dunning" | "next_renewal";
+                            failed_change_charge?: "start_dunning" | "next_renewal" | "revert" | "apply_when_paid";
+                            /** @description `apply_when_paid`: hours a held change waits for its invoice to be paid, counted from the request. Never past the term end. Default 23. */
+                            pending_change_expiry_hours?: number;
+                            /** @description `apply_when_paid`: the same for a slow payment method (a bank debit, a mandate, an offline invoice, or a payment still in progress at the gateway). Never past the term end. Default 168. */
+                            pending_change_expiry_hours_slow?: number;
                             /**
                              * @description How an upgrade bills the rest of the term for the items whose price or quantity changes. `prorated` (default) charges the new price and credits the old one for the time left; `none` changes the items and books no money for the current term (a change of billing period still charges the full new term). An item added or removed is always prorated. A `prorate` on the call wins. A longer billing period is an upgrade.
                              * @enum {string}
@@ -35322,6 +37243,13 @@ export interface paths {
                              */
                             downgrade_credit?: "credit_balance" | "refund" | "customer_chooses";
                             /**
+                             * @description The documents a change whose prorated lines net to a credit (a downgrade to a cheaper plan) raises. `one_credit_note`: one credit note for the net credit, and no invoice. Not saved (null; every business created before 2026-11-13): the rule before this key, unchanged — two documents when the change is invoiced immediately and the term's invoices can take the whole credit, else one credit note. `credit_note_and_invoice` (stored on every business a person creates from 2026-11-13): a credit note for the unused time of the old lines, at the tax and discount of the invoice that charged them, and a tax invoice for the new lines at their own tax rate and place of supply, raised now whatever `invoice_immediately` says. On a paid term the note is refundable credit and the new invoice uses it at once. On an unpaid term the note first reduces that term's invoice (an adjustment) and the new invoice is due. When the term's invoices cannot take the whole credit (part was already refunded, credited or written off), each invoice is credited up to what it can still take and the change keeps both documents. What is left follows `downgrade_credit`. A change that nets to a charge is not affected. Send null to clear a saved value.
+                             * @enum {string}
+                             */
+                            net_credit_documents?: "credit_note_and_invoice" | "one_credit_note" | null;
+                            /** @description When true, a change applied now that nets to a credit (a downgrade, a removed item) is refused with 400 while the customer has an invoice that is past due. A change at the end of the term, and a scheduled change when it applies, are not refused. Default false. */
+                            block_downgrade_when_past_due?: boolean;
+                            /**
                              * @description How the reactivation of a cancelled subscription bills its new term when the request sends no `charges_handling`. `invoice_immediately` (default) invoices and collects it; `add_to_unbilled_charges` adds the full recurring amount to the next invoice.
                              * @enum {string}
                              */
@@ -35352,10 +37280,10 @@ export interface paths {
                                  */
                                 on_upgrade?: "full" | "prorated" | "next_window";
                                 /**
-                                 * @description The new plan's credits on a downgrade. `next_window` (default): from the next window. `full`: at once, in full.
+                                 * @description The new plan's credits on a downgrade. `next_window` (default): the old plan's grant runs to its window end, and the new plan grants from the next window. `full`: the old grant ends, and the new plan grants at once, in full. `prorated`: the old grant ends, and the new plan grants at once the part that matches the rest of the window. A downgrade at the term end is on a window start: the new plan grants its full amount from that window under each value. A business that a person creates in the dashboard starts with `prorated`.
                                  * @enum {string}
                                  */
-                                on_downgrade?: "full" | "next_window";
+                                on_downgrade?: "full" | "prorated" | "next_window";
                                 /**
                                  * @description A first window that the subscription start cuts short. `full` (default): the full amount. `prorated`: prorated for the part of the window. `next_full_window`: nothing until the first full window. A price's `grants_credit.per_cycle.first_window` overrides it.
                                  * @enum {string}
@@ -35371,6 +37299,16 @@ export interface paths {
                                  * @enum {string}
                                  */
                                 on_cancel_at_period_end?: "grant_started_window" | "stop_at_request";
+                                /**
+                                 * @description When a period's plan credits can be spent. `invoice_issued` (default): when the period's invoice is issued, paid or not. `invoice_paid`: while that invoice is unpaid, the period's grants (the term grant and each reset window in the term) have the status `pending`: the balance, the access check and holds do not count them. They become `active` when the invoice is paid (`credit_grant_activated`) and keep their window. They are voided when the invoice is voided or written off, when the subscription is cancelled for non-payment, or when the window ends before the payment.
+                                 * @enum {string}
+                                 */
+                                grant_when?: "invoice_issued" | "invoice_paid";
+                                /**
+                                 * @description Plan credits when dunning cancels the subscription for non-payment. `keep` (default): granted credits stay until they expire. `void_unused`: the unused part of each plan grant from the oldest unpaid period on is voided (`credit_grant_voided`); credit rolled over from a paid period stays. A business that a person creates in the dashboard starts with `void_unused`.
+                                 * @enum {string}
+                                 */
+                                on_unpaid_cancel?: "keep" | "void_unused";
                             };
                             /** @description How allowances that renew on their own clock behave. Keys left out keep their stored value. */
                             allowances?: {
@@ -35379,6 +37317,40 @@ export interface paths {
                                  * @enum {string}
                                  */
                                 on_upgrade?: "new_window" | "keep_used" | "prorated";
+                            };
+                            /**
+                             * @description Which new invoices with a total of zero send `invoice_paid` (amount 0) when they are issued as paid. `never` (default): none. `one_off`: only an invoice from a one-time purchase, `POST /invoices` or a dashboard invoice, a credit purchase or an automatic top-up. `all`: every one, also renewals and plan changes. A business created in the dashboard starts with `all`. Invoices issued before a change keep their events.
+                             * @enum {string}
+                             */
+                            zero_invoice_paid_event?: "never" | "one_off" | "all";
+                            /**
+                             * @description Which mid-term invoices of a subscription take its coupons. `skip` (default): none; only the renewal invoice takes them. `unbilled_and_edits`: invoices for unbilled charges and for subscription edits, not charges invoiced immediately. `all`: every mid-term invoice. A business created in the dashboard starts with `all`.
+                             * @enum {string}
+                             */
+                            mid_term_coupons?: "skip" | "unbilled_and_edits" | "all";
+                            /**
+                             * @description How a coupon applied to the customer combines with other coupons. `fallback` (default): a customer coupon applies only when the invoice has no other coupon. `stack`: a customer coupon applies together with the invoice's other coupons.
+                             * @enum {string}
+                             */
+                            customer_coupons?: "fallback" | "stack";
+                            /** @description Late usage after a cancellation. Usage for an invoiced period can arrive after the subscription's last invoice. When no live subscription of the customer bills the meter, `enabled: true` puts that usage on one more invoice with `purpose: late_usage`. The invoice is raised when the oldest late event was received at least `wait_hours` ago, at most one each `min_interval_hours` for a customer, at the price of the period it belongs to, with no coupons. We try to collect it one time when auto-collection is on, and we do not retry it or start dunning. Keys left out keep their stored value. */
+                            late_usage_invoices?: {
+                                /** @description Default `false`: late usage after a cancellation is not billed. */
+                                enabled?: boolean;
+                                /** @description Per currency (upper-case ISO-4217 code), the smallest late-usage subtotal before tax, in minor units, that we invoice, for example {"USD": 500}. Below it the usage waits and bills when more arrives. A currency with no entry has no minimum. A PATCH replaces the whole map. Default {}. */
+                                minimum?: {
+                                    [key: string]: number;
+                                };
+                                /**
+                                 * @description How long the oldest unbilled late event waits before we raise the invoice, in hours. Late events that arrive in this time go on the same invoice. Default 24.
+                                 * @default 24
+                                 */
+                                wait_hours?: number;
+                                /**
+                                 * @description The shortest time between two late-usage invoices of one customer, in hours. Default 24: at most one invoice each day.
+                                 * @default 24
+                                 */
+                                min_interval_hours?: number;
                             };
                         } | null;
                         /** @description Invoice rules. Keys left out keep their stored value; `null` resets every key. The business read returns the resolved value of every key. Each default is the behaviour before this field existed. */
@@ -35595,6 +37567,20 @@ export interface paths {
                             allow_cancel_subscription?: boolean;
                             /** @description May a buyer pause AND resume their own subscription? Default false. One key for both directions — offering pause without resume would trap a buyer. Pause uses the business's own pause defaults. */
                             allow_pause_resume?: boolean;
+                            /** @description May a buyer restart an ended subscription from the portal? Default false. The portal opens a checkout that charges the new term before the subscription is active again. */
+                            allow_restart?: boolean;
+                            /**
+                             * @description Price a portal restart bills. `current` (default) = the plan's catalogue price today, a custom price on the subscription kept; `keep` = the price the subscription had.
+                             * @enum {string}
+                             */
+                            restart_price?: "current" | "keep";
+                            /** @description Days after a subscription ended in which a buyer may restart it. Null (default) = any time. */
+                            restart_window_days?: number | null;
+                            /**
+                             * @description `pay_first` (default): unpaid invoices of the subscription must be paid before a portal restart. `allow`: they do not block it.
+                             * @enum {string}
+                             */
+                            restart_open_invoices?: "pay_first" | "allow";
                             /** @description May a buyer skip an upcoming renewal from the portal? Default false. Capped by `skip_renewal_limit`. */
                             allow_skip_renewal?: boolean;
                             /** @description Most renewals a buyer may skip in 12 months. Default 3. Operators are not capped. */
@@ -35603,7 +37589,7 @@ export interface paths {
                             portal_show_usage?: boolean;
                             /** @description Also show the projected usage at the end of the billing window. Default false. */
                             portal_show_usage_projection?: boolean;
-                            /** @description May a buyer undo a pending cancellation? Default false. Covers a subscription still active with cancel_at_period_end; an already-cancelled one is refused, because restarting it bills a new period. */
+                            /** @description May a buyer undo a pending cancellation? Default false. Covers a subscription still active with cancel_at_period_end; an ended one is restarted through a checkout instead (`allow_restart`). */
                             allow_reactivate?: boolean;
                             /**
                              * @description When a buyer-initiated cancellation takes effect. Default `end_of_term`. The merchant's choice, not the buyer's — it is not accepted as a request parameter. Money handling comes from the business's own cancellation defaults, so a buyer cancel settles identically to an operator cancel.
@@ -35927,6 +37913,549 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/businesses/{biz}/credit_units/{unit}/overdraft_limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List overdraft limit overrides
+         * @description The plan and customer overrides of a unit's overdraft limit, oldest first. The unit's own limit is `overdraft_limit` on the credit unit. Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description Only plan or only customer overrides.
+                     * @enum {string}
+                     */
+                    level?: "plan" | "customer";
+                    /** @description Page size, 1 to 1000. */
+                    limit?: number;
+                    /** @description The `next_cursor` of the previous page. */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The credit unit's id: the slug you chose. */
+                    unit: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The overrides. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditOverdraftLimitList"];
+                    };
+                };
+                /** @description No such credit unit. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/credit_units/{unit}/overdraft_limits/plans/{product}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a plan's overdraft limit
+         * @description The limit for customers on this plan. A customer's own limit wins over it; it wins over the unit's limit. With subscriptions to more than one plan that have a limit, the oldest live subscription's plan wins. Needs `credits:manage`.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The credit unit's id: the slug you chose. */
+                    unit: string;
+                    /** @description The plan's product id. */
+                    product: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreditOverdraftLimitSet"];
+                };
+            };
+            responses: {
+                /** @description The plan's limit. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditOverdraftLimit"];
+                    };
+                };
+                /** @description The unit has a money rate, or the product is not a plan. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such credit unit or product. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /**
+         * Remove a plan's overdraft limit
+         * @description Customers on the plan then get the unit's limit. Needs `credits:manage`.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The credit unit's id: the slug you chose. */
+                    unit: string;
+                    /** @description The plan's product id. */
+                    product: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Removed. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditOverdraftLimitDeleted"];
+                    };
+                };
+                /** @description No such credit unit or product. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/credit_overdraft_limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a customer's overdraft limits
+         * @description For each active unit with no rate: the limit that applies to the customer now and where it comes from (customer, plan, unit, or the default 0). Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The customer's id (cus_…). */
+                    cus: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One entry per unit. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CustomerCreditOverdraftLimitList"];
+                    };
+                };
+                /** @description No such customer. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/credit_overdraft_limits/{unit}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a customer's overdraft limit
+         * @description The customer's own limit wins over the plan's and the unit's. Needs `credits:manage`.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The customer's id (cus_…). */
+                    cus: string;
+                    /** @description The credit unit's id: the slug you chose. */
+                    unit: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreditOverdraftLimitSet"];
+                };
+            };
+            responses: {
+                /** @description The limit that now applies. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CustomerCreditOverdraftLimit"];
+                    };
+                };
+                /** @description The unit has a money rate. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such customer or credit unit. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /**
+         * Remove a customer's overdraft limit
+         * @description The plan's or the unit's limit then applies. Needs `credits:manage`.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The customer's id (cus_…). */
+                    cus: string;
+                    /** @description The credit unit's id: the slug you chose. */
+                    unit: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The limit that now applies. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CustomerCreditOverdraftLimit"];
+                    };
+                };
+                /** @description No such customer or credit unit. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/reports/credit_deferred_revenue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deferred credit revenue roll-forward
+         * @description Paid credit at its cost (what the buyer paid), per month in the business time zone, currency and unit (`money` for credit in money): opening + sold − recognised − breakage − refunds + other = closing, and a month's closing is the next month's opening. sold: paid credit that became spendable. recognised: credit used, less draws given back. breakage: credit that expired. refunds: credit voided by a credit note. other: rollovers between grants. Every customer counts, so the closing balances of a currency add up to `ledger_closing`. Credit invoiced and not yet paid is not included. Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description First month, YYYY-MM. Default: 11 months before `to`. */
+                    from?: string;
+                    /** @description Last month, YYYY-MM. Default: this month. At most 36 months. */
+                    to?: string;
+                    /** @description Only this currency. */
+                    currency?: string;
+                    /** @description Only this unit; `money` for credit in money. */
+                    unit?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The roll-forward. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditDeferredRevenue"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/customers/{cus}/credit_grants/{grant}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a credit grant's activity
+         * @description What happened to one grant: the totals (bought, used, revenue recognised, expired, voided, left) and its movements, oldest first. A draw by usage paid in credits names its settlement and meter; a draw on an invoice names the invoice. Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Page size, 1 to 1000. */
+                    limit?: number;
+                    /** @description The `next_cursor` of the previous page. */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                    /** @description The customer's id (cus_…). */
+                    cus: string;
+                    /** @description The credit grant's id (cgr_…). */
+                    grant: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The grant's activity. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditGrantActivity"];
+                    };
+                };
+                /** @description No such customer or credit grant. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/reports/credit_refused_demand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Refused credit usage
+         * @description Usage events refused because the customer did not have enough credit, per meter and by `group_by` per day or customer: the events, their quantity in the meter's own unit, and the credits they would have cost. Refused usage is never counted in a usage total, an allowance or a settlement. Range at most 92 days. Needs `credits:view`.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Start, ISO 8601 with an offset. */
+                    from: string;
+                    /** @description End (exclusive), ISO 8601 with an offset. */
+                    to: string;
+                    /**
+                     * @description Default `meter`.
+                     * @enum {string}
+                     */
+                    group_by?: "meter" | "day" | "customer";
+                    /** @description Rows, 1 to 1000. Default 500. */
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The refused usage. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CreditRefusedDemand"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 
 export type webhooks = Record<string, never>;
@@ -35981,7 +38510,7 @@ export interface components {
             group_by?: string[];
             /** @description Up to 3 event properties a spend limit can name (`property_key`), so each value of the property has its own limit. Can change after the meter has usage. */
             limit_dimensions?: string[];
-            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. Can change after the meter has usage. */
+            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. With a quality or resolution, the price is the row with both tiers, else the same quality only, else the same resolution only, else the row with no tier. Can change after the meter has usage. */
             price_list?: {
                 /** @description The list provider for every event. */
                 provider?: string;
@@ -35993,6 +38522,19 @@ export interface components {
                 token_type?: string;
                 /** @description Or: the group key that names the token type. */
                 token_type_key?: string;
+                /**
+                 * @description The list unit an event quantity counts, such as `audio_second` or `image`. Not set: `token`, else `request`.
+                 * @enum {string}
+                 */
+                unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+                /** @description The price tier for every event, such as `hd`. Stored trimmed and in lower case. */
+                quality?: string;
+                /** @description Or: the group key that names the quality. */
+                quality_key?: string;
+                /** @description The resolution tier for every event, such as `1024x1024`. Stored trimmed and in lower case. */
+                resolution?: string;
+                /** @description Or: the group key that names the resolution. */
+                resolution_key?: string;
             } | null;
             /** @description The currency of event `cost` for events that name none. Null = the price's currency. */
             cost_currency?: string | null;
@@ -36035,7 +38577,7 @@ export interface components {
             group_by?: string[];
             /** @description Up to 3 event properties a spend limit can name (`property_key`), so each value of the property has its own limit. Can change after the meter has usage. */
             limit_dimensions?: string[];
-            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. Can change after the meter has usage. */
+            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. With a quality or resolution, the price is the row with both tiers, else the same quality only, else the same resolution only, else the row with no tier. Can change after the meter has usage. */
             price_list?: {
                 /** @description The list provider for every event. */
                 provider?: string;
@@ -36047,6 +38589,19 @@ export interface components {
                 token_type?: string;
                 /** @description Or: the group key that names the token type. */
                 token_type_key?: string;
+                /**
+                 * @description The list unit an event quantity counts, such as `audio_second` or `image`. Not set: `token`, else `request`.
+                 * @enum {string}
+                 */
+                unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+                /** @description The price tier for every event, such as `hd`. Stored trimmed and in lower case. */
+                quality?: string;
+                /** @description Or: the group key that names the quality. */
+                quality_key?: string;
+                /** @description The resolution tier for every event, such as `1024x1024`. Stored trimmed and in lower case. */
+                resolution?: string;
+                /** @description Or: the group key that names the resolution. */
+                resolution_key?: string;
             } | null;
             /** @description The currency of event `cost` for events that name none. Null = the price's currency. */
             cost_currency?: string | null;
@@ -36101,7 +38656,7 @@ export interface components {
             group_by?: string[];
             /** @description Up to 3 event properties a spend limit can name (`property_key`), so each value of the property has its own limit. Can change after the meter has usage. */
             limit_dimensions?: string[];
-            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. Can change after the meter has usage. */
+            /** @description Maps each combination to a model price list key, for `model_price_list` prices and line cost. Each key it reads must be in `group_by`. With a quality or resolution, the price is the row with both tiers, else the same quality only, else the same resolution only, else the row with no tier. Can change after the meter has usage. */
             price_list?: {
                 /** @description The list provider for every event. */
                 provider?: string;
@@ -36113,6 +38668,19 @@ export interface components {
                 token_type?: string;
                 /** @description Or: the group key that names the token type. */
                 token_type_key?: string;
+                /**
+                 * @description The list unit an event quantity counts, such as `audio_second` or `image`. Not set: `token`, else `request`.
+                 * @enum {string}
+                 */
+                unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+                /** @description The price tier for every event, such as `hd`. Stored trimmed and in lower case. */
+                quality?: string;
+                /** @description Or: the group key that names the quality. */
+                quality_key?: string;
+                /** @description The resolution tier for every event, such as `1024x1024`. Stored trimmed and in lower case. */
+                resolution?: string;
+                /** @description Or: the group key that names the resolution. */
+                resolution_key?: string;
             } | null;
             /** @description The currency of event `cost` for events that name none. Null = the price's currency. */
             cost_currency?: string | null;
@@ -36123,6 +38691,8 @@ export interface components {
             status: "active" | "archived";
             /** @description True once the meter has a counted event or a price: only `name` can change. */
             locked?: boolean;
+            /** @description What one unit of the meter costs in credits. Null = the meter has no credit cost. Set it with `PUT …/meters/{meter}/credit_cost`. */
+            credit_cost?: components["schemas"]["MeterCreditCost"] | null;
             /**
              * Format: date-time
              * @description When the meter was created (ISO-8601 UTC).
@@ -36180,6 +38750,126 @@ export interface components {
             cost?: string;
             /** @description Default: the price's currency. */
             currency?: string;
+            /**
+             * @description For a meter with a credit cost: record the usage and spend no credits. No effect on any other meter.
+             * @default false
+             */
+            backfill: boolean;
+        };
+        MeterCreditCostSet: {
+            /**
+             * @description The id of a credit unit that has no money rate. A meter keeps its unit.
+             * @example credit
+             */
+            unit: string;
+            /**
+             * @description Credits for one unit of the meter: more than 0, at most 6 decimal places. A number is accepted too.
+             * @example 0.5
+             */
+            credits_per_unit: string;
+            /** @description The cost for a plan or for one subscription. Omit for none. */
+            overrides?: components["schemas"]["MeterCreditCostOverride"][];
+        };
+        /** @description Send `product` (a plan) or `subscription`, not both. */
+        MeterCreditCostOverride: {
+            /**
+             * @description A plan's product id.
+             * @example pro-plan
+             */
+            product?: string;
+            /**
+             * @description The subscription's id (sub_…).
+             * @example sub_XXXXXXXXXXXX01
+             */
+            subscription?: string;
+            /**
+             * @description The meter credit cost override's credits per unit.
+             * @example 0.4
+             */
+            credits_per_unit: string;
+        };
+        MeterCreditCost: {
+            /**
+             * @description The object type; always `meter_credit_cost`.
+             * @enum {string}
+             */
+            object?: "meter_credit_cost";
+            /**
+             * @description The meter credit cost's meter.
+             * @example illustrations
+             */
+            meter?: string;
+            /**
+             * @description The meter credit cost's unit.
+             * @example credit
+             */
+            unit: string;
+            /**
+             * @description The meter credit cost's credits per unit.
+             * @example 1
+             */
+            credits_per_unit: string;
+            /** @description The meter credit cost's overrides. */
+            overrides: components["schemas"]["MeterCreditCostOverride"][];
+        };
+        MeterCreditCostDeleted: {
+            /**
+             * @description The object type; always `meter_credit_cost`.
+             * @enum {string}
+             */
+            object: "meter_credit_cost";
+            /** @description The meter credit cost deleted's meter. */
+            meter: string;
+            /**
+             * @description The meter credit cost deleted's deleted.
+             * @enum {boolean}
+             */
+            deleted: true;
+        };
+        /** @description What a meter with a credit cost did with the event. */
+        UsageEventCredit: {
+            /** @description The usage event credit's meter. */
+            meter?: string;
+            /** @description The usage event credit's unit. */
+            unit?: string;
+            /**
+             * @description `taken`: the credits left the balance and wait for settlement. `pending`: a credit grant that ended pays, and its grace window is open. `settled`: drawn from the grants. `refused` and `skipped`: no credits were spent, and the event is never billed.
+             * @enum {string}
+             */
+            status?: "taken" | "pending" | "settled" | "refused" | "skipped";
+            /**
+             * @description Why no credits were spent. Null for a billed event.
+             * @enum {string}
+             */
+            reason?: "insufficient_credit" | "backfill" | "unmatched_customer" | "voided" | null | null;
+            /** @description The event's quantity on the meter. */
+            quantity?: string;
+            /** @description The usage event credit's credits per unit. */
+            credits_per_unit?: string;
+            /**
+             * @description The usage event credit's cost source.
+             * @enum {string}
+             */
+            cost_source?: "meter" | "plan" | "subscription";
+            /** @description What the event costs. */
+            credits_due?: string;
+            /** @description The usage event credit's credits taken. */
+            credits_taken?: string;
+            /** @description The part a credit grant that ended paid, in its grace window. */
+            credits_from_closed_grant?: string;
+            /** @description The part that credits did not pay and that is billed in money (see `overage_basis`). Under `bill`, when the meter or the credit unit has a money price, the event is accepted and this part goes on the next invoice of the customer's subscription as a usage line. */
+            credits_uncovered?: string;
+            /**
+             * @description What bills `credits_uncovered`: `meter`, the meter's own usage price on the customer's subscription (it wins); `unit`, the credit unit's price per credit. Null when nothing bills it.
+             * @enum {string}
+             */
+            overage_basis?: "meter" | "unit" | null | null;
+            /** @description The part taken below zero, inside the overdraft limit, that no grant has paid back and no invoice bills yet. The next grant or top-up pays it first. */
+            credits_overdrawn?: string;
+            /** @description The usage event credit's covered by hold. */
+            covered_by_hold?: boolean;
+            /** @description The part past the hold that the capture did not charge, when `credit_config.capture_over_hold` is `cap_at_hold`. It is recorded and never billed. `credits_taken` does not include it. */
+            credits_past_hold?: string;
         };
         UsageEventBatchCreate: {
             /** @description The usage event batch's events. */
@@ -36246,6 +38936,13 @@ export interface components {
             voided_at?: string | null;
             /** @description The usage event's void reason. */
             void_reason?: string | null;
+            /**
+             * Format: date-time
+             * @description Set when a meter that is paid in credits refused the event because the customer did not have sufficient credit. The event is stored and listed. It does not count in usage totals. Its cost still counts in cost and margin reports.
+             */
+            refused_at?: string | null;
+            /** @description Present only when a meter with a credit cost counted the event: one entry for each such meter. */
+            credit?: components["schemas"]["UsageEventCredit"][];
         };
         UsageEventResult: {
             /** @description The usage event result's event. */
@@ -36271,7 +38968,7 @@ export interface components {
                 /** @description The error message, if any. */
                 error?: {
                     /**
-                     * @description timestamp_too_old, timestamp_in_future, invalid_value, …
+                     * @description timestamp_too_old, timestamp_in_future, invalid_value, insufficient_credit (stored, not billed), …
                      * @example timestamp_too_old
                      */
                     code?: string;
@@ -36381,10 +39078,31 @@ export interface components {
              */
             model?: string;
             /**
-             * @description `input`, `output`, `cache_read`, `cache_write`, … as the source names them.
+             * @description The price kind: `input`, `output`, `cache_read`, `input_document`, … as the source names it.
              * @example input
              */
             token_type?: string;
+            /**
+             * @description The same value as `token_type`, under its new name.
+             * @example input
+             */
+            price_kind?: string;
+            /**
+             * @description What one unit is. `token` and `request` (counted items such as web searches) are the units the list had first; `audio_second` and `video_second` are seconds.
+             * @enum {string}
+             * @example token
+             */
+            unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+            /**
+             * @description The quality tier, such as `hd`. Null = no tier.
+             * @example hd
+             */
+            quality?: string | null;
+            /**
+             * @description The resolution tier. Null = no tier.
+             * @example 1024x1024
+             */
+            resolution?: string | null;
             /**
              * @description The model price's currency (ISO-4217 code).
              * @example USD
@@ -36396,7 +39114,7 @@ export interface components {
              */
             unit_amount_decimal?: string;
             /**
-             * @description 1,000,000 for tokens; 1,000 for counted items such as web searches.
+             * @description 1,000,000 for tokens and characters; 1,000 for requests and pages; 3,600 for audio priced per hour.
              * @example 1000000
              */
             quantity_divisor?: number;
@@ -36411,7 +39129,7 @@ export interface components {
              */
             source_effective_from?: string | null;
             /**
-             * @description Where the model price comes from.
+             * @description Who published the price: `genai-prices`, or `litellm` for a media price.
              * @example genai-prices
              */
             source?: string;
@@ -36497,6 +39215,37 @@ export interface components {
             next_check_at?: string;
             /** @description The model price source's providers. */
             providers?: string[];
+            /** @description Every feed of the list, each with its own state. The top-level fields are the first feed. The second gives image, video, audio and character prices; when both give one, the list uses the second. */
+            sources?: ({
+                /**
+                 * @description Where the source comes from.
+                 * @example litellm
+                 */
+                source?: string;
+                /** @description The source's URL. */
+                url?: string;
+                /** @description The source's licence. */
+                licence?: string;
+                /**
+                 * @description The source's prices.
+                 * @enum {string}
+                 */
+                prices?: "all" | "media";
+                /**
+                 * Format: date-time
+                 * @description The checked time (ISO-8601 UTC).
+                 */
+                checked_at?: string | null;
+                /**
+                 * Format: date-time
+                 * @description The last success time (ISO-8601 UTC).
+                 */
+                last_success_at?: string | null;
+                /** @description The source's check error. */
+                check_error?: string | null;
+                /** @description The source's upstream version. */
+                upstream_version?: string | null;
+            })[];
         };
         ModelPriceDriftList: {
             /**
@@ -36555,10 +39304,31 @@ export interface components {
             /** @description The model id or name, as your events send it. */
             model?: string;
             /**
-             * @description The model cost override's token type.
+             * @description The price kind: `input`, `output`, `cache_read`, `input_document`, … as the source names it.
              * @example input
              */
             token_type?: string;
+            /**
+             * @description The same value as `token_type`, under its new name.
+             * @example input
+             */
+            price_kind?: string;
+            /**
+             * @description What one unit is. `token` and `request` (counted items such as web searches) are the units the list had first; `audio_second` and `video_second` are seconds.
+             * @enum {string}
+             * @example token
+             */
+            unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+            /**
+             * @description The quality tier, such as `hd`. Null = no tier.
+             * @example hd
+             */
+            quality?: string | null;
+            /**
+             * @description The resolution tier. Null = no tier.
+             * @example 1024x1024
+             */
+            resolution?: string | null;
             /**
              * @description The model cost override's currency (ISO-4217 code).
              * @example USD
@@ -36613,10 +39383,31 @@ export interface components {
             /** @description The model id or name, as your events send it. */
             model: string;
             /**
-             * @description The model cost override's token type.
+             * @description The price kind. Required unless you set `price_kind`.
              * @example input
              */
-            token_type: string;
+            token_type?: string;
+            /**
+             * @description The same as `token_type`. Set one of them.
+             * @example input
+             */
+            price_kind?: string;
+            /**
+             * @description What one unit is. Default `token`.
+             * @enum {string}
+             * @example token
+             */
+            unit?: "token" | "request" | "image" | "video_second" | "audio_second" | "character" | "page" | "pixel";
+            /**
+             * @description The quality tier, such as `hd`: letters, digits, `_`, `.` and `-`. We trim it and store it in lower case. Default none.
+             * @example hd
+             */
+            quality?: string | null;
+            /**
+             * @description The resolution tier, in the same characters. Default none.
+             * @example 1024x1024
+             */
+            resolution?: string | null;
             /**
              * @description The model cost override's currency (ISO-4217 code).
              * @example USD
@@ -36752,7 +39543,12 @@ export interface components {
              * @description The usage margin's group by.
              * @enum {string}
              */
-            group_by?: "customer" | "model" | "meter";
+            group_by?: "customer" | "model" | "meter" | "plan";
+            /**
+             * @description The usage margin's scope.
+             * @enum {string}
+             */
+            scope?: "billed" | "all";
             /**
              * Format: date-time
              * @description The usage margin's from.
@@ -36773,6 +39569,12 @@ export interface components {
                 model?: string;
                 /** @description The usage margin's meter. */
                 meter?: string;
+                /** @description With `group_by=meter`: the meter's name. */
+                meter_name?: string | null;
+                /** @description The plan product's id; `""` = no plan. */
+                plan?: string;
+                /** @description With `group_by=plan`: the plan product's name. */
+                plan_name?: string | null;
                 /** @description The usage margin's currency (ISO-4217 code). */
                 currency?: string;
                 /** @description After discounts and credit notes, before tax. */
@@ -36790,6 +39592,27 @@ export interface components {
                 lines?: number;
                 /** @description The usage margin's lines without cost. */
                 lines_without_cost?: number;
+                /** @description With `scope=all`. By customer and plan: every revenue line. By meter and model: every usage line, also those with no full cost. */
+                total_revenue_minor?: number;
+                /** @description With `scope=all`. Cost of usage that no invoice line bills. */
+                cost_only_minor?: number;
+                /** @description With `scope=all`. Days of cost-only usage, per customer, meter and group values. */
+                cost_only_rows?: number;
+                /** @description With `scope=all`. Of `cost_only_rows`, those with no full cost: not in `cost_only_minor`. */
+                cost_only_rows_without_cost?: number;
+                /** @description With `scope=all`. `cost_minor` + `cost_only_minor`. */
+                total_cost_minor?: number;
+                /** @description With `scope=all`. `total_revenue_minor` − `total_cost_minor`. */
+                total_margin_minor?: number;
+                /**
+                 * @description With `scope=all`. Null when `total_revenue_minor` is 0.
+                 * @example 62.18
+                 */
+                total_margin_percent?: string | null;
+                /** @description With `scope=all` and `group_by=plan`. Recurring and proration lines of plan products. */
+                plan_fee_minor?: number;
+                /** @description With `scope=all` and `group_by=plan`. Customers with a subscription on the plan that was live in the range. */
+                subscribers?: number;
             })[];
             /** @description The usage margin's totals. */
             totals?: ({
@@ -36810,6 +39633,27 @@ export interface components {
                 lines?: number;
                 /** @description The total's lines without cost. */
                 lines_without_cost?: number;
+                /** @description With `scope=all`. By customer and plan: every revenue line. By meter and model: every usage line, also those with no full cost. */
+                total_revenue_minor?: number;
+                /** @description With `scope=all`. Cost of usage that no invoice line bills. */
+                cost_only_minor?: number;
+                /** @description With `scope=all`. Days of cost-only usage, per customer, meter and group values. */
+                cost_only_rows?: number;
+                /** @description With `scope=all`. Of `cost_only_rows`, those with no full cost: not in `cost_only_minor`. */
+                cost_only_rows_without_cost?: number;
+                /** @description With `scope=all`. `cost_minor` + `cost_only_minor`. */
+                total_cost_minor?: number;
+                /** @description With `scope=all`. `total_revenue_minor` − `total_cost_minor`. */
+                total_margin_minor?: number;
+                /**
+                 * @description With `scope=all`. Null when `total_revenue_minor` is 0.
+                 * @example 62.18
+                 */
+                total_margin_percent?: string | null;
+                /** @description With `scope=all` and `group_by=plan`. Recurring and proration lines of plan products. */
+                plan_fee_minor?: number;
+                /** @description With `scope=all` and `group_by=plan`. Customers with a subscription on the plan that was live in the range. */
+                subscribers?: number;
             })[];
         };
         CreditUnit: {
@@ -36826,8 +39670,10 @@ export interface components {
             plural_name: string;
             /** @description ISO 4217. */
             currency: string;
-            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. */
-            minor_per_unit: string;
+            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. Null = the unit has no rate. */
+            minor_per_unit: string | null;
+            /** @description True when the unit has a money rate. False: its credits are counted in units only. */
+            rated: boolean;
             /** @description 0 to 4. Grant amounts are whole numbers of 10^-decimals units. */
             decimals: number;
             /** @description True after the first grant in this unit. */
@@ -36854,6 +39700,17 @@ export interface components {
             updated_at?: string;
             /** @description Send as `expected_version` to refuse a stale update. */
             resource_version?: number;
+            /** @description Money for one credit used past the balance, in minor units of the unit's `currency`, as a decimal string with at most 12 decimal places. Only for a unit with no rate; null = none. The gate bills it. A meter's own usage price wins over it. */
+            overage_minor_per_unit?: string | null;
+            /** @description How far below 0 the balance may go, in the unit's smallest step (as a grant's `amount`). The unit's own limit; a plan and a customer can override it. Default 0. Only for a unit with no rate. The gate enforces it. */
+            overdraft_limit?: number;
+            /**
+             * @description What a plan's credit reset does with a negative balance that no invoice billed: `carry` (default; the new grant pays it first) or `forgive` (written off at the reset). Only for a unit with no rate.
+             * @enum {string}
+             */
+            negative_balance_at_reset?: "carry" | "forgive";
+            /** @description `overdraft_limit` in whole units. */
+            overdraft_limit_decimal?: string;
         };
         /** @description A page of credit units. */
         CreditUnitList: {
@@ -36878,10 +39735,19 @@ export interface components {
             plural_name?: string;
             /** @description ISO 4217. */
             currency: string;
-            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. */
-            minor_per_unit: string;
+            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. Required: send a rate, or null for a unit with no money value. */
+            minor_per_unit: string | null;
             /** @description 0 to 4. Default 0. */
             decimals?: number;
+            /** @description Money for one credit used past the balance, in minor units of the unit's `currency`, as a decimal string with at most 12 decimal places. Only for a unit with no rate; null = none. The gate bills it. A meter's own usage price wins over it. */
+            overage_minor_per_unit?: string | null;
+            /** @description How far below 0 the balance may go, in the unit's smallest step (as a grant's `amount`). The unit's own limit; a plan and a customer can override it. Default 0. Only for a unit with no rate. The gate enforces it. */
+            overdraft_limit?: number;
+            /**
+             * @description What a plan's credit reset does with a negative balance that no invoice billed: `carry` (default; the new grant pays it first) or `forgive` (written off at the reset). Only for a unit with no rate.
+             * @enum {string}
+             */
+            negative_balance_at_reset?: "carry" | "forgive";
         };
         CreditUnitUpdate: {
             /** @description Singular. */
@@ -36890,12 +39756,21 @@ export interface components {
             plural_name?: string;
             /** @description ISO 4217. Refused once the unit is locked. */
             currency?: string;
-            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. Refused once the unit is locked. */
-            minor_per_unit?: string;
+            /** @description Minor units of `currency` per 1 unit, as a decimal string with at most 12 decimal places. For "1 credit = USD 0.01" send `"1"`. Null removes the rate. Refused once the unit is locked. */
+            minor_per_unit?: string | null;
             /** @description 0 to 4. Refused once the unit is locked. */
             decimals?: number;
             /** @description The `resource_version` you read. */
             expected_version?: number;
+            /** @description Money for one credit used past the balance, in minor units of the unit's `currency`, as a decimal string with at most 12 decimal places. Only for a unit with no rate; null = none. The gate bills it. A meter's own usage price wins over it. */
+            overage_minor_per_unit?: string | null;
+            /** @description How far below 0 the balance may go, in the unit's smallest step (as a grant's `amount`). The unit's own limit; a plan and a customer can override it. Default 0. Only for a unit with no rate. The gate enforces it. */
+            overdraft_limit?: number;
+            /**
+             * @description What a plan's credit reset does with a negative balance that no invoice billed: `carry` (default; the new grant pays it first) or `forgive` (written off at the reset). Only for a unit with no rate.
+             * @enum {string}
+             */
+            negative_balance_at_reset?: "carry" | "forgive";
         };
         CreditGrant: {
             /**
@@ -36915,7 +39790,7 @@ export interface components {
             amount: number;
             /** @description `amount` in whole units, as a decimal string. */
             amount_decimal?: string;
-            /** @description The money value at grant. Fixed for life. */
+            /** @description The money value at grant. Fixed for life. 0 for a unit with no rate. */
             face_minor: number;
             /** @description Paid: the net money received for it. Promotional: 0. */
             cost_basis_minor?: number;
@@ -36980,7 +39855,7 @@ export interface components {
                 units?: number;
                 /** @description In whole units. */
                 units_decimal?: string;
-                /** @description Money value left. */
+                /** @description Money value left. 0 for a unit with no rate. */
                 face_minor?: number;
                 /** @description Cost basis left. */
                 cost_minor?: number;
@@ -37001,6 +39876,8 @@ export interface components {
             updated_at?: string;
             /** @description A number that goes up on every change. */
             resource_version?: number;
+            /** @description Why an operator voided the grant. Null when none was given. */
+            void_reason?: components["schemas"]["CreditVoidReason"];
         };
         /** @description A page of credit grants. */
         CreditGrantList: {
@@ -37055,7 +39932,7 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
-            /** @description Paid only: the net price, without tax. It is the cost basis. */
+            /** @description Paid only: the net price, without tax. It is the cost basis. For a unit with no rate, it is the only money the grant has. */
             price_minor?: number;
             /**
              * @description Paid only, required. `taxed_at_use` is for money credit only.
@@ -37106,6 +39983,8 @@ export interface components {
             cost_minor?: number;
             /** @description The invoice, for a draw or a restore. */
             invoice?: string | null;
+            /** @description The credit usage settlement (cst_…), for a draw of usage paid in credits. */
+            settlement?: string | null;
             /**
              * Format: date-time
              * @description When the credit transaction was created (ISO-8601 UTC).
@@ -37126,6 +40005,75 @@ export interface components {
             /** @description Send as `starting_after` for the next page. */
             next_cursor: string | null;
         };
+        /** @description One settlement of usage paid in credits: a customer, a meter and a window. */
+        CreditUsage: {
+            /**
+             * @description The object type; always `credit_usage`.
+             * @enum {string}
+             */
+            object: "credit_usage";
+            /** @description cst_… */
+            id: string;
+            /** @description cus_… */
+            customer: string;
+            /** @description The meter's id. */
+            meter: string;
+            /** @description The credit unit's id. */
+            unit: string;
+            /**
+             * @description `usage`: events received in the window. `late`: late events that a credit grant paid in its grace window, after it ended.
+             * @enum {string}
+             */
+            kind?: "usage" | "late";
+            /**
+             * @description The credit usage's status.
+             * @enum {string}
+             */
+            status?: "settled";
+            /**
+             * Format: date-time
+             * @description The credit usage's window start.
+             */
+            window_start: string;
+            /**
+             * Format: date-time
+             * @description The credit usage's window end.
+             */
+            window_end: string;
+            /** @description Usage events in the settlement. */
+            events?: number;
+            /** @description The usage, in units of the meter. */
+            quantity?: string;
+            /** @description What the usage costs, in whole credits. */
+            credits_due?: string;
+            /** @description What the settlement drew from the credit grants. */
+            credits_drawn?: string;
+            /** @description Usage that no credit paid. Only for events that a credit hold covers. */
+            quantity_uncovered?: string;
+            /** @description ISO 4217. */
+            currency?: string;
+            /** @description The cost of the paid credit drawn: the revenue the settlement posted. */
+            revenue_minor?: number;
+            /**
+             * Format: date-time
+             * @description When the credit usage was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+        };
+        /** @description A page of credit usage settlements. */
+        CreditUsageList: {
+            /**
+             * @description The object type; always `list`.
+             * @enum {string}
+             */
+            object: "list";
+            /** @description The rows on this page. */
+            data: components["schemas"]["CreditUsage"][];
+            /** @description Whether more rows exist after this page. */
+            has_more: boolean;
+            /** @description Send as `starting_after` for the next page. */
+            next_cursor: string | null;
+        };
         CreditHold: {
             /**
              * @description The object type; always `credit_hold`.
@@ -37138,8 +40086,16 @@ export interface components {
             customer: string;
             /** @description ISO 4217. */
             currency: string;
-            /** @description The amount held. */
+            /** @description The amount held. 0 for a hold in units. */
             amount_minor: number;
+            /** @description The credit unit's id. Set for a hold in units. */
+            unit?: string | null;
+            /** @description The credits held at the start, as a decimal. Null for a hold in money. */
+            units?: string | null;
+            /** @description The credits that the hold still reserves. 0 when the hold is closed. */
+            remaining_units?: string | null;
+            /** @description The credits that the captured usage events took in total, as a decimal. */
+            captured_units?: string | null;
             /** @description The meter's id. */
             meter?: string | null;
             /** @description Usage property values, for scoped spend limits. */
@@ -37158,7 +40114,7 @@ export interface components {
             expires_at: string;
             /** @description The rated value of the captured usage event. */
             captured_minor?: number | null;
-            /** @description The captured usage took the balance past the overdraft limit. */
+            /** @description The captured usage took the balance past the overdraft limit. For a hold in units: the event cost more credits than the balance had. */
             overdraft?: boolean;
             /** @description Key-value pairs you attach to the credit hold. */
             metadata?: {
@@ -37190,8 +40146,12 @@ export interface components {
             next_cursor: string | null;
         };
         CreditHoldCreate: {
-            /** @description The estimated cost, more than 0. */
-            amount_minor: number;
+            /** @description The estimated cost, more than 0. Not for a meter that is paid in credits. */
+            amount_minor?: number;
+            /** @description A meter that is paid in credits: the meter quantity the work will use, as a decimal. The meter's credit cost for this customer converts it to credits. */
+            quantity?: string;
+            /** @description A meter that is paid in credits: the credits to hold, as a decimal. Send `quantity` or `units`, not both. */
+            units?: string;
             /** @description ISO 4217. Default: the customer's currency. */
             currency?: string;
             /** @description The meter the call will use. */
@@ -37215,6 +40175,12 @@ export interface components {
             };
             /** @description The `key` of a usage event that you already sent. */
             usage_event_id?: string;
+            /** @description Default true: the capture closes the hold. False, for a hold in units: the hold stays open with the units that the event did not use. */
+            final?: boolean;
+        };
+        CreditHoldExtend: {
+            /** @description Seconds from now, 1 to 86,400. The new expiry must be later than the current expiry. */
+            expires_in: number;
         };
         AccessCheck: {
             /**
@@ -37243,8 +40209,12 @@ export interface components {
             available_units?: {
                 /** @description The credit unit's id. */
                 unit?: string;
-                /** @description In the unit's smallest step. */
+                /** @description In the unit's smallest step. For a unit with no money rate: what a usage event can spend now. A credit grant counts only while its window contains this time, and usage that is not settled yet and open holds are taken off. */
                 units?: number;
+                /** @description Only for a unit with no money rate: reserved by open holds, in the unit's smallest step. */
+                held_units?: number;
+                /** @description Only for a unit with no money rate: taken by usage events and not drawn from a credit grant yet. */
+                unsettled_units?: number;
             }[];
             /** @description The access check's balance. */
             balance: {
@@ -37268,7 +40238,7 @@ export interface components {
                  * @description Where the on exhausted comes from.
                  * @enum {string}
                  */
-                source?: "business_blocking_off" | "customer_override" | "grant" | "plan_price" | "business_default";
+                source?: "business_blocking_off" | "customer_override" | "grant" | "plan_price" | "business_default" | "no_subscription" | "trial";
             };
             /** @description The access check's usage this period. */
             usage_this_period?: {
@@ -37298,6 +40268,28 @@ export interface components {
              * @description When the customer's plan credits next renew. Null = no plan credits renew.
              */
             renews_at?: string | null;
+            /** @description Set for a meter that is paid in credits. Amounts are in the credit unit, as decimals. */
+            credits?: {
+                /** @description The credit unit's id. */
+                unit?: string;
+                /** @description What one unit of the meter costs this customer. */
+                credits_per_unit?: string;
+                /**
+                 * @description The credit's cost source.
+                 * @enum {string}
+                 */
+                cost_source?: "meter" | "plan" | "subscription";
+                /** @description What the estimate costs. */
+                estimate?: string;
+                /** @description What a usage event can spend at this instant. The open holds are already taken off. */
+                available?: string;
+                /** @description Reserved by open holds. */
+                held?: string;
+                /** @description Taken by usage events and not drawn from a credit grant yet. */
+                unsettled?: string;
+                /** @description `available` less the estimate, never below 0. */
+                remaining?: string;
+            } | null;
             /**
              * Format: date-time
              * @description The access check's as of.
@@ -37856,6 +40848,45 @@ export interface components {
             trigger: "threshold" | "schedule";
             /** @description Buy when the live balance is at or below this. */
             threshold_minor?: number | null;
+            /** @description A unit with no money rate: buy when the credits a usage event can spend are at or below this. A decimal, in credits. */
+            threshold_units?: string | null;
+            /** @description A unit with no money rate: the credit pack a run buys (the price's id). */
+            pack_price?: string | null;
+            /** @description `fixed` with `pack_price`: packs in one purchase, 1 to 1000. Default 1. */
+            pack_quantity?: number | null;
+            /** @description `target` with `pack_price`: buy whole packs to reach this many credits or more. A decimal. */
+            target_units?: string | null;
+            /** @description The most that automatic top-up can buy in the last hour, this day, the last 7 days and this month. Day and month follow the business's time zone. A purchase that would pass a limit is skipped (`credit_auto_topup_skipped`, reason `purchase_limit`). Unset = no limit for that window. */
+            purchase_limits?: {
+                /** @description The purchase limit's hour. */
+                hour?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's day. */
+                day?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's week. */
+                week?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's month. */
+                month?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+            } | null;
             /** @description `{every: week, weekday: 1–7}` (ISO, 1 = Monday) or `{every: month, day: 1–31}`. A day past the month's end runs on its last day. */
             schedule?: Record<string, never> | null;
             /**
@@ -37863,7 +40894,7 @@ export interface components {
              * @enum {string}
              */
             method: "fixed" | "target";
-            /** @description `fixed`: the amount to buy. */
+            /** @description `fixed`: the amount to buy. Not with `pack_price`: the pack sets it. */
             amount_minor?: number | null;
             /** @description `target`: buy up to this balance. */
             target_minor?: number | null;
@@ -37873,8 +40904,8 @@ export interface components {
             max_runs_per_day?: number;
             /** @description The `pm_…` to charge. Null = the customer's charge order. */
             payment_method?: string | null;
-            /** @description The credit each run buys. */
-            grant: {
+            /** @description Required, except with `pack_price`: the pack carries the settings of its credit. */
+            grant?: {
                 /**
                  * @description The grant's tax treatment.
                  * @enum {string}
@@ -37909,6 +40940,45 @@ export interface components {
             trigger: "threshold" | "schedule";
             /** @description The threshold. */
             threshold_minor?: number | null;
+            /** @description The threshold in credits, for a unit with no money rate. */
+            threshold_units?: string | null;
+            /** @description The credit pack a run buys, for a unit with no money rate. */
+            pack_price?: string | null;
+            /** @description Packs in one purchase. */
+            pack_quantity?: number | null;
+            /** @description The balance in credits that a run buys up to. */
+            target_units?: string | null;
+            /** @description The most that automatic top-up can buy in the last hour, this day, the last 7 days and this month. Day and month follow the business's time zone. A purchase that would pass a limit is skipped (`credit_auto_topup_skipped`, reason `purchase_limit`). Unset = no limit for that window. */
+            purchase_limits?: {
+                /** @description The purchase limit's hour. */
+                hour?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's day. */
+                day?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's week. */
+                week?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+                /** @description The purchase limit's month. */
+                month?: {
+                    /** @description The most purchases in the window. */
+                    count?: number;
+                    /** @description The most money in the window, before tax. */
+                    amount_minor?: number;
+                };
+            } | null;
             /** @description `{every: week, weekday: 1–7}` (ISO, 1 = Monday) or `{every: month, day: 1–31}`. A day past the month's end runs on its last day. */
             schedule?: Record<string, never> | null;
             /**
@@ -37916,7 +40986,7 @@ export interface components {
              * @enum {string}
              */
             method: "fixed" | "target";
-            /** @description The fixed amount. */
+            /** @description The fixed amount. With `pack_price`: the price of one purchase when it was saved. */
             amount_minor?: number | null;
             /** @description The target balance. */
             target_minor?: number | null;
@@ -37926,6 +40996,8 @@ export interface components {
             max_runs_per_day?: number;
             /** @description pm_… */
             payment_method?: string | null;
+            /** @description False when a run has no payment method to charge: the named method, or every method in the charge order, is invalid. Enable is then refused. */
+            has_payment_method?: boolean;
             /** @description The credit each run buys. */
             grant?: {
                 /**
@@ -37945,7 +41017,7 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "disabled";
-            /** @description payment_declined, operator or customer. */
+            /** @description payment_declined, retries_exhausted, operator or customer. */
             disabled_reason?: string | null;
             /** @description ISO 8601. */
             disabled_at?: string | null;
@@ -38003,6 +41075,8 @@ export interface components {
             charge_after?: string | null;
             /** @description Why the charge failed. */
             decline_code?: string | null;
+            /** @description Charge tries that failed. */
+            attempts?: number;
             /** @description The gateway's message. */
             failure_message?: string | null;
             /** @description ISO 8601. */
@@ -38243,6 +41317,52 @@ export interface components {
             ip?: Record<string, never>;
             /** @description The request log's user agent. */
             user_agent?: Record<string, never>;
+        };
+        AuditLog: {
+            /**
+             * @description The object type; always `audit_log`.
+             * @enum {string}
+             */
+            object?: "audit_log";
+            /**
+             * Format: uuid
+             * @description The entry id.
+             */
+            id?: string;
+            /** @description `biz_…`. Null for an organization-wide action. */
+            business_id?: Record<string, never>;
+            /** @description Who acted: an API key id, a member's email, `billing_clock`, `system`, or the id of the checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from. */
+            actor?: Record<string, never>;
+            /** @description Where the action came from, e.g. `api`, `dashboard`. */
+            source?: string;
+            /** @description What happened, e.g. `subscription.cancel`. */
+            action?: string;
+            /** @description The kind of resource changed. */
+            resource_type?: Record<string, never>;
+            /** @description The id of the resource changed. */
+            resource_id?: Record<string, never>;
+            /** @description The changed fields before the action. */
+            before?: Record<string, never>;
+            /** @description The changed fields after the action. */
+            after?: Record<string, never>;
+            /** @description The IP address of the request. */
+            actor_ip?: Record<string, never>;
+            /** @description Entries that share this id are one action. */
+            trace_id?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the audit log was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+            /** @description The hosted page a customer acted from, when `actor` is a checkout or portal session. Null for every other actor. */
+            channel?: "checkout" | "portal" | null;
+            /** @description The customer of the checkout or portal session in `actor`. Null for every other actor, and when the session has no customer (never attached, or deleted). */
+            actor_customer?: {
+                /** @description `cus_…` */
+                id?: string;
+                /** @description The account holder's name, else the email. */
+                name?: Record<string, never>;
+            };
         };
         TransferRequest: {
             /** @description The id of the business to copy the configuration to (biz_…). */
@@ -38488,6 +41608,22 @@ export interface components {
             intent_purposes: ("payment" | "setup")[];
             /** @description The gateway registers storefront domains for Apple Pay and Google Pay buttons (`POST /v1/businesses/{biz}/gateway_accounts/{gwa}/wallet_domains`). */
             wallet_domains?: boolean;
+            /** @description How to open an object on the gateway's own dashboard, per id shape. An id that matches no entry has no link. Empty: no link is known for this gateway. */
+            dashboard_links: ({
+                /**
+                 * @description What the id names.
+                 * @enum {string}
+                 */
+                object: "payment" | "setup" | "mandate" | "order" | "refund" | "customer" | "subscription";
+                /** @description A regular expression the whole id must match. */
+                id_pattern: string;
+                /** @description The URL for a live business. `{id}` is the URL-encoded id. */
+                live_url: string;
+                /** @description The URL for a test business. `{id}` is the URL-encoded id. */
+                test_url: string;
+                /** @description False while the URL is not yet checked against the gateway. */
+                confirmed: boolean;
+            })[];
             /**
              * @description Who takes the payer's ACH debit authorization for `us_bank_account`. `gateway`: the gateway's own form shows it. `ours`: our checkout and portal show the authorization, and the payer accepts it before the bank account is saved. Null: the gateway offers no ACH debit.
              * @enum {string}
@@ -38571,7 +41707,7 @@ export interface components {
                 start?: string;
                 /**
                  * Format: date
-                 * @description Last day covered, inclusive.
+                 * @description Last day covered, inclusive, and the last period's `t`. At organization scope it is the label day: a business whose own today is later is read through its own today, and those days are in the last period.
                  */
                 end?: string;
                 /** @description The IANA zone the window's boundaries were resolved in. */
@@ -38997,6 +42133,148 @@ export interface components {
             /** @description Per-invoice ceiling in minor units, required when mode is 'limit'. Compared against the invoice in ITS OWN currency — a multi-currency business caps at the same number in each. */
             limit_minor?: number | null;
         };
+        /** @description Credit grants and holds for the business. A PATCH replaces the whole object; send every key you want to keep (an omitted `in_flight_applies`, or another key that says so, keeps its stored value). `null` returns every key to its default. Unknown keys answer 400 `Unknown parameter: credit_config.<key>`. Setting it needs `credits:manage`. */
+        CreditConfig: {
+            /** @description True: the customer can enable and disable an automatic top-up of a credit unit with no money rate in the portal. Unset: only an operator can. */
+            portal_auto_topup?: boolean;
+            /**
+             * @description Whether an automatic top-up (in money or in a credit unit) tries a soft decline again. Unset or true: it tries on the schedule of `auto_topup_retry_hours`; a hard decline, or the last try, turns the top-up off. False: the first decline turns it off. An omitted key keeps its stored value.
+             * @default true
+             */
+            auto_topup_retries: boolean;
+            /**
+             * @description The delays in hours between the tries of an automatic top-up after a soft decline, each from the try before. At most 4 delays (5 tries in total), and they must add up to 72 hours or less. Unset: `[4, 12]` (the second try 4 hours after the first, the third 12 hours later). An omitted key keeps its stored value.
+             * @default 4,12
+             */
+            auto_topup_retry_hours: number[];
+            /** @description A retry schedule per kind of payment method, with the same rules as `auto_topup_retry_hours`. A kind with no list uses `auto_topup_retry_hours`. An omitted key keeps its stored value. */
+            auto_topup_retry_hours_by_method?: {
+                /** @description The auto topup retry hours by method's card. */
+                card?: number[];
+                /** @description The auto topup retry hours by method's bank debit. */
+                bank_debit?: number[];
+            };
+            /**
+             * @description Allow a `block` policy. While false, the access check and holds never refuse for credit: usage that credit does not pay is billed.
+             * @default false
+             */
+            blocking_enabled: boolean;
+            /**
+             * @description The policy when the customer, the grant and the plan price set none: `block` refuses usage that credit cannot pay, `bill` bills it. Applies only while `blocking_enabled` is true.
+             * @default bill
+             * @enum {string}
+             */
+            on_exhausted_default: "block" | "bill";
+            /**
+             * @description The part of the balance (before holds) that open holds can use, in basis points (5000 = 50%). Under a `block` policy, a hold or an access check with `estimate` is refused with `in_flight_limit` when the open holds plus the amount are more than this part. `in_flight_applies` sets whether that includes a hold with no other hold open.
+             * @default 5000
+             */
+            in_flight_share_bps: number;
+            /**
+             * @description When `in_flight_share_bps` applies. `always`: to every hold, so with the default 50% share a customer with 1.5 credits cannot start a 1-credit action. `other_holds_open`: only while the customer has another hold open, so one action at a time can spend the whole balance and parallel actions stay inside the share. A business that a person creates in the dashboard starts with `other_holds_open`.
+             * @default always
+             * @enum {string}
+             */
+            in_flight_applies: "always" | "other_holds_open";
+            /**
+             * @description How long a hold stays open when the request does not set `expires_in`.
+             * @default 60
+             */
+            hold_default_seconds: number;
+            /**
+             * @description For a meter with a credit cost, when a subscription in a free trial uses more than its credits. `refuse` (default): we refuse the usage. `overdraft_only`: the balance can go below zero to the overdraft limit, and no usage is billed in money. `as_paid`: the same rules as a paid subscription (block or bill, and the overdraft limit); usage billed in money goes on the first invoice after the trial. In a trial, the balance goes below zero only when the credit unit has an overage price, so that we can invoice the rest if the trial ends without a paid subscription. An omitted key keeps its stored value.
+             * @default refuse
+             * @enum {string}
+             */
+            trial_usage: "refuse" | "overdraft_only" | "as_paid";
+            /**
+             * @description For a meter with a credit cost, when a customer with no live subscription (for example, a customer who only bought credit packs) uses more than their credits. `block` (default): we refuse the usage. `as_subscriber`: the same block-or-bill rules as a subscriber (`on_exhausted_default`, the customer's override, a grant that says `block`). Usage billed in money at the credit unit's overage price goes on a one-off invoice after `no_subscription_invoice_after_days`. An omitted key keeps its stored value.
+             * @default block
+             * @enum {string}
+             */
+            no_subscription_usage: "block" | "as_subscriber";
+            /**
+             * @description When a customer with no live subscription can go below zero, to the overdraft limit, in a credit unit with an overage price. `needs_payment_method` (default): only with a payment method that we can charge, and while no overage invoice of theirs is unpaid or written off. `always`: no other condition. `never`: the balance never goes below zero. An omitted key keeps its stored value.
+             * @default needs_payment_method
+             * @enum {string}
+             */
+            no_subscription_overdraft: "needs_payment_method" | "always" | "never";
+            /**
+             * @description For a customer with no live subscription: the age, in days, of the oldest unbilled usage past the credits when we put it on a one-off invoice. Default 30. When the customer is archived, or their last subscription was cancelled after the usage, we invoice it at once. An omitted key keeps its stored value.
+             * @default 30
+             */
+            no_subscription_invoice_after_days: number;
+            /**
+             * @description When credit that we give back expires, in months after it is given back: after a usage event is voided, or after a credit note gives back the credit an invoice used, and the original grant has ended. `never`: it does not expire. Default 12. An omitted key keeps its stored value.
+             * @default 12
+             */
+            restore_expiry_months: number | "never";
+            /**
+             * @description What a hard decline does to an automatic top-up (money or a credit unit). `disable` (default): the top-up turns off. `keep_enabled`: the top-up stays on. We do not try the declined payment again; a threshold top-up runs again only after the balance goes above the threshold and then below it again, and a scheduled top-up runs at its next time. The `credit_auto_topup_failed` event then has `stays_enabled: true`, and `credit_auto_topup_hard_declined` is not sent. An omitted key keeps its stored value.
+             * @default disable
+             * @enum {string}
+             */
+            auto_topup_on_hard_decline: "disable" | "keep_enabled";
+            /**
+             * @description When the capture of a hold in a credit unit uses more than the hold. `debt` (default): the rest is taken from the balance, billed in money or taken below zero, as for any usage event. `cap_at_hold`: the event takes no more than the hold; the rest is not charged and shows in `credits_past_hold` of the usage event. A capture is never refused for this. A hold in money is not changed. An omitted key keeps its stored value.
+             * @default debt
+             * @enum {string}
+             */
+            capture_over_hold: "debt" | "cap_at_hold";
+            /**
+             * @description For a meter with a credit cost: how late a usage event can arrive and still be paid by the credit grant that was live at the event's timestamp, in hours. An event that arrives later is paid by the balance at the time it arrives. `0` = the balance at arrival always pays. An omitted key keeps its stored value.
+             * @default 12
+             */
+            late_event_grace_hours: number;
+            /** @description Per currency (ISO-4217 code in capitals), minor units: how far below zero a blocking check lets usage go. */
+            overdraft_limit_minor?: {
+                [key: string]: number;
+            };
+            /** @description Per currency: the smallest and largest credit purchase (pack or top-up) in minor units. */
+            top_up_limits?: {
+                [key: string]: {
+                    /** @description The min in minor units (integer), e.g. 2900 = $29.00. */
+                    min_minor?: number | null;
+                    /** @description The max in minor units (integer), e.g. 2900 = $29.00. */
+                    max_minor?: number | null;
+                };
+            };
+            /** @description Per currency, for free credit: `max_minor` refuses a grant above it; `alert_above_minor` records and alerts a grant above it. */
+            grant_limits?: {
+                [key: string]: {
+                    /** @description The max in minor units (integer), e.g. 2900 = $29.00. */
+                    max_minor?: number | null;
+                    /** @description The alert above in minor units (integer), e.g. 2900 = $29.00. */
+                    alert_above_minor?: number | null;
+                };
+            };
+            /** @description Per credit unit with no money rate, for a promotional credit grant in that unit: `max_units` refuses a grant above it; `alert_above_units` records and alerts a grant above it. Both are in the unit's smallest step, as a grant's `amount`. `grant_limits` does not apply to such a unit, because its credit has no money value. Not set = no limit. An omitted key keeps its stored value; send `{}` to remove every limit. */
+            unit_grant_limits?: {
+                [key: string]: {
+                    /** @description The unit grant limit's max units. */
+                    max_units?: number | null;
+                    /** @description The unit grant limit's alert above units. */
+                    alert_above_units?: number | null;
+                };
+            };
+            /**
+             * @description The tax treatment of paid credit when the grant does not set one.
+             * @enum {string}
+             */
+            default_tax_treatment?: "taxed_at_purchase" | "taxed_at_use" | null;
+            /** @description Grants that apply to all usage pay only these prices or meters: `{kind: "prices", prices: [...]}` or `{kind: "meters", meters: [...]}`. */
+            credit_scope?: {
+                /**
+                 * @description The credit scope's kind.
+                 * @enum {string}
+                 */
+                kind?: "prices" | "meters";
+                /** @description The credit scope's prices. */
+                prices?: string[];
+                /** @description The credit scope's meters. */
+                meters?: string[];
+            } | null;
+        } | null;
         /** @description The two invoice classes, configured separately. An absent class means auto-apply with no ceiling. A recurring invoice is one raised for a subscription (renewal, proration, mid-term item add); a one-time invoice is one with no subscription behind it. */
         CreditsFlexibilitySlots: {
             /** @description Applies to invoices for recurring charges. */
@@ -39286,6 +42564,24 @@ export interface components {
              * @enum {string}
              */
             status?: "active" | "restricted";
+            /** @description Only on `GET /v1/me`: the credential that made the request. Check `livemode` before the first write: a `test` key reaches test businesses only. */
+            credential?: {
+                /**
+                 * @description The businesses the credential reaches. API keys are `test` or `live`; `all` is the dashboard's own credential.
+                 * @enum {string}
+                 */
+                livemode: "test" | "live" | "all";
+                /**
+                 * @description `api` for an API key, `dashboard` for the dashboard's credential.
+                 * @enum {string}
+                 */
+                kind: "api" | "dashboard";
+                /**
+                 * @description What an API key may do. Null for a signed-in member, whose role decides.
+                 * @enum {string}
+                 */
+                access: "read" | "write" | null;
+            };
         };
         Country: {
             /**
@@ -39424,15 +42720,16 @@ export interface components {
                 /** @description Send this alert. */
                 enabled?: boolean;
             };
-            /** @description An alert at the time someone gives free credit above `credit_config.grant_limits.<currency>.alert_above_minor`: a wallet top-up of type `granted`, promotional credit or a promotional credit grant. */
+            /** @description An alert at the time someone gives free credit above `credit_config.grant_limits.<currency>.alert_above_minor`: a wallet top-up of type `granted`, promotional credit or a promotional credit grant. Also a promotional credit grant in a unit with no money rate above `credit_config.unit_grant_limits.<unit>.alert_above_units`. */
             large_grants?: {
                 /** @description Send this alert. */
                 enabled?: boolean;
             };
         };
         Business: {
-            /** @description Extra minutes before a period's usage closes, for apps that buffer events. Usage closes about 6 minutes after the period ends plus this wait, never more than 30 minutes. */
+            /** @description The usage grace window in minutes, 0 to 43200 (30 days), for apps that send events late. A metered subscription renews on time and its new period's plan credits start on time; only the invoice of the period that closed waits, for this long after the period ends plus about 6 minutes, so usage that arrives in the grace bills on it. The wait is never more than half the plan's billing interval or half the new period. Usage that arrives after the invoice finalizes bills on the next invoice. Only an invoice with metered usage waits. 0 = the invoice finalizes about 6 minutes after the period ends. */
             usage_close_delay_minutes?: number;
+            credit_config?: components["schemas"]["CreditConfig"];
             /** @description The object type. */
             object: string;
             /**
@@ -39904,6 +43201,8 @@ export interface components {
                      */
                     anchor?: "subscription" | "calendar";
                 } | null;
+                /** @description Per cycle, for a credit unit with no money rate: money per whole credit (a decimal in major units), a share of the plan fee. The credit of each term is then paid credit: units × this amount is deferred from the term invoice's revenue and recognised as the credits are used; what is left at expiry is breakage. Absent: the credit has no money value. Applies to a term grant written with its invoice; a grant that waits for its invoice to be paid, a reset window and carried credit have no cost basis. */
+                unit_cost_basis?: string;
                 /**
                  * @description Per cycle, a calendar window that starts before the subscription: grant it in full, prorated, or wait for the first full window. Null = the business setting.
                  * @enum {string}
@@ -40148,6 +43447,8 @@ export interface components {
                      */
                     anchor?: "subscription" | "calendar";
                 } | null;
+                /** @description Per cycle, for a credit unit with no money rate: money per whole credit (a decimal in major units), a share of the plan fee. The credit of each term is then paid credit: units × this amount is deferred from the term invoice's revenue and recognised as the credits are used; what is left at expiry is breakage. Absent: the credit has no money value. Applies to a term grant written with its invoice; a grant that waits for its invoice to be paid, a reset window and carried credit have no cost basis. */
+                unit_cost_basis?: string;
                 /**
                  * @description Per cycle, a calendar window that starts before the subscription: grant it in full, prorated, or wait for the first full window. Null = the business setting.
                  * @enum {string}
@@ -40225,6 +43526,44 @@ export interface components {
             tax_behavior?: "inclusive" | "exclusive";
             /** @description false to archive, true to restore */
             active?: boolean;
+            /** @description The name customers see, when it differs from `name`. */
+            external_name?: string | null;
+            /** @description A description of the price. */
+            description?: string | null;
+            /** @description Trial length, in `trial_period_unit`s. Send `null` with `trial_period_unit: null` to remove the trial. New subscriptions only. */
+            trial_period?: number | null;
+            /**
+             * @description Unit for `trial_period`.
+             * @enum {string}
+             */
+            trial_period_unit?: "day" | "week" | "month" | "year" | null;
+            /**
+             * @description What happens when this price's trial ends.
+             * @enum {string}
+             */
+            trial_end_action?: "activate_subscription" | "cancel_subscription" | null;
+            /** @description How many periods a subscription bills this price for; null bills until cancelled. */
+            billing_cycles?: number | null;
+            /** @description Units free in each billing period. */
+            free_quantity?: number | null;
+            /** @description Per-unit plan price: the fewest seats a customer can select in the portal. */
+            portal_min_quantity?: number | null;
+            /** @description Per-unit plan price: the most seats a customer can select in the portal. */
+            portal_max_quantity?: number | null;
+            /** @description Stored with the price. */
+            invoice_notes?: string | null;
+            /** @description Your own key-value data. Replaces the stored metadata; null clears it. */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Optimistic concurrency: the current resource_version; 409 on mismatch. */
+            expected_version?: number;
+            /** @description Cannot change after create. Sending it answers 400. */
+            usage_aggregation?: Record<string, never>;
+            /** @description Cannot change after create. Sending it answers 400. */
+            usage_recurring?: Record<string, never>;
+            /** @description Cannot change after create. Sending it answers 400. */
+            usage_time_unit?: Record<string, never>;
         };
         Price: {
             /** @description Credit this price grants. `{"kind":"pack", …}` on a one-time price: each paid invoice line grants `amount` × quantity (paid credit, active once the invoice is paid). `{"kind":"per_cycle", …}` on a recurring price: `amount` × item quantity of promotional credit each period, with optional rollover. Null grants nothing. */
@@ -40296,6 +43635,8 @@ export interface components {
                      */
                     anchor?: "subscription" | "calendar";
                 } | null;
+                /** @description Per cycle, for a credit unit with no money rate: money per whole credit (a decimal in major units), a share of the plan fee. The credit of each term is then paid credit: units × this amount is deferred from the term invoice's revenue and recognised as the credits are used; what is left at expiry is breakage. Absent: the credit has no money value. Applies to a term grant written with its invoice; a grant that waits for its invoice to be paid, a reset window and carried credit have no cost basis. */
+                unit_cost_basis?: string;
                 /**
                  * @description Per cycle, a calendar window that starts before the subscription: grant it in full, prorated, or wait for the first full window. Null = the business setting.
                  * @enum {string}
@@ -40478,7 +43819,56 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @description A coupon applied to a customer. */
+        CustomerDiscount: {
+            /**
+             * @description The object type; always `customer_discount`.
+             * @enum {string}
+             */
+            object?: "customer_discount";
+            /**
+             * @description The customer discount id.
+             * @example disc_…
+             */
+            id?: string;
+            /** @description The coupon code. */
+            coupon?: string;
+            /** @description The coupon's name. */
+            coupon_name?: string | null;
+            /**
+             * @description The customer discount's kind.
+             * @enum {string}
+             */
+            kind?: "percentage" | "fixed_amount";
+            /** @description The percentage off, in basis points. */
+            percent_off_bps?: number | null;
+            /** @description The fixed amount off, in minor units. */
+            amount_off_minor?: number | null;
+            /** @description The currency of a fixed amount. Invoices in other currencies get no discount. */
+            currency?: string | null;
+            /**
+             * @description The customer discount's apply on.
+             * @enum {string}
+             */
+            apply_on?: "invoice_amount" | "each_specified_item";
+            /**
+             * @description The customer discount's duration type.
+             * @enum {string}
+             */
+            duration_type?: "once" | "repeating" | "forever";
+            /** @description How many more invoices it discounts. Null: every invoice until removed. */
+            remaining_invoices?: number | null;
+            /** @description How many invoices it discounts in total. Null: no limit. */
+            total_invoices?: number | null;
+            /**
+             * Format: date-time
+             * @description When the customer discount was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+        };
         Customer: {
+            /** @description The coupons applied to this customer that can still discount an invoice. Emitted by GET (detail) only. */
+            readonly discounts?: components["schemas"]["CustomerDiscount"][];
             /** @description Credit policy for this customer: an override of what happens when credit is used up (ignored after `override_expires_at`), and an overdraft limit per currency. Replaced whole; null = the business's settings. */
             credit_settings?: {
                 /**
@@ -41350,7 +44740,39 @@ export interface components {
                 quantity: number;
                 /** @description Custom price override (flat/per-unit only), minor units; falls back to the catalog price when omitted */
                 unit_price_minor?: number;
+                /** @description Units of this item not charged. Default: the price's. */
+                free_quantity?: number;
+                /** @description Billing cycles for this item. On the plan item, the subscription runs this many paid cycles and then cancels. Default: the price's. */
+                billing_cycles?: number;
+                /** @description Your own key-value data on this item. */
+                metadata?: {
+                    [key: string]: unknown;
+                };
             }[];
+            /**
+             * @description Overrides the customer's setting for this subscription. `on` charges the customer's payment method. With `on`, a create that charges now (no trial, starts now, invoiced now) needs a usable payment method when the first invoice has an amount due: without one it answers 400 `no_chargeable_payment_method`. A first invoice of 0 (a free plan) needs no card. `off` raises invoices without charging them.
+             * @enum {string}
+             */
+            auto_collection?: "on" | "off";
+            /** @description Days until an invoice of this subscription is due. Default: the customer's. */
+            net_term_days?: number;
+            /** @description The most refundable credit that is applied automatically to one invoice of this subscription, in minor units. null or omitted: no limit for this subscription; 0: never. It can only narrow the business's credits_flexibility. */
+            max_refundable_credits_usage_minor?: number | null;
+            /** @description The most excess payment that is applied automatically to one invoice of this subscription, in minor units. null or omitted: no limit for this subscription; 0: never. */
+            max_excess_payment_usage_minor?: number | null;
+            /** @description Purchase order number. */
+            po_number?: string;
+            /** @description Notes printed on this subscription's invoices. */
+            invoice_notes?: string;
+            /**
+             * @description A buyer is present and can complete an authentication challenge (a checkout page). Default false: a server-to-server create, where `requires_action` is a refusal.
+             * @default false
+             */
+            on_session: boolean;
+            /** @description Your own key-value data on the subscription, for example your app's account id. Checked against the business's metadata key rules (400 with `param: "metadata"` when a value breaks one), the same as checkout `metadata`. */
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** @description 0 disables the plan's trial; omitted applies the plan price's trial_period. */
             trial_days?: number;
             /**
@@ -41458,6 +44880,76 @@ export interface components {
             } | null;
             /** @description Upcoming renewals scheduled to be skipped, as the instants the clock renews at. See `skip_renewal`. */
             skipped_renewals?: string[];
+            /** @description `billing_rules_config.failed_change_charge: apply_when_paid`: a change held until its invoice is paid. Nothing in it applies before then. Null when nothing is held. GET (detail) only. Cancel it with `DELETE …/subscriptions/{sub}/pending_change`. */
+            readonly pending_change?: {
+                /**
+                 * @description The object type; always `pending_change`.
+                 * @enum {string}
+                 */
+                object?: "pending_change";
+                /** @description The pending change (`spc_…`). */
+                id?: string;
+                /**
+                 * @description `change`: a plan or item change; `item_add`: `POST …/items`.
+                 * @enum {string}
+                 */
+                kind?: "change" | "item_add";
+                /**
+                 * @description The pending change's status.
+                 * @enum {string}
+                 */
+                status?: "pending" | "applied" | "expired" | "cancelled";
+                /** @description The invoice whose payment applies the change. */
+                invoice?: string | null;
+                /** @description The pending change's invoice status. */
+                invoice_status?: string | null;
+                /** @description What the invoice collects, in minor units. */
+                amount_due_minor?: number | null;
+                /** @description The pending change's currency (ISO-4217 code). */
+                currency?: string | null;
+                /** @description The change as it was requested. */
+                request?: {
+                    [key: string]: unknown;
+                };
+                /** @description What the change does to each item, with the product name. */
+                items?: ({
+                    /**
+                     * @description What the run did with the record.
+                     * @enum {string}
+                     */
+                    action?: "change" | "add" | "remove";
+                    /** @description The price's id (a slug id, e.g. `pro-monthly-usd`). */
+                    price?: string | null;
+                    /** @description The item's product name. */
+                    product_name?: string | null;
+                    /** @description The quantity. */
+                    quantity?: number | null;
+                    /** @description A change: the item's product before it. */
+                    from_product_name?: string | null;
+                    /** @description A change: the item's quantity before it. */
+                    from_quantity?: number | null;
+                })[];
+                /**
+                 * @description Where the pending change comes from.
+                 * @enum {string}
+                 */
+                source?: "api" | "dashboard" | "checkout" | "portal";
+                /**
+                 * Format: date-time
+                 * @description The instant the change is priced and applied as of.
+                 */
+                requested_at?: string;
+                /**
+                 * Format: date-time
+                 * @description When it expires unpaid: the earliest of the term end and the expiry hours.
+                 */
+                expires_at?: string;
+                /**
+                 * @description The pending change's end reason.
+                 * @enum {string}
+                 */
+                end_reason?: "expired" | "replaced" | "cancelled" | "voided" | "moved" | null;
+            } | null;
             /** @description What one billing period charges for the recurring items, in minor units, net of discounts that last more than one period and before tax; null when cancelled or when an item recurs on a different cadence than the subscription */
             recurring_amount_minor?: number | null;
             /** @description DERIVED, read-only: cash collected on this subscription's invoices, in its currency — succeeded payments minus succeeded refunds. Credits applied to invoices are excluded. Emitted by GET (detail) only. */
@@ -41473,10 +44965,163 @@ export interface components {
             custom_fields?: {
                 [key: string]: unknown;
             } | null;
+            /** @description Your own key-value data: set on create, by a checkout's `metadata`, or by an update. Never interpreted. */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * @description The customer's id. Present on retrieve and on create.
+             * @example cus_…
+             */
+            customer?: string;
             /** @description The shipping address this subscription is set to ship to; null when it ships to the customer's default. Emitted by GET (detail), create, and an update that sends it. */
             shipping_address_id?: string | null;
             /** @description Where this subscription ships now: its own address, else the customer's default, else null. Invoices record a copy when they are issued. */
             shipping_address?: components["schemas"]["ShippingAddress"] | null;
+            /** @description The subscription's items (plan, add-ons, usage prices). On retrieve, list, create and update. */
+            items?: components["schemas"]["SubscriptionItem"][];
+            /**
+             * Format: date-time
+             * @description The current billing term start. Null while `in_trial`.
+             */
+            current_period_start?: string | null;
+            /**
+             * Format: date-time
+             * @description The subscription's trial start.
+             */
+            trial_start?: string | null;
+            /**
+             * Format: date-time
+             * @description The subscription's trial end.
+             */
+            trial_end?: string | null;
+            /** @description The subscription's cancel at period end. */
+            cancel_at_period_end?: boolean;
+            /**
+             * Format: date-time
+             * @description When it was cancelled; for a subscription scheduled to cancel, when it will cancel.
+             */
+            canceled_at?: string | null;
+            /** @description The subscription's cancel reason. */
+            cancel_reason?: string | null;
+            /** @description The subscription's cancel reason code. */
+            cancel_reason_code?: string | null;
+            /**
+             * Format: date-time
+             * @description The requested start, for a backdated or future-dated subscription.
+             */
+            start_date?: string | null;
+            /**
+             * Format: date-time
+             * @description When the subscription started (ISO-8601 UTC).
+             */
+            started_at?: string | null;
+            /**
+             * Format: date-time
+             * @description The activated time (ISO-8601 UTC).
+             */
+            activated_at?: string | null;
+            /** @description Interval count of the billing term. */
+            billing_period?: number;
+            /**
+             * @description The subscription's billing period unit.
+             * @enum {string}
+             */
+            billing_period_unit?: "day" | "week" | "month" | "year";
+            /** @description Cycles left after the current one; null renews until cancelled. */
+            remaining_billing_cycles?: number | null;
+            /**
+             * @description This subscription's setting; null follows the customer's.
+             * @enum {string}
+             */
+            auto_collection?: "on" | "off" | null;
+            /** @description The subscription's create pending invoices. */
+            create_pending_invoices?: boolean | null;
+            /** @description The subscription's net term days. */
+            net_term_days?: number | null;
+            /** @description The purchase order number. */
+            po_number?: string | null;
+            /** @description The subscription's invoice notes. */
+            invoice_notes?: string | null;
+            /** @description The max refundable credits usage in minor units (integer), e.g. 2900 = $29.00. */
+            max_refundable_credits_usage_minor?: number | null;
+            /** @description The max excess payment usage in minor units (integer), e.g. 2900 = $29.00. */
+            max_excess_payment_usage_minor?: number | null;
+            /** @description Monthly recurring revenue in minor units; 0 while in a trial. */
+            mrr?: number | null;
+            /** @description The payment method this subscription charges (`pm_…`); null charges the customer's primary. On retrieve. */
+            default_payment_method?: string | null;
+            /** @description The active discount, or null. On retrieve. */
+            discount?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Unpaid invoices that are due. On retrieve. The invoice of a `pending_change` is not counted: it is voided unless paid. */
+            due_invoices_count?: number;
+            /** @description Their amount due. On retrieve. */
+            total_dues_minor?: number;
+            /**
+             * Format: date-time
+             * @description The subscription's due since.
+             */
+            due_since?: string | null;
+            /** @description On list. */
+            customer_email?: string | null;
+            /** @description On list. */
+            customer_name?: string | null;
+            /** @description On list. */
+            customer_company?: string | null;
+            /** @description On list. */
+            customer_phone?: string | null;
+            /**
+             * Format: date-time
+             * @description When the subscription was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description When the subscription was last changed (ISO-8601 UTC).
+             */
+            updated_at?: string;
+            /** @description A number that goes up on every change. */
+            resource_version?: number;
+        } & {
+            [key: string]: unknown;
+        };
+        SubscriptionItem: {
+            /**
+             * @description The subscription item's id.
+             * @example si_…
+             */
+            id: string;
+            /** @description The price id. */
+            price: string;
+            /** @description The quantity. */
+            quantity: number;
+            /** @description The subscription item's price model. */
+            price_model?: string;
+            /**
+             * @description The subscription item's price type.
+             * @enum {string}
+             */
+            price_type?: "recurring" | "one_time";
+            /** @description The billing interval. */
+            interval?: string | null;
+            /** @description The unit price this item bills, including a custom price. */
+            unit_price_minor?: number | null;
+            /** @description The subscription item's unit price overridden. */
+            unit_price_overridden?: boolean;
+            /** @description The catalog price this item departs from; null at list price. */
+            catalog_amount_minor?: number | null;
+            /** @description The product id. */
+            product?: string;
+            /** @description The subscription item's product name. */
+            product_name?: string;
+            /** @description `plan`, `addon` or `charge`: find the plan item by this. */
+            product_kind?: string;
+            /** @description The subscription item's free quantity. */
+            free_quantity?: number | null;
+            /** @description The subscription item's billing cycles. */
+            billing_cycles?: number | null;
         } & {
             [key: string]: unknown;
         };
@@ -41653,17 +45298,19 @@ export interface components {
             /** @description False suppresses the PRORATED credit and charge. On a term reset the full new-term charge is not a prorated artefact and still happens — only the unused-time credit is dropped, so there is no free term. Omitted = the business rule for the change's direction (`billing_rules_config.upgrade_proration` or `downgrade_proration`; unset, prorated). A value sent here applies to this change in either direction. A longer billing period is an upgrade and a shorter one a downgrade; on the same period the recurring amount per month decides. */
             prorate?: boolean;
             /**
-             * @description `now` applies the change; `end_of_term` schedules it for the current term end (the trial end in a trial) and returns `scheduled_change`. Omitted = the business rule for the change's direction (`billing_rules_config.upgrade_timing` or `downgrade_timing`); unset, `now`. Omitted with any of `at`, `reset_term`, `prorate`, `invoice_immediately`, `metadata` or a discount = `now` when the rule allows it. A timing the rule does not allow is refused (400). A change at the end of the term cannot carry those fields, or `on_charge_failure`, `coupons`, `downgrade_credit`, `plan_credits` or `allowances` (400 names them): it follows the business rules when it lands.
+             * @description `now` applies the change; `end_of_term` schedules it for the current term end (the trial end in a trial) and returns `scheduled_change`. Omitted = the business rule for the change's direction (`billing_rules_config.upgrade_timing` or `downgrade_timing`); unset, `now`. Omitted with any of `at`, `reset_term`, `prorate`, `invoice_immediately`, `metadata` or a discount = `now` when the rule allows it. A timing the rule does not allow is refused (400). A change at the end of the term cannot carry those fields, or `on_charge_failure`, `coupons`, `downgrade_credit`, `net_credit_documents`, `plan_credits` or `allowances` (400 names them): it follows the business rules when it lands.
              * @enum {string}
              */
             timing?: "now" | "end_of_term";
-            /** @description Invoicing options: true raises the proration invoice now and collects it; false queues the same lines as unbilled charges, folded into the next renewal invoice (where tax and account credits are applied). OMITTED resolves the business setting `default_invoice_immediately` (Settings > Billing LogIQ > Update subscription), which is off by default — so omitting this queues unbilled charges unless the business turned it on. Pass true explicitly to invoice now regardless of that setting. Credits (downgrade / term-reset) are issued immediately either way. */
+            /** @description Invoicing options: true raises the proration invoice now and collects it; false queues the same lines as unbilled charges, folded into the next renewal invoice (where tax and account credits are applied). OMITTED resolves the business setting `default_invoice_immediately` (Settings > Billing LogIQ > Update subscription), which is off by default — so omitting this queues unbilled charges unless the business turned it on. Pass true explicitly to invoice now regardless of that setting. Credits (downgrade / term-reset) are issued immediately either way. A change that nets to a credit ignores this field: see `net_credit_documents`. */
             invoice_immediately?: boolean;
             /**
-             * @description What a failed charge on this change's invoice does, for this call only. `start_dunning`: dunning retries it now, as any failed invoice. `next_renewal`: dunning waits for the term end (not after a term reset). Omitted: the business rule (`billing_rules_config.failed_change_charge`).
+             * @description What a failed charge on this change's invoice does, for this call only. `start_dunning`: dunning retries it now, as any failed invoice; a hard decline runs the final action at once. `next_renewal`: dunning waits for the term end (not after a term reset). `revert`: a hard decline undoes the change, voids the invoice and answers 402 `payment_failed`. `apply_when_paid`: the change applies only when its invoice is paid; unpaid, nothing changes and the call answers 402 with `pending_change`. Omitted: the business rule (`billing_rules_config.failed_change_charge`).
              * @enum {string}
              */
-            on_charge_failure?: "start_dunning" | "next_renewal";
+            on_charge_failure?: "start_dunning" | "next_renewal" | "revert" | "apply_when_paid";
+            /** @description `apply_when_paid`: the payer is present. The held invoice is collected on session, so a payment that needs authentication answers 402 `requires_action` with `payment_intent` and `next_action`; complete it and call `POST …/invoices/{inv}/collect` with `payment_intent`. Omitted: off session, where the bank asks the payer and the change waits for the payment. */
+            on_session?: boolean;
             /**
              * @description What this plan change does with the subscription's coupons, for this call only. `keep`: every coupon stays. `drop`: every coupon is removed before the change bills. `keep_if_valid`: a coupon that names plans and does not cover the new plan is removed. Manual discounts always stay. Omitted: the business rule (`billing_rules_config.plan_change_coupons`).
              * @enum {string}
@@ -41675,7 +45322,12 @@ export interface components {
              */
             downgrade_credit?: "credit_balance" | "refund";
             /**
-             * @description How a plan that grants credits per cycle grants them at this change, for this call only. `full`: the new plan's credits for the current window now. `prorated`: the part of them that matches the rest of the window (upgrade only; 400 on a downgrade). `next_window`: the old grant runs to its window end, and the new plan grants from the next window. On an upgrade it replaces `billing_rules_config.plan_credits.on_upgrade`, on a downgrade `on_downgrade`. Omitted: the business rule.
+             * @description The documents a change that nets to a credit raises, for this call only. `credit_note_and_invoice`: a credit note for the unused time and an invoice for the new lines, with the credit applied to that invoice at once (`proration_invoice` and `credit_note` are both set). `one_credit_note`: one credit note for the net credit, and `proration_invoice` is null. Omitted: the business rule (`billing_rules_config.net_credit_documents`; not saved: two documents when the change is invoiced immediately and the term's invoices can take the credit, else one note). No effect on a change that nets to a charge.
+             * @enum {string}
+             */
+            net_credit_documents?: "credit_note_and_invoice" | "one_credit_note";
+            /**
+             * @description How a plan that grants credits per cycle grants them at this change, for this call only. `full`: the new plan's credits for the current window now. `prorated`: the part of them that matches the rest of the window. `next_window`: the old grant runs to its window end, and the new plan grants from the next window. On an upgrade it replaces `billing_rules_config.plan_credits.on_upgrade`, on a downgrade `on_downgrade`. Omitted: the business rule.
              * @enum {string}
              */
             plan_credits?: "full" | "prorated" | "next_window";
@@ -41851,6 +45503,11 @@ export interface components {
              */
             downgrade_credit?: "credit_balance" | "refund";
             /**
+             * @description As on `POST …/change`: `one_credit_note` previews one credit line for the net credit and no invoice (`invoice_total_minor` 0). Omitted: the business rule. Not with a scheduled `change_option` (400).
+             * @enum {string}
+             */
+            net_credit_documents?: "credit_note_and_invoice" | "one_credit_note";
+            /**
              * @description `specific_date` previews the edit as `POST …/schedule` (type `change`) applies it at `changes_scheduled_at`, priced from today's state. A scheduled change carries only `changes`/`adds`/`removes`, so a coupon, manual discount, `prorate` or `reset_term` alongside it is refused (400). `end_of_term` previews it as a change scheduled for the current term end (the trial end in a trial) books it at that instant: nothing is left to prorate, and `next_renewal` is the renewal at the new composition. `prorate` and `reset_term` are refused (400); a coupon or manual discount is previewed onto that renewal.
              * @enum {string}
              */
@@ -41920,10 +45577,10 @@ export interface components {
              */
             dunning_status?: "in_progress" | "parked" | "succeeded" | "exhausted" | "stopped" | null;
             /**
-             * @description What an engine-made invoice is for: `usage_interim` = usage billed during the period when it reached the usage invoice threshold; `credit_purchase` = an automatic credit top-up. Null on every other invoice.
+             * @description What an engine-made invoice is for: `usage_interim` = usage billed during the period when it reached the usage invoice threshold; `credit_purchase` = an automatic credit top-up; `late_usage` = usage of an invoiced period that arrived after a cancelled subscription's last invoice (`billing_rules_config.late_usage_invoices`). Null on every other invoice.
              * @enum {string}
              */
-            purpose?: "usage_interim" | "credit_purchase" | null | null;
+            purpose?: "usage_interim" | "credit_purchase" | "late_usage" | null | null;
             /** @description A debit has been accepted by the gateway and has not settled. **RETRIEVE only** — the list route does not compute it, so treat an absent key as unknown rather than as false. Collection is refused while one is live, so a UI must not offer "collect" against it. */
             payment_in_flight?: boolean;
             /** @description The in-flight debit is paused for the payer's own bank approval rather than for a settlement network — it is waiting on the CUSTOMER and expires unapproved. True when the gateway said so for this debit, or when the RBI/NPCI rule predicts it (INR over ₹15,000 on the card and UPI rails) for a rail that states nothing. NOT amount-gated: an issuer may demand additional-factor authentication at any figure. RETRIEVE only. */
@@ -42095,6 +45752,11 @@ export interface components {
             finalized_at?: string | null;
             /**
              * Format: date-time
+             * @description Set on a held renewal invoice while it is `pending`: when it finalizes. With a usage grace window (`usage_close_delay_minutes`), a metered renewal runs on time and its invoice waits, so usage that arrives in the grace bills on it. At the renewal you get `subscription_renewed` and `invoice_pending_created`; `invoice_generated`, `invoice_closed`, `usage_recorded` and the payment events come at this time. Null on every other invoice.
+             */
+            usage_closes_at?: string | null;
+            /**
+             * Format: date-time
              * @description Last change to this invoice.
              */
             updated_at?: string;
@@ -42205,6 +45867,8 @@ export interface components {
                  * @description When the transaction happened (ISO-8601 UTC).
                  */
                 occurred_at?: string;
+                /** @description The payment (`pay_…`) to pass to the refund endpoint. On a refund, the payment it reverses. Null when no payment record exists. */
+                payment?: string | null;
             })[];
             /** @description The shipping address printed on the invoice, or null. */
             shipping_address?: components["schemas"]["DocumentAddress"];
@@ -42272,6 +45936,8 @@ export interface components {
                 item_level_discount_minor?: number;
                 /** @description The most a credit-note item that names this line (`invoice_line_item`) can still credit: the line's amount after discount, plus its tax when the tax was added to the price, less what non-voided credit notes already credit against the line. A tax line is worth its own amount. Never negative. Present on the single-invoice read only. */
                 creditable_minor?: number;
+                /** @description A credit pack line only: the most a note with `pack_refund: full` can credit against it, used credits included. `creditable_minor` is the default, the unused part only. Present on the single-invoice read only. */
+                pack_full_creditable_minor?: number;
                 /** @description SNAPSHOT of the HSN/SAC that classified this line at issue (India GST). Null outside that regime and on lines that classify no supply. */
                 tax_code?: string | null;
                 /**
@@ -42474,6 +46140,19 @@ export interface components {
             product_ids?: string[];
             /** @description Price ids of this item kind, for constraint_type='specific'. A line matches on its product OR its price. */
             price_ids?: string[];
+            /** @description Plans and addons only, with constraint_type 'all' or 'specific'. A line matches only when its price bills on one of these periods, for example yearly only. Empty means any period. Prices added later are included when their period matches. */
+            billing_periods?: ({
+                /**
+                 * @description The billing interval.
+                 * @enum {string}
+                 */
+                interval: "day" | "week" | "month" | "year";
+                /**
+                 * @description The billing period's interval count.
+                 * @default 1
+                 */
+                interval_count: number;
+            })[];
         };
         CouponCreate: {
             /** @description The coupon's code. Letters, digits, underscores and hyphens only. Codes imported before this rule still apply. */
@@ -42500,8 +46179,13 @@ export interface components {
             duration_in_periods?: number;
             /** @description The most times the coupon can be redeemed. */
             max_redemptions?: number;
-            /** @description Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400. */
+            /** @description Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400. */
             max_redemptions_per_customer?: number;
+            /**
+             * @description How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.
+             * @enum {string}
+             */
+            per_customer_limit_by?: "customer" | "email";
             /**
              * Format: date-time
              * @description The last time the coupon can be redeemed (ISO-8601 UTC).
@@ -42645,8 +46329,13 @@ export interface components {
             times_redeemed?: number;
             /** @description The most times the coupon can be redeemed. */
             max_redemptions?: number | null;
-            /** @description Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400. */
+            /** @description Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400. */
             max_redemptions_per_customer?: number | null;
+            /**
+             * @description How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.
+             * @enum {string}
+             */
+            per_customer_limit_by?: "customer" | "email";
             /** @description True if the coupon is active. */
             active?: boolean;
             /**
@@ -42975,18 +46664,22 @@ export interface components {
             /** @description The coupon's id (a slug id, e.g. `welcome-10`). */
             coupon?: string;
             /**
-             * @description The redemption's status.
+             * @description `released`: redeemed on an invoice that was then voided. It counts toward no limit.
              * @enum {string}
              */
-            status?: "active" | "exhausted" | "removed";
+            status?: "active" | "exhausted" | "removed" | "released";
             /** @description null = forever */
             remaining_periods?: number | null;
             /** @description The customer's id (cus_…). */
             customer: string;
-            /** @description The subscription's id (sub_…). */
+            /** @description The account holder's display name. Null when the customer has no name. */
+            customer_name?: string | null;
+            /** @description Null for a coupon redeemed on an invoice with no subscription. */
             subscription: string | null;
             /** @description First non-voided invoice it discounted */
             invoice?: string | null;
+            /** @description The number of that invoice, such as `INV-229`. */
+            invoice_number?: string | null;
             /**
              * Format: date-time
              * @description When the coupon was redeemed (ISO-8601 UTC).
@@ -43243,8 +46936,13 @@ export interface components {
             redeem_by?: string | null;
             /** @description The most times the coupon can be redeemed. */
             max_redemptions?: number | null;
-            /** @description Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400. */
+            /** @description Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400. */
             max_redemptions_per_customer?: number | null;
+            /**
+             * @description How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.
+             * @enum {string}
+             */
+            per_customer_limit_by?: "customer" | "email";
             /** @description The name printed on invoices for this discount. */
             invoice_name?: string | null;
             /**
@@ -43293,10 +46991,15 @@ export interface components {
              * @enum {string}
              */
             kind: "adjustment" | "refundable";
-            /** @description Reason code, e.g. write_off, order_cancellation, product_unsatisfactory. */
+            /** @description Why the credit note is issued: `write_off`, `subscription_change`, `subscription_cancellation`, `chargeback` or `other`. */
             reason_code?: string;
             /** @description Why the credit note is issued. */
             reason?: string;
+            /**
+             * @description For a credit pack line. `unused` (default): the note can credit the unused credits only, and voids them. `full`: the note can credit the whole line, used credits too; the unused credits are voided and the note reverses the revenue of the used credits (credit adjustments). In a unit with no money value, the used credits are first taken again from the customer's other grants in the unit, as far as their balance allows (holds keep theirs); the rest is written off. For any other pack, a full refund is refused while the customer has other credit left in the same unit. Refused when no item names a credit pack line.
+             * @enum {string}
+             */
+            pack_refund?: "unused" | "full";
             /** @description A note to the customer, stored on the credit note. */
             customer_notes?: string;
             /** @description The lines to credit. */
@@ -43320,6 +47023,11 @@ export interface components {
             }[];
         };
         CreditNote: {
+            /**
+             * @description `full`: a credit pack line was credited whole, used credits too. `unused`: the unused part only (every note before this field).
+             * @enum {string}
+             */
+            pack_refund?: "unused" | "full";
             /** @description The object type. */
             object: string;
             /**
@@ -43427,6 +47135,10 @@ export interface components {
                  * @description Inclusive, matching the invoice line this credits.
                  */
                 period_end?: string | null;
+                /** @description The line kind, in the invoice line vocabulary. `tax` = the tax this note reverses, written as its own item. Null on items that record no kind (every supply line, and items written before the kind was recorded). */
+                kind?: string | null;
+                /** @description Single credit-note read only. True when this item's amount is stated in `taxes[]`: a document prints it there, not as a line, so the tax shows once. The printed lines are then the items where this is false. An item without a recorded kind counts when it carries the tax-reversal wording, credits no invoice line and sums exactly to the `taxes[]` total. */
+                stated_in_taxes?: boolean;
             })[];
             /** @description What was taken off subtotal_minor and which bucket it went back to. Amounts are positive magnitudes. Present on the single credit-note read only. */
             discounts?: ({
@@ -43605,8 +47317,14 @@ export interface components {
             gateway_key?: string | null;
             /** @description The customer's id (cus_…). */
             customer?: string | null;
+            /** @description The account holder's display name. Null when the customer has no name. */
+            customer_name?: string | null;
             /** @description The invoice's id (inv_…). */
             invoice?: string | null;
+            /** @description The invoice's number, such as `INV-229`. Null when it has none. */
+            invoice_number?: string | null;
+            /** @description The credit note's number, such as `CN-31`. Null when there is none. */
+            credit_note_number?: string | null;
             /**
              * @description The payment this transaction belongs to (a charge) or reverses (a refund) — the id payment events carry as `content.payment.id`.
              * @example pay_…
@@ -43971,6 +47689,19 @@ export interface components {
              * @example 4242
              */
             payment_method_last4?: string | null;
+            /** @description The error of the newest attempt, when that attempt failed. Null when the intent has no attempt, or when its newest attempt did not fail. */
+            last_error?: {
+                /**
+                 * @description The gateway's error code for the failed attempt.
+                 * @example card_declined
+                 */
+                code: string | null;
+                /**
+                 * @description The gateway's error message for the failed attempt.
+                 * @example Your card was declined.
+                 */
+                message: string | null;
+            } | null;
         };
         PaymentIntentList: {
             /**
@@ -44047,6 +47778,13 @@ export interface components {
              * @enum {string}
              */
             livemode?: "test" | "live";
+            /** @description The event types this endpoint receives. Omit or null = every type, including types added later. Each entry must be a type from the event reference (400 otherwise). */
+            event_types?: string[] | null;
+            /**
+             * @description The webhook endpoint's description.
+             * @example Order fulfilment
+             */
+            description?: string | null;
         };
         WebhookEndpoint: {
             /** @description The object type. */
@@ -44072,6 +47810,18 @@ export interface components {
             signing_secret?: string;
             /** @description Whether the endpoint receives webhooks. */
             enabled: boolean;
+            /** @description The event types this endpoint receives; null = every type. */
+            event_types?: string[] | null;
+            /**
+             * @description The webhook endpoint's description.
+             * @example Order fulfilment
+             */
+            description?: string | null;
+            /**
+             * Format: date-time
+             * @description When the webhook endpoint was created (ISO-8601 UTC).
+             */
+            created_at?: string;
         };
         WebhookEndpointList: {
             /**
@@ -44713,6 +48463,344 @@ export interface components {
             /** @description The role's version. */
             version?: number;
         };
+        CreditOverdraftLimitSet: {
+            /** @description How far below 0 the balance may go, in the unit's smallest step (as a grant's `amount`). The unit's own limit; a plan and a customer can override it. Default 0. Only for a unit with no rate. The gate enforces it. */
+            overdraft_limit: number;
+        };
+        CreditOverdraftLimit: {
+            /**
+             * @description The object type; always `credit_overdraft_limit`.
+             * @enum {string}
+             */
+            object: "credit_overdraft_limit";
+            /** @description The credit unit. */
+            unit: string;
+            /**
+             * @description The credit overdraft limit's level.
+             * @enum {string}
+             */
+            level: "unit" | "plan" | "customer";
+            /** @description The plan, for a plan override. */
+            product?: string | null;
+            /** @description The plan's name. */
+            product_name?: string | null;
+            /** @description cus_…, for a customer override. */
+            customer?: string | null;
+            /** @description The customer's name. */
+            customer_name?: string | null;
+            /** @description In the unit's smallest step. */
+            overdraft_limit: number;
+            /** @description In whole units, for example `2.5`. */
+            overdraft_limit_decimal?: string;
+            /**
+             * Format: date-time
+             * @description When the credit overdraft limit was last changed (ISO-8601 UTC).
+             */
+            updated_at?: string;
+        };
+        CreditOverdraftLimitList: {
+            /**
+             * @description The object type; always `list`.
+             * @enum {string}
+             */
+            object: "list";
+            /** @description The rows on this page. */
+            data: components["schemas"]["CreditOverdraftLimit"][];
+            /** @description Whether more rows exist after this page. */
+            has_more: boolean;
+            /** @description Pass as `starting_after` to get the next page. Null on the last page. */
+            next_cursor: string | null;
+        };
+        CreditOverdraftLimitDeleted: {
+            /**
+             * @description The object type; always `credit_overdraft_limit`.
+             * @enum {string}
+             */
+            object: "credit_overdraft_limit";
+            /** @description The credit unit. */
+            unit: string;
+            /**
+             * @description The credit overdraft limit deleted's level.
+             * @enum {string}
+             */
+            level?: "plan";
+            /** @description The plan. */
+            product?: string;
+            /** @description The credit overdraft limit deleted's deleted. */
+            deleted: boolean;
+        };
+        CustomerCreditOverdraftLimit: {
+            /**
+             * @description The object type; always `customer_credit_overdraft_limit`.
+             * @enum {string}
+             */
+            object: "customer_credit_overdraft_limit";
+            /** @description The credit unit. */
+            unit: string;
+            /** @description Plural name of the unit. */
+            unit_name?: string;
+            /** @description The unit's decimal places. */
+            decimals?: number;
+            /** @description The limit that applies now, in the unit's smallest step. */
+            overdraft_limit: number;
+            /** @description The same, in whole units. */
+            overdraft_limit_decimal?: string;
+            /**
+             * @description Where the limit comes from. `default` = no limit is set: 0.
+             * @enum {string}
+             */
+            source: "customer" | "plan" | "unit" | "default";
+            /** @description The customer's own limit; null = none. */
+            customer_override: number | null;
+        };
+        CustomerCreditOverdraftLimitList: {
+            /**
+             * @description The object type; always `list`.
+             * @enum {string}
+             */
+            object: "list";
+            /** @description The rows on this page. */
+            data: components["schemas"]["CustomerCreditOverdraftLimit"][];
+        };
+        CreditVoidReason: {
+            /**
+             * @description The reason.
+             * @enum {string}
+             */
+            reason: "customer_request" | "fraud" | "goodwill_reversal" | "billing_error" | "migration" | "other";
+            /** @description At most 500 characters. */
+            note: string | null;
+            /**
+             * Format: date-time
+             * @description When the credit void reason was created (ISO-8601 UTC).
+             */
+            created_at: string;
+        };
+        CreditGrantVoid: {
+            /**
+             * @description Why you void the grant. Optional; the dashboard asks for one.
+             * @enum {string}
+             */
+            reason?: "customer_request" | "fraud" | "goodwill_reversal" | "billing_error" | "migration" | "other";
+            /** @description At most 500 characters. Required with `other`; needs `reason`. */
+            note?: string;
+            /** @description True voids a PAID grant with no credit note: the customer gets no money back, and the cost of the unused credit is written off as breakage. Needs `reason`. The audit log keeps the note, or the reason when there is no note. A promotional grant answers 400. You cannot undo this. */
+            without_refund?: boolean;
+        };
+        CreditDeferredRevenue: {
+            /**
+             * @description The object type; always `credit_deferred_revenue`.
+             * @enum {string}
+             */
+            object: "credit_deferred_revenue";
+            /** @description The business time zone the months are cut in. */
+            time_zone: string;
+            /** @description YYYY-MM. */
+            from: string;
+            /** @description YYYY-MM. */
+            to: string;
+            /** @description The rows on this page. */
+            data: {
+                /** @description YYYY-MM. */
+                month: string;
+                /** @description ISO 4217. */
+                currency: string;
+                /** @description The credit unit; `money` for credit in money. */
+                unit: string;
+                /** @description Paid credit at cost at the start of the month. */
+                opening_minor: number;
+                /** @description Paid credit that became spendable. */
+                sold_minor: number;
+                /** @description Credit used, less draws given back: moved to revenue. */
+                recognised_minor: number;
+                /** @description Credit that expired unused. */
+                breakage_minor: number;
+                /** @description Credit voided by a credit note. */
+                refunds_minor: number;
+                /** @description Rollovers between grants. Usually 0. */
+                other_minor: number;
+                /** @description At the end of the month. */
+                closing_minor: number;
+                /** @description What credit notes gave back on the packs this month, used credits included (a full refund). Not part of the balance above. */
+                credited_minor?: number;
+            }[];
+            /** @description The `credit_grants_paid` ledger account at the end of `to`, per currency. */
+            ledger_closing: {
+                /** @description ISO 4217. */
+                currency: string;
+                /** @description Balance. */
+                credit_grants_paid_minor: number;
+            }[];
+        };
+        CreditGrantActivity: {
+            /**
+             * @description The object type; always `credit_grant_activity`.
+             * @enum {string}
+             */
+            object: "credit_grant_activity";
+            /** @description cgr_… */
+            grant: string;
+            /** @description cus_… */
+            customer?: string;
+            /** @description The credit unit; null for money. */
+            unit?: string | null;
+            /** @description ISO 4217. */
+            currency?: string;
+            /**
+             * @description The credit grant activity's category.
+             * @enum {string}
+             */
+            category?: "paid" | "promotional";
+            /** @description Units the grant gave, in the smallest step. */
+            purchased_units?: number;
+            /** @description The same, in whole units. */
+            purchased_units_decimal?: string;
+            /** @description The grant's status: pending, active, expired or voided. */
+            status?: string;
+            /** @description What the buyer paid. 0 for given credit. */
+            cost_basis_minor?: number;
+            /** @description Units used, less draws given back. */
+            used_units?: number;
+            /** @description The same, in whole units. */
+            used_units_decimal?: string;
+            /** @description Revenue booked as the paid credit was used. */
+            revenue_recognised_minor?: number;
+            /** @description Units that expired. */
+            expired_units?: number;
+            /** @description The same, in whole units. */
+            expired_units_decimal?: string;
+            /** @description Cost of the paid units that expired. */
+            breakage_minor?: number;
+            /** @description Units voided. */
+            voided_units?: number;
+            /** @description The same, in whole units. */
+            voided_units_decimal?: string;
+            /** @description Cost of the paid units voided by a credit note. */
+            refunded_minor?: number;
+            /** @description What credit notes gave back on the pack line that sold this grant. A full refund includes the used credits. */
+            credited_minor?: number;
+            /** @description Net units moved in or out by a rollover. */
+            rolled_over_units?: number;
+            /** @description Units left. */
+            remaining_units?: number;
+            /** @description The same, in whole units. */
+            remaining_units_decimal?: string;
+            /** @description Cost of the units left: deferred revenue. */
+            remaining_cost_minor?: number;
+            /** @description The rows on this page. */
+            data: ({
+                /** @description The movement id. */
+                id: string;
+                /**
+                 * @description The credit grant activity's kind.
+                 * @enum {string}
+                 */
+                kind: "grant" | "activate" | "draw" | "restore" | "expire" | "void" | "rollover_in" | "rollover_out";
+                /**
+                 * Format: date-time
+                 * @description When the credit grant activity was created (ISO-8601 UTC).
+                 */
+                created_at: string;
+                /** @description Signed, in the smallest step. */
+                units: number;
+                /** @description Signed, in whole units. */
+                units_decimal?: string;
+                /** @description Signed cost of these units. */
+                cost_minor: number;
+                /** @description in_… for an invoice draw, a purchase or a credit note void. */
+                invoice?: string | null;
+                /** @description That invoice's number, once it has one. */
+                invoice_number?: string | null;
+                /** @description cst_… for a draw by usage paid in credits. */
+                settlement?: string | null;
+                /** @description The meter of that settlement. */
+                meter?: string | null;
+                /** @description That meter's name. */
+                meter_name?: string | null;
+            })[];
+            /** @description Whether more rows exist after this page. */
+            has_more: boolean;
+            /** @description Pass as `starting_after` to get the next page. Null on the last page. */
+            next_cursor: string | null;
+        };
+        CreditRefusedDemand: {
+            /**
+             * @description The object type; always `credit_refused_demand`.
+             * @enum {string}
+             */
+            object: "credit_refused_demand";
+            /**
+             * @description The credit refused demand's group by.
+             * @enum {string}
+             */
+            group_by: "meter" | "day" | "customer";
+            /** @description The business time zone the days are cut in. */
+            time_zone?: string;
+            /** @description The rows on this page. */
+            data: ({
+                /** @description YYYY-MM-DD, with `group_by=day`. */
+                day?: string;
+                /** @description cus_…, with `group_by=customer`. */
+                customer?: string;
+                /** @description With `group_by=customer`. */
+                customer_name?: string | null;
+                /** @description The meter. */
+                meter: string;
+                /** @description The meter's name. */
+                meter_name?: string;
+                /** @description The credit unit. */
+                unit: string;
+                /** @description Events refused. */
+                refused_events: number;
+                /** @description Customers refused. */
+                customers?: number;
+                /** @description Quantity refused, in the meter's own unit (decimal string). */
+                refused_quantity: string;
+                /** @description Credits it would have cost, in the smallest step. */
+                refused_units: number;
+                /** @description The same, in whole units. */
+                refused_units_decimal?: string;
+            })[];
+            /** @description Whether more rows exist after this page. */
+            has_more: boolean;
+        };
+        /** @description Runway in units, for `unit` of a unit with no rate. */
+        CreditRunwayUnits: {
+            /**
+             * @description The object type; always `credit_runway`.
+             * @enum {string}
+             */
+            object: "credit_runway";
+            /** @description cus_… */
+            customer: string;
+            /** @description The unit's currency. */
+            currency?: string;
+            /** @description The credit unit. */
+            unit: string;
+            /** @description The credit runway units's estimate. */
+            estimate?: boolean;
+            /** @description Null with under 24 hours of usage or none. */
+            runway_days: number | null;
+            /**
+             * Format: date-time
+             * @description The runs out time (ISO-8601 UTC).
+             */
+            runs_out_at?: string | null;
+            /** @description What the gate offers now, in the smallest step. */
+            balance_units: number;
+            /** @description The same, in whole units. */
+            balance_units_decimal?: string;
+            /** @description Units used in the last 7 days ÷ 7. */
+            burn_units_per_day?: number | null;
+            /** @description The same, in whole units. */
+            burn_units_per_day_decimal?: string | null;
+            /** @description Units the gate took in the last 7 days. */
+            units_last_7_days?: number;
+            /** @description The same, in whole units. */
+            units_last_7_days_decimal?: string;
+            /** @description For example: Runs out in about 5 days. */
+            message?: string;
+        };
         /** @description A card dispute (chargeback) on a payment. */
         Dispute: {
             /**
@@ -44765,6 +48853,18 @@ export interface components {
             invoice_id?: string | null;
             /** @description The customer's internal id. */
             customer_id?: string | null;
+            /** @description The customer's id (`cus_…`). Null when the dispute matches no payment. */
+            customer?: string | null;
+            /** @description The customer's display name. */
+            customer_name?: string | null;
+            /** @description The disputed invoice's id (`inv_…`). */
+            invoice?: string | null;
+            /** @description The disputed invoice's number. */
+            invoice_number?: string | null;
+            /** @description The id (`sub_…`) of the subscription that the disputed invoice bills. */
+            subscription?: string | null;
+            /** @description The id (`txn_…`) of the disputed payment's transaction. */
+            transaction?: string | null;
             /**
              * Format: date-time
              * @description When the gateway wants the evidence.
@@ -45107,7 +49207,7 @@ export interface components {
              * @example USD
              */
             currency: string;
-            /** @description The quoted lines. */
+            /** @description The quoted lines: the change's net effect. A negative line for the unused time of a price the change replaces is booked as a CREDIT NOTE applied to the change invoice, not as an invoice line. To check a booked change, compare the invoice with `invoice_total_minor`, the note with `credit_note_total_minor`, and the charge with `amount_due_minor`. */
             lines: {
                 /**
                  * @description The line description.
@@ -45202,6 +49302,27 @@ export interface components {
                 amount_minor?: number;
                 /** @description The invoice number the credit applies to, for an adjustment. */
                 invoice?: string;
+            })[];
+            /** @description Change estimates: every document the change books, in the order it books them: a credit note for each term invoice (an adjustment for the unpaid part, refundable for the paid part), then the invoice for the new lines. */
+            documents?: ({
+                /**
+                 * @description The document.
+                 * @enum {string}
+                 * @example credit_note
+                 */
+                type?: "credit_note" | "invoice";
+                /**
+                 * @description Credit notes only.
+                 * @enum {string}
+                 */
+                kind?: "adjustment" | "refundable";
+                /** @description Credit notes only: the number of the invoice that the note credits. */
+                invoice?: string;
+                /**
+                 * @description The total in minor units.
+                 * @example 9900
+                 */
+                total_minor?: number;
             })[];
             /**
              * Format: date-time
@@ -45401,6 +49522,12 @@ export interface components {
                 /** @description What `/change` does when the request has no `invoice_immediately`. */
                 invoice_immediately?: boolean;
                 /**
+                 * @description The documents `/change` without `net_credit_documents` raises for a change that nets to a credit (`billing_rules_config.net_credit_documents`). Null: not saved, so `invoice_immediately` picks them.
+                 * @enum {string}
+                 * @example credit_note_and_invoice
+                 */
+                net_credit_documents?: "credit_note_and_invoice" | "one_credit_note" | null;
+                /**
                  * @description Where a credit from this change goes: the request's `downgrade_credit`, else `billing_rules_config.downgrade_credit`.
                  * @enum {string}
                  * @example credit_balance
@@ -45417,7 +49544,7 @@ export interface components {
                  * @enum {string}
                  * @example start_dunning
                  */
-                on_charge_failure?: "start_dunning" | "next_renewal";
+                on_charge_failure?: "start_dunning" | "next_renewal" | "revert" | "apply_when_paid";
                 /**
                  * @description The plan-credit rule `/change` without `plan_credits` uses for this direction. Null when no plan this change moves grants credits per cycle.
                  * @enum {string}
@@ -46282,7 +50409,7 @@ export interface components {
                 period_end?: string | null;
             })[];
             /**
-             * @description Sum of the item amounts and settled charges.
+             * @description Sum of the item amounts, the settled charges and the `credit_usage` amounts billed in money.
              * @example 150000
              */
             subtotal_minor: number;
@@ -46345,6 +50472,87 @@ export interface components {
                  */
                 total_minor?: number;
             } | null;
+            /** @description Usage on meters that are paid in credits, since the last period invoice. Present only when the customer has such usage, and only on the customer's oldest live subscription, whose invoice bills the money part. */
+            credit_usage?: ({
+                /**
+                 * @description The meter id.
+                 * @example renders
+                 */
+                meter?: string;
+                /**
+                 * @description The meter's name.
+                 * @example Renders
+                 */
+                name?: string;
+                /**
+                 * @description The credit unit id.
+                 * @example credit
+                 */
+                unit?: string;
+                /**
+                 * @description The unit's name for one.
+                 * @example credit
+                 */
+                unit_name?: string;
+                /**
+                 * @description The unit's name for more than one.
+                 * @example credits
+                 */
+                unit_plural_name?: string;
+                /**
+                 * @description The quantity that credits paid, as a decimal.
+                 * @example 10
+                 */
+                paid_quantity?: string;
+                /**
+                 * @description The credits that paid it.
+                 * @example 10
+                 */
+                paid_units?: string;
+                /** @description The parts that the next period invoice bills in money. The totals include them. */
+                billed?: ({
+                    /**
+                     * @description `meter`: the meter's own usage price rates the quantity. `unit`: the credit unit's price for one credit bills the credits.
+                     * @enum {string}
+                     */
+                    basis?: "meter" | "unit";
+                    /**
+                     * @description The meter price id. Null for `unit`.
+                     * @example renders-usd
+                     */
+                    price?: string | null;
+                    /**
+                     * @description The quantity billed in money, as a decimal.
+                     * @example 5
+                     */
+                    quantity?: string;
+                    /**
+                     * @description The credits that the quantity needed.
+                     * @example 5
+                     */
+                    units?: string;
+                    /**
+                     * @description The amount so far, in minor units, before tax.
+                     * @example 50
+                     */
+                    amount_minor?: number;
+                })[];
+                /**
+                 * @description Sum of the `billed` amounts.
+                 * @example 50
+                 */
+                billed_amount_minor?: number;
+                /**
+                 * @description The unit's negative balance: credits used below zero that no grant repaid and no invoice billed. Given once per unit, on its first meter.
+                 * @example 0
+                 */
+                overshoot_units?: string;
+                /**
+                 * @description This meter's quantity used below a zero balance and not settled yet.
+                 * @example 0
+                 */
+                below_zero_quantity?: string;
+            })[];
             /** @description Always false: coupons and credits are not applied here. */
             discounts_applied?: boolean;
             /** @description Usage recorded during the trial, with no amount: no invoice bills it. Null outside a trial. */

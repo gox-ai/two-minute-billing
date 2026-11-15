@@ -663,6 +663,43 @@ ok(
   other.series.find((x) => x.key === "transaction_count")!.headline.value === 0,
 );
 
+// An offline payment has no vaulted method: its method row is its gateway, labelled as the
+// gateway breakdown labels it, never "Unknown". On the UTC business, after its empty check.
+await runWithEventContext({ source: "api", actor: "key_verify" }, () =>
+  recordTransaction({
+    organizationId: orgId,
+    businessId: utcBiz.id,
+    type: "payment",
+    status: "succeeded",
+    amountMinor: 5_000n,
+    currency: "INR",
+    gatewayKey: "offline_wire",
+    occurredAt: new Date("2026-08-10T06:00:00Z"),
+  }),
+);
+const offline = await computePaymentsAnalytics(orgId, utcBiz.id, {
+  range: "this_month",
+  now: NOW,
+});
+const offMethod = offline.breakdowns.payment_methods;
+const offGateway = offline.breakdowns.gateways;
+ok(
+  "an offline payment's method is its gateway, labelled like the gateway row",
+  offMethod.length === 1 &&
+    offMethod[0]!.key === "offline_wire" &&
+    offMethod[0]!.label === offGateway[0]?.label &&
+    offMethod[0]!.label === "Offline wire",
+);
+const offFiltered = await computePaymentsAnalytics(orgId, utcBiz.id, {
+  range: "this_month",
+  now: NOW,
+  paymentMethod: "offline_wire",
+});
+ok(
+  "payment_method=offline_wire selects it",
+  offFiltered.series.find((x) => x.key === "transaction_count")!.headline.value === 1,
+);
+
 // ---------------------------------------------------------------------------
 let pass = true;
 for (const [name, okFlag] of checks) {

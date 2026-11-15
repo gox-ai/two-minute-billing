@@ -82,6 +82,12 @@ const PENDING_INTENT_STATUSES = new Set(["inited", "in_progress"]);
 
 const UNKNOWN = "unknown";
 
+/**
+ * A transaction's payment-method key. An offline payment has no stored method, so it takes its
+ * gateway key (`offline_wire` → "Offline wire"), the same row the gateway breakdown shows.
+ */
+const TXN_METHOD = sql`coalesce(pm.type, case when t.gateway_key like 'offline%' then t.gateway_key end, ${UNKNOWN})`;
+
 export interface PaymentsBreakdownRow {
   key: string;
   label: string;
@@ -115,7 +121,7 @@ export interface ErrorDetailRow {
 export interface PaymentsAnalyticsFilters {
   /** `transactions.gateway_key` (`unknown` selects rows with none). */
   gateway: string | null;
-  /** `payment_methods.type` — card / upi / … (`unknown` selects rows with none). */
+  /** `payment_methods.type` — card / upi / …, the gateway key for offline (`unknown` = none). */
   payment_method: string | null;
 }
 
@@ -328,7 +334,7 @@ export async function computePaymentsAnalytics(
     const optionRows = (await tx.execute(sql`
       select distinct
         coalesce(t.gateway_key, ${UNKNOWN}) as gateway,
-        coalesce(pm.type, ${UNKNOWN})       as method
+        ${TXN_METHOD}       as method
       from transactions t
       left join payment_methods pm on pm.id = t.payment_method_id
       where t.business_id = ${businessId}::uuid
@@ -400,7 +406,7 @@ export async function computePaymentsAnalytics(
         case when t.occurred_at >= ${curStart}::timestamptz then 'current' else 'previous' end as period,
         t.currency                            as currency,
         coalesce(t.gateway_key, ${UNKNOWN})   as gateway,
-        coalesce(pm.type, ${UNKNOWN})         as method,
+        ${TXN_METHOD}         as method,
         coalesce(t.error_code, ${UNKNOWN})    as error_code,
         t.type                                as txn_type,
         t.status                              as txn_status,
@@ -413,7 +419,7 @@ export async function computePaymentsAnalytics(
         and t.occurred_at >= ${prevStart}::timestamptz
         and t.occurred_at <  ${curEnd}::timestamptz
         and (${gateway}::text is null or coalesce(t.gateway_key, ${UNKNOWN}) = ${gateway}::text)
-        and (${paymentMethod}::text is null or coalesce(pm.type, ${UNKNOWN}) = ${paymentMethod}::text)
+        and (${paymentMethod}::text is null or ${TXN_METHOD} = ${paymentMethod}::text)
       group by 1, 2, 3, 4, 5, 6, 7
     `)) as unknown as DimRow[];
 
@@ -468,7 +474,7 @@ export async function computePaymentsAnalytics(
         and t.occurred_at >= ${curStart}::timestamptz
         and t.occurred_at <  ${curEnd}::timestamptz
         and (${gateway}::text is null or coalesce(t.gateway_key, ${UNKNOWN}) = ${gateway}::text)
-        and (${paymentMethod}::text is null or coalesce(pm.type, ${UNKNOWN}) = ${paymentMethod}::text)
+        and (${paymentMethod}::text is null or ${TXN_METHOD} = ${paymentMethod}::text)
       group by 1, 2, 3, 4
     `)) as unknown as BucketTxnRow[];
 

@@ -1,5 +1,5 @@
-import { FormLoading } from "@/components/patterns/route-loading";
+import { SettingsLoading } from "@/components/patterns/route-loading";
 
 export default function Loading() {
-  return <FormLoading />;
+  return <SettingsLoading groups={2} />;
 }

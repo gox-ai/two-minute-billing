@@ -4,6 +4,12 @@ import { createLogger } from "@/platform/logger";
 import { emitEvent } from "@/modules/events/emit";
 import { bumpRollupVersion } from "./rollup-sql";
 import { buildEventData } from "@/modules/events/registry";
+import {
+  isModelPriceUnit,
+  MODEL_PRICE_UNITS,
+  normalizeTier,
+  TIER_RE,
+} from "@/modules/model-prices/units";
 import { customers, customerUsageKeys, meters } from "@db/schema";
 import {
   isRollable,
@@ -58,6 +64,13 @@ export interface MeterPriceListMap {
   model_key?: string;
   token_type?: string;
   token_type_key?: string;
+  /** 0524: the list unit (`MODEL_PRICE_UNITS`). Absent = `token`, else `request`. */
+  unit?: string;
+  /** 0524: the price tier, fixed or read from a grouped property. Absent = no tier. */
+  quality?: string;
+  quality_key?: string;
+  resolution?: string;
+  resolution_key?: string;
 }
 
 /** The catalog id family (GUIDE §2 rule 5): unique per business, immutable. */
@@ -112,13 +125,36 @@ export function meterDefinitionIssue(d: MeterDefinition): string | null {
   return d.priceList ? priceListIssue(d.priceList, groupBy) : null;
 }
 
+/** A fixed tier as it is stored and matched ("HD " → "hd"), like a cost row and an event value. */
+export function normalizePriceListMap<T extends MeterPriceListMap | null | undefined>(m: T): T {
+  if (!m || (m.quality == null && m.resolution == null)) return m;
+  const out = { ...m };
+  if (out.quality != null) out.quality = normalizeTier(out.quality);
+  if (out.resolution != null) out.resolution = normalizeTier(out.resolution);
+  return out;
+}
+
 /** A price list mapping reads its keys from the group values, so each key must be grouped. */
 function priceListIssue(m: MeterPriceListMap, groupBy: readonly string[]): string | null {
   if (m.provider != null && m.provider_key != null)
     return "We could not save the meter. Set provider or provider_key in price_list, not both.";
   if ((m.token_type == null) === (m.token_type_key == null))
     return "We could not save the meter. Set token_type or token_type_key in price_list.";
-  for (const k of [m.provider_key, m.model_key ?? "model", m.token_type_key])
+  if (m.unit != null && !isModelPriceUnit(m.unit))
+    return `We could not save the meter. The unit in price_list must be one of ${MODEL_PRICE_UNITS.join(", ")}.`;
+  for (const t of ["quality", "resolution"] as const) {
+    if (m[t] != null && m[`${t}_key`] != null)
+      return `We could not save the meter. Set ${t} or ${t}_key in price_list, not both.`;
+    if (m[t] != null && (m[t] === "" || !TIER_RE.test(m[t])))
+      return `We could not save the meter. The ${t} in price_list can have 40 characters at most: lower-case letters, digits, "_", "." and "-".`;
+  }
+  for (const k of [
+    m.provider_key,
+    m.model_key ?? "model",
+    m.token_type_key,
+    m.quality_key,
+    m.resolution_key,
+  ])
     if (k != null && !groupBy.includes(k))
       return `We could not save the meter. price_list reads ${k}, so add ${k} to group_by.`;
   return null;
@@ -196,7 +232,7 @@ export async function createMeter(input: {
   key?: string;
   definition: MeterDefinition;
 }): Promise<Meter> {
-  const d = input.definition;
+  const d = { ...input.definition, priceList: normalizePriceListMap(input.definition.priceList) };
   const issue = meterDefinitionIssue(d);
   if (issue) throw new MeterRuleError(issue);
   const key = input.key ?? slugify(d.name);
@@ -360,6 +396,7 @@ export async function updateMeter(input: {
     const next: MeterDefinition = { ...current };
     for (const [k, v] of Object.entries(input.patch))
       if (v !== undefined) (next as unknown as Record<string, unknown>)[k] = v;
+    next.priceList = normalizePriceListMap(next.priceList);
     const issue = meterDefinitionIssue(next);
     if (issue) throw new MeterRuleError(issue);
     // These change no count, so they may change after the meter has usage.

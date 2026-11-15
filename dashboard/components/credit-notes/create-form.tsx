@@ -8,8 +8,10 @@ import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import { Input } from "@/components/ui/input";
+import { CheckboxField } from "@/components/ui/checkbox";
 import { MoneyInput } from "@/components/form/money-input";
-import { money, toMajor, fmtDateShort } from "@/lib/format";
+import { money, toMajor } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import {
   createCreditNoteAction,
   loadCreditableInvoiceAction,
@@ -110,6 +112,18 @@ export function CreateCreditNoteForm({
 
   const lines = invoice?.lines ?? [];
   const currency = invoice?.currency ?? "USD";
+  // A credit pack line credits only its unused credits unless the operator refunds in full.
+  const [packRefund, setPackRefund] = React.useState(false);
+  // Only where a full refund changes the maximum: a pack with some credits used.
+  const hasPack = lines.some(
+    (l) =>
+      l.pack_full_creditable_minor != null &&
+      l.pack_full_creditable_minor > (l.creditable_minor ?? 0),
+  );
+  const maxOf = (l: (typeof lines)[number]) =>
+    packRefund && l.pack_full_creditable_minor != null
+      ? l.pack_full_creditable_minor
+      : l.creditable_minor;
 
   // `alloc` still holds MINOR units — that is what gets posted and what the totals
   // are summed in. The inputs are `MoneyInput`s, so the operator types major units
@@ -119,7 +133,7 @@ export function CreateCreditNoteForm({
   const rows = lines.map((l) => {
     const raw = alloc[l.id] ?? "";
     const amount = raw === "" ? 0 : Number(raw);
-    const over = Number.isFinite(amount) && amount > l.creditable_minor;
+    const over = Number.isFinite(amount) && amount > maxOf(l);
     return { line: l, amount: Number.isFinite(amount) ? amount : 0, over };
   });
 
@@ -241,7 +255,7 @@ export function CreateCreditNoteForm({
                   hint: [
                     money(i.total_minor, i.currency),
                     i.status.replace(/_/g, " "),
-                    i.created_at ? fmtDateShort(i.created_at, tz) : null,
+                    i.created_at ? fmtDate(i.created_at, tz) : null,
                   ]
                     .filter(Boolean)
                     .join(" \u00b7 "),
@@ -278,74 +292,89 @@ export function CreateCreditNoteForm({
             </p>
           ) : lines.length === 0 ? (
             <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-              This invoice has no line items to credit.
+              {invoice.only_credit_usage
+                ? "This invoice has only usage paid with credits. A credit note cannot credit it."
+                : "This invoice has no line items to credit."}
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50 text-left">
-                    <th className="px-5 py-2 font-medium text-muted-foreground">Line item</th>
-                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">
-                      Line amount
-                    </th>
-                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">
-                      Maximum
-                    </th>
-                    <th className="px-5 py-2 text-right font-medium text-muted-foreground">
-                      Credit
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(({ line, over }) => (
-                    <tr key={line.id} className="border-b last:border-0">
-                      <td className="px-5 py-2">
-                        <div className="font-medium">{line.description}</div>
-                        <div className="font-mono text-xs text-muted-foreground">{line.id}</div>
-                        {/* Description travels alongside the amount as parallel arrays. */}
-                        <input type="hidden" name="item_description" value={line.description} />
-                        <input type="hidden" name="item_line" value={line.id} />
-                      </td>
-                      <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">
-                        {money(line.amount_minor, currency)}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {money(line.creditable_minor, currency)}
-                      </td>
-                      <td className="px-5 py-2 text-right">
-                        {/* Typed in MAJOR units, posts integer minor under `item_amount_minor`.
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50 text-left">
+                      <th className="px-5 py-2 font-medium text-muted-foreground">Line item</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">
+                        Line amount
+                      </th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">
+                        Maximum
+                      </th>
+                      <th className="px-5 py-2 text-right font-medium text-muted-foreground">
+                        Credit
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(({ line, over }) => (
+                      <tr key={line.id} className="border-b last:border-0">
+                        <td className="px-5 py-2">
+                          <div className="font-medium">{line.description}</div>
+                          <div className="font-mono text-xs text-muted-foreground">{line.id}</div>
+                          {/* Description travels alongside the amount as parallel arrays. */}
+                          <input type="hidden" name="item_description" value={line.description} />
+                          <input type="hidden" name="item_line" value={line.id} />
+                        </td>
+                        <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">
+                          {money(line.amount_minor, currency)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {money(maxOf(line), currency)}
+                        </td>
+                        <td className="px-5 py-2 text-right">
+                          {/* Typed in MAJOR units, posts integer minor under `item_amount_minor`.
                             A blank row posts '' and is skipped by the action. */}
-                        <MoneyInput
-                          name="item_amount_minor"
-                          currency={currency}
-                          max={toMajor(line.creditable_minor, currency)}
-                          invalid={over}
-                          onMinorChange={(minor) => setAlloc((a) => ({ ...a, [line.id]: minor }))}
-                          className="ml-auto w-40"
-                          inputClassName="text-right"
-                        />
-                        {over ? (
-                          <p className="mt-1 text-xs font-medium text-destructive">
-                            More than the maximum
-                          </p>
-                        ) : null}
+                          <MoneyInput
+                            name="item_amount_minor"
+                            currency={currency}
+                            max={toMajor(maxOf(line), currency)}
+                            invalid={over}
+                            onMinorChange={(minor) => setAlloc((a) => ({ ...a, [line.id]: minor }))}
+                            className="ml-auto w-40"
+                            inputClassName="text-right"
+                          />
+                          {over ? (
+                            <p className="mt-1 text-xs font-medium text-destructive">
+                              More than the maximum
+                            </p>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t bg-muted/30">
+                      <td className="px-5 py-2 font-medium" colSpan={3}>
+                        Credit note total
+                      </td>
+                      <td className="px-5 py-2 text-right font-semibold tabular-nums">
+                        {money(total, currency)}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t bg-muted/30">
-                    <td className="px-5 py-2 font-medium" colSpan={3}>
-                      Credit note total
-                    </td>
-                    <td className="px-5 py-2 text-right font-semibold tabular-nums">
-                      {money(total, currency)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
+                  </tfoot>
+                </table>
+              </div>
+              {hasPack ? (
+                <div className="border-t px-5 py-3">
+                  <CheckboxField
+                    name="pack_refund"
+                    checked={packRefund}
+                    onCheckedChange={setPackRefund}
+                    label="Refund used credits too"
+                    hint="The customer gets back the full price of the pack. We void its unused credits. The customer's other credits in this unit pay for the credits that the pack paid. We write off what they cannot pay. You cannot undo this."
+                  />
+                </div>
+              ) : null}
+            </>
           )}
         </RecordCard>
 

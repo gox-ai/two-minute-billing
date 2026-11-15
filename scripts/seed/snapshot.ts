@@ -91,6 +91,9 @@ const CATALOG = new Set([
   "decline_rule_overrides",
 ]);
 
+/** `audit_logs.resource_type` of the CATALOG tables (`product_groups` → 'product_group'). */
+const CATALOG_AUDIT_TYPES = [...CATALOG].map((t) => `'${t.replace(/s$/, "")}'`).join(", ");
+
 /** Text columns that must be unique across tenants, so a second load must not reuse them. */
 const GLOBAL_TEXT_IDS: Record<string, string[]> = {
   tmtest_charges: ["charge_id"],
@@ -611,11 +614,13 @@ export async function insertScope(
     const exprs = cols
       .map((c) => {
         const e = columnExpr(c, input.days, input.tz);
-        return input.notAfter &&
-          CATALOG.has(t) &&
-          (c.name === "created_at" || c.name === "updated_at")
-          ? `least(${e}, '${input.notAfter}'::timestamptz)`
-          : e;
+        if (!input.notAfter) return e;
+        const clamped = `least(${e}, '${input.notAfter}'::timestamptz)`;
+        if (CATALOG.has(t) && (c.name === "created_at" || c.name === "updated_at")) return clamped;
+        // A catalog row's audit entry carries the same wall time: date it with the row.
+        if (t === "audit_logs" && c.name === "created_at")
+          return `case when r."resource_type" in (${CATALOG_AUDIT_TYPES}) then ${clamped} else ${e} end`;
+        return e;
       })
       .join(", ");
     const stmt = `insert into public."${t}" (${list}) select ${exprs} from json_populate_recordset(null::public."${t}", $1::text::json) r`;

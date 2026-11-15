@@ -17,6 +17,7 @@ import {
   setCheckoutCustomer,
 } from "@/modules/checkout/service";
 import { sendCheckoutReminders } from "@/modules/checkout/reminders";
+import { tmtestPayAtOnce } from "./lib/tmtest-pay-at-once";
 import { isEmailTypeEnabled, resolveEmailConfig } from "@/modules/emails/config";
 import { resolveReport } from "@/modules/metrics/reports/resolve";
 import { businesses, checkoutSessions, emailMessages } from "@db/schema";
@@ -44,6 +45,7 @@ const newBiz = async (name: string, on: boolean) => {
     livemode: "test",
     timezone: "UTC",
   });
+  await tmtestPayAtOnce(orgId, biz.id);
   await withTenant(orgId, (tx) =>
     tx
       .update(businesses)

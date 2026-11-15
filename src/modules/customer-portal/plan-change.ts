@@ -27,6 +27,7 @@ import {
   type ChangeTiming,
 } from "@/modules/subscriptions/change-policy";
 import { estimateChange } from "@/modules/subscriptions/estimate";
+import { isMeteredPrice } from "@/modules/catalog/pricing";
 import { resolveLifecycleConfig } from "@/modules/subscriptions/lifecycle-config";
 import { creditHandlingFor } from "@/modules/subscriptions/downgrade-credit";
 import { QUOTE_MOVED_MESSAGE, quoteOf, quotedInstant } from "@/modules/subscriptions/price-quote";
@@ -83,6 +84,30 @@ const monthly = (p: PriceRow, quantity: number) =>
     ? (Number(p.amountMinor) * (p.model === "flat" ? 1 : quantity)) / monthsOf(p)
     : 0;
 
+/**
+ * Which way a plan switch moves, for the list. Null when either price has no single rate
+ * (tiered, stairstep, volume, usage): the list price cannot say whether it costs more.
+ * The preview prices the real change.
+ */
+export function listDirection(
+  current: { price: PriceRow; quantity: number } | null,
+  target: PriceRow,
+): ChangeDirection | null {
+  if (target.amountMinor == null) return null;
+  if (current && current.price.amountMinor == null) return null;
+  return changeDirection(
+    current ? monthly(current.price, current.quantity) : 0,
+    monthly(target, current?.quantity ?? 1),
+    current ? { before: monthsOf(current.price), after: monthsOf(target) } : undefined,
+  );
+}
+
+/** The fields a buyer needs to tell two prices apart and to read a per-unit rate. */
+const priceFacts = (p: PriceRow) => ({
+  price_name: p.externalName ?? p.name ?? null,
+  metered: isMeteredPrice(p),
+});
+
 async function load(ctx: PortalCtx, subPublicId: string) {
   return withTenant(ctx.organizationId, async (tx) => {
     const [sub] = await tx
@@ -97,7 +122,8 @@ async function load(ctx: PortalCtx, subPublicId: string) {
         ),
       )
       .limit(1);
-    if (!sub) throw new PortalChangeError(`No such subscription: ${subPublicId}`, 404);
+    if (!sub)
+      throw new PortalChangeError("We could not find this subscription. Reload the page.", 404);
     const [biz] = await tx
       .select()
       .from(businesses)
@@ -199,7 +225,6 @@ export async function getChangeOptions(ctx: PortalCtx, subPublicId: string) {
   const cfg = resolveStorefrontConfig(l.biz);
   const now = new Date();
   const planItem = l.items.find((r) => r.product.kind === "plan");
-  const planMonthly = planItem ? monthly(planItem.price, planItem.item.quantity) : 0;
   const shorterOk = shorterAllowed(l, cfg, now);
   const why = unavailable(l, cfg);
   const seatsOn = !!planItem && planItem.price.model === "per_unit" && cfg.seatChanges !== "off";
@@ -231,11 +256,11 @@ export async function getChangeOptions(ctx: PortalCtx, subPublicId: string) {
         current,
         direction: current
           ? ("same" as const)
-          : changeDirection(
-              planMonthly,
-              monthly(o.price, planItem?.item.quantity ?? 1),
-              planItem ? { before: monthsOf(planItem.price), after: monthsOf(o.price) } : undefined,
+          : listDirection(
+              planItem ? { price: planItem.price, quantity: planItem.item.quantity } : null,
+              o.price,
             ),
+        ...priceFacts(o.price),
       };
     });
   if (planItem && !plans.some((p) => p.current))
@@ -249,6 +274,7 @@ export async function getChangeOptions(ctx: PortalCtx, subPublicId: string) {
       interval_count: planItem.price.intervalCount,
       current: true,
       direction: "same",
+      ...priceFacts(planItem.price),
     });
   // Each listed plan's add-on rules, so the page can follow the plan the customer selects.
   const planProductByPrice = new Map<string, string>(
@@ -298,6 +324,8 @@ export async function getChangeOptions(ctx: PortalCtx, subPublicId: string) {
         item: on?.item.publicId ?? null,
         /** Per plan price: how it attaches. Absent = not available on that plan. */
         rules: rulesFor(o.product.publicId),
+        model: o.price.model,
+        ...priceFacts(o.price),
       };
     }),
     // An add-on the customer already has but the merchant no longer shows: they may still remove it.
@@ -314,6 +342,8 @@ export async function getChangeOptions(ctx: PortalCtx, subPublicId: string) {
             item: r.item.publicId,
             rules: rulesFor(r.product.publicId),
             remove_only: true,
+            model: r.price.model,
+            ...priceFacts(r.price),
           }))
       : []),
   ];
@@ -629,6 +659,57 @@ async function price(ctx: PortalCtx, p: Planned) {
   });
   // Deferred by the business rule: the charge joins the next invoice, nothing is due today.
   const due = p.invoiceImmediately ? (est.amount_due_minor ?? est.total_minor) : 0;
+  // This change waits for payment (`apply_when_paid`): a retry pays that invoice, so show it.
+  // A re-price misses the unused-time credit already on it.
+  const held = await heldQuoteFor(ctx, p);
+  if (held)
+    return {
+      due_today: {
+        // The credits sit on the held invoice, not in its lines: list them as lines, as the
+        // estimate does, so the buyer reads "Credit for unused time", not a nameless gap.
+        lines: [
+          ...held.lines.map((l) => ({ description: l.description, amount_minor: l.amountMinor })),
+          ...(held.changeCreditMinor > 0
+            ? [
+                {
+                  description:
+                    est.lines.find((l) => l.amount_minor < 0)?.description ??
+                    "Credit for unused time",
+                  amount_minor: -held.changeCreditMinor,
+                },
+              ]
+            : []),
+          ...(held.otherCreditsMinor > 0
+            ? [{ description: "Account credit", amount_minor: -held.otherCreditsMinor }]
+            : []),
+          ...(held.promotionalDiscountMinor > 0
+            ? [{ description: "Promotional credit", amount_minor: -held.promotionalDiscountMinor }]
+            : []),
+          ...(held.paidMinor > 0
+            ? [{ description: "Already paid", amount_minor: -held.paidMinor }]
+            : []),
+        ],
+        tax_minor: held.taxMinor,
+        total_minor: held.amountDueMinor,
+        amount_due_minor: held.amountDueMinor,
+        credit_minor: held.changeCreditMinor,
+        refunded_minor: 0,
+        immediate_charge: true,
+        added_to_next_invoice: false,
+        next_invoice_at: null,
+        discount_minor: held.discountMinor,
+        credited_period_start: est.credited_period_start ?? null,
+        credited_period_end: est.credited_period_end ?? null,
+        held_invoice: held.invoice,
+      },
+      total_minor: held.amountDueMinor,
+      effective_at: p.now,
+      next_recurring: nextRecurring,
+      new_period_end: est.new_period_end,
+      next_renewal: est.next_renewal
+        ? { at: est.next_renewal.date, total_minor: est.next_renewal.total_minor }
+        : null,
+    };
   return {
     due_today: {
       lines: est.lines,
@@ -640,11 +721,49 @@ async function price(ctx: PortalCtx, p: Planned) {
       refunded_minor: est.refunded_to_payment_method_minor ?? 0,
       immediate_charge: p.invoiceImmediately && est.immediate_charge,
       added_to_next_invoice: !p.invoiceImmediately,
+      // Deferred charges ride on the next renewal invoice; its date, when there is one.
+      next_invoice_at: p.invoiceImmediately ? null : (est.next_renewal?.date ?? null),
+      discount_minor: est.discount_minor,
+      credited_period_start: est.credited_period_start ?? null,
+      credited_period_end: est.credited_period_end ?? null,
     },
     total_minor: due,
     effective_at: p.now,
     next_recurring: nextRecurring,
+    new_period_end: est.new_period_end,
+    next_renewal: est.next_renewal
+      ? { at: est.next_renewal.date, total_minor: est.next_renewal.total_minor }
+      : null,
   };
+}
+
+/** The change request `applyPortalChange` sends for this plan. */
+function changeInputOf(ctx: PortalCtx, p: Planned) {
+  return {
+    organizationId: ctx.organizationId,
+    businessId: ctx.businessId,
+    subscriptionId: p.l.sub.id,
+    now: p.now,
+    changes: p.changes,
+    adds: p.adds,
+    removes: p.removes,
+    prorate: p.prorate,
+    resetTerm: p.resetTerm,
+    invoiceImmediately: p.invoiceImmediately,
+    // Book exactly the previewed request; refuse if the engine would add anything unseen.
+    refuseUnrequestedItems: true,
+  };
+}
+
+/** The held invoice of this very change, when it waits for payment; else null. */
+async function heldQuoteFor(ctx: PortalCtx, p: Planned) {
+  const { repeatsPendingChange } = await import("@/modules/subscriptions/proration");
+  if (!(await repeatsPendingChange(changeInputOf(ctx, p)))) return null;
+  const { heldQuote, livePendingChange } = await import("@/modules/subscriptions/pending-change");
+  return withTenant(ctx.organizationId, async (tx) => {
+    const row = await livePendingChange(tx, p.l.sub.id);
+    return row ? heldQuote(tx, row) : null;
+  });
 }
 
 /** Every amount the preview shows, as one value: apply refuses when any of them moved. */
@@ -702,9 +821,13 @@ export async function applyPortalChange(
   // Booked at the preview's instant, so the unused-time credit is the one shown.
   const p = await plan(ctx, subPublicId, req, quotedInstant(req.pricedAt));
   const priced = await price(ctx, p);
+  const changeInput = changeInputOf(ctx, p);
+  // A retry of a change held for payment pays its invoice at the first quote.
+  const { repeatsPendingChange } = await import("@/modules/subscriptions/proration");
   if (
-    priced.total_minor !== req.expectedTotalMinor ||
-    (req.quote !== undefined && quoteOfPriced(priced) !== req.quote)
+    (priced.total_minor !== req.expectedTotalMinor ||
+      (req.quote !== undefined && quoteOfPriced(priced) !== req.quote)) &&
+    !(p.timing !== "end_of_term" && (await repeatsPendingChange(changeInput)))
   )
     throw new PortalChangeError(QUOTE_MOVED_MESSAGE, 409);
   if (p.timing === "end_of_term") {
@@ -726,19 +849,34 @@ export async function applyPortalChange(
     };
   }
   const r = await changeSubscription({
-    organizationId: ctx.organizationId,
-    businessId: ctx.businessId,
-    subscriptionId: p.l.sub.id,
-    now: p.now,
-    changes: p.changes,
-    adds: p.adds,
-    removes: p.removes,
-    prorate: p.prorate,
-    resetTerm: p.resetTerm,
+    ...changeInput,
     creditHandling: p.creditHandling,
-    invoiceImmediately: p.invoiceImmediately,
-    // Book exactly the previewed request; refuse if the engine would add anything unseen.
-    refuseUnrequestedItems: true,
+    pendingSource: "portal",
+  }).catch(async (e: unknown) => {
+    // `failed_change_charge: revert`: the plan did not change and nothing is owed.
+    const { ChangeRevertedError, PendingChangeError } =
+      await import("@/modules/subscriptions/proration");
+    const { payerRefusal } = await import("@/providers/decline-codes");
+    if (e instanceof ChangeRevertedError) {
+      throw new PortalChangeError(
+        payerRefusal("We could not change your plan.", e.reverted.declineMessage),
+      );
+    }
+    // `apply_when_paid`: nothing changed yet. A retry of this change, or Pay on the invoice,
+    // pays the same invoice and the plan changes then.
+    if (e instanceof PendingChangeError) {
+      throw new PortalChangeError(
+        e.held.inFlight
+          ? "Your payment is in progress. Your plan changes when the payment is complete."
+          : payerRefusal(
+              "We could not change your plan.",
+              e.held.code === "requires_action"
+                ? "Your bank asks you to confirm this payment."
+                : (e.held.declineMessage ?? "The payment was not completed."),
+            ),
+      );
+    }
+    throw e;
   });
   const inv = r.prorationInvoice;
   return {

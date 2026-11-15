@@ -1498,6 +1498,38 @@ console.log("");
   //  - /subscriptions/count: a read sent as POST because its filter sets do not fit a query
   //    string. It writes nothing, so there is nothing to replay.
   const exempt = new Set([
+    // Billy (the assistant), dashboard session routes: a repeat is safe without the pair.
+    // confirm claims the action in a conditional UPDATE (proposed → running; a repeat is a 409)
+    // and runs it through the API with the action's own stored Idempotency-Key. edit, cancel,
+    // feedback and settings set a value. messages adds a chat turn and attachments an upload:
+    // a repeat shows twice and moves no money. The deletes are deletes. A conversation PATCH
+    // sets a title and keeps a stamp that is already set, so a repeat changes nothing.
+    "DELETE /auth/assistant/conversations/:id",
+    "PATCH /auth/assistant/conversations/:id",
+    "POST /auth/assistant/messages",
+    "PUT /auth/assistant/messages/:id/feedback",
+    "POST /auth/assistant/attachments",
+    "DELETE /auth/assistant/attachments/:id",
+    "POST /auth/assistant/actions/:id/confirm",
+    "POST /auth/assistant/actions/:id/edit",
+    "POST /auth/assistant/actions/:id/cancel",
+    "PUT /auth/assistant/settings",
+    // Support requests (0512): create takes its own Idempotency-Key, stored on the row under a
+    // unique (organization, member, key) index, so a repeat returns the first request; the
+    // draft is marked sent in the same transaction, so a new key cannot send it twice. A reply
+    // adds a message (a repeat shows twice and moves no money); read clears a flag.
+    "POST /auth/assistant/support/requests",
+    "POST /auth/assistant/support/requests/:id/messages",
+    "POST /auth/assistant/support/requests/:id/read",
+    // MCP: a JSON-RPC envelope whose tools are all read-only (readOnlyHint). OAuth: register is
+    // pre-tenant like /auth/signup; approve and deny act only while decidedAt is null, and a
+    // grant is revoked only while revokedAt is null, so a replay changes nothing.
+    "POST /mcp",
+    "POST /mcp/:biz",
+    "POST /oauth/register",
+    "POST /auth/oauth/requests/:id/approve",
+    "POST /auth/oauth/requests/:id/deny",
+    "DELETE /auth/oauth/grants/:id",
     "POST /auth/signup",
     "POST /auth/login",
     "POST /auth/logout",
@@ -1563,6 +1595,8 @@ console.log("");
     "POST /v1/businesses/:biz/customers/:cus/subscription_estimate",
     "POST /v1/businesses/:biz/subscriptions/:sub/reactivate_estimate",
     "POST /v1/businesses/:biz/unbilled_charges/invoice_now_estimate",
+    // A POST-shaped read: prices one pack purchase with the buyer's code and writes nothing.
+    "POST /portal/v1/credits/quote",
     "POST /v1/businesses/:biz/emails/templates/:type/preview",
     "POST /v1/businesses/:biz/emails/smtp/test-connection",
     "POST /v1/businesses/:biz/transfer_configurations/preview",

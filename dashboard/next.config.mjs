@@ -494,6 +494,9 @@ const nextConfig = {
    */
   experimental: {
     useTypeScriptCli: true,
+    // proxy.ts buffers request bodies, 10 MB by default. An assistant screenshot may be
+    // 10 MB, which is ~13.4 MB as base64 JSON; a cut body would reach the API malformed.
+    proxyClientMaxBodySize: "15mb",
   },
 
   reactStrictMode: true,
@@ -541,6 +544,10 @@ const nextConfig = {
         destination: "/businesses/:biz/reports",
         permanent: true,
       },
+      // The sign-up page is `/signup`; the hyphenated form is a common guess and fell through to
+      // the sign-in guard.
+      { source: "/sign-up", destination: "/signup", permanent: true },
+      { source: "/sign-up/:rest*", destination: "/signup/:rest*", permanent: true },
     ];
   },
   async headers() {

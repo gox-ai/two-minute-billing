@@ -58,7 +58,7 @@ export default async function InvoicesPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Invoices & Credit Notes" />
+        <PageHeader title="Invoices" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -74,7 +74,7 @@ export default async function InvoicesPage({
           stays visible at zero rows — the table renders its own empty state. */}
       <InvoicesTable
         page={{
-          title: "Invoices & Credit Notes",
+          title: "Invoices",
           breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Invoices" }],
           notice: (
             <>

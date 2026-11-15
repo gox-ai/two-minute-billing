@@ -1633,7 +1633,7 @@ const subEventsBefore = (
 await throws(
   "a declined first charge refuses the checkout",
   () => completeCheckout(declineCtx!, { paymentMethodToken: "tok_4000000000000341" }),
-  /declined/,
+  /^We could not start your subscription\. .+ We did not charge you\. Try again, or use a different payment method\.$/,
 );
 const declinedSubs = await withTenant(orgId, (tx) =>
   tx.select().from(subscriptions).where(eq(subscriptions.customerId, declineCust.id)),
@@ -4980,6 +4980,117 @@ ok(
   ok(
     "currency: an INR signup is still offered Cashfree with its mandate rails",
     (cashfreeOffer(inrGws)?.method_types ?? []).includes("upi") && inrGws.debit_currency === "INR",
+  );
+  await app.close();
+}
+
+// ═══ A TYPED TEST CARD IS THE CARD THAT IS SAVED ═════════════════════════════════
+// The hosted card step sends the typed card as `token`, without the setup intent: through
+// the intent, tmtest saves its default 4242 and drops the typed card.
+{
+  const app = await buildApp({ logger: false });
+  await clearPublicRateLimits();
+  const tOrg = await createOrganization({ name: "Typed Card Co" });
+  const tOrgId = tOrg.organization.id;
+  const tBiz = await createBusiness({
+    organizationId: tOrgId,
+    name: "Typed Card Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  await createGatewayAccount({
+    organizationId: tOrgId,
+    businessId: tBiz.id,
+    gatewayKey: "tmtest",
+    label: "Typed TM Test",
+    credentials: {},
+  });
+  const tProduct = await createProduct({ organizationId: tOrgId, businessId: tBiz.id, name: "P" });
+  const tPrice = await createPrice({
+    organizationId: tOrgId,
+    businessId: tBiz.id,
+    productId: tProduct.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 2900,
+    interval: "month",
+  });
+  const call = (path: string, token: string, payload: unknown) =>
+    app.inject({
+      method: "POST",
+      url: path,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": crypto.randomUUID() },
+      payload: payload as object,
+    });
+  /** A session at the card step, with the setup intent the page begins. */
+  const atCardStep = async (email: string) => {
+    const s = await createCheckoutSession({
+      organizationId: tOrgId,
+      businessId: tBiz.id,
+      priceId: tPrice.publicId,
+      quantity: 1,
+    });
+    await call("/checkout/v1/customer", s.token, {
+      email,
+      address: {
+        line1: "1 Market St",
+        city: "San Francisco",
+        state_code: "CA",
+        postal_code: "94105",
+        country: "US",
+        first_name: "Ria",
+        last_name: "Typed",
+      },
+    });
+    const setup = await call("/checkout/v1/setup", s.token, {
+      return_url: "https://portal.test/done",
+      cancel_url: "https://portal.test/back",
+    });
+    return { token: s.token, intent: JSON.parse(setup.body).payment_intent as string };
+  };
+  const subsOf = (email: string) =>
+    withTenant(tOrgId, (tx) =>
+      tx
+        .select({ status: subscriptions.status })
+        .from(subscriptions)
+        .innerJoin(customers, eq(customers.id, subscriptions.customerId))
+        .where(and(eq(subscriptions.businessId, tBiz.id), eq(customers.email, email))),
+    );
+  const last4Of = (email: string) =>
+    withTenant(tOrgId, (tx) =>
+      tx
+        .select({ last4: paymentMethods.last4 })
+        .from(paymentMethods)
+        .innerJoin(customers, eq(customers.id, paymentMethods.customerId))
+        .where(eq(customers.email, email)),
+    ).then((r) => r.map((x) => x.last4).sort());
+
+  const declined = await atCardStep("typed.decline@example.com");
+  const d = await call("/checkout/v1/complete", declined.token, { token: "4000000000000002" });
+  ok(
+    "typed card: 4000 0000 0000 0002 is refused (400) and no subscription is created",
+    d.statusCode === 400 &&
+      // The field the card step shows beside Pay, not any text in the body.
+      /declined/i.test(String(JSON.parse(d.body).error?.message ?? "")) &&
+      (await subsOf("typed.decline@example.com")).length === 0 &&
+      (await last4Of("typed.decline@example.com")).join() === "0002",
+  );
+  const threeDs = await atCardStep("typed.3ds@example.com");
+  const t = await call("/checkout/v1/complete", threeDs.token, { token: "4000000000003155" });
+  ok(
+    "typed card: 4000 0000 0000 3155 asks for authentication (402 + next_action)",
+    t.statusCode === 402 && !!JSON.parse(t.body).payment_intent?.next_action,
+  );
+  const viaIntent = await atCardStep("typed.intent@example.com");
+  const v = await call("/checkout/v1/complete", viaIntent.token, {
+    setup_intent: viaIntent.intent,
+  });
+  ok(
+    "typed card: the setup intent with no typed card still saves the default 4242 and subscribes",
+    v.statusCode === 201 &&
+      (await last4Of("typed.intent@example.com")).join() === "4242" &&
+      (await subsOf("typed.intent@example.com")).some((s) => s.status === "active"),
   );
   await app.close();
 }

@@ -137,6 +137,15 @@ const EXEMPT_PAGES = new Map<string, string>([
     "(storefront)/portal/continue/[token]/page.tsx",
     "reached with the emailed portal link; the peek spends nothing",
   ],
+  ["(dashboard)/[...rest]/page.tsx", "renders nothing: notFound() for a path no route claims"],
+  [
+    "(dashboard)/businesses/[biz]/[...rest]/page.tsx",
+    "renders nothing: notFound() for a path no route claims",
+  ],
+  [
+    "(dashboard)/businesses/[biz]/catalog/page.tsx",
+    "renders nothing: redirects to the guarded Plans page",
+  ],
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {

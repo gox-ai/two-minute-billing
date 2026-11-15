@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ActionButton } from "@/components/action-button";
 import { AttachAddonModal } from "@/components/catalog/attach-addon-modal";
 import { detachItemFromPlanAction } from "@/app/(dashboard)/businesses/[biz]/catalog/products/[prod]/actions";
+import { plural } from "@/lib/labels";
 import type { AttachedItemConfig, Product } from "@/lib/api";
 
 /**
@@ -54,8 +56,8 @@ const CHARGE_EVENT_LABELS: Record<string, string> = {
 };
 
 /**
- * A plan's applicable items are split into separate **Addons** and **Charges**
- * sub-lists, each with its own "Search for ID / Name" box and a "Showing 1 – N of N"
+ * A plan's applicable items are split into separate **Add-ons** and **Charges**
+ * sub-lists, each with its own "Search by ID or name" box and a "Showing 1–N of N"
  * count. Both lists are bounded (a business's catalog is tens of items, and the parent
  * already fetched them all), so search and counting are client-side — the §6 list
  * policy only mandates a server cursor for lists that can plausibly reach thousands of
@@ -77,9 +79,9 @@ export function AttachedItemsList({
       <ItemSection
         biz={biz}
         plan={plan}
-        title="Addons"
+        title="Add-ons"
         rows={addons}
-        empty="No addons apply to this plan. Add one to this plan so that subscriptions can use it."
+        empty="No add-ons apply to this plan. Add one to this plan so that subscriptions can use it."
       />
       <ItemSection
         biz={biz}
@@ -123,13 +125,13 @@ function ItemSection({
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search for ID / Name"
+              placeholder="Search by ID or name"
               aria-label={`Search ${title.toLowerCase()} by ID or name`}
               className="h-8 w-56"
             />
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
               {shown.length > 0
-                ? `Showing 1 – ${shown.length} of ${rows.length}`
+                ? `Showing 1–${shown.length} of ${rows.length}`
                 : `Showing 0 of ${rows.length}`}
             </span>
           </div>
@@ -169,66 +171,44 @@ function ItemRow({ biz, plan, row }: { biz: string; plan: string; row: AttachedR
           >
             {item.name}
           </Link>
-          {via === "all_plans" ? (
-            <Badge variant="outline" className="text-xs">
-              All plans
-            </Badge>
-          ) : null}
-          {via === "differential" ? (
-            <Badge variant="outline" className="text-xs">
-              Via differential price
-            </Badge>
-          ) : null}
+          {via === "all_plans" ? <Chip>All plans</Chip> : null}
+          {via === "differential" ? <Chip>Via differential price</Chip> : null}
         </span>
         <span className="font-mono text-xs text-muted-foreground">{item.id}</span>
         {config ? (
           <span className="flex flex-wrap gap-1.5">
-            <Badge
-              variant={config.applicability === "mandatory" ? "default" : "secondary"}
-              className="text-xs capitalize"
+            <Chip
+              tone={config.applicability === "mandatory" ? "blue" : "gray"}
+              className="capitalize"
             >
               {config.applicability}
-            </Badge>
+            </Chip>
             {item.kind === "charge" ? (
-              <Badge variant="secondary" className="text-xs">
-                {CHARGE_EVENT_LABELS[config.chargeOnEvent] ?? config.chargeOnEvent}
-              </Badge>
+              <Chip>{CHARGE_EVENT_LABELS[config.chargeOnEvent] ?? config.chargeOnEvent}</Chip>
             ) : null}
-            {config.chargeOnce ? (
-              <Badge variant="secondary" className="text-xs">
-                Once
-              </Badge>
-            ) : null}
-            {config.defaultQuantity !== 1 ? (
-              <Badge variant="outline" className="text-xs">
-                Qty {config.defaultQuantity}
-              </Badge>
-            ) : null}
+            {config.chargeOnce ? <Chip>Once</Chip> : null}
+            {config.defaultQuantity !== 1 ? <Chip>Qty {config.defaultQuantity}</Chip> : null}
             {config.billingCycles != null ? (
-              <Badge variant="outline" className="text-xs">
-                {config.billingCycles} cycle{config.billingCycles !== 1 ? "s" : ""}
-              </Badge>
+              <Chip>{plural(config.billingCycles, "cycle")}</Chip>
             ) : null}
             {config.customerCanChangeQuantity === false ? (
-              <Badge variant="outline" className="text-xs">
-                Portal: fixed quantity
-              </Badge>
+              <Chip>Portal: fixed quantity</Chip>
             ) : config.minQuantity != null ||
               config.maxQuantity != null ||
               config.quantityStep > 1 ? (
-              <Badge variant="outline" className="text-xs">
+              <Chip>
                 Portal:{" "}
                 {config.maxQuantity != null
                   ? `${config.minQuantity ?? 1} to ${config.maxQuantity}`
                   : `${config.minQuantity ?? 1} or more`}
                 {config.quantityStep > 1 ? `, step ${config.quantityStep}` : ""}
-              </Badge>
+              </Chip>
             ) : null}
           </span>
         ) : null}
         {via === "all_plans" ? (
           <p className="text-xs text-muted-foreground">
-            Applies to every plan in this business. The setting is on the addon, not here.{" "}
+            Applies to every plan in this business. The setting is on the add-on, not here.{" "}
             <Link
               href={`/businesses/${biz}/catalog/products/${item.id}/edit`}
               className="text-primary hover:underline"
@@ -264,16 +244,13 @@ function ItemRow({ biz, plan, row }: { biz: string; plan: string; row: AttachedR
             via === "attached"
               ? undefined
               : via === "all_plans"
-                ? "This addon applies to every plan. Save keeps a configuration for THIS plan only. It does not change the “Applies to all plans” setting."
-                : "This addon applies through its differential price for this plan. Save keeps an explicit configuration for it."
+                ? "This add-on applies to every plan. Save keeps a configuration for THIS plan only. It does not change the “Applies to all plans” setting."
+                : "This add-on applies through its differential price for this plan. Save keeps an explicit configuration for it."
           }
           trigger={
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
+            <Button type="button" variant="ghost" size="sm">
               {config ? "Edit" : "Configure"}
-            </button>
+            </Button>
           }
         />
         {detachable ? (

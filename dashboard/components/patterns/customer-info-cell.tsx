@@ -20,7 +20,8 @@ export function CustomerInfoCell({
 }) {
   const title = name || email || id;
   const titleIsId = title === id;
-  const sub = name ? email || id : email ? id : null;
+  // A list may pass the email as the name (the engine's fallback): treat that as no name.
+  const sub = name && name !== email ? email || id : email ? id : null;
   return (
     <InfoCell
       title={

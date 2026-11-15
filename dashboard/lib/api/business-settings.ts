@@ -341,6 +341,10 @@ export interface BusinessSettingsPatch {
     cancel_timing?: "immediately" | "end_of_term";
     allow_pause_resume?: boolean;
     allow_reactivate?: boolean;
+    allow_restart?: boolean;
+    restart_price?: "current" | "keep";
+    restart_window_days?: number | null;
+    restart_open_invoices?: "pay_first" | "allow";
     /** Buyer may skip an upcoming renewal. Default OFF. */
     allow_skip_renewal?: boolean;
     /** Most renewals a buyer may skip in 12 months, 1–12. Default 3. Operators are not capped. */
@@ -421,7 +425,7 @@ export interface BusinessSettingsPatch {
     /** Copied on every send. `cc` is visible to the customer; `bcc` is not. Max 10 each. */
     cc?: string[] | null;
     bcc?: string[] | null;
-    /** Prepended to every subject at send time, e.g. "[Acme]". */
+    /** Prepended to every subject at send time, e.g. "[Halyard]". */
     subjectPrefix?: string | null;
     /**
      * The merchant's sign-off, rendered under the button on every email.

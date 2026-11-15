@@ -1144,6 +1144,11 @@ Known live findings:
 
 ## Changelog
 
+- **2026-11-12** — tmtest: a payment intent with no instrument (hosted purchase Pay, portal Pay
+  now) answers the `sdk` challenge on every account, so the storefront shows Approve/Decline
+  (`buyerPaymentDialog`, built in `gateways.ts`). `buyer_auth_mode=none` authorizes it at once, as
+  before; `sdk` / `form_post` unchanged; setups and vaulted-card intents unchanged. Suites past the
+  dialog use `scripts/lib/tmtest-pay-at-once.ts`. Gate: `verify:gateway-sdk-modes` (d, k).
 - **2026-11-03** — `gateway_request_logs.span_id` (0496), written by `providers/http.ts` from the
   ambient span, and a `span_id` list filter. One tick trace holds many charges; the span is one charge.
 - **2026-11-03** — `providerFetch` (11 gateways) and the Stripe SDK fetch never follow a redirect: a
@@ -3213,3 +3218,15 @@ gateway's own `detail` says so and the card prints that text verbatim rather tha
   `/v1/reporting/balances`, 403 → `not_permitted` with the Transaction search steps).
   `getGatewayAccountBalance` + `GET …/gateway_accounts/:gwa/balance`; never throws, a gateway
   error comes back as `available: false` with a message.
+- **2026-11-13** — tmtest typed test cards. Completing a tmtest setup intent with no client result
+  saves the default `4242` card (`consumeSetup`); the typed token never reaches the adapter on
+  that path. So the hosted card step and the portal add-card send a typed card as `token`,
+  without the setup intent: `4000000000000002` is refused at the first charge and nothing
+  subscribes, `4000000000003155` answers `402` with a challenge. The setup intent path, the
+  Approve/Decline dialog (`tmtest_ok` / `tmtest_decline`) and `buyer_auth_mode` are unchanged.
+  `verify:checkout` +3. The 3-D Secure redirect goes to `tmtest.local`, which hosts no page.
+- **2026-11-15** — `GatewayDefinition.dashboardLinks` (required): each gateway declares the
+  gateway-dashboard URL per stored id shape, with `confirmedBy` or `false`. Served as
+  `dashboard_links` on `GET /v1/gateways`; the dashboard's `gatewayObjectUrl` reads it. Linked:
+  Stripe `pi_`/`ch_` and Razorpay `pay_` (confirmed), Stripe `seti_` and PayPal captures (not yet
+  confirmed). Every other gateway declares none. Gate: `test/unit/gateway-object-url.test.ts`.

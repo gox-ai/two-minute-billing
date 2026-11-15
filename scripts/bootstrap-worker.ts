@@ -21,8 +21,9 @@
  *
  *   pnpm db:bootstrap
  */
-import { runMigrations } from 'graphile-worker'
-import { config } from '@/platform/config'
+import { runMigrations } from "graphile-worker";
+import { config } from "@/platform/config";
 
-await runMigrations({ connectionString: config.DATABASE_URL })
-console.log('graphile_worker schema ready')
+// Direct URL when set: graphile's migration takes a session lock a transaction pooler drops.
+await runMigrations({ connectionString: config.QUEUE_DATABASE_URL ?? config.DATABASE_URL });
+console.log("graphile_worker schema ready");

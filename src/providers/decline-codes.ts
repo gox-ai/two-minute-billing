@@ -602,6 +602,31 @@ export const PAYER_SAFE_INTERNAL_FAILURE =
 /** The payer's sentence when the business chose not to show the reason. Blames nobody. */
 export const PAYER_REASON_WITHHELD = "We could not complete the payment.";
 
+const OPENS_WITH_LEAD = /^We could not /;
+const HAS_NEXT_STEP = /\b(try again|contact|do not pay)\b/i;
+
+/**
+ * One refusal for a buyer who is present: ONE opening, the reason, "We did not charge
+ * you." and ONE next step. A reason that is a whole message itself (our own-fault and
+ * withheld sentences, a gateway text that opens "We could not") takes the place of the
+ * lead instead of following it.
+ */
+export function payerRefusal(
+  lead: string,
+  reason: string,
+  nextStep = "Try again, or use a different payment method.",
+): string {
+  const said = reason.trim();
+  const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
+  // Our fault: the method is fine, so never send the buyer to another one.
+  if (sentence === PAYER_SAFE_INTERNAL_FAILURE)
+    return `${lead.replace(/\.$/, "")} because of a problem on our side. Your payment method is fine. We did not charge you. Try again in a few minutes.`;
+  if (sentence === PAYER_REASON_WITHHELD) return `${lead} We did not charge you. ${nextStep}`;
+  const opening = OPENS_WITH_LEAD.test(sentence) ? sentence : `${lead} ${sentence}`;
+  const step = HAS_NEXT_STEP.test(sentence) ? "" : ` ${nextStep}`;
+  return `${opening} We did not charge you.${step}`;
+}
+
 /**
  * The decline sentence a PAYER may read, after the business's override.
  *

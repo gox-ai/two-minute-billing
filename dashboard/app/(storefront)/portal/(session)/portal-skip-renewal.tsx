@@ -15,6 +15,7 @@ import { Alert } from "@/components/ui/alert";
 import { RadioField } from "@/components/ui/radio-group";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalSkipRenewalAction } from "./actions";
+import { buyerChangeError, skipChoices } from "./portal-change-view";
 
 export interface PortalRenewalRow {
   renewal_at: string;
@@ -49,10 +50,14 @@ export function PortalSkipRenewal({
   const [error, setError] = React.useState<string | null>(null);
   const [undoing, setUndoing] = React.useState<PortalRenewalRow | null>(null);
   const [undoError, setUndoError] = React.useState<string | null>(null);
+  const [showAll, setShowAll] = React.useState(false);
+  // The next few dates; most buyers skip the next renewal or the one after it.
+  const { shown, more } = skipChoices(renewals, showAll);
 
   function openDialog() {
     setSelected(first);
     setError(null);
+    setShowAll(false);
     setOpen(true);
   }
 
@@ -63,7 +68,14 @@ export function PortalSkipRenewal({
     const res = await portalSkipRenewalAction(subscription, selected, false);
     setBusy(false);
     // The server's own words: the limit, the 48-hour cut-off.
-    if (!res.ok) return setError(res.error ?? "We could not skip the renewal.");
+    if (!res.ok)
+      return setError(
+        buyerChangeError(
+          res.error,
+          "We could not skip the renewal.",
+          "Select a different date, or contact us.",
+        ),
+      );
     setOpen(false);
     router.refresh();
   }
@@ -71,7 +83,10 @@ export function PortalSkipRenewal({
   async function undo(row: PortalRenewalRow) {
     setUndoError(null);
     const res = await portalSkipRenewalAction(subscription, row.renewal_at, true);
-    if (!res.ok) return setUndoError(res.error ?? "We could not undo the skip.");
+    if (!res.ok)
+      return setUndoError(
+        buyerChangeError(res.error, "We could not undo the skip.", "Contact us to undo it."),
+      );
     router.refresh();
   }
 
@@ -137,13 +152,22 @@ export function PortalSkipRenewal({
               ariaLabel="Renewal to skip"
               value={selected}
               onValueChange={setSelected}
-              options={renewals.map((r) => ({
+              options={shown.map((r) => ({
                 value: r.renewal_at,
                 label: r.label,
-                disabled: r.skipped || !r.changeable,
-                hint: r.skipped ? "Skipped" : !r.changeable ? CUTOFF : undefined,
+                disabled: !r.changeable,
+                hint: !r.changeable ? CUTOFF : undefined,
               }))}
             />
+            {more > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="text-xs font-medium text-primary transition-colors hover:underline"
+              >
+                Show {more} later {more === 1 ? "date" : "dates"}
+              </button>
+            ) : null}
           </div>
           {error ? (
             <Alert tone="error" className="text-xs">

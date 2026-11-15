@@ -11,13 +11,17 @@ import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import { DateTimeField } from "@/components/form/datetime-field";
 import { Button } from "@/components/ui/button";
+import { CheckboxField } from "@/components/ui/checkbox";
 import { RadioField } from "@/components/ui/radio-group";
 import { MoneyField, majorToMinor } from "@/components/catalog/form-kit";
 import {
   releaseHoldAction,
   saveCustomerCreditSettingsAction,
-  voidGrantAction,
 } from "@/app/(dashboard)/businesses/[biz]/customers/[cus]/credits/actions";
+import { voidGrantWithReasonAction } from "@/app/(dashboard)/businesses/[biz]/customers/[cus]/credits/grant-actions";
+import { SelectField } from "@/components/ui/select-field";
+import { Textarea } from "@/components/ui/textarea";
+import { VOID_REASON_OPTIONS } from "@/lib/credit-settings";
 import type { ActionResult } from "@/lib/action-result";
 import { toMajorInput } from "@/lib/money";
 import { money } from "@/lib/format";
@@ -39,36 +43,111 @@ function useConfirmAction(
   };
 }
 
-/** Void a promotional grant: the remainder is booked out. Paid grants leave by credit note. */
+/**
+ * Void a grant: the remainder is booked out. A paid grant leaves by credit note when the
+ * customer gets money back; here it is voided with no refund, and the operator must select
+ * that. The operator selects why; the reason is kept on the grant.
+ */
 export function VoidGrantButton({
   biz,
   cus,
   grant,
   remaining,
+  paid = false,
 }: {
   biz: string;
   cus: string;
   grant: string;
   remaining: string;
+  /** A paid grant: the dialog asks for "Void without a refund". */
+  paid?: boolean;
 }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
-  const confirm = useConfirmAction(voidGrantAction, { biz, cus, grant });
+  const [reason, setReason] = React.useState("");
+  const [noRefund, setNoRefund] = React.useState(false);
   return (
     <>
-      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        aria-label={`Void credit grant, ${remaining} remaining`}
+        onClick={() => {
+          setReason("");
+          setNoRefund(false);
+          setOpen(true);
+        }}
+      >
         Void
       </Button>
-      <ConfirmDialog
+      <EditDrawer
         open={open}
         onOpenChange={setOpen}
         title="Void this credit grant?"
         description={`The customer loses the remaining ${remaining}. You cannot undo this.`}
-        confirmLabel="Void grant"
-        destructive
-        onConfirm={confirm}
-      />
+      >
+        <ActionForm
+          action={voidGrantWithReasonAction}
+          onSuccess={(r) => {
+            toast.success(r.message ?? "Credit grant voided.");
+            setOpen(false);
+            router.refresh();
+          }}
+          className="flex flex-col gap-4 py-2"
+        >
+          <input type="hidden" name="biz" value={biz} />
+          <input type="hidden" name="cus" value={cus} />
+          <input type="hidden" name="grant" value={grant} />
+          {paid ? (
+            <>
+              <input type="hidden" name="paid" value="on" />
+              <div className="flex flex-col gap-1">
+                <CheckboxField
+                  name="without_refund"
+                  checked={noRefund}
+                  onCheckedChange={setNoRefund}
+                  label="Void without a refund"
+                  hint="The customer gets no money back for the unused credit. To give money back, create a credit note on the invoice of this credit."
+                />
+                <NoRefundError />
+              </div>
+            </>
+          ) : null}
+          <Field name="reason" label="Reason" required>
+            <SelectField
+              name="reason"
+              value={reason}
+              onValueChange={setReason}
+              ariaLabel="Reason"
+              placeholder="Select a reason"
+              options={VOID_REASON_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </Field>
+          <Field
+            name="note"
+            label="Note"
+            required={reason === "other"}
+            help={reason === "other" ? "Say why you void the credit." : "Optional."}
+          >
+            <Textarea name="note" maxLength={500} rows={3} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <SubmitButton variant="destructive">Void credit grant</SubmitButton>
+          </div>
+        </ActionForm>
+      </EditDrawer>
     </>
   );
+}
+
+/** The message under "Void without a refund" when the save refused it. */
+function NoRefundError() {
+  const error = useFieldError("without_refund");
+  return error ? <p className="m-0 text-xs font-medium text-destructive">{error}</p> : null;
 }
 
 /** Release an open hold: it stops counting against the balance at once. */
@@ -79,6 +158,7 @@ export function ReleaseHoldButton({
 }: {
   biz: string;
   hold: string;
+  /** What the hold still reserves: what the release returns. */
   amount: string;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -92,7 +172,7 @@ export function ReleaseHoldButton({
         open={open}
         onOpenChange={setOpen}
         title="Release this hold?"
-        description={`${amount} becomes available again. The app cannot capture the hold after this. You cannot undo this.`}
+        description={`We return ${amount} to the balance. The app cannot capture the hold after this. You cannot undo this.`}
         confirmLabel="Release hold"
         destructive
         onConfirm={confirm}
@@ -224,9 +304,10 @@ export function CustomerCreditSettingsButton({
             </>
           ) : (
             <p className="m-0 text-sm text-muted-foreground">
-              Blocking is off for this business, so we never refuse usage for lack of credit. To set
-              a policy or an overdraft limit for this customer, turn on blocking in Settings →
-              Credits.
+              Blocking is off for this business, so we do not refuse usage for lack of credit that
+              has a money value. To set a policy or a money overdraft limit for this customer, turn
+              on blocking in Settings → Credits. Credit with no money value has its own overdraft
+              limit: set it in Credit in units on this page.
             </p>
           )}
           <div className="flex justify-end gap-2">

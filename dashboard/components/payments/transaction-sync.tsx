@@ -6,6 +6,8 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { AttentionCard } from "@/components/patterns/record-page";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { useDisplayTz } from "@/components/business-tz";
+import { fmtDateTime } from "@/lib/format-date";
 import { ActionButton } from "@/components/action-button";
 import {
   cancelPendingDebitAction,
@@ -50,13 +52,8 @@ export function TransactionSyncPanel({
     null,
   );
 
-  const when = (iso: string | null) =>
-    iso
-      ? new Date(iso).toLocaleString(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-        })
-      : null;
+  const tz = useDisplayTz();
+  const when = (iso: string | null) => (iso ? fmtDateTime(iso, tz) : null);
 
   const facts = [
     // These describe the CLOCK, not this button: Check now is a read and does not move

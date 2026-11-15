@@ -57,6 +57,7 @@ import {
   USAGE_WIDGET_SCHEMAS,
 } from "./openapi-usage-widget";
 import { USAGE_CONTROL_PATHS, USAGE_CONTROL_SCHEMAS } from "./openapi-usage-controls";
+import { withCreditSettingsDocs } from "./openapi-credit-settings";
 
 function list(ref: string) {
   return {
@@ -419,6 +420,7 @@ const emailTypeParam = {
       "credit_note_issued",
       "credit_note_applied",
       "subscription_activated",
+      "subscription_reactivated",
       "subscription_changed",
       "subscription_renewed",
       "subscription_paused",
@@ -453,6 +455,7 @@ const emailTypeParam = {
       "payment_request",
       "payment_method_request",
       "credit_note_sent",
+      "subscription_restart",
       "portal_sign_in_code",
     ],
   },
@@ -569,6 +572,17 @@ const created = (ref: string) => ({
   description: "Created",
   content: { "application/json": { schema: { $ref: `#/components/schemas/${ref}` } } },
 });
+/** The seven counts of one email delivery report row. */
+const EMAIL_REPORT_COUNTS = {
+  delivered: { type: "integer" },
+  not_delivered: { type: "integer" },
+  pending: { type: "integer" },
+  failed: { type: "integer" },
+  bounced: { type: "integer" },
+  complained: { type: "integer" },
+  skipped: { type: "integer" },
+} as const;
+
 const errResp = (description: string) => ({
   description,
   content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
@@ -612,7 +626,10 @@ const openapiSpec = {
       "`GET /v1/request_logs/{id}` to see what was sent and what was answered. Reads are kept 30 days, " +
       "writes 90 days.",
   },
-  servers: [{ url: "http://localhost:4000", description: "local dev" }],
+  servers: [
+    { url: "https://api.twominutebilling.com", description: "Two Minute Billing Cloud" },
+    { url: "http://localhost:4000", description: "a local install" },
+  ],
   security: [{ bearerAuth: [] }],
   tags: [
     {
@@ -1605,6 +1622,7 @@ const openapiSpec = {
                     description:
                       "The dunning policy (dpol_…) for this customer's invoices. null uses the business dunning settings.",
                   },
+                  ...CUSTOMER_CREDIT_SETTINGS_FIELD,
                 },
               },
             },
@@ -1961,7 +1979,7 @@ const openapiSpec = {
         tags: ["Subscriptions"],
         summary: "Mint a hosted-checkout session (subscribe, or change an existing subscription)",
         description:
-          "Returns a short-lived bearer token (returned exactly once) and the /checkout/s/<token> link a BUYER opens; the org API key never reaches their browser. mode='create' (default) subscribes a new customer to the items. mode='change' requires `subscription` and, on completion, upserts the items onto THAT subscription (plan swap / quantity change / add-ons) and applies the coupons. In change mode the customer is pinned to the subscription's owner at mint time and cannot be reassigned by the buyer. Items and coupons are validated AT MINT (a bogus price or coupon 404s here rather than failing the buyer mid-flow). A change session may carry only coupons; a create session needs at least one item. Unlisted items on the target are left alone unless replace_items_list is true. With reactivate:true a change session targets a CANCELLED subscription and completing it reactivates it with a fresh term, billed on the spot; a failed charge refuses it when the business requires a successful charge to reactivate.",
+          "Returns a short-lived bearer token (returned exactly once) and the /checkout/s/<token> link a BUYER opens; the org API key never reaches their browser. mode='create' (default) subscribes a new customer to the items, or, with `customer_id`, a customer you already created. mode='change' requires `subscription` and, on completion, upserts the items onto THAT subscription (plan swap / quantity change / add-ons) and applies the coupons. In change mode the customer is pinned to the subscription's owner at mint time and cannot be reassigned by the buyer. Items and coupons are validated AT MINT (a bogus price or coupon 404s here rather than failing the buyer mid-flow). A change session may carry only coupons; a create session needs at least one item. Unlisted items on the target are left alone unless replace_items_list is true. With reactivate:true a change session targets a CANCELLED subscription and completing it reactivates it with a fresh term, billed on the spot. The charge is taken first: a failed charge leaves the subscription cancelled and the page open for another payment method.",
         parameters: [bizParam, idempotencyHeader],
         requestBody: {
           required: true,
@@ -1999,7 +2017,7 @@ const openapiSpec = {
                   coupons: {
                     type: "array",
                     description:
-                      "Coupon codes to apply on completion. Plain coupon codes or coupon-set codes.",
+                      "Coupon codes to apply on completion. Plain coupon codes or coupon-set codes. mode='purchase': the codes discount the purchase's one invoice, and each coupon applies once. A purchase that a coupon makes free completes with no payment step, and its invoice is paid.",
                     items: { type: "string" },
                   },
                   mode: {
@@ -2007,12 +2025,12 @@ const openapiSpec = {
                     enum: ["create", "change", "purchase"],
                     default: "create",
                     description:
-                      "create subscribes a new customer; change changes an existing subscription; purchase sells one-time prices only (a paid invoice, no subscription).",
+                      "create subscribes a new customer (or the `customer_id` customer); change changes an existing subscription; purchase sells one-time prices only (a paid invoice, no subscription).",
                   },
                   customer_id: {
                     type: "string",
                     description:
-                      "cus_… — mode='purchase' only: an existing customer buying more. The buyer cannot change this customer's email.",
+                      "cus_… — an existing customer of this business (404 when not found). mode='create': completing subscribes THIS customer instead of creating one, so the app can create the customer first (for usage billing) and still send the buyer to hosted checkout. A create session is refused with 409 when a live subscription of this customer already bills a meter that the items bill. mode='purchase': the customer buys one-time items. The hosted page does not show or change the customer's email; it prefills their billing address, and the buyer can correct it. Not with mode='change' (400), nor with `customer` or `billing_address` (400).",
                   },
                   subscription: {
                     type: "string",
@@ -2070,12 +2088,12 @@ const openapiSpec = {
                     type: "object",
                     additionalProperties: true,
                     description:
-                      "Metadata to write onto the resulting subscription when this checkout completes. Valid in both modes, and REPLACED wholesale rather than merged. Applied only after completion succeeds, so a change that moves both items and a flag can be sent as one call and lands as both or neither. Send {} to clear; omit the key to leave the subscription's metadata untouched.",
+                      "Metadata written when this checkout completes. mode='create' and 'change': onto the resulting subscription, REPLACED wholesale rather than merged. Applied only after completion succeeds, so a change that moves both items and a flag can be sent as one call and lands as both or neither. Send {} to clear; omit the key to leave the subscription's metadata untouched. mode='purchase': stored on the invoice the purchase raises, so a webhook handler can read back your own reference (for example `{\"order_id\": \"…\"}`) from the paid invoice.",
                   },
                   customer: {
                     type: "object",
                     description:
-                      "mode='create' only. Defaults for the buyer's details step, shown as editable values. The buyer's own submit creates the customer; nothing is written at mint.",
+                      "mode='create' only, without `customer_id`. Defaults for the buyer's details step, shown as editable values. The buyer's own submit creates the customer; nothing is written at mint.",
                     properties: {
                       email: { type: "string", format: "email" },
                       tax_registration_number: { type: "string", maxLength: 50 },
@@ -2084,7 +2102,7 @@ const openapiSpec = {
                   billing_address: {
                     type: "object",
                     description:
-                      "mode='create' only. Billing-address defaults for the details step (same fields the buyer submits). Format-checked here; required fields are enforced on the buyer's submit.",
+                      "mode='create' only, without `customer_id`. Billing-address defaults for the details step (same fields the buyer submits). Format-checked here; required fields are enforced on the buyer's submit.",
                     properties: {
                       line1: { type: "string", maxLength: 200 },
                       line2: { type: "string", maxLength: 200 },
@@ -2168,7 +2186,8 @@ const openapiSpec = {
         summary: "Create a subscription (bills active subs in advance)",
         description:
           "When the new subscription auto-collects and bills a period NOW (no trial, starts " +
-          "immediately, `invoice_immediately` is not false), the customer must already have a " +
+          "immediately, `invoice_immediately` is not false) and the first invoice has an amount " +
+          "due, the customer must already have a " +
           "USABLE payment method — not `expired`, not `invalid` — or the create is refused with " +
           "400 `payment_error` / `no_chargeable_payment_method`. Add a card first, or pass " +
           '`auto_collection: "off"`. This refusal is newer than the endpoint: it was added ' +
@@ -2447,6 +2466,9 @@ const openapiSpec = {
               "Applied (with proration invoice if any), or scheduled for the term end (`scheduled_change`)",
           },
           "400": errResp("Invalid change"),
+          "402": errResp(
+            "`billing_rules_config.failed_change_charge: apply_when_paid` (or `on_charge_failure: apply_when_paid`): the invoice was raised but not paid, so nothing changed yet. `error.code` = `payment_failed` (declined, or a slow payment still in progress) or `requires_action` (the payer must authenticate; with `on_session: true` the response carries `payment_intent` and `next_action`). `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`. The change applies, priced as of this request, when that invoice is paid: repeat this request with a working card, pay the invoice, or complete the intent with `POST …/invoices/{inv}/collect`. `revert`: the charge hard-declined, so the change was undone and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the voided invoice and `error.decline_code` the decline.",
+          ),
           "409": errResp(
             "Refused by the business's plan-change gate (`error.code` = `invoices_unpaid`), or a concurrent write",
           ),
@@ -2524,6 +2546,9 @@ const openapiSpec = {
           },
         },
         responses: {
+          "402": errResp(
+            "`billing_rules_config.failed_change_charge: apply_when_paid`: the whole edit (swap, adds and removals) is ONE held change with ONE invoice, raised but not paid, so nothing changed yet; `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`, and repeating this request pays the same invoice. `revert`: the charge hard-declined, so the plan change, or the item add, was undone and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the invoice and `error.decline_code` the decline.",
+          ),
           "200": {
             description:
               "Reconciled. The FULL subscription — items, customer, discount and default payment " +
@@ -2763,6 +2788,171 @@ const openapiSpec = {
           "every measure it can answer). This endpoint keeps answering with an unchanged payload and " +
           "will only be removed at a version boundary, announced ahead of time.",
         responses: { "200": { description: "Metrics roll-up" } },
+      },
+    },
+    "/v1/businesses/{biz}/mrr_bridge": {
+      get: {
+        tags: ["Analytics"],
+        summary: "MRR bridge",
+        description:
+          "How MRR moved over a range of days: opening MRR, the change by reason (new, expansion, reactivation, resume, contraction, pause, churn) with the largest movements behind each, and closing MRR. Built from the MRR movements ledger, where the sum of the changes in a range equals the change in MRR across it.",
+        parameters: [
+          bizParam,
+          {
+            name: "start",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "First day, YYYY-MM-DD in the business timezone. Default: 29 days before end.",
+          },
+          {
+            name: "end",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Last day, YYYY-MM-DD in the business timezone. Default: today.",
+          },
+          {
+            name: "currency",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "ISO currency. Default: the business currency.",
+          },
+          {
+            name: "top",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 20 },
+            description: "Largest movements listed per reason. Default 5.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "MRR bridge",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: [
+                    "object",
+                    "currency",
+                    "opening_mrr_minor",
+                    "change_minor",
+                    "closing_mrr_minor",
+                    "reasons",
+                  ],
+                  properties: {
+                    object: {
+                      type: "string",
+                      enum: ["mrr_bridge"],
+                      description: "Always mrr_bridge.",
+                    },
+                    business: { type: "string", description: "The business id." },
+                    currency: { type: "string", description: "ISO currency of every amount." },
+                    start: { type: "string", description: "First day of the range." },
+                    end: { type: "string", description: "Last day of the range." },
+                    from: {
+                      type: "string",
+                      format: "date-time",
+                      description: "The range start as an instant.",
+                    },
+                    to: {
+                      type: "string",
+                      format: "date-time",
+                      description: "The range end as an instant (exclusive).",
+                    },
+                    opening_mrr_minor: {
+                      type: "integer",
+                      description: "MRR at the start of the range.",
+                    },
+                    change_minor: {
+                      type: "integer",
+                      description: "The total change over the range.",
+                    },
+                    closing_mrr_minor: {
+                      type: "integer",
+                      description: "MRR at the end of the range.",
+                    },
+                    unclassified_minor: {
+                      type: "integer",
+                      description: "Change under a reason not listed. Absent when none.",
+                    },
+                    reasons: {
+                      type: "array",
+                      description: "The change split by reason.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          reason: {
+                            type: "string",
+                            description:
+                              "new, expansion, reactivation, resume, contraction, pause or churn.",
+                          },
+                          mrr_delta_minor: {
+                            type: "integer",
+                            description: "The change from this reason.",
+                          },
+                          movements: { type: "integer", description: "How many movements." },
+                          largest: {
+                            type: "array",
+                            description: "The largest movements, by size.",
+                            items: {
+                              type: "object",
+                              properties: {
+                                subscription: {
+                                  type: "string",
+                                  nullable: true,
+                                  description: "The subscription id.",
+                                },
+                                customer: {
+                                  type: "string",
+                                  nullable: true,
+                                  description: "The customer id.",
+                                },
+                                customer_name: {
+                                  type: "string",
+                                  nullable: true,
+                                  description: "The customer's name.",
+                                },
+                                plan: {
+                                  type: "object",
+                                  nullable: true,
+                                  description: "The plan after the move (id, name).",
+                                },
+                                previous_plan: {
+                                  type: "object",
+                                  nullable: true,
+                                  description: "The plan before, when it changed.",
+                                },
+                                previous_mrr_minor: {
+                                  type: "integer",
+                                  description: "MRR before the move.",
+                                },
+                                new_mrr_minor: {
+                                  type: "integer",
+                                  description: "MRR after the move.",
+                                },
+                                mrr_delta_minor: { type: "integer", description: "The change." },
+                                occurred_at: {
+                                  type: "string",
+                                  format: "date-time",
+                                  description: "When it happened.",
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": errResp("Invalid range"),
+        },
       },
     },
     "/v1/businesses/{biz}/metrics": {
@@ -3030,9 +3220,11 @@ const openapiSpec = {
             },
             description:
               "A named window. With `business`, it is cut on that business's local dates. Without it, " +
-              "each business's figures stay on its own local dates and the window ends on the last " +
-              "day EVERY business has reached, so a total never mixes one business's today with " +
-              "another's yesterday; the returned `timezone` is then the organization's, a label. " +
+              "each business is read over the window resolved at its OWN local today, so an " +
+              "organization figure is the sum of the business figures. The periods are labelled on " +
+              "the earliest of those todays, a date every business has reached; a business already on " +
+              "a later date puts those later days in the last period, so the last period never holds " +
+              "some businesses alone. The returned `timezone` is then the organization's, a label. " +
               "The resolved `start`, `end`, `timezone` and `timezone_source` come back on the response. " +
               "`this_quarter` and `this_year` run from the start of the current FISCAL quarter/year. " +
               "Mutually exclusive with `start`/`end`.",
@@ -3361,6 +3553,20 @@ const openapiSpec = {
                     description:
                       "With `collect: true` only: charge this saved method of the customer, with no fallback to backups.",
                   },
+                  coupons: {
+                    type: "array",
+                    maxItems: 20,
+                    items: { type: "string", maxLength: 100 },
+                    description:
+                      "Coupon codes or coupon-set codes to redeem on this invoice. Each coupon applies once, whatever its duration, and the discount comes off before tax. A fixed-amount coupon must be in the invoice currency. An item-scoped coupon must match a line that has a `price`. Voiding the invoice gives the redemption back.",
+                  },
+                  metadata: {
+                    type: "object",
+                    additionalProperties: true,
+                    example: { order_id: "ord_1042" },
+                    description:
+                      "Your own key-value data, stored on the invoice and returned with it. Never interpreted.",
+                  },
                 },
               },
             },
@@ -3368,7 +3574,9 @@ const openapiSpec = {
         },
         responses: {
           "201": created("Invoice"),
-          "400": errResp("Invalid"),
+          "400": errResp(
+            "Invalid body, or a coupon the invoice refuses: unknown, not usable now, at a redemption limit, in another currency, or matching no line",
+          ),
           "404": errResp("No such customer"),
         },
       },
@@ -3505,6 +3713,328 @@ const openapiSpec = {
           "200": {
             description: "PDF invoice (binary)",
             content: { "application/pdf": { schema: { type: "string", format: "binary" } } },
+          },
+          "404": errResp("No such invoice"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/invoices/{inv}/explanation": {
+      get: {
+        tags: ["Invoices"],
+        summary: "Explain an invoice",
+        description:
+          "Why the invoice is what it is, from its stored lines: the totals ladder with a check that it adds up, the facts behind each line (kind, period, price, discounts, tax or why it was not taxed), and what changed from the same subscription's previous invoice, grouped by price. Nothing is recomputed.",
+        parameters: [
+          bizParam,
+          {
+            name: "inv",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "The invoice id (inv_…).",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Invoice explanation",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: [
+                    "object",
+                    "invoice",
+                    "currency",
+                    "totals",
+                    "lines",
+                    "discounts",
+                    "tax",
+                    "compared_to_previous",
+                  ],
+                  properties: {
+                    object: {
+                      type: "string",
+                      enum: ["invoice_explanation"],
+                      description: "Always invoice_explanation.",
+                    },
+                    invoice: { type: "string", description: "The invoice id." },
+                    number: {
+                      type: "string",
+                      nullable: true,
+                      description: "The invoice number, once issued.",
+                    },
+                    status: { type: "string", description: "The invoice status." },
+                    currency: { type: "string", description: "ISO currency of every amount." },
+                    period_start: {
+                      type: "string",
+                      format: "date-time",
+                      nullable: true,
+                      description: "Start of the billed period.",
+                    },
+                    period_end: {
+                      type: "string",
+                      format: "date-time",
+                      nullable: true,
+                      description: "End of the billed period.",
+                    },
+                    totals: {
+                      type: "object",
+                      description: "The stored totals, in minor units, and whether they add up.",
+                      properties: {
+                        subtotal_minor: {
+                          type: "integer",
+                          description: "Lines less item-level discounts.",
+                        },
+                        item_level_discount_minor: {
+                          type: "integer",
+                          description: "Discounts inside the subtotal.",
+                        },
+                        document_level_discount_minor: {
+                          type: "integer",
+                          description: "Discounts applied to the subtotal.",
+                        },
+                        tax_minor: { type: "integer", description: "The sum of the tax lines." },
+                        rounding_minor: {
+                          type: "integer",
+                          description: "The sum of the rounding lines.",
+                        },
+                        total_minor: { type: "integer", description: "The invoice total." },
+                        credits_applied_minor: {
+                          type: "integer",
+                          description: "Credits applied to the invoice.",
+                        },
+                        amount_paid_minor: {
+                          type: "integer",
+                          description: "Payments applied to the invoice.",
+                        },
+                        withholding_minor: {
+                          type: "integer",
+                          description: "Tax withheld by the customer.",
+                        },
+                        amount_due_minor: { type: "integer", description: "What is still owed." },
+                        identity: {
+                          type: "string",
+                          description: "The rule the totals must satisfy, in words.",
+                        },
+                        holds: {
+                          type: "boolean",
+                          description: "Whether the stored totals satisfy the rule.",
+                        },
+                      },
+                    },
+                    lines: {
+                      type: "array",
+                      description: "Each line with the facts behind it.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string", description: "The line id." },
+                          description: {
+                            type: "string",
+                            description: "The line text on the invoice.",
+                          },
+                          kind: {
+                            type: "string",
+                            description:
+                              "recurring, proration, usage, one_time, discount, tax or rounding.",
+                          },
+                          why: {
+                            type: "string",
+                            nullable: true,
+                            description: "What this kind of line is for.",
+                          },
+                          price: {
+                            type: "string",
+                            nullable: true,
+                            description: "The price that produced the line.",
+                          },
+                          quantity: { type: "integer", description: "The quantity billed." },
+                          amount_minor: {
+                            type: "integer",
+                            description: "The line amount before discounts.",
+                          },
+                          period_start: {
+                            type: "string",
+                            format: "date-time",
+                            nullable: true,
+                            description: "Start of the period the line covers.",
+                          },
+                          period_end: {
+                            type: "string",
+                            format: "date-time",
+                            nullable: true,
+                            description: "End of the period the line covers.",
+                          },
+                          period_days: {
+                            type: "integer",
+                            nullable: true,
+                            description: "Days the line covers.",
+                          },
+                          discount_minor: {
+                            type: "integer",
+                            description: "Discount on this line.",
+                          },
+                          discounted_by: {
+                            type: "array",
+                            description: "The discounts that reduced this line.",
+                            items: {
+                              type: "object",
+                              properties: {
+                                label: {
+                                  type: "string",
+                                  nullable: true,
+                                  description: "The discount's name.",
+                                },
+                                coupon_code: {
+                                  type: "string",
+                                  nullable: true,
+                                  description: "The coupon, if a coupon gave it.",
+                                },
+                                scope: {
+                                  type: "string",
+                                  description: "item_level or document_level.",
+                                },
+                              },
+                            },
+                          },
+                          tax_amount_minor: {
+                            type: "integer",
+                            nullable: true,
+                            description: "Tax charged on this line.",
+                          },
+                          untaxed_because: {
+                            type: "string",
+                            nullable: true,
+                            description: "Why the line has no tax, when it has none.",
+                          },
+                        },
+                      },
+                    },
+                    discounts: {
+                      type: "array",
+                      description: "Every discount on the invoice.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          label: {
+                            type: "string",
+                            nullable: true,
+                            description: "The discount's name.",
+                          },
+                          source: {
+                            type: "string",
+                            nullable: true,
+                            description: "coupon, manual, promotional_credits or credit_grants.",
+                          },
+                          coupon_code: {
+                            type: "string",
+                            nullable: true,
+                            description: "The coupon, if a coupon gave it.",
+                          },
+                          scope: { type: "string", description: "item_level or document_level." },
+                          amount_minor: { type: "integer", description: "The discount amount." },
+                          line_item_ids: {
+                            type: "array",
+                            items: { type: "string" },
+                            description: "The lines it reduced.",
+                          },
+                        },
+                      },
+                    },
+                    tax: {
+                      type: "object",
+                      description: "The tax decision recorded on the invoice.",
+                      properties: {
+                        treatment: {
+                          type: "string",
+                          nullable: true,
+                          description: "The tax treatment applied.",
+                        },
+                        place_of_supply_code: {
+                          type: "string",
+                          nullable: true,
+                          description: "The place of supply used.",
+                        },
+                        seller_state_code: {
+                          type: "string",
+                          nullable: true,
+                          description: "The seller's state, where it matters.",
+                        },
+                        origin: {
+                          type: "object",
+                          nullable: true,
+                          description: "Where the tax decision came from.",
+                        },
+                        customer_tax_id: {
+                          type: "object",
+                          nullable: true,
+                          description: "The customer's tax id at issue.",
+                        },
+                      },
+                    },
+                    compared_to_previous: {
+                      type: "object",
+                      nullable: true,
+                      description:
+                        "The change from the same subscription's previous invoice. Null when there is none.",
+                      properties: {
+                        previous_invoice: {
+                          type: "string",
+                          description: "The previous invoice id.",
+                        },
+                        previous_number: {
+                          type: "string",
+                          nullable: true,
+                          description: "Its number.",
+                        },
+                        previous_total_minor: { type: "integer", description: "Its total." },
+                        total_delta_minor: {
+                          type: "integer",
+                          description: "This total less the previous total.",
+                        },
+                        discount_delta_minor: {
+                          type: "integer",
+                          description: "The change in discounts.",
+                        },
+                        tax_delta_minor: { type: "integer", description: "The change in tax." },
+                        line_changes: {
+                          type: "array",
+                          description:
+                            "Charges that were added, removed or changed, largest first.",
+                          items: {
+                            type: "object",
+                            properties: {
+                              kind: { type: "string", description: "The line kind." },
+                              price: { type: "string", nullable: true, description: "The price." },
+                              description: { type: "string", description: "The line text." },
+                              change: {
+                                type: "string",
+                                enum: ["added", "removed", "changed"],
+                                description: "What happened to the charge.",
+                              },
+                              before: {
+                                type: "object",
+                                nullable: true,
+                                description: "Quantity and amount_minor on the previous invoice.",
+                              },
+                              after: {
+                                type: "object",
+                                nullable: true,
+                                description: "Quantity and amount_minor on this invoice.",
+                              },
+                              delta_minor: {
+                                type: "integer",
+                                description: "The change in amount.",
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
           "404": errResp("No such invoice"),
         },
@@ -3786,7 +4316,59 @@ const openapiSpec = {
                   type: "object",
                   properties: {
                     object: { type: "string", enum: ["list"] },
-                    data: { type: "array", items: { type: "object" } },
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          object: { type: "string", enum: ["retry"] },
+                          invoice: { type: "string", example: "inv_…" },
+                          invoice_number: { type: "string", nullable: true },
+                          status: { type: "string", description: "The invoice status." },
+                          dunning_status: {
+                            type: "string",
+                            nullable: true,
+                            description:
+                              "in_progress | parked | succeeded | exhausted | stopped. Null until dunning first touches the invoice.",
+                          },
+                          currency: { type: "string" },
+                          amount_due_minor: { type: "integer" },
+                          collection: {
+                            type: "string",
+                            enum: ["charge", "reminder"],
+                            description:
+                              "`reminder` when auto-collection is off (the subscription's setting, else the customer's): dunning sends payment reminders and never charges, so `attempt_count` stays 0 and `next_attempt_at` is the next reminder. `charge` for a retried payment.",
+                          },
+                          attempt_count: {
+                            type: "integer",
+                            description: "Charge attempts made. Always 0 on a `reminder` row.",
+                          },
+                          next_attempt_at: {
+                            type: "string",
+                            format: "date-time",
+                            nullable: true,
+                            description:
+                              "The next retry, or the next reminder on a `reminder` row. A time in the past is due: the next clock tick acts on it.",
+                          },
+                          retry_started_at: { type: "string", format: "date-time" },
+                          customer: { type: "string", nullable: true, example: "cus_…" },
+                          customer_name: { type: "string", nullable: true },
+                          customer_email: { type: "string", nullable: true },
+                          last_error_code: { type: "string", nullable: true },
+                          last_error_id: { type: "string", nullable: true },
+                          last_error_text: { type: "string", nullable: true },
+                          last_failure_retriable: {
+                            type: "boolean",
+                            nullable: true,
+                            description: "true = soft, false = hard, null = never recorded.",
+                          },
+                          last_failure_at: { type: "string", format: "date-time", nullable: true },
+                          gateway_key: { type: "string", nullable: true },
+                          payment_method_brand: { type: "string", nullable: true },
+                          payment_method_last4: { type: "string", nullable: true },
+                        },
+                      },
+                    },
                     has_more: { type: "boolean" },
                     next_cursor: { type: "string", nullable: true },
                     total: { type: "integer", nullable: true },
@@ -5686,7 +6268,7 @@ const openapiSpec = {
             required: false,
             schema: { type: "string", enum: ["true", "false"] },
             description:
-              "`true` adds the metered usage recorded so far in the current term, with its minimum-spend true-up, when this renewal is the invoice that bills it. Coupons, credits and tax then apply as on the real invoice. Default `false`: the fixed-charge estimate.",
+              "`true` adds the metered usage recorded so far in the current term, with its minimum-spend true-up, when this renewal is the invoice that bills it. It also adds one line for each meter that is paid in credits and has usage more than the credit balance that a money price bills. Coupons, credits and tax then apply as on the real invoice. Default `false`: the fixed-charge estimate.",
           },
         ],
         responses: {
@@ -5960,6 +6542,20 @@ const openapiSpec = {
         responses: { "200": { description: "List of scheduled_change" } },
       },
     },
+    "/v1/businesses/{biz}/subscriptions/{sub}/pending_change": {
+      delete: {
+        tags: ["Subscriptions"],
+        summary: "Cancel the change held for payment",
+        description:
+          "`billing_rules_config.failed_change_charge: apply_when_paid`: cancel the subscription's pending change. Its invoice and the credit notes the change raised are voided, and nothing in it applies. 409 `pending_change_payment_in_progress` while a payment for it is in progress; 409 `pending_change_applied` when the invoice is already paid (the change is applied).",
+        parameters: [bizParam, subParam, idempotencyHeader],
+        responses: {
+          "200": { description: 'Cancelled: `{ object: "pending_change", id, cancelled: true }`' },
+          "404": errResp("No such subscription, or it has no pending change"),
+          "409": errResp("A payment for the pending change is in progress, or it is already paid"),
+        },
+      },
+    },
     "/v1/businesses/{biz}/scheduled_changes/{sch}": {
       delete: {
         tags: ["Subscriptions"],
@@ -6003,6 +6599,9 @@ const openapiSpec = {
         responses: {
           "201": { description: "Item added" },
           "400": errResp("Invalid"),
+          "402": errResp(
+            "`billing_rules_config.failed_change_charge: apply_when_paid`: the item's invoice was raised but not paid, so no item was added yet; `pending_change` = `{ id, invoice, expires_at, payment_in_progress }`, and repeating this request pays the same invoice. `revert`: the charge hard-declined, so the item was removed again and its invoice voided. `error.code` = `payment_failed`; `error.invoice` names the invoice and `error.decline_code` the decline.",
+          ),
           "404": errResp("No such subscription/price"),
           "409": errResp(
             "Idempotency-Key reused with a different payload, or a request with it is still in progress",
@@ -6328,7 +6927,7 @@ const openapiSpec = {
         tags: ["Subscriptions"],
         summary: "Retrieve usage so far in the current billing window",
         description:
-          "Read-only; nothing is stored. Rates the usage recorded in the window the next invoice bills, as that invoice will rate it (free units, tiers, packages, percentages), and adds tax with the customer's tax settings. Discounts and credits are not applied (`discounts_applied: false`); for the exact next invoice, call `renewal_estimate?include_usage_so_far=true`. Usage already settled early (an item removed, a term reset) is listed in `settled_charges` and counted in the totals, since the next invoice bills it. `window` is null when no invoice will bill usage (a trial, a cancelled subscription, or a window already billed); during a trial, `trial` lists the units recorded, with no amount.",
+          "Read-only; nothing is stored. Rates the usage recorded in the window the next invoice bills, as that invoice will rate it (free units, tiers, packages, percentages), and adds tax with the customer's tax settings. Discounts and credits are not applied (`discounts_applied: false`); for the exact next invoice, call `renewal_estimate?include_usage_so_far=true`. Usage already settled early (an item removed, a term reset) is listed in `settled_charges` and counted in the totals, since the next invoice bills it. For a meter that is paid in credits, `credit_usage` gives the quantity that credits paid, the quantity that a money price bills with its amount (counted in the totals), and the credits below a zero balance that are not billed. `window` is null when no invoice will bill usage (a trial, a cancelled subscription, or a window already billed); during a trial, `trial` lists the units recorded, with no amount.",
         parameters: [
           bizParam,
           subParam,
@@ -8331,7 +8930,10 @@ const openapiSpec = {
             "application/json": { schema: { $ref: "#/components/schemas/WebhookEndpointCreate" } },
           },
         },
-        responses: { "201": created("WebhookEndpoint"), "400": errResp("Invalid body") },
+        responses: {
+          "201": created("WebhookEndpoint"),
+          "400": errResp("Invalid body, or an unknown event type"),
+        },
       },
       get: {
         tags: ["Webhooks"],
@@ -8373,6 +8975,20 @@ const openapiSpec = {
                     description:
                       "biz_… id to scope; null to receive all events again. Must be in the endpoint’s own partition — livemode is immutable and cannot be patched.",
                   },
+                  event_types: {
+                    type: "array",
+                    items: { type: "string" },
+                    nullable: true,
+                    example: ["invoice_paid", "payment_failed", "subscription_canceled"],
+                    description:
+                      "The event types this endpoint receives. Omit or null = every type, including types added later. Each entry must be a type from the event reference (400 otherwise).",
+                  },
+                  description: {
+                    type: "string",
+                    nullable: true,
+                    maxLength: 500,
+                    example: "Order fulfilment",
+                  },
                 },
               },
             },
@@ -8380,7 +8996,9 @@ const openapiSpec = {
         },
         responses: {
           "200": ok("WebhookEndpoint"),
-          "400": errResp("Cross-partition re-scope, or livemode passed (immutable)"),
+          "400": errResp(
+            "Cross-partition re-scope, livemode passed (immutable), or an unknown event type",
+          ),
           "404": errResp("No such endpoint, or it is in the other partition"),
         },
       },
@@ -9917,6 +10535,61 @@ const openapiSpec = {
         },
       },
     },
+    "/v1/businesses/{biz}/emails/report": {
+      get: {
+        tags: ["Webhooks"],
+        summary: "Email delivery report",
+        description:
+          "Billing email counts by week and by email type for the last `weeks` weeks, this week included. Weeks run Monday to Sunday in the business time zone, and an email counts in the week it was queued. `delivered` and `not_delivered` follow the same rules as `/emails/activity`. A complaint counts in `complained` only, not in `bounced`. There is no open or click tracking.",
+        parameters: [
+          bizParam,
+          {
+            name: "weeks",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 52, default: 12 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Success",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["email_delivery_report"] },
+                    weeks: { type: "integer" },
+                    timezone: { type: "string" },
+                    from: { type: "string", format: "date" },
+                    weekly: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          week_start: { type: "string", format: "date" },
+                          ...EMAIL_REPORT_COUNTS,
+                        },
+                      },
+                    },
+                    by_type: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: { type: { type: "string" }, ...EMAIL_REPORT_COUNTS },
+                      },
+                    },
+                    totals: { type: "object", properties: EMAIL_REPORT_COUNTS },
+                  },
+                },
+              },
+            },
+          },
+          "400": errResp("weeks is not a whole number from 1 to 52"),
+          "404": errResp("No such business"),
+        },
+      },
+    },
     "/v1/businesses/{biz}/emails/reminders": {
       get: {
         tags: ["Webhooks"],
@@ -10489,6 +11162,7 @@ const openapiSpec = {
                       "payment_request",
                       "payment_method_request",
                       "credit_note_sent",
+                      "subscription_restart",
                     ],
                   },
                   customer: {
@@ -10499,11 +11173,22 @@ const openapiSpec = {
                   invoice: {
                     type: "string",
                     description:
-                      "Invoice id (inv_…). Required for `invoice_sent` and `payment_request`.",
+                      "Invoice id (inv_…). Required for `invoice_sent` and `payment_request`. The invoice must be final: a `pending` invoice is refused with a 400, because its amount and due date can still change.",
                   },
                   credit_note: {
                     type: "string",
                     description: "Credit note id (cn_…). Required for `credit_note_sent`.",
+                  },
+                  subscription: {
+                    type: "string",
+                    description:
+                      "Subscription id (sub_…). Required for `subscription_restart`, and the subscription must have ended. The email carries a restart checkout: the customer pays for a new term, and the subscription starts again only when that payment succeeds.",
+                  },
+                  restart_price: {
+                    type: "string",
+                    enum: ["current", "keep"],
+                    description:
+                      "`subscription_restart` only. `current` (default) bills the new term at the plan's price today, a custom price on the subscription kept; `keep` bills the price the subscription had.",
                   },
                   to: {
                     type: "string",
@@ -10539,7 +11224,9 @@ const openapiSpec = {
               },
             },
           },
-          "400": errResp("Missing record, unknown type, or no recipient"),
+          "400": errResp(
+            "Missing record, unknown type, no recipient, or an invoice that is not final (`pending`)",
+          ),
         },
       },
     },
@@ -10580,6 +11267,14 @@ const openapiSpec = {
             required: false,
             description:
               "Only the disputes on this payment (`pay_…`). An unknown payment gives an empty list.",
+            schema: { type: "string" },
+          },
+          {
+            name: "customer",
+            in: "query",
+            required: false,
+            description:
+              "Only this customer's disputes (`cus_…`). An unknown customer gives an empty list.",
             schema: { type: "string" },
           },
         ],
@@ -11331,6 +12026,69 @@ const openapiSpec = {
           },
           "400": errResp("Invalid body / currency required"),
           "404": errResp("No such customer"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/customers/{cus}/discounts": {
+      post: {
+        tags: ["Customers"],
+        summary: "Apply a coupon to a customer",
+        description:
+          "The coupon discounts the customer's invoices: subscription invoices, one-off invoices, one-time purchases and automatic top-ups. Its duration counts the invoices it discounts: `once` discounts the next one, `repeating` the next `duration_in_periods`, `forever` every invoice until you remove it. The business setting `billing_rules_config.customer_coupons` sets how it combines with other coupons: `fallback` (the default) applies it only to an invoice that no other coupon discounts; `stack` adds it to the other coupons. A fixed-amount coupon does not discount an invoice in another currency. A coupon can be active on a customer only once.",
+        parameters: [bizParam, cusParam, idempotencyHeader],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["coupon"],
+                properties: {
+                  coupon: {
+                    type: "string",
+                    maxLength: 100,
+                    description: "The coupon code, or a code from a coupon set.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Coupon applied",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/CustomerDiscount" } },
+            },
+          },
+          "400": errResp(
+            "Coupon not usable: unknown, archived, expired, at its redemption limit, or already applied to this customer",
+          ),
+          "404": errResp("No such customer"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/customers/{cus}/discounts/{id}": {
+      delete: {
+        tags: ["Customers"],
+        summary: "Remove a coupon from a customer",
+        description:
+          "Later invoices are not discounted by it. Invoices already raised keep their discount.",
+        parameters: [
+          bizParam,
+          cusParam,
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "The customer discount id (`disc_…`).",
+          },
+          idempotencyHeader,
+        ],
+        responses: {
+          "200": { description: "Removed" },
+          "404": errResp("No such customer, or no active discount with this id"),
         },
       },
     },
@@ -12435,7 +13193,20 @@ const openapiSpec = {
         responses: {
           "200": {
             description: "A list of audit log entries",
-            content: { "application/json": { schema: { type: "object" } } },
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: { type: "array", items: { $ref: "#/components/schemas/AuditLog" } },
+                    has_more: { type: "boolean" },
+                    next_cursor: { type: ["string", "null"] },
+                    total: { type: ["integer", "null"] },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -12694,7 +13465,20 @@ const openapiSpec = {
         responses: {
           "200": {
             description: "A list of audit log entries",
-            content: { "application/json": { schema: { type: "object" } } },
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: { type: "array", items: { $ref: "#/components/schemas/AuditLog" } },
+                    has_more: { type: "boolean" },
+                    next_cursor: { type: ["string", "null"] },
+                    total: { type: ["integer", "null"] },
+                  },
+                },
+              },
+            },
           },
           "404": errResp("No such business"),
         },
@@ -12887,13 +13671,82 @@ const openapiSpec = {
         },
       },
     },
+    "/v1/businesses/{biz}/transfer_configurations/plans": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Build a transfer plan (all-mode key only)",
+        description:
+          "Stores every object and setting the copy would touch, each with its action, as a run in the `planned` state. Writes no configuration. Review the items with `GET …/{job}/items`, leave items out with `POST …/{job}/items`, then start the copy with `POST …/{job}/apply`.",
+        parameters: [
+          bizParam,
+          idempotencyHeader,
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of the run in the response. Default `all`.",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                allOf: [
+                  { $ref: "#/components/schemas/TransferRequest" },
+                  {
+                    type: "object",
+                    properties: {
+                      conflict_policy: {
+                        type: "object",
+                        additionalProperties: { type: "string", enum: ["skip", "update"] },
+                        description:
+                          "Per section: `skip` keeps an object that exists in the destination, `update` writes over it.",
+                      },
+                      exclude: {
+                        type: "array",
+                        maxItems: 5000,
+                        items: { type: "string", maxLength: 300 },
+                        description: "Item keys to leave out of the plan.",
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "The planned run",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
+            },
+          },
+          "400": errResp("Invalid body, or a blocker"),
+          "403": errResp("Requires an all-mode API key and the admin permission"),
+          "404": errResp("No such destination business"),
+          "409": errResp(
+            "The destination changed after the plan was built, or another transfer into it is running",
+          ),
+        },
+      },
+    },
     "/v1/businesses/{biz}/transfer_configurations/{job}": {
       get: {
         tags: ["Businesses"],
         summary: "Get a transfer configuration job",
+        description:
+          "An async run also carries `summary`: item counts per result (`new`, `updated`, `deleted`, `unchanged`, `kept`, `blocked`, `left_out`), the same per pair and section with the progress of the queued items and `applied` (the items the copy wrote, as `new`, `updated` and `deleted`), `retryable` (the items a retry queues again) and, for an all-mode caller, `blocked` (each blocked item that is not left out, with its messages; the apply refuses while one remains). An all-mode caller also gets every item in `items`, unless `items=none`. Page the items with `GET …/{job}/items`.",
         parameters: [
           bizParam,
           { name: "job", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of an async run. Default `all`.",
+          },
         ],
         responses: {
           "200": {
@@ -12902,6 +13755,294 @@ const openapiSpec = {
               "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
             },
           },
+          "400": errResp("Invalid query"),
+          "404": errResp("No such transfer"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/transfer_configurations/{job}/apply": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Start the copy of a planned transfer (all-mode key only)",
+        description:
+          "Queues the run. The worker applies its items one by one. Refused while a blocked item is not left out. A live destination needs `confirm` and a signed-in owner or admin to change its records.",
+        parameters: [
+          bizParam,
+          { name: "job", in: "path", required: true, schema: { type: "string" } },
+          idempotencyHeader,
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of the run in the response. Default `all`.",
+          },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  confirm: {
+                    type: "string",
+                    description:
+                      "The destination business's name, typed exactly. Needed when the run writes into a live business.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "202": {
+            description: "The run",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
+            },
+          },
+          "400": errResp("Invalid body"),
+          "403": errResp("Requires an all-mode API key and the admin permission"),
+          "404": errResp("No such transfer"),
+          "409": errResp(
+            "The destination changed after the plan was built, or another transfer into it is running",
+          ),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/transfer_configurations/{job}/retry": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Retry the failed items of a transfer run (all-mode key only)",
+        description:
+          "Queues the run's retryable items again. Items that were applied stay as they are.",
+        parameters: [
+          bizParam,
+          { name: "job", in: "path", required: true, schema: { type: "string" } },
+          idempotencyHeader,
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of the run in the response. Default `all`.",
+          },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  confirm: {
+                    type: "string",
+                    description:
+                      "The destination business's name, typed exactly. Needed when the run writes into a live business.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "202": {
+            description: "The run",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
+            },
+          },
+          "400": errResp("Invalid body"),
+          "403": errResp("Requires an all-mode API key and the admin permission"),
+          "404": errResp("No such transfer"),
+          "409": errResp("No item failed, or the destination changed after the plan was built"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/transfer_configurations/{job}/cancel": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Stop a transfer run (all-mode key only)",
+        description: "Stops a planned or running run. Items already applied stay applied.",
+        parameters: [
+          bizParam,
+          { name: "job", in: "path", required: true, schema: { type: "string" } },
+          idempotencyHeader,
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of the run in the response. Default `all`.",
+          },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: { type: "object", additionalProperties: false, properties: {} },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "The run",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
+            },
+          },
+          "400": errResp("Invalid body"),
+          "403": errResp("Requires an all-mode API key and the admin permission"),
+          "404": errResp("No such transfer"),
+          "409": errResp("The run has ended"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/transfer_configurations/{job}/items": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Leave items out of a planned transfer, or put them back (all-mode key only)",
+        description:
+          "`exclude` leaves the named item keys out of the copy. `include` puts them back. Only a run that has not started takes changes.",
+        parameters: [
+          bizParam,
+          { name: "job", in: "path", required: true, schema: { type: "string" } },
+          idempotencyHeader,
+          {
+            name: "items",
+            in: "query",
+            schema: { type: "string", enum: ["all", "none"] },
+            description: "`none` leaves the items out of the run in the response. Default `all`.",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  exclude: {
+                    type: "array",
+                    maxItems: 5000,
+                    items: { type: "string", maxLength: 300 },
+                    description: "Item keys to leave out.",
+                  },
+                  include: {
+                    type: "array",
+                    maxItems: 5000,
+                    items: { type: "string", maxLength: 300 },
+                    description: "Item keys to put back.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "The run",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/TransferJob" } },
+            },
+          },
+          "400": errResp("Invalid body, or a key that is not in the plan"),
+          "403": errResp("Requires an all-mode API key and the admin permission"),
+          "404": errResp("No such transfer"),
+          "409": errResp("The run has started"),
+        },
+      },
+      get: {
+        tags: ["Businesses"],
+        summary: "List the items of an async transfer run (all-mode key only)",
+        description:
+          "One page of the run's items in plan order, each in the shape of the run's `items`. Filters combine. A result is what the plan does with the item: a left-out item is `left_out` and a blocked one `blocked`, whatever its action.",
+        parameters: [
+          bizParam,
+          { name: "job", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "section",
+            in: "query",
+            schema: { type: "string", maxLength: 40 },
+            description: "Only this section, e.g. `coupons`.",
+          },
+          {
+            name: "result",
+            in: "query",
+            schema: {
+              type: "string",
+              enum: [
+                "new",
+                "updated",
+                "deleted",
+                "unchanged",
+                "kept",
+                "blocked",
+                "left_out",
+                "changes",
+              ],
+            },
+            description:
+              "Only items with this result. `changes` is the items that write to the destination: `new`, `updated` and `deleted`.",
+          },
+          {
+            name: "status",
+            in: "query",
+            schema: { type: "string", enum: ["queued", "open", "done", "failed", "skipped"] },
+            description:
+              "Only items the apply queued: all of them (`queued`), the ones not done yet (`open`), or one status.",
+          },
+          {
+            name: "q",
+            in: "query",
+            schema: { type: "string", maxLength: 200 },
+            description: "Only items whose label contains this text, in any case.",
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 500 },
+            description: "Maximum number of items to return. Default 100.",
+          },
+          {
+            name: "starting_after",
+            in: "query",
+            schema: { type: "string" },
+            description: "The `next_cursor` of the previous page.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "A page of items",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: {
+                      type: "array",
+                      items: { type: "object" },
+                      description:
+                        "The items: `key`, `pair`, `section`, `kind`, `label`, `action`, `excluded`, `blocked`, `depends_on`, `diff`, `messages`, `status`, `skip_reason`, `error`, `attempts`, `started_at`, `finished_at`.",
+                    },
+                    has_more: {
+                      type: "boolean",
+                      description: "True when there are more items after this page.",
+                    },
+                    next_cursor: {
+                      type: "string",
+                      nullable: true,
+                      description: "Pass as `starting_after` for the next page.",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": errResp("Invalid query"),
+          "403": errResp("Requires an all-mode API key"),
           "404": errResp("No such transfer"),
         },
       },
@@ -12909,7 +14050,7 @@ const openapiSpec = {
     "/v1/businesses/{biz}/time_travel/start": {
       post: {
         tags: ["Businesses"],
-        summary: "Start Time Travel (test businesses, all-mode key only)",
+        summary: "Start Time Travel (test businesses, test key)",
         parameters: [bizParam, idempotencyHeader],
         requestBody: {
           required: true,
@@ -12929,14 +14070,14 @@ const openapiSpec = {
             content: { "application/json": { schema: { type: "object" } } },
           },
           "400": errResp("Invalid body / not a test business"),
-          "403": errResp("Requires an all-mode API key"),
+          "403": errResp("A live key cannot use the test tools"),
         },
       },
     },
     "/v1/businesses/{biz}/time_travel/advance": {
       post: {
         tags: ["Businesses"],
-        summary: "Travel the simulated clock forward (test businesses, all-mode key only)",
+        summary: "Travel the simulated clock forward (test businesses, test key)",
         parameters: [bizParam, idempotencyHeader],
         requestBody: {
           required: true,
@@ -12959,14 +14100,14 @@ const openapiSpec = {
             content: { "application/json": { schema: { type: "object" } } },
           },
           "400": errResp("Invalid body"),
-          "403": errResp("Requires an all-mode API key"),
+          "403": errResp("A live key cannot use the test tools"),
         },
       },
     },
     "/v1/businesses/{biz}/time_travel/stop": {
       post: {
         tags: ["Businesses"],
-        summary: "Stop Time Travel (test businesses, all-mode key only)",
+        summary: "Stop Time Travel (test businesses, test key)",
         parameters: [bizParam, idempotencyHeader],
         requestBody: {
           required: false,
@@ -12981,14 +14122,14 @@ const openapiSpec = {
             description: "Time Travel state plus wiped flag",
             content: { "application/json": { schema: { type: "object" } } },
           },
-          "403": errResp("Requires an all-mode API key"),
+          "403": errResp("A live key cannot use the test tools"),
         },
       },
     },
     "/v1/businesses/{biz}/test_data": {
       delete: {
         tags: ["Businesses"],
-        summary: "Delete test data (test businesses, all-mode key only)",
+        summary: "Delete test data (test businesses, test key)",
         description:
           "Deletes every customer of a test business and the subscriptions, invoices, payments " +
           "and credit notes under them, and stops Time Travel. The catalog, settings, gateways, " +
@@ -13007,7 +14148,41 @@ const openapiSpec = {
             },
           },
           "400": errResp("The business is a live business"),
-          "403": errResp("Requires an all-mode API key"),
+          "403": errResp("A live key cannot use the test tools"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/test_data/reset": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Reset a test business (test businesses, test key)",
+        description:
+          "Puts a test business back to how a new test mode of its live business starts. " +
+          "Deletes the customers and every subscription, invoice, payment and credit note, the " +
+          "catalog, coupons, taxes, dunning, webhook endpoints, gateways and email settings, and " +
+          "stops Time Travel. Copies the settings of the live business again, adds a new TM Test " +
+          "Gateway and starts the document numbers again at 1. The business id stays the same, " +
+          "so test keys and a stored business id keep working. Team members, API keys and the " +
+          "audit log are kept. A test business without a live business cannot be reset.",
+        parameters: [bizParam, idempotencyHeader],
+        responses: {
+          "200": {
+            description: "The business was reset",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["test_data_reset"] },
+                    business: { type: "string" },
+                    deleted: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          "400": errResp("The business is a live business, or has no live business"),
+          "403": errResp("A live key cannot use the test tools"),
         },
       },
     },
@@ -13305,6 +14480,45 @@ const openapiSpec = {
                     description:
                       "Card limit per currency, in minor units, keyed by ISO-4217 code. An invoice whose amount due is above the limit for its currency is not paid by card: automatic and manual collection charge only the customer's other payment methods, and the customer portal offers no Pay now for it. With no other method the attempt fails as `card_limit_exceeded` and the invoice stays open for the customer to pay another way. An absent currency or `null` means no limit.",
                   },
+                  credit_config: { $ref: "#/components/schemas/CreditConfig" },
+                  billing_frequencies: {
+                    type: "array",
+                    nullable: true,
+                    maxItems: 50,
+                    description:
+                      "The billing frequencies a price of this business may use. `null`: any frequency.",
+                    items: {
+                      type: "object",
+                      required: ["interval", "count"],
+                      properties: {
+                        interval: { type: "string", enum: ["day", "week", "month", "year"] },
+                        count: { type: "integer", minimum: 1, maximum: 120 },
+                      },
+                    },
+                  },
+                  invoice_issuer: {
+                    type: "string",
+                    enum: ["business", "organization"],
+                    description:
+                      "Whose name, address and tax id head the invoices: this business's, or the organization's registered entity.",
+                  },
+                  mandate_config: {
+                    type: "object",
+                    nullable: true,
+                    description:
+                      "Mandate sizing (card and UPI mandates). `headroom_bps`: the mandate ceiling as a multiple of the largest expected charge, in basis points (default 13000 = 1.3×); `rail_ceiling_cap_minor`: the highest ceiling asked for. Each key overrides on its own; `null`: the defaults.",
+                    properties: {
+                      headroom_bps: { type: "integer", minimum: 1 },
+                      rail_ceiling_cap_minor: { type: "integer", minimum: 1 },
+                    },
+                  },
+                  invoice_customization: {
+                    type: "object",
+                    nullable: true,
+                    additionalProperties: true,
+                    description:
+                      "What printed invoices, credit notes and receipts show. Groups: `common` (address_format, custom_address, show_customer_id, show_subscription_id, show_customer_info, show_shipping_info, show_payment_stub, show_exchange_rate), `signature` (image_url, caption, position), `payment_instructions` (mode, personalize), `invoice` (title, show_status, show_billing_period, show_next_billing, show_credit_note_number, show_custom_fields, numbering), `credit_note` (title, show_status, show_service_period, show_invoice_date, service_period_basis, notes, numbering), `receipt` (numbering). Send the whole object: it replaces the stored one. `null` clears it.",
+                  },
                   credits_flexibility: {
                     type: "object",
                     nullable: true,
@@ -13336,7 +14550,7 @@ const openapiSpec = {
                         minItems: 1,
                         maxItems: 8,
                         description:
-                          "Retry offsets. Offset N is counted from the Nth failure, not from the due date.",
+                          "Retry offsets, each counted from the invoice's due date: offset N is the Nth retry.",
                         items: {
                           type: "object",
                           required: ["after_days"],
@@ -13594,9 +14808,23 @@ const openapiSpec = {
                       },
                       failed_change_charge: {
                         type: "string",
-                        enum: ["start_dunning", "next_renewal"],
+                        enum: ["start_dunning", "next_renewal", "revert", "apply_when_paid"],
                         description:
-                          "When the invoice a subscription change raises and collects at once fails. `start_dunning` (default) retries it on the dunning schedule; `next_renewal` holds the first retry until the current term ends, also when the gateway reports the failure later; a change that resets the term (for example monthly to yearly) starts dunning at once. The change stays in place either way.",
+                          "When the invoice a subscription change (or an item add) raises and collects at once fails. `start_dunning` (default) retries it on the dunning schedule, and a hard decline that ends dunning at once runs the dunning final action at once; `next_renewal` holds the first retry until the current term ends, also when the gateway reports the failure later; a change that resets the term (for example monthly to yearly) starts dunning at once. With those two the change stays in place. `revert`: a hard decline that ends dunning at once undoes the change \u2014 the items, term and plan credits go back, the invoice and the change's credit notes are voided, and the request answers 402 `payment_failed`; a change that also adds or removes items, changes discounts or settles metered usage cannot be undone exactly and gets the dunning final action instead. A soft decline is retried with `start_dunning`, `next_renewal` and `revert`. `apply_when_paid` (the value a new business gets): the change applies only when its invoice is paid. The request raises and collects the invoice, priced as of the request; if it is not paid, nothing changes, the request answers 402 with `pending_change`, the subscription shows `pending_change`, and dunning does not retry the invoice. Paying it later (a repeat of the request, the invoice's collect or pay, a completed authentication, a slow payment that settles) applies the change as of the request. It expires, and its invoice and credit notes are voided, at the earliest of the term end and `pending_change_expiry_hours` (`pending_change_expiry_hours_slow` for a bank debit, a mandate or an offline invoice); another change, a cancel, a pause or a void of the invoice ends it too. A change whose shape cannot be held exactly (a discount edit, a deferred or metered settlement, a one-time fee, a term reset with a commitment) applies at once and is settled as `revert`.",
+                      },
+                      pending_change_expiry_hours: {
+                        type: "integer",
+                        minimum: 1,
+                        maximum: 720,
+                        description:
+                          "`apply_when_paid`: hours a held change waits for its invoice to be paid, counted from the request. Never past the term end. Default 23.",
+                      },
+                      pending_change_expiry_hours_slow: {
+                        type: "integer",
+                        minimum: 1,
+                        maximum: 720,
+                        description:
+                          "`apply_when_paid`: the same for a slow payment method (a bank debit, a mandate, an offline invoice, or a payment still in progress at the gateway). Never past the term end. Default 168.",
                       },
                       upgrade_proration: {
                         type: "string",
@@ -13690,6 +14918,18 @@ const openapiSpec = {
                         description:
                           "Where the credit a change gives goes. `credit_balance` (default) keeps it as account credit. `refund` refunds what is left of the change's credit note to the card or bank payments that funded the customer's invoices, one payment per refund (bank-debit money goes back to the bank debit). The refund can be partial: credit that no gateway payment backs (offline or credit-settled money), and anything left after a refund that is still in progress, stays on the account. `/change` returns `credit_refunds` with `refunded_minor` and `kept_minor`. `customer_chooses` lets the customer select in the portal (`credit_handling` on the portal change); other sources keep the credit.",
                       },
+                      net_credit_documents: {
+                        type: "string",
+                        nullable: true,
+                        enum: ["credit_note_and_invoice", "one_credit_note"],
+                        description:
+                          "The documents a change whose prorated lines net to a credit (a downgrade to a cheaper plan) raises. `one_credit_note`: one credit note for the net credit, and no invoice. Not saved (null; every business created before 2026-11-13): the rule before this key, unchanged — two documents when the change is invoiced immediately and the term's invoices can take the whole credit, else one credit note. `credit_note_and_invoice` (stored on every business a person creates from 2026-11-13): a credit note for the unused time of the old lines, at the tax and discount of the invoice that charged them, and a tax invoice for the new lines at their own tax rate and place of supply, raised now whatever `invoice_immediately` says. On a paid term the note is refundable credit and the new invoice uses it at once. On an unpaid term the note first reduces that term's invoice (an adjustment) and the new invoice is due. When the term's invoices cannot take the whole credit (part was already refunded, credited or written off), each invoice is credited up to what it can still take and the change keeps both documents. What is left follows `downgrade_credit`. A change that nets to a charge is not affected. Send null to clear a saved value.",
+                      },
+                      block_downgrade_when_past_due: {
+                        type: "boolean",
+                        description:
+                          "When true, a change applied now that nets to a credit (a downgrade, a removed item) is refused with 400 while the customer has an invoice that is past due. A change at the end of the term, and a scheduled change when it applies, are not refused. Default false.",
+                      },
                       reactivation_charges: {
                         type: "string",
                         enum: ["invoice_immediately", "add_to_unbilled_charges"],
@@ -13736,9 +14976,9 @@ const openapiSpec = {
                           },
                           on_downgrade: {
                             type: "string",
-                            enum: ["full", "next_window"],
+                            enum: ["full", "prorated", "next_window"],
                             description:
-                              "The new plan's credits on a downgrade. `next_window` (default): from the next window. `full`: at once, in full.",
+                              "The new plan's credits on a downgrade. `next_window` (default): the old plan's grant runs to its window end, and the new plan grants from the next window. `full`: the old grant ends, and the new plan grants at once, in full. `prorated`: the old grant ends, and the new plan grants at once the part that matches the rest of the window. A downgrade at the term end is on a window start: the new plan grants its full amount from that window under each value. A business that a person creates in the dashboard starts with `prorated`.",
                           },
                           first_window: {
                             type: "string",
@@ -13758,6 +14998,18 @@ const openapiSpec = {
                             description:
                               "After a cancel at period end is requested. `grant_started_window` (default): grant each window that starts before the end. `stop_at_request`: grant nothing more after the request.",
                           },
+                          grant_when: {
+                            type: "string",
+                            enum: ["invoice_issued", "invoice_paid"],
+                            description:
+                              "When a period's plan credits can be spent. `invoice_issued` (default): when the period's invoice is issued, paid or not. `invoice_paid`: while that invoice is unpaid, the period's grants (the term grant and each reset window in the term) have the status `pending`: the balance, the access check and holds do not count them. They become `active` when the invoice is paid (`credit_grant_activated`) and keep their window. They are voided when the invoice is voided or written off, when the subscription is cancelled for non-payment, or when the window ends before the payment.",
+                          },
+                          on_unpaid_cancel: {
+                            type: "string",
+                            enum: ["keep", "void_unused"],
+                            description:
+                              "Plan credits when dunning cancels the subscription for non-payment. `keep` (default): granted credits stay until they expire. `void_unused`: the unused part of each plan grant from the oldest unpaid period on is voided (`credit_grant_voided`); credit rolled over from a paid period stays. A business that a person creates in the dashboard starts with `void_unused`.",
+                          },
                         },
                       },
                       allowances: {
@@ -13770,6 +15022,62 @@ const openapiSpec = {
                             enum: ["new_window", "keep_used", "prorated"],
                             description:
                               "An allowance on an upgrade. `new_window` (default): a new window starts at the change, with the full new allowance. `keep_used`: the used count carries over to the new allowance. `prorated`: the rest of the new allowance is prorated for the rest of the window.",
+                          },
+                        },
+                      },
+                      zero_invoice_paid_event: {
+                        type: "string",
+                        enum: ["never", "one_off", "all"],
+                        description:
+                          "Which new invoices with a total of zero send `invoice_paid` (amount 0) when they are issued as paid. `never` (default): none. `one_off`: only an invoice from a one-time purchase, `POST /invoices` or a dashboard invoice, a credit purchase or an automatic top-up. `all`: every one, also renewals and plan changes. A business created in the dashboard starts with `all`. Invoices issued before a change keep their events.",
+                      },
+                      mid_term_coupons: {
+                        type: "string",
+                        enum: ["skip", "unbilled_and_edits", "all"],
+                        description:
+                          "Which mid-term invoices of a subscription take its coupons. `skip` (default): none; only the renewal invoice takes them. `unbilled_and_edits`: invoices for unbilled charges and for subscription edits, not charges invoiced immediately. `all`: every mid-term invoice. A business created in the dashboard starts with `all`.",
+                      },
+                      customer_coupons: {
+                        type: "string",
+                        enum: ["fallback", "stack"],
+                        description:
+                          "How a coupon applied to the customer combines with other coupons. `fallback` (default): a customer coupon applies only when the invoice has no other coupon. `stack`: a customer coupon applies together with the invoice's other coupons.",
+                      },
+                      late_usage_invoices: {
+                        type: "object",
+                        description:
+                          "Late usage after a cancellation. Usage for an invoiced period can arrive after the subscription's last invoice. When no live subscription of the customer bills the meter, `enabled: true` puts that usage on one more invoice with `purpose: late_usage`. The invoice is raised when the oldest late event was received at least `wait_hours` ago, at most one each `min_interval_hours` for a customer, at the price of the period it belongs to, with no coupons. We try to collect it one time when auto-collection is on, and we do not retry it or start dunning. Keys left out keep their stored value.",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                            description:
+                              "Default `false`: late usage after a cancellation is not billed.",
+                          },
+                          minimum: {
+                            type: "object",
+                            additionalProperties: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 1000000000,
+                            },
+                            description:
+                              'Per currency (upper-case ISO-4217 code), the smallest late-usage subtotal before tax, in minor units, that we invoice, for example {"USD": 500}. Below it the usage waits and bills when more arrives. A currency with no entry has no minimum. A PATCH replaces the whole map. Default {}.',
+                          },
+                          wait_hours: {
+                            type: "integer",
+                            minimum: 1,
+                            maximum: 168,
+                            default: 24,
+                            description:
+                              "How long the oldest unbilled late event waits before we raise the invoice, in hours. Late events that arrive in this time go on the same invoice. Default 24.",
+                          },
+                          min_interval_hours: {
+                            type: "integer",
+                            minimum: 1,
+                            maximum: 720,
+                            default: 24,
+                            description:
+                              "The shortest time between two late-usage invoices of one customer, in hours. Default 24: at most one invoice each day.",
                           },
                         },
                       },
@@ -14024,6 +15332,37 @@ const openapiSpec = {
                           "One key for both directions — offering pause without resume would " +
                           "trap a buyer. Pause uses the business's own pause defaults.",
                       },
+                      allow_restart: {
+                        type: "boolean",
+                        description:
+                          "May a buyer restart an ended subscription from the portal? Default false. " +
+                          "The portal opens a checkout that charges the new term before the " +
+                          "subscription is active again.",
+                      },
+                      restart_price: {
+                        type: "string",
+                        enum: ["current", "keep"],
+                        description:
+                          "Price a portal restart bills. `current` (default) = the plan's catalogue " +
+                          "price today, a custom price on the subscription kept; `keep` = the price " +
+                          "the subscription had.",
+                      },
+                      restart_window_days: {
+                        type: "integer",
+                        nullable: true,
+                        minimum: 1,
+                        maximum: 3650,
+                        description:
+                          "Days after a subscription ended in which a buyer may restart it. Null " +
+                          "(default) = any time.",
+                      },
+                      restart_open_invoices: {
+                        type: "string",
+                        enum: ["pay_first", "allow"],
+                        description:
+                          "`pay_first` (default): unpaid invoices of the subscription must be paid " +
+                          "before a portal restart. `allow`: they do not block it.",
+                      },
                       allow_skip_renewal: {
                         type: "boolean",
                         description:
@@ -14052,8 +15391,7 @@ const openapiSpec = {
                         description:
                           "May a buyer undo a pending cancellation? Default false. Covers a " +
                           "subscription still active with cancel_at_period_end; an " +
-                          "already-cancelled one is refused, because restarting it bills a new " +
-                          "period.",
+                          "ended one is restarted through a checkout instead (`allow_restart`).",
                       },
                       cancel_timing: {
                         type: "string",
@@ -14619,6 +15957,59 @@ const openapiSpec = {
           user_agent: { type: ["string", "null"] },
         },
       },
+      /** One audit log entry (`GET /v1/audit_logs`, `GET /v1/businesses/{biz}/audit_logs`). */
+      AuditLog: {
+        type: "object",
+        properties: {
+          object: { type: "string", enum: ["audit_log"] },
+          id: { type: "string", format: "uuid", description: "The entry id." },
+          business_id: {
+            type: ["string", "null"],
+            description: "`biz_…`. Null for an organization-wide action.",
+          },
+          actor: {
+            type: ["string", "null"],
+            description:
+              "Who acted: an API key id, a member's email, `billing_clock`, `system`, or the id of the " +
+              "checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from.",
+          },
+          source: {
+            type: "string",
+            description: "Where the action came from, e.g. `api`, `dashboard`.",
+          },
+          action: { type: "string", description: "What happened, e.g. `subscription.cancel`." },
+          resource_type: { type: ["string", "null"], description: "The kind of resource changed." },
+          resource_id: { type: ["string", "null"], description: "The id of the resource changed." },
+          before: { description: "The changed fields before the action." },
+          after: { description: "The changed fields after the action." },
+          actor_ip: { type: ["string", "null"], description: "The IP address of the request." },
+          trace_id: {
+            type: ["string", "null"],
+            description: "Entries that share this id are one action.",
+          },
+          created_at: { type: "string", format: "date-time" },
+          channel: {
+            type: ["string", "null"],
+            enum: ["checkout", "portal", null],
+            description:
+              "The hosted page a customer acted from, when `actor` is a checkout or portal session. " +
+              "Null for every other actor.",
+          },
+          actor_customer: {
+            type: ["object", "null"],
+            description:
+              "The customer of the checkout or portal session in `actor`. Null for every other actor, " +
+              "and when the session has no customer (never attached, or deleted).",
+            properties: {
+              id: { type: "string", description: "`cus_…`" },
+              name: {
+                type: ["string", "null"],
+                description: "The account holder's name, else the email.",
+              },
+            },
+          },
+        },
+      },
       /** Body of a transfer preview and of a transfer run. */
       TransferRequest: {
         type: "object",
@@ -14932,6 +16323,7 @@ const openapiSpec = {
           "webhook_secret",
           "webhook_instructions",
           "intent_purposes",
+          "dashboard_links",
           "ach_authorization",
           "currencies",
         ],
@@ -15028,6 +16420,47 @@ const openapiSpec = {
             description:
               "The gateway registers storefront domains for Apple Pay and Google Pay buttons " +
               "(`POST /v1/businesses/{biz}/gateway_accounts/{gwa}/wallet_domains`).",
+          },
+          dashboard_links: {
+            type: "array",
+            description:
+              "How to open an object on the gateway's own dashboard, per id shape. An id that " +
+              "matches no entry has no link. Empty: no link is known for this gateway.",
+            items: {
+              type: "object",
+              required: ["object", "id_pattern", "live_url", "test_url", "confirmed"],
+              properties: {
+                object: {
+                  type: "string",
+                  enum: [
+                    "payment",
+                    "setup",
+                    "mandate",
+                    "order",
+                    "refund",
+                    "customer",
+                    "subscription",
+                  ],
+                  description: "What the id names.",
+                },
+                id_pattern: {
+                  type: "string",
+                  description: "A regular expression the whole id must match.",
+                },
+                live_url: {
+                  type: "string",
+                  description: "The URL for a live business. `{id}` is the URL-encoded id.",
+                },
+                test_url: {
+                  type: "string",
+                  description: "The URL for a test business. `{id}` is the URL-encoded id.",
+                },
+                confirmed: {
+                  type: "boolean",
+                  description: "False while the URL is not yet checked against the gateway.",
+                },
+              },
+            },
           },
           ach_authorization: {
             type: "string",
@@ -15163,7 +16596,14 @@ const openapiSpec = {
                 format: "date",
                 description: "First day covered, inclusive.",
               },
-              end: { type: "string", format: "date", description: "Last day covered, inclusive." },
+              end: {
+                type: "string",
+                format: "date",
+                description:
+                  "Last day covered, inclusive, and the last period's `t`. At organization scope it is " +
+                  "the label day: a business whose own today is later is read through its own today, " +
+                  "and those days are in the last period.",
+              },
               timezone: {
                 type: "string",
                 description: "The IANA zone the window's boundaries were resolved in.",
@@ -15739,6 +17179,198 @@ const openapiSpec = {
           },
         },
       },
+      CreditConfig: {
+        type: "object",
+        nullable: true,
+        additionalProperties: false,
+        description:
+          "Credit grants and holds for the business. A PATCH replaces the whole object; send every key you want to keep (an omitted `in_flight_applies`, or another key that says so, keeps its stored value). `null` returns every key to its default. Unknown keys answer 400 `Unknown parameter: credit_config.<key>`. Setting it needs `credits:manage`.",
+        properties: {
+          portal_auto_topup: {
+            type: "boolean",
+            description:
+              "True: the customer can enable and disable an automatic top-up of a credit unit with no money rate in the portal. Unset: only an operator can.",
+          },
+          auto_topup_retries: {
+            type: "boolean",
+            default: true,
+            description:
+              "Whether an automatic top-up (in money or in a credit unit) tries a soft decline again. Unset or true: it tries on the schedule of `auto_topup_retry_hours`; a hard decline, or the last try, turns the top-up off. False: the first decline turns it off. An omitted key keeps its stored value.",
+          },
+          auto_topup_retry_hours: {
+            type: "array",
+            items: { type: "integer", minimum: 1 },
+            maxItems: 4,
+            default: [4, 12],
+            description:
+              "The delays in hours between the tries of an automatic top-up after a soft decline, each from the try before. At most 4 delays (5 tries in total), and they must add up to 72 hours or less. Unset: `[4, 12]` (the second try 4 hours after the first, the third 12 hours later). An omitted key keeps its stored value.",
+          },
+          auto_topup_retry_hours_by_method: {
+            type: "object",
+            additionalProperties: false,
+            description:
+              "A retry schedule per kind of payment method, with the same rules as `auto_topup_retry_hours`. A kind with no list uses `auto_topup_retry_hours`. An omitted key keeps its stored value.",
+            properties: {
+              card: { type: "array", items: { type: "integer", minimum: 1 }, maxItems: 4 },
+              bank_debit: { type: "array", items: { type: "integer", minimum: 1 }, maxItems: 4 },
+            },
+          },
+          blocking_enabled: {
+            type: "boolean",
+            default: false,
+            description:
+              "Allow a `block` policy. While false, the access check and holds never refuse for credit: usage that credit does not pay is billed.",
+          },
+          on_exhausted_default: {
+            type: "string",
+            enum: ["block", "bill"],
+            default: "bill",
+            description:
+              "The policy when the customer, the grant and the plan price set none: `block` refuses usage that credit cannot pay, `bill` bills it. Applies only while `blocking_enabled` is true.",
+          },
+          in_flight_share_bps: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10000,
+            default: 5000,
+            description:
+              "The part of the balance (before holds) that open holds can use, in basis points (5000 = 50%). Under a `block` policy, a hold or an access check with `estimate` is refused with `in_flight_limit` when the open holds plus the amount are more than this part. `in_flight_applies` sets whether that includes a hold with no other hold open.",
+          },
+          in_flight_applies: {
+            type: "string",
+            enum: ["always", "other_holds_open"],
+            default: "always",
+            description:
+              "When `in_flight_share_bps` applies. `always`: to every hold, so with the default 50% share a customer with 1.5 credits cannot start a 1-credit action. `other_holds_open`: only while the customer has another hold open, so one action at a time can spend the whole balance and parallel actions stay inside the share. A business that a person creates in the dashboard starts with `other_holds_open`.",
+          },
+          hold_default_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: 86400,
+            default: 60,
+            description: "How long a hold stays open when the request does not set `expires_in`.",
+          },
+          trial_usage: {
+            type: "string",
+            enum: ["refuse", "overdraft_only", "as_paid"],
+            default: "refuse",
+            description:
+              "For a meter with a credit cost, when a subscription in a free trial uses more than its credits. `refuse` (default): we refuse the usage. `overdraft_only`: the balance can go below zero to the overdraft limit, and no usage is billed in money. `as_paid`: the same rules as a paid subscription (block or bill, and the overdraft limit); usage billed in money goes on the first invoice after the trial. In a trial, the balance goes below zero only when the credit unit has an overage price, so that we can invoice the rest if the trial ends without a paid subscription. An omitted key keeps its stored value.",
+          },
+          no_subscription_usage: {
+            type: "string",
+            enum: ["block", "as_subscriber"],
+            default: "block",
+            description:
+              "For a meter with a credit cost, when a customer with no live subscription (for example, a customer who only bought credit packs) uses more than their credits. `block` (default): we refuse the usage. `as_subscriber`: the same block-or-bill rules as a subscriber (`on_exhausted_default`, the customer's override, a grant that says `block`). Usage billed in money at the credit unit's overage price goes on a one-off invoice after `no_subscription_invoice_after_days`. An omitted key keeps its stored value.",
+          },
+          no_subscription_overdraft: {
+            type: "string",
+            enum: ["needs_payment_method", "always", "never"],
+            default: "needs_payment_method",
+            description:
+              "When a customer with no live subscription can go below zero, to the overdraft limit, in a credit unit with an overage price. `needs_payment_method` (default): only with a payment method that we can charge, and while no overage invoice of theirs is unpaid or written off. `always`: no other condition. `never`: the balance never goes below zero. An omitted key keeps its stored value.",
+          },
+          no_subscription_invoice_after_days: {
+            type: "integer",
+            minimum: 1,
+            maximum: 90,
+            default: 30,
+            description:
+              "For a customer with no live subscription: the age, in days, of the oldest unbilled usage past the credits when we put it on a one-off invoice. Default 30. When the customer is archived, or their last subscription was cancelled after the usage, we invoice it at once. An omitted key keeps its stored value.",
+          },
+          restore_expiry_months: {
+            oneOf: [
+              { type: "integer", minimum: 1, maximum: 120 },
+              { type: "string", enum: ["never"] },
+            ],
+            default: 12,
+            description:
+              "When credit that we give back expires, in months after it is given back: after a usage event is voided, or after a credit note gives back the credit an invoice used, and the original grant has ended. `never`: it does not expire. Default 12. An omitted key keeps its stored value.",
+          },
+          auto_topup_on_hard_decline: {
+            type: "string",
+            enum: ["disable", "keep_enabled"],
+            default: "disable",
+            description:
+              "What a hard decline does to an automatic top-up (money or a credit unit). `disable` (default): the top-up turns off. `keep_enabled`: the top-up stays on. We do not try the declined payment again; a threshold top-up runs again only after the balance goes above the threshold and then below it again, and a scheduled top-up runs at its next time. The `credit_auto_topup_failed` event then has `stays_enabled: true`, and `credit_auto_topup_hard_declined` is not sent. An omitted key keeps its stored value.",
+          },
+          capture_over_hold: {
+            type: "string",
+            enum: ["debt", "cap_at_hold"],
+            default: "debt",
+            description:
+              "When the capture of a hold in a credit unit uses more than the hold. `debt` (default): the rest is taken from the balance, billed in money or taken below zero, as for any usage event. `cap_at_hold`: the event takes no more than the hold; the rest is not charged and shows in `credits_past_hold` of the usage event. A capture is never refused for this. A hold in money is not changed. An omitted key keeps its stored value.",
+          },
+          late_event_grace_hours: {
+            type: "number",
+            minimum: 0,
+            maximum: 840,
+            default: 12,
+            description:
+              "For a meter with a credit cost: how late a usage event can arrive and still be paid by the credit grant that was live at the event's timestamp, in hours. An event that arrives later is paid by the balance at the time it arrives. `0` = the balance at arrival always pays. An omitted key keeps its stored value.",
+          },
+          overdraft_limit_minor: {
+            type: "object",
+            additionalProperties: { type: "integer", minimum: 0 },
+            description:
+              "Per currency (ISO-4217 code in capitals), minor units: how far below zero a blocking check lets usage go.",
+          },
+          top_up_limits: {
+            type: "object",
+            description:
+              "Per currency: the smallest and largest credit purchase (pack or top-up) in minor units.",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                min_minor: { type: "integer", minimum: 0, nullable: true },
+                max_minor: { type: "integer", minimum: 0, nullable: true },
+              },
+            },
+          },
+          grant_limits: {
+            type: "object",
+            description:
+              "Per currency, for free credit: `max_minor` refuses a grant above it; `alert_above_minor` records and alerts a grant above it.",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                max_minor: { type: "integer", minimum: 0, nullable: true },
+                alert_above_minor: { type: "integer", minimum: 0, nullable: true },
+              },
+            },
+          },
+          unit_grant_limits: {
+            type: "object",
+            description:
+              "Per credit unit with no money rate, for a promotional credit grant in that unit: `max_units` refuses a grant above it; `alert_above_units` records and alerts a grant above it. Both are in the unit's smallest step, as a grant's `amount`. `grant_limits` does not apply to such a unit, because its credit has no money value. Not set = no limit. An omitted key keeps its stored value; send `{}` to remove every limit.",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                max_units: { type: "integer", minimum: 0, nullable: true },
+                alert_above_units: { type: "integer", minimum: 0, nullable: true },
+              },
+            },
+          },
+          default_tax_treatment: {
+            type: "string",
+            enum: ["taxed_at_purchase", "taxed_at_use"],
+            nullable: true,
+            description: "The tax treatment of paid credit when the grant does not set one.",
+          },
+          credit_scope: {
+            type: "object",
+            nullable: true,
+            description:
+              'Grants that apply to all usage pay only these prices or meters: `{kind: "prices", prices: [...]}` or `{kind: "meters", meters: [...]}`.',
+            properties: {
+              kind: { type: "string", enum: ["prices", "meters"] },
+              prices: { type: "array", items: { type: "string" } },
+              meters: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
       CreditsFlexibilitySlots: {
         type: "object",
         description:
@@ -16018,6 +17650,32 @@ const openapiSpec = {
             description:
               "`restricted` makes the organization read-only: every write answers 403 with code `account_restricted`. This occurs when its plan is unpaid, until the open invoice is paid. It also occurs when the organization bills more than its plan covers and our staff make it read-only, until it changes to a plan that covers its billing. Its own billing to its customers continues. Cloud only: always `active` on a self-hosted installation.",
           },
+          credential: {
+            type: "object",
+            description:
+              "Only on `GET /v1/me`: the credential that made the request. Check `livemode` before the first write: a `test` key reaches test businesses only.",
+            required: ["livemode", "kind", "access"],
+            properties: {
+              livemode: {
+                type: "string",
+                enum: ["test", "live", "all"],
+                description:
+                  "The businesses the credential reaches. API keys are `test` or `live`; `all` is the dashboard's own credential.",
+              },
+              kind: {
+                type: "string",
+                enum: ["api", "dashboard"],
+                description: "`api` for an API key, `dashboard` for the dashboard's credential.",
+              },
+              access: {
+                type: "string",
+                enum: ["read", "write"],
+                nullable: true,
+                description:
+                  "What an API key may do. Null for a signed-in member, whose role decides.",
+              },
+            },
+          },
         },
       },
       Country: {
@@ -16189,7 +17847,7 @@ const openapiSpec = {
           large_grants: {
             type: "object",
             description:
-              "An alert at the time someone gives free credit above `credit_config.grant_limits.<currency>.alert_above_minor`: a wallet top-up of type `granted`, promotional credit or a promotional credit grant.",
+              "An alert at the time someone gives free credit above `credit_config.grant_limits.<currency>.alert_above_minor`: a wallet top-up of type `granted`, promotional credit or a promotional credit grant. Also a promotional credit grant in a unit with no money rate above `credit_config.unit_grant_limits.<unit>.alert_above_units`.",
             properties: { enabled: { type: "boolean", description: "Send this alert." } },
           },
         },
@@ -16199,6 +17857,7 @@ const openapiSpec = {
         required: ["object", "id", "name", "default_currency", "status", "created_at"],
         properties: {
           ...USAGE_CLOSE_DELAY_FIELD,
+          credit_config: { $ref: "#/components/schemas/CreditConfig" },
           object: { type: "string" },
           id: { type: "string", example: "biz_…" },
           name: { type: "string" },
@@ -16950,6 +18609,82 @@ const openapiSpec = {
           is_taxable: { type: "boolean" },
           tax_behavior: { type: "string", enum: ["inclusive", "exclusive"] },
           active: { type: "boolean", description: "false to archive, true to restore" },
+          external_name: {
+            type: "string",
+            nullable: true,
+            description: "The name customers see, when it differs from `name`.",
+          },
+          description: {
+            type: "string",
+            nullable: true,
+            description: "A description of the price.",
+          },
+          trial_period: {
+            type: "integer",
+            minimum: 0,
+            nullable: true,
+            description:
+              "Trial length, in `trial_period_unit`s. Send `null` with `trial_period_unit: null` to remove the trial. New subscriptions only.",
+          },
+          trial_period_unit: {
+            type: "string",
+            enum: ["day", "week", "month", "year"],
+            nullable: true,
+            description: "Unit for `trial_period`.",
+          },
+          trial_end_action: {
+            type: "string",
+            enum: ["activate_subscription", "cancel_subscription"],
+            nullable: true,
+            description: "What happens when this price's trial ends.",
+          },
+          billing_cycles: {
+            type: "integer",
+            minimum: 1,
+            nullable: true,
+            description:
+              "How many periods a subscription bills this price for; null bills until cancelled.",
+          },
+          free_quantity: {
+            type: "integer",
+            minimum: 0,
+            nullable: true,
+            description: "Units free in each billing period.",
+          },
+          portal_min_quantity: {
+            type: "integer",
+            minimum: 1,
+            nullable: true,
+            description:
+              "Per-unit plan price: the fewest seats a customer can select in the portal.",
+          },
+          portal_max_quantity: {
+            type: "integer",
+            minimum: 1,
+            nullable: true,
+            description: "Per-unit plan price: the most seats a customer can select in the portal.",
+          },
+          invoice_notes: { type: "string", nullable: true, description: "Stored with the price." },
+          metadata: {
+            type: "object",
+            nullable: true,
+            additionalProperties: true,
+            description: "Your own key-value data. Replaces the stored metadata; null clears it.",
+          },
+          expected_version: {
+            type: "integer",
+            minimum: 0,
+            description: "Optimistic concurrency: the current resource_version; 409 on mismatch.",
+          },
+          usage_aggregation: {
+            description: "Cannot change after create. Sending it answers 400.",
+          },
+          usage_recurring: {
+            description: "Cannot change after create. Sending it answers 400.",
+          },
+          usage_time_unit: {
+            description: "Cannot change after create. Sending it answers 400.",
+          },
         },
       },
       Price: {
@@ -17131,10 +18866,57 @@ const openapiSpec = {
           },
         },
       },
+      CustomerDiscount: {
+        type: "object",
+        description: "A coupon applied to a customer.",
+        properties: {
+          object: { type: "string", enum: ["customer_discount"] },
+          id: { type: "string", example: "disc_…", description: "The customer discount id." },
+          coupon: { type: "string", description: "The coupon code." },
+          coupon_name: { type: "string", nullable: true, description: "The coupon's name." },
+          kind: { type: "string", enum: ["percentage", "fixed_amount"] },
+          percent_off_bps: {
+            type: "integer",
+            nullable: true,
+            description: "The percentage off, in basis points.",
+          },
+          amount_off_minor: {
+            type: "integer",
+            nullable: true,
+            description: "The fixed amount off, in minor units.",
+          },
+          currency: {
+            type: "string",
+            nullable: true,
+            description:
+              "The currency of a fixed amount. Invoices in other currencies get no discount.",
+          },
+          apply_on: { type: "string", enum: ["invoice_amount", "each_specified_item"] },
+          duration_type: { type: "string", enum: ["once", "repeating", "forever"] },
+          remaining_invoices: {
+            type: "integer",
+            nullable: true,
+            description: "How many more invoices it discounts. Null: every invoice until removed.",
+          },
+          total_invoices: {
+            type: "integer",
+            nullable: true,
+            description: "How many invoices it discounts in total. Null: no limit.",
+          },
+          created_at: { type: "string", format: "date-time" },
+        },
+      },
       Customer: {
         type: "object",
         required: ["object", "id", "email", "name"],
         properties: {
+          discounts: {
+            type: "array",
+            readOnly: true,
+            description:
+              "The coupons applied to this customer that can still discount an invoice. Emitted by GET (detail) only.",
+            items: { $ref: "#/components/schemas/CustomerDiscount" },
+          },
           ...CUSTOMER_CREDIT_SETTINGS_FIELD,
           object: { type: "string" },
           id: { type: "string", example: "cus_…" },
@@ -17833,8 +19615,70 @@ const openapiSpec = {
                   description:
                     "Custom price override (flat/per-unit only), minor units; falls back to the catalog price when omitted",
                 },
+                free_quantity: {
+                  type: "integer",
+                  minimum: 0,
+                  description: "Units of this item not charged. Default: the price's.",
+                },
+                billing_cycles: {
+                  type: "integer",
+                  minimum: 1,
+                  description:
+                    "Billing cycles for this item. On the plan item, the subscription runs this many paid cycles and then cancels. Default: the price's.",
+                },
+                metadata: {
+                  type: "object",
+                  additionalProperties: true,
+                  description: "Your own key-value data on this item.",
+                },
               },
             },
+          },
+          auto_collection: {
+            type: "string",
+            enum: ["on", "off"],
+            description:
+              "Overrides the customer's setting for this subscription. `on` charges the customer's payment method. With `on`, a create that charges now (no trial, starts now, invoiced now) needs a usable payment method when the first invoice has an amount due: without one it answers 400 `no_chargeable_payment_method`. A first invoice of 0 (a free plan) needs no card. `off` raises invoices without charging them.",
+          },
+          net_term_days: {
+            type: "integer",
+            minimum: 0,
+            maximum: 365,
+            description:
+              "Days until an invoice of this subscription is due. Default: the customer's.",
+          },
+          max_refundable_credits_usage_minor: {
+            type: "integer",
+            minimum: 0,
+            nullable: true,
+            description:
+              "The most refundable credit that is applied automatically to one invoice of this subscription, in minor units. null or omitted: no limit for this subscription; 0: never. It can only narrow the business's credits_flexibility.",
+          },
+          max_excess_payment_usage_minor: {
+            type: "integer",
+            minimum: 0,
+            nullable: true,
+            description:
+              "The most excess payment that is applied automatically to one invoice of this subscription, in minor units. null or omitted: no limit for this subscription; 0: never.",
+          },
+          po_number: { type: "string", maxLength: 100, description: "Purchase order number." },
+          invoice_notes: {
+            type: "string",
+            maxLength: 2000,
+            description: "Notes printed on this subscription's invoices.",
+          },
+          on_session: {
+            type: "boolean",
+            default: false,
+            description:
+              "A buyer is present and can complete an authentication challenge (a checkout page). Default false: a server-to-server create, where `requires_action` is a refusal.",
+          },
+          metadata: {
+            type: "object",
+            additionalProperties: true,
+            example: { app_account_id: "acct_1042" },
+            description:
+              "Your own key-value data on the subscription, for example your app's account id. Checked against the business's metadata key rules (400 with `param: \"metadata\"` when a value breaks one), the same as checkout `metadata`.",
           },
           trial_days: {
             type: "integer",
@@ -17976,6 +19820,80 @@ const openapiSpec = {
             description:
               "Upcoming renewals scheduled to be skipped, as the instants the clock renews at. See `skip_renewal`.",
           },
+          pending_change: {
+            type: "object",
+            nullable: true,
+            readOnly: true,
+            description:
+              "`billing_rules_config.failed_change_charge: apply_when_paid`: a change held until its invoice is paid. Nothing in it applies before then. Null when nothing is held. GET (detail) only. Cancel it with `DELETE …/subscriptions/{sub}/pending_change`.",
+            properties: {
+              object: { type: "string", enum: ["pending_change"] },
+              id: { type: "string", description: "The pending change (`spc_…`)." },
+              kind: {
+                type: "string",
+                enum: ["change", "item_add"],
+                description: "`change`: a plan or item change; `item_add`: `POST …/items`.",
+              },
+              status: { type: "string", enum: ["pending", "applied", "expired", "cancelled"] },
+              invoice: {
+                type: "string",
+                nullable: true,
+                description: "The invoice whose payment applies the change.",
+              },
+              invoice_status: { type: "string", nullable: true },
+              amount_due_minor: {
+                type: "integer",
+                nullable: true,
+                description: "What the invoice collects, in minor units.",
+              },
+              currency: { type: "string", nullable: true },
+              request: {
+                type: "object",
+                additionalProperties: true,
+                description: "The change as it was requested.",
+              },
+              items: {
+                type: "array",
+                description: "What the change does to each item, with the product name.",
+                items: {
+                  type: "object",
+                  properties: {
+                    action: { type: "string", enum: ["change", "add", "remove"] },
+                    price: { type: "string", nullable: true },
+                    product_name: { type: "string", nullable: true },
+                    quantity: { type: "integer", nullable: true },
+                    from_product_name: {
+                      type: "string",
+                      nullable: true,
+                      description: "A change: the item's product before it.",
+                    },
+                    from_quantity: {
+                      type: "integer",
+                      nullable: true,
+                      description: "A change: the item's quantity before it.",
+                    },
+                  },
+                },
+              },
+              source: { type: "string", enum: ["api", "dashboard", "checkout", "portal"] },
+              requested_at: {
+                type: "string",
+                format: "date-time",
+                description: "The instant the change is priced and applied as of.",
+              },
+              expires_at: {
+                type: "string",
+                format: "date-time",
+                description:
+                  "When it expires unpaid: the earliest of the term end and the expiry hours.",
+              },
+              end_reason: {
+                type: "string",
+                nullable: true,
+                enum: ["expired", "replaced", "cancelled", "voided", "moved"],
+              },
+            },
+          },
           recurring_amount_minor: {
             type: "integer",
             nullable: true,
@@ -18007,6 +19925,19 @@ const openapiSpec = {
             additionalProperties: true,
             description: "Stored custom-field values; also flattened onto the object as cf_<name>",
           },
+          metadata: {
+            type: "object",
+            nullable: true,
+            additionalProperties: true,
+            example: { app_account_id: "acct_1042" },
+            description:
+              "Your own key-value data: set on create, by a checkout's `metadata`, or by an update. Never interpreted.",
+          },
+          customer: {
+            type: "string",
+            example: "cus_…",
+            description: "The customer's id. Present on retrieve and on create.",
+          },
           shipping_address_id: {
             type: "string",
             nullable: true,
@@ -18019,6 +19950,120 @@ const openapiSpec = {
             description:
               "Where this subscription ships now: its own address, else the customer's default, else null. Invoices record a copy when they are issued.",
           },
+          items: {
+            type: "array",
+            description:
+              "The subscription's items (plan, add-ons, usage prices). On retrieve, list, create and update.",
+            items: { $ref: "#/components/schemas/SubscriptionItem" },
+          },
+          current_period_start: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description: "The current billing term start. Null while `in_trial`.",
+          },
+          trial_start: { type: "string", format: "date-time", nullable: true },
+          trial_end: { type: "string", format: "date-time", nullable: true },
+          cancel_at_period_end: { type: "boolean" },
+          canceled_at: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description:
+              "When it was cancelled; for a subscription scheduled to cancel, when it will cancel.",
+          },
+          cancel_reason: { type: "string", nullable: true },
+          cancel_reason_code: { type: "string", nullable: true },
+          start_date: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description: "The requested start, for a backdated or future-dated subscription.",
+          },
+          started_at: { type: "string", format: "date-time", nullable: true },
+          activated_at: { type: "string", format: "date-time", nullable: true },
+          billing_period: { type: "integer", description: "Interval count of the billing term." },
+          billing_period_unit: { type: "string", enum: ["day", "week", "month", "year"] },
+          remaining_billing_cycles: {
+            type: "integer",
+            nullable: true,
+            description: "Cycles left after the current one; null renews until cancelled.",
+          },
+          auto_collection: {
+            type: "string",
+            enum: ["on", "off"],
+            nullable: true,
+            description: "This subscription's setting; null follows the customer's.",
+          },
+          create_pending_invoices: { type: "boolean", nullable: true },
+          net_term_days: { type: "integer", nullable: true },
+          po_number: { type: "string", nullable: true },
+          invoice_notes: { type: "string", nullable: true },
+          max_refundable_credits_usage_minor: { type: "integer", nullable: true },
+          max_excess_payment_usage_minor: { type: "integer", nullable: true },
+          mrr: {
+            type: "integer",
+            nullable: true,
+            description: "Monthly recurring revenue in minor units; 0 while in a trial.",
+          },
+          default_payment_method: {
+            type: "string",
+            nullable: true,
+            description:
+              "The payment method this subscription charges (`pm_…`); null charges the customer's primary. On retrieve.",
+          },
+          discount: {
+            type: "object",
+            nullable: true,
+            additionalProperties: true,
+            description: "The active discount, or null. On retrieve.",
+          },
+          due_invoices_count: {
+            type: "integer",
+            description:
+              "Unpaid invoices that are due. On retrieve. The invoice of a `pending_change` is not counted: it is voided unless paid.",
+          },
+          total_dues_minor: { type: "integer", description: "Their amount due. On retrieve." },
+          due_since: { type: "string", format: "date-time", nullable: true },
+          customer_email: { type: "string", nullable: true, description: "On list." },
+          customer_name: { type: "string", nullable: true, description: "On list." },
+          customer_company: { type: "string", nullable: true, description: "On list." },
+          customer_phone: { type: "string", nullable: true, description: "On list." },
+          created_at: { type: "string", format: "date-time" },
+          updated_at: { type: "string", format: "date-time" },
+          resource_version: { type: "integer" },
+        },
+        additionalProperties: true,
+      },
+      SubscriptionItem: {
+        type: "object",
+        required: ["id", "price", "quantity"],
+        properties: {
+          id: { type: "string", example: "si_…" },
+          price: { type: "string", description: "The price id." },
+          quantity: { type: "integer" },
+          price_model: { type: "string" },
+          price_type: { type: "string", enum: ["recurring", "one_time"] },
+          interval: { type: "string", nullable: true },
+          unit_price_minor: {
+            type: "integer",
+            nullable: true,
+            description: "The unit price this item bills, including a custom price.",
+          },
+          unit_price_overridden: { type: "boolean" },
+          catalog_amount_minor: {
+            type: "integer",
+            nullable: true,
+            description: "The catalog price this item departs from; null at list price.",
+          },
+          product: { type: "string", description: "The product id." },
+          product_name: { type: "string" },
+          product_kind: {
+            type: "string",
+            description: "`plan`, `addon` or `charge`: find the plan item by this.",
+          },
+          free_quantity: { type: "integer", nullable: true },
+          billing_cycles: { type: "integer", nullable: true },
         },
         additionalProperties: true,
       },
@@ -18198,18 +20243,23 @@ const openapiSpec = {
             type: "string",
             enum: ["now", "end_of_term"],
             description:
-              "`now` applies the change; `end_of_term` schedules it for the current term end (the trial end in a trial) and returns `scheduled_change`. Omitted = the business rule for the change's direction (`billing_rules_config.upgrade_timing` or `downgrade_timing`); unset, `now`. Omitted with any of `at`, `reset_term`, `prorate`, `invoice_immediately`, `metadata` or a discount = `now` when the rule allows it. A timing the rule does not allow is refused (400). A change at the end of the term cannot carry those fields, or `on_charge_failure`, `coupons`, `downgrade_credit`, `plan_credits` or `allowances` (400 names them): it follows the business rules when it lands.",
+              "`now` applies the change; `end_of_term` schedules it for the current term end (the trial end in a trial) and returns `scheduled_change`. Omitted = the business rule for the change's direction (`billing_rules_config.upgrade_timing` or `downgrade_timing`); unset, `now`. Omitted with any of `at`, `reset_term`, `prorate`, `invoice_immediately`, `metadata` or a discount = `now` when the rule allows it. A timing the rule does not allow is refused (400). A change at the end of the term cannot carry those fields, or `on_charge_failure`, `coupons`, `downgrade_credit`, `net_credit_documents`, `plan_credits` or `allowances` (400 names them): it follows the business rules when it lands.",
           },
           invoice_immediately: {
             type: "boolean",
             description:
-              "Invoicing options: true raises the proration invoice now and collects it; false queues the same lines as unbilled charges, folded into the next renewal invoice (where tax and account credits are applied). OMITTED resolves the business setting `default_invoice_immediately` (Settings > Billing LogIQ > Update subscription), which is off by default \u2014 so omitting this queues unbilled charges unless the business turned it on. Pass true explicitly to invoice now regardless of that setting. Credits (downgrade / term-reset) are issued immediately either way.",
+              "Invoicing options: true raises the proration invoice now and collects it; false queues the same lines as unbilled charges, folded into the next renewal invoice (where tax and account credits are applied). OMITTED resolves the business setting `default_invoice_immediately` (Settings > Billing LogIQ > Update subscription), which is off by default \u2014 so omitting this queues unbilled charges unless the business turned it on. Pass true explicitly to invoice now regardless of that setting. Credits (downgrade / term-reset) are issued immediately either way. A change that nets to a credit ignores this field: see `net_credit_documents`.",
           },
           on_charge_failure: {
             type: "string",
-            enum: ["start_dunning", "next_renewal"],
+            enum: ["start_dunning", "next_renewal", "revert", "apply_when_paid"],
             description:
-              "What a failed charge on this change's invoice does, for this call only. `start_dunning`: dunning retries it now, as any failed invoice. `next_renewal`: dunning waits for the term end (not after a term reset). Omitted: the business rule (`billing_rules_config.failed_change_charge`).",
+              "What a failed charge on this change's invoice does, for this call only. `start_dunning`: dunning retries it now, as any failed invoice; a hard decline runs the final action at once. `next_renewal`: dunning waits for the term end (not after a term reset). `revert`: a hard decline undoes the change, voids the invoice and answers 402 `payment_failed`. `apply_when_paid`: the change applies only when its invoice is paid; unpaid, nothing changes and the call answers 402 with `pending_change`. Omitted: the business rule (`billing_rules_config.failed_change_charge`).",
+          },
+          on_session: {
+            type: "boolean",
+            description:
+              "`apply_when_paid`: the payer is present. The held invoice is collected on session, so a payment that needs authentication answers 402 `requires_action` with `payment_intent` and `next_action`; complete it and call `POST …/invoices/{inv}/collect` with `payment_intent`. Omitted: off session, where the bank asks the payer and the change waits for the payment.",
           },
           coupons: {
             type: "string",
@@ -18223,11 +20273,17 @@ const openapiSpec = {
             description:
               "Where a credit from this change goes, for this call only. `credit_balance`: it stays as account credit. `refund`: it is refunded to the card or bank payments that funded the customer's invoices, as far as they can take it; the rest stays as credit, and the response carries `credit_refunds`. Omitted: the business rule (`billing_rules_config.downgrade_credit`; `customer_chooses` keeps the credit for a call made here).",
           },
+          net_credit_documents: {
+            type: "string",
+            enum: ["credit_note_and_invoice", "one_credit_note"],
+            description:
+              "The documents a change that nets to a credit raises, for this call only. `credit_note_and_invoice`: a credit note for the unused time and an invoice for the new lines, with the credit applied to that invoice at once (`proration_invoice` and `credit_note` are both set). `one_credit_note`: one credit note for the net credit, and `proration_invoice` is null. Omitted: the business rule (`billing_rules_config.net_credit_documents`; not saved: two documents when the change is invoiced immediately and the term's invoices can take the credit, else one note). No effect on a change that nets to a charge.",
+          },
           plan_credits: {
             type: "string",
             enum: ["full", "prorated", "next_window"],
             description:
-              "How a plan that grants credits per cycle grants them at this change, for this call only. `full`: the new plan's credits for the current window now. `prorated`: the part of them that matches the rest of the window (upgrade only; 400 on a downgrade). `next_window`: the old grant runs to its window end, and the new plan grants from the next window. On an upgrade it replaces `billing_rules_config.plan_credits.on_upgrade`, on a downgrade `on_downgrade`. Omitted: the business rule.",
+              "How a plan that grants credits per cycle grants them at this change, for this call only. `full`: the new plan's credits for the current window now. `prorated`: the part of them that matches the rest of the window. `next_window`: the old grant runs to its window end, and the new plan grants from the next window. On an upgrade it replaces `billing_rules_config.plan_credits.on_upgrade`, on a downgrade `on_downgrade`. Omitted: the business rule.",
           },
           allowances: {
             type: "string",
@@ -18449,6 +20505,12 @@ const openapiSpec = {
             description:
               "As on `POST \u2026/change`: decides `refunded_to_payment_method_minor` and `change_policy.credit_handling`. Not with a scheduled `change_option` (400).",
           },
+          net_credit_documents: {
+            type: "string",
+            enum: ["credit_note_and_invoice", "one_credit_note"],
+            description:
+              "As on `POST \u2026/change`: `one_credit_note` previews one credit line for the net credit and no invoice (`invoice_total_minor` 0). Omitted: the business rule. Not with a scheduled `change_option` (400).",
+          },
           change_option: {
             type: "string",
             enum: ["immediately", "specific_date", "end_of_term"],
@@ -18540,11 +20602,13 @@ const openapiSpec = {
           purpose: {
             type: "string",
             nullable: true,
-            enum: ["usage_interim", "credit_purchase", null],
+            enum: ["usage_interim", "credit_purchase", "late_usage", null],
             description:
               "What an engine-made invoice is for: `usage_interim` = usage billed during the period " +
               "when it reached the usage invoice threshold; `credit_purchase` = an automatic credit " +
-              "top-up. Null on every other invoice.",
+              "top-up; `late_usage` = usage of an invoiced period that arrived after a cancelled " +
+              "subscription's last invoice (`billing_rules_config.late_usage_invoices`). Null on " +
+              "every other invoice.",
           },
           payment_in_flight: {
             type: "boolean",
@@ -18849,6 +20913,13 @@ const openapiSpec = {
             description:
               "When the invoice stopped being a draft. A pending draft's `created_at` is its draft date.",
           },
+          usage_closes_at: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description:
+              "Set on a held renewal invoice while it is `pending`: when it finalizes. With a usage grace window (`usage_close_delay_minutes`), a metered renewal runs on time and its invoice waits, so usage that arrives in the grace bills on it. At the renewal you get `subscription_renewed` and `invoice_pending_created`; `invoice_generated`, `invoice_closed`, `usage_recorded` and the payment events come at this time. Null on every other invoice.",
+          },
           updated_at: {
             type: "string",
             format: "date-time",
@@ -18943,6 +21014,12 @@ const openapiSpec = {
                 id_at_gateway: { type: "string", nullable: true },
                 error_code: { type: "string", nullable: true },
                 occurred_at: { type: "string", format: "date-time" },
+                payment: {
+                  type: "string",
+                  nullable: true,
+                  description:
+                    "The payment (`pay_…`) to pass to the refund endpoint. On a refund, the payment it reverses. Null when no payment record exists.",
+                },
               },
             },
           },
@@ -19022,6 +21099,13 @@ const openapiSpec = {
                     "tax was added to the price, less what non-voided credit notes already " +
                     "credit against the line. A tax line is worth its own amount. Never " +
                     "negative. Present on the single-invoice read only.",
+                },
+                pack_full_creditable_minor: {
+                  type: "integer",
+                  description:
+                    "A credit pack line only: the most a note with `pack_refund: full` can " +
+                    "credit against it, used credits included. `creditable_minor` is the " +
+                    "default, the unused part only. Present on the single-invoice read only.",
                 },
                 tax_code: {
                   type: "string",
@@ -19175,6 +21259,23 @@ const openapiSpec = {
               "Price ids of this item kind, for constraint_type='specific'. A line matches on " +
               "its product OR its price.",
           },
+          billing_periods: {
+            type: "array",
+            maxItems: 20,
+            items: {
+              type: "object",
+              required: ["interval"],
+              properties: {
+                interval: { type: "string", enum: ["day", "week", "month", "year"] },
+                interval_count: { type: "integer", minimum: 1, maximum: 365, default: 1 },
+              },
+            },
+            example: [{ interval: "year", interval_count: 1 }],
+            description:
+              "Plans and addons only, with constraint_type 'all' or 'specific'. A line matches " +
+              "only when its price bills on one of these periods, for example yearly only. " +
+              "Empty means any period. Prices added later are included when their period matches.",
+          },
         },
       },
       CouponCreate: {
@@ -19200,7 +21301,13 @@ const openapiSpec = {
           max_redemptions_per_customer: {
             type: "integer",
             description:
-              "Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400.",
+              "Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400.",
+          },
+          per_customer_limit_by: {
+            type: "string",
+            enum: ["customer", "email"],
+            description:
+              "How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.",
           },
           redeem_by: { type: "string", format: "date-time" },
           valid_from: { type: "string", format: "date-time" },
@@ -19290,7 +21397,13 @@ const openapiSpec = {
             type: "integer",
             nullable: true,
             description:
-              "Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400.",
+              "Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400.",
+          },
+          per_customer_limit_by: {
+            type: "string",
+            enum: ["customer", "email"],
+            description:
+              "How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.",
           },
           active: { type: "boolean" },
           status: {
@@ -19561,14 +21674,33 @@ const openapiSpec = {
           object: { type: "string", enum: ["coupon_redemption"] },
           id: { type: "string", example: "disc_…" },
           coupon: { type: "string" },
-          status: { type: "string", enum: ["active", "exhausted", "removed"] },
+          status: {
+            type: "string",
+            enum: ["active", "exhausted", "removed", "released"],
+            description:
+              "`released`: redeemed on an invoice that was then voided. It counts toward no limit.",
+          },
           remaining_periods: { type: "integer", nullable: true, description: "null = forever" },
           customer: { type: "string" },
-          subscription: { type: "string", nullable: true },
+          customer_name: {
+            type: "string",
+            nullable: true,
+            description: "The account holder's display name. Null when the customer has no name.",
+          },
+          subscription: {
+            type: "string",
+            nullable: true,
+            description: "Null for a coupon redeemed on an invoice with no subscription.",
+          },
           invoice: {
             type: "string",
             nullable: true,
             description: "First non-voided invoice it discounted",
+          },
+          invoice_number: {
+            type: "string",
+            nullable: true,
+            description: "The number of that invoice, such as `INV-229`.",
           },
           redeemed_at: { type: "string", format: "date-time" },
           discount_minor: { type: "integer", description: "Taken off non-voided invoices" },
@@ -19770,7 +21902,13 @@ const openapiSpec = {
             type: "integer",
             nullable: true,
             description:
-              "Redemptions allowed per customer across their subscriptions; null = no cap. Applying past it is a 400.",
+              "Redemptions allowed per customer across their subscriptions and invoices; null = no cap. `per_customer_limit_by` sets how a customer is counted. Applying past it is a 400.",
+          },
+          per_customer_limit_by: {
+            type: "string",
+            enum: ["customer", "email"],
+            description:
+              "How the per-customer cap counts. `customer` (default): redemptions by the same customer record. `email`: redemptions by every customer with the same email, trimmed and lower-cased (a `+tag` stays part of the address). Use `email` when each purchase creates a new customer.",
           },
           invoice_name: { type: "string", nullable: true },
           valid_from: { type: "string", format: "date-time", nullable: true },
@@ -19821,9 +21959,16 @@ const openapiSpec = {
           },
           reason_code: {
             type: "string",
-            description: "Reason code, e.g. write_off, order_cancellation, product_unsatisfactory.",
+            description:
+              "Why the credit note is issued: `write_off`, `subscription_change`, `subscription_cancellation`, `chargeback` or `other`.",
           },
           reason: { type: "string" },
+          pack_refund: {
+            type: "string",
+            enum: ["unused", "full"],
+            description:
+              "For a credit pack line. `unused` (default): the note can credit the unused credits only, and voids them. `full`: the note can credit the whole line, used credits too; the unused credits are voided and the note reverses the revenue of the used credits (credit adjustments). In a unit with no money value, the used credits are first taken again from the customer's other grants in the unit, as far as their balance allows (holds keep theirs); the rest is written off. For any other pack, a full refund is refused while the customer has other credit left in the same unit. Refused when no item names a credit pack line.",
+          },
           customer_notes: {
             type: "string",
             maxLength: 2000,
@@ -19881,6 +22026,12 @@ const openapiSpec = {
           "currency",
         ],
         properties: {
+          pack_refund: {
+            type: "string",
+            enum: ["unused", "full"],
+            description:
+              "`full`: a credit pack line was credited whole, used credits too. `unused`: the unused part only (every note before this field).",
+          },
           object: { type: "string" },
           id: { type: "string", example: "cn_…" },
           number: {
@@ -20005,6 +22156,17 @@ const openapiSpec = {
                   format: "date-time",
                   nullable: true,
                   description: "Inclusive, matching the invoice line this credits.",
+                },
+                kind: {
+                  type: "string",
+                  nullable: true,
+                  description:
+                    "The line kind, in the invoice line vocabulary. `tax` = the tax this note reverses, written as its own item. Null on items that record no kind (every supply line, and items written before the kind was recorded).",
+                },
+                stated_in_taxes: {
+                  type: "boolean",
+                  description:
+                    "Single credit-note read only. True when this item's amount is stated in `taxes[]`: a document prints it there, not as a line, so the tax shows once. The printed lines are then the items where this is false. An item without a recorded kind counts when it carries the tax-reversal wording, credits no invoice line and sums exactly to the `taxes[]` total.",
                 },
               },
             },
@@ -20158,7 +22320,22 @@ const openapiSpec = {
           currency: { type: "string" },
           gateway_key: { type: "string", nullable: true },
           customer: { type: "string", nullable: true },
+          customer_name: {
+            type: "string",
+            nullable: true,
+            description: "The account holder's display name. Null when the customer has no name.",
+          },
           invoice: { type: "string", nullable: true },
+          invoice_number: {
+            type: "string",
+            nullable: true,
+            description: "The invoice's number, such as `INV-229`. Null when it has none.",
+          },
+          credit_note_number: {
+            type: "string",
+            nullable: true,
+            description: "The credit note's number, such as `CN-31`. Null when there is none.",
+          },
           reference_payment: {
             type: "string",
             nullable: true,
@@ -20539,6 +22716,17 @@ const openapiSpec = {
               gateway_account_label: { type: "string", nullable: true },
               payment_method_brand: { type: "string", nullable: true },
               payment_method_last4: { type: "string", nullable: true },
+              last_error: {
+                type: "object",
+                nullable: true,
+                description:
+                  "The error of the newest attempt, when that attempt failed. Null when the intent has no attempt, or when its newest attempt did not fail.",
+                required: ["code", "message"],
+                properties: {
+                  code: { type: "string", nullable: true, example: "card_declined" },
+                  message: { type: "string", nullable: true, example: "Your card was declined." },
+                },
+              },
             },
           },
         ],
@@ -20592,6 +22780,20 @@ const openapiSpec = {
             description:
               "The endpoint's test/live partition. Resolved when omitted: from `business` if scoped, else from the calling key's mode. Required (400 if omitted) only for an org-wide endpoint created with a full-access key. Rejected (400) if it contradicts `business`.",
           },
+          event_types: {
+            type: "array",
+            items: { type: "string" },
+            nullable: true,
+            example: ["invoice_paid", "payment_failed", "subscription_canceled"],
+            description:
+              "The event types this endpoint receives. Omit or null = every type, including types added later. Each entry must be a type from the event reference (400 otherwise).",
+          },
+          description: {
+            type: "string",
+            nullable: true,
+            maxLength: 500,
+            example: "Order fulfilment",
+          },
         },
       },
       WebhookEndpoint: {
@@ -20619,6 +22821,15 @@ const openapiSpec = {
             description: "Returned once at creation; verify deliveries with HMAC-SHA256.",
           },
           enabled: { type: "boolean" },
+          event_types: {
+            type: "array",
+            items: { type: "string" },
+            nullable: true,
+            example: ["invoice_paid", "payment_failed"],
+            description: "The event types this endpoint receives; null = every type.",
+          },
+          description: { type: "string", nullable: true, example: "Order fulfilment" },
+          created_at: { type: "string", format: "date-time" },
         },
       },
       WebhookEndpointList: list("WebhookEndpoint"),
@@ -21659,6 +23870,10 @@ const FIELD_RULES: Array<[string, string]> = [
   ["linked_payments.id_at_gateway", "The transaction's id at the gateway."],
   ["linked_payments.error_code", "The gateway's error code, if the payment failed."],
   ["linked_payments.occurred_at", "When the transaction happened (ISO-8601 UTC)."],
+  [
+    "linked_payments.payment",
+    "The payment (`pay_…`) to refund with `POST /payments/{payment}/refund`. On a refund, the payment it reverses. Null when no payment record exists.",
+  ],
   ["Invoice shipping_address", "The shipping address printed on the invoice, or null."],
   [
     "Invoice shipping_address_is_snapshot",
@@ -21945,6 +24160,8 @@ const FIELD_RULES: Array<[string, string]> = [
   ["PaymentIntent payment_method_brand", "The card brand used."],
   ["PaymentIntent payment_method_last4", "The last four digits of the card used."],
   ["PaymentIntentWithAttempts attempts", "The attempts made for this intent."],
+  ["last_error.code", "The gateway's error code for the failed attempt."],
+  ["last_error.message", "The gateway's error message for the failed attempt."],
   [
     "PaymentIntentWithAttempts voided_transaction",
     "The transaction booked when the intent was voided.",
@@ -22756,6 +24973,15 @@ const FIELD_RULES: Array<[string, string]> = [
   ],
   ["OP GET /emails/activity pending", "Number of emails still waiting to be sent."],
   ["OP GET /emails/activity last_sent_at", "When the last email was sent (ISO-8601 UTC), or null."],
+  ["OP GET /emails/report PARAM:weeks", "How many weeks to count, this week included."],
+  ["OP GET /emails/report weeks", "How many weeks the report covers."],
+  ["OP GET /emails/report timezone", "The business time zone the weeks are counted in."],
+  ["OP GET /emails/report from", "The first day of the first week (YYYY-MM-DD)."],
+  ["OP GET /emails/report weekly", "One row for each week, the oldest first."],
+  ["OP GET /emails/report weekly.week_start", "The Monday that starts the week (YYYY-MM-DD)."],
+  ["OP GET /emails/report by_type", "One row for each email type with email in the period."],
+  ["OP GET /emails/report by_type.type", "The email type."],
+  ["OP GET /emails/report totals", "The counts for the whole period."],
   ["OP GET /emails/reminders configurable", "Whether the reminder schedule can be changed."],
   ["OP GET /emails/reminders data", "The reminder emails and when they go out."],
   ["OP GET /emails/reminders data.type", "The reminder's email type."],
@@ -22962,6 +25188,8 @@ const FIELD_RULES: Array<[string, string]> = [
   ],
   ["OP POST /time_travel/stop wipe", "True to delete the simulated data when the clock stops."],
   ["OP DELETE /test_data deleted", "Number of rows deleted."],
+  ["OP POST /test_data/reset business", "The id of the business that was reset (biz_…)."],
+  ["OP POST /test_data/reset deleted", "Number of rows deleted."],
   ["OP GET /currencies/{currency} PARAM:currency", "The currency's ISO-4217 code."],
   ["OP PUT /currencies/{currency} source", "Where the rate comes from: `manual` or `auto`."],
   ["OP DELETE /currencies/{currency} currency", "The currency that was removed (ISO-4217 code)."],
@@ -23077,6 +25305,14 @@ const FIELD_RULES: Array<[string, string]> = [
     "What happens when the charge for a subscription change fails.",
   ],
   [
+    "OP PATCH / billing_rules_config.pending_change_expiry_hours",
+    "Hours a change held for payment waits for its invoice.",
+  ],
+  [
+    "OP PATCH / billing_rules_config.pending_change_expiry_hours_slow",
+    "Hours a change held for payment waits on a slow payment method.",
+  ],
+  [
     "OP PATCH / billing_rules_config.upgrade_proration",
     "How an upgrade bills the rest of the term.",
   ],
@@ -23105,6 +25341,14 @@ const FIELD_RULES: Array<[string, string]> = [
     "What a plan change does with the subscription's coupons.",
   ],
   ["OP PATCH / billing_rules_config.downgrade_credit", "Where the credit from a change goes."],
+  [
+    "OP PATCH / billing_rules_config.net_credit_documents",
+    "The documents a change that nets to a credit raises.",
+  ],
+  [
+    "OP PATCH / billing_rules_config.block_downgrade_when_past_due",
+    "Whether a downgrade applied now waits for past-due invoices.",
+  ],
   [
     "OP PATCH / billing_rules_config.reactivation_charges",
     "How a reactivation bills its new term when the request does not say.",
@@ -23139,8 +25383,24 @@ const FIELD_RULES: Array<[string, string]> = [
     "Which credit windows a cancel at period end still grants.",
   ],
   [
+    "OP PATCH / billing_rules_config.plan_credits.grant_when",
+    "When a period's plan credits can be spent: at the invoice's issue, or when it is paid.",
+  ],
+  [
+    "OP PATCH / billing_rules_config.plan_credits.on_unpaid_cancel",
+    "What happens to plan credits when the subscription is cancelled for non-payment.",
+  ],
+  [
     "OP PATCH / billing_rules_config.allowances.on_upgrade",
     "What an allowance does on an upgrade.",
+  ],
+  [
+    "OP PATCH / billing_rules_config.late_usage_invoices.enabled",
+    "Whether late usage after a cancellation goes on one more invoice.",
+  ],
+  [
+    "OP PATCH / billing_rules_config.late_usage_invoices.minimum",
+    "Per currency, the smallest late-usage amount we invoice.",
   ],
   [
     "OP PATCH / invoice_rules_config.small_invoice_action",
@@ -23868,6 +26128,12 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
       payment_id: nstr("The disputed payment's internal id."),
       invoice_id: nstr("The invoice's internal id."),
       customer_id: nstr("The customer's internal id."),
+      customer: nstr("The customer's id (`cus_…`). Null when the dispute matches no payment."),
+      customer_name: nstr("The customer's display name."),
+      invoice: nstr("The disputed invoice's id (`inv_…`)."),
+      invoice_number: nstr("The disputed invoice's number."),
+      subscription: nstr("The id (`sub_…`) of the subscription that the disputed invoice bills."),
+      transaction: nstr("The id (`txn_…`) of the disputed payment's transaction."),
       evidence_due_by: dt("When the gateway wants the evidence.", true),
       opened_at: dt("When the dispute opened."),
       closed_at: dt("When the dispute closed.", true),
@@ -24031,7 +26297,7 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
             example: 4900,
           }),
         }),
-        "The quoted lines.",
+        "The quoted lines: the change's net effect. A negative line for the unused time of a price the change replaces is booked as a CREDIT NOTE applied to the change invoice, not as an invoice line. To check a booked change, compare the invoice with `invoice_total_minor`, the note with `credit_note_total_minor`, and the charge with `amount_due_minor`.",
       ),
       subtotal_minor: int("The sum of the lines, in minor units.", { example: 4900 }),
       discount_minor: int("Every discount off the subtotal, in minor units.", { example: 490 }),
@@ -24092,6 +26358,18 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
           invoice: str("The invoice number the credit applies to, for an adjustment."),
         }),
         "Where the credit goes.",
+      ),
+      documents: arrOf(
+        obj("One document the change books.", {
+          type: str("The document.", {
+            enum: ["credit_note", "invoice"],
+            example: "credit_note",
+          }),
+          kind: str("Credit notes only.", { enum: ["adjustment", "refundable"] }),
+          invoice: str("Credit notes only: the number of the invoice that the note credits."),
+          total_minor: int("The total in minor units.", { example: 9900 }),
+        }),
+        "Change estimates: every document the change books, in the order it books them: a credit note for each term invoice (an adjustment for the unpaid part, refundable for the paid part), then the invoice for the new lines.",
       ),
       credited_period_start: str("Start of the period that is credited (ISO 8601).", {
         format: "date-time",
@@ -24230,6 +26508,14 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
           invoice_immediately: bool(
             "What `/change` does when the request has no `invoice_immediately`.",
           ),
+          net_credit_documents: str(
+            "The documents `/change` without `net_credit_documents` raises for a change that nets to a credit (`billing_rules_config.net_credit_documents`). Null: not saved, so `invoice_immediately` picks them.",
+            {
+              enum: ["credit_note_and_invoice", "one_credit_note"],
+              example: "credit_note_and_invoice",
+              nullable: true,
+            },
+          ),
           credit_handling: str(
             "Where a credit from this change goes: the request's `downgrade_credit`, else `billing_rules_config.downgrade_credit`.",
             { enum: ["credit_balance", "refund"], example: "credit_balance" },
@@ -24240,7 +26526,10 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
           ),
           on_charge_failure: str(
             "What `/change` without `on_charge_failure` does when the change's charge fails (`billing_rules_config.failed_change_charge`).",
-            { enum: ["start_dunning", "next_renewal"], example: "start_dunning" },
+            {
+              enum: ["start_dunning", "next_renewal", "revert", "apply_when_paid"],
+              example: "start_dunning",
+            },
           ),
           plan_credits: str(
             "The plan-credit rule `/change` without `plan_credits` uses for this direction. Null when no plan this change moves grants credits per cycle.",
@@ -24679,7 +26968,10 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
         }),
         "Usage settled early (an item removed, a term reset).",
       ),
-      subtotal_minor: int("Sum of the item amounts and settled charges.", { example: 150000 }),
+      subtotal_minor: int(
+        "Sum of the item amounts, the settled charges and the `credit_usage` amounts billed in money.",
+        { example: 150000 },
+      ),
       tax_minor: int("Tax on the subtotal, inclusive tax included.", { example: 27000 }),
       tax_lines: arrOf(
         obj("One tax component.", {
@@ -24706,6 +26998,40 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
         },
         undefined,
         { nullable: true },
+      ),
+      credit_usage: arrOf(
+        obj("One meter that is paid in credits.", {
+          meter: str("The meter id.", { example: "renders" }),
+          name: str("The meter's name.", { example: "Renders" }),
+          unit: str("The credit unit id.", { example: "credit" }),
+          unit_name: str("The unit's name for one.", { example: "credit" }),
+          unit_plural_name: str("The unit's name for more than one.", { example: "credits" }),
+          paid_quantity: str("The quantity that credits paid, as a decimal.", { example: "10" }),
+          paid_units: str("The credits that paid it.", { example: "10" }),
+          billed: arrOf(
+            obj("Usage more than the credit balance that one money price bills.", {
+              basis: str(
+                "`meter`: the meter's own usage price rates the quantity. `unit`: the credit unit's price for one credit bills the credits.",
+                { enum: ["meter", "unit"] },
+              ),
+              price: nstr("The meter price id. Null for `unit`.", { example: "renders-usd" }),
+              quantity: str("The quantity billed in money, as a decimal.", { example: "5" }),
+              units: str("The credits that the quantity needed.", { example: "5" }),
+              amount_minor: int("The amount so far, in minor units, before tax.", { example: 50 }),
+            }),
+            "The parts that the next period invoice bills in money. The totals include them.",
+          ),
+          billed_amount_minor: int("Sum of the `billed` amounts.", { example: 50 }),
+          overshoot_units: str(
+            "The unit's negative balance: credits used below zero that no grant repaid and no invoice billed. Given once per unit, on its first meter.",
+            { example: "0" },
+          ),
+          below_zero_quantity: str(
+            "This meter's quantity used below a zero balance and not settled yet.",
+            { example: "0" },
+          ),
+        }),
+        "Usage on meters that are paid in credits, since the last period invoice. Present only when the customer has such usage, and only on the customer's oldest live subscription, whose invoice bills the money part.",
       ),
       discounts_applied: bool("Always false: coupons and credits are not applied here."),
       trial: obj(
@@ -26144,5 +28470,7 @@ function withPropertyExamples(spec: typeof openapiSpec): typeof openapiSpec {
 }
 
 export const openapiDocument = withFieldDescriptions(
-  withPropertyExamples(withResponseSchemas(withIdempotencyDocs(openapiSpec))),
+  withPropertyExamples(
+    withResponseSchemas(withIdempotencyDocs(withCreditSettingsDocs(openapiSpec))),
+  ),
 );

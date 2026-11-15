@@ -14,6 +14,8 @@ describe("credit and allowance reset settings", () => {
       firstWindow: "full",
       onPause: "skip",
       onCancelAtPeriodEnd: "grant_started_window",
+      grantWhen: "invoice_issued",
+      onUnpaidCancel: "keep",
     });
     expect(r.allowances).toEqual({ onUpgrade: "new_window" });
   });
@@ -21,7 +23,11 @@ describe("credit and allowance reset settings", () => {
   it("reads stored values and drops one outside its union", () => {
     const r = resolveBillingRulesConfig({
       billingRulesConfig: {
-        plan_credits: { on_upgrade: "next_window", on_downgrade: "prorated", on_pause: "shift" },
+        plan_credits: {
+          on_upgrade: "next_window",
+          on_downgrade: "customer_chooses",
+          on_pause: "shift",
+        },
         allowances: { on_upgrade: "keep_used" },
       },
     });
@@ -29,6 +35,13 @@ describe("credit and allowance reset settings", () => {
     expect(r.planCredits.onDowngrade).toBe("next_window");
     expect(r.planCredits.onPause).toBe("shift");
     expect(r.allowances.onUpgrade).toBe("keep_used");
+  });
+
+  it("reads a prorated downgrade", () => {
+    const r = resolveBillingRulesConfig({
+      billingRulesConfig: { plan_credits: { on_downgrade: "prorated" } },
+    });
+    expect(r.planCredits.onDowngrade).toBe("prorated");
   });
 
   it("serializes in snake_case", () => {

@@ -99,6 +99,33 @@ export function getEmailActivity(biz: string, windowDays = 30) {
   return apiGet<EmailActivity>(`/v1/businesses/${biz}/emails/activity?window_days=${windowDays}`);
 }
 
+// ── Delivery report ───────────────────────────────────────────────────────────
+
+/** The counts of one report row. `bounced` excludes complaints. */
+export interface EmailReportCounts {
+  delivered: number;
+  not_delivered: number;
+  pending: number;
+  failed: number;
+  bounced: number;
+  complained: number;
+  skipped: number;
+}
+
+export interface EmailDeliveryReport {
+  weeks: number;
+  /** The business time zone; weeks run Monday to Sunday in it. */
+  timezone: string;
+  from: string;
+  weekly: Array<{ week_start: string } & EmailReportCounts>;
+  by_type: Array<{ type: string } & EmailReportCounts>;
+  totals: EmailReportCounts;
+}
+
+export function getEmailDeliveryReport(biz: string, weeks = 12) {
+  return apiGet<EmailDeliveryReport>(`/v1/businesses/${biz}/emails/report?weeks=${weeks}`);
+}
+
 // ── Reminder schedule ─────────────────────────────────────────────────────────
 
 /**
@@ -345,7 +372,8 @@ export type AdhocEmailType =
   | "invoice_sent"
   | "payment_request"
   | "payment_method_request"
-  | "credit_note_sent";
+  | "credit_note_sent"
+  | "subscription_restart";
 
 export interface AdhocEmailBody {
   type: AdhocEmailType;
@@ -355,6 +383,10 @@ export interface AdhocEmailBody {
   invoice?: string;
   /** Required for `credit_note_sent`. */
   credit_note?: string;
+  /** Required for `subscription_restart`: the ended subscription. */
+  subscription?: string;
+  /** `subscription_restart` only. Default `current`. */
+  restart_price?: "current" | "keep";
   /** Override the recipient. Defaults to the customer's billing email. */
   to?: string;
   /** The operator's covering message, rendered as {{note}}. */

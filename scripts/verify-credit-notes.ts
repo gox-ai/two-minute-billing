@@ -314,6 +314,31 @@ const checks: Array<[string, boolean]> = [];
     "GB2: failed payout attempt recorded on the CN timeline with a reason",
     !!failedTxn && !!failedTxn.errorText,
   ]);
+  // One refusal, one event — and it names the note, the invoice and the reason.
+  const { events, payments } = await import("@db/schema");
+  const failedEvents = await withTenant(orgId, async (tx) => {
+    const [pay] = await tx
+      .select({ publicId: payments.publicId })
+      .from(payments)
+      .where(eq(payments.invoiceId, invoice.id))
+      .limit(1);
+    const rows = await tx
+      .select({ data: events.data })
+      .from(events)
+      .where(eq(events.type, "refund_failed"));
+    return rows.filter(
+      (e) => (e.data as { refund?: { payment?: string } }).refund?.payment === pay?.publicId,
+    );
+  });
+  const failedRefund = (failedEvents[0]?.data as { refund?: Record<string, unknown> } | undefined)
+    ?.refund;
+  checks.push([
+    `GB2: a declined payout emits ONE refund_failed with invoice + reason (got ${failedEvents.length})`,
+    failedEvents.length === 1 &&
+      failedRefund?.invoice === invoice.publicId &&
+      failedRefund?.credit_note === cn.publicId &&
+      typeof failedRefund?.reason === "string",
+  ]);
   // Cap: the OPEN CN's un-refunded total (10013) still counts against the paid
   // 20000, leaving 9987 refundable. A fresh CN for 9988 must be rejected — the
   // reversal restores `available`, it must not double the refundable headroom.

@@ -30,6 +30,7 @@ export default async function WhatsNewPage() {
     <>
       <PageHeader
         title="What's new"
+        breadcrumbs={[{ label: "Overview", href: "/" }, { label: "What's new" }]}
         description="Product updates to Two Minute Billing, newest first."
       />
       {notes.length === 0 ? (

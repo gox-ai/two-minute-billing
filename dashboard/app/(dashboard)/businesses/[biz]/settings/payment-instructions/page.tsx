@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Landmark } from "lucide-react";
 import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
 import {
@@ -111,10 +112,12 @@ export default async function PaymentInstructionSettings({
         )}
 
         {instructions.length === 0 ? (
-          <SettingsCard title="Your instructions" padded>
+          <SettingsCard title="Your instructions">
             <EmptyState
+              icon={<Landmark />}
               title="No payment instructions yet"
               description="Create one below. It shows at the foot of your invoices."
+              className="min-h-0 py-8"
             />
           </SettingsCard>
         ) : (
@@ -140,11 +143,10 @@ export default async function PaymentInstructionSettings({
                 {pi.resource_version != null ? (
                   <input type="hidden" name="pi_expected_version" value={pi.resource_version} />
                 ) : null}
-                <div className="px-5 py-4">
-                  <PaymentInstructionFormFields instruction={pi} targeting={targeting} />
-                </div>
+                <PaymentInstructionFormFields instruction={pi} targeting={targeting} />
+                {/* Outline: Create below is the page's one filled button. */}
                 <div className="flex justify-end border-t px-5 py-3">
-                  <SubmitButton>Save</SubmitButton>
+                  <SubmitButton variant="outline">Save</SubmitButton>
                 </div>
               </ActionForm>
             </SettingsCard>
@@ -154,9 +156,7 @@ export default async function PaymentInstructionSettings({
         <SettingsCard title="Create a payment instruction" meta="Bank transfer or PayPal">
           <ActionForm action={createPaymentInstructionAction} className="flex flex-col">
             <input type="hidden" name="biz" value={biz} />
-            <div className="px-5 py-4">
-              <PaymentInstructionFormFields targeting={targeting} />
-            </div>
+            <PaymentInstructionFormFields targeting={targeting} />
             <div className="flex justify-end border-t px-5 py-3">
               <SubmitButton>Create instruction</SubmitButton>
             </div>

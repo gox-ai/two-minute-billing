@@ -901,16 +901,17 @@ const VIRTUAL_FILTERS: Record<string, VirtualFilter> = {
     },
   },
   /**
-   * Has EVER had a coupon or manual discount applied to any of their subscriptions — any
-   * status, so a removed or exhausted one still counts. Same `is`-only shape as above.
+   * Has EVER redeemed a coupon or had a manual discount, on a subscription or an invoice —
+   * any status but `released`, so a removed or exhausted one still counts. Same `is`-only
+   * shape as above.
    */
   has_used_discount: {
     kind: "bool",
     condition: (op, v) => {
       if (op !== "is") return undefined;
       const used = sql`EXISTS (SELECT 1 FROM ${appliedCoupons}
-        JOIN ${subscriptions} ON ${subscriptions.id} = ${appliedCoupons.subscriptionId}
-        WHERE ${subscriptions.customerId} = ${customers.id})`;
+        WHERE ${appliedCoupons.customerId} = ${customers.id}
+          AND ${appliedCoupons.status} <> 'released')`;
       return v === "true" ? used : sql`NOT ${used}`;
     },
   },

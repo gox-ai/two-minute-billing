@@ -74,7 +74,7 @@ export function CustomerSegmentsLoading() {
             <Skeleton className="h-8 w-28" />
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <CardBones>
             <SegmentBodySkeleton />
           </CardBones>

@@ -429,6 +429,8 @@ describe("reset settings", () => {
         firstWindow: "full",
         onPause: "skip",
         onCancelAtPeriodEnd: "grant_started_window",
+        grantWhen: "invoice_issued",
+        onUnpaidCancel: "keep",
       },
       allowances: { onUpgrade: "new_window" },
     });

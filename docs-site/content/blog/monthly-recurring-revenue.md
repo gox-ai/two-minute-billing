@@ -2,7 +2,7 @@
 title: "Monthly recurring revenue (MRR): what it is and how to calculate it"
 seoTitle: "Monthly recurring revenue (MRR) formula"
 description: "Monthly recurring revenue (MRR) is what customers have committed to pay each month. Learn the formula, what to leave out, and how to handle annual plans."
-date: "2026-11-02"
+date: "2026-10-15"
 category: Revenue metrics
 type: Guide
 draft: false

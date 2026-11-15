@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resetTermFor, resolveLifecycleConfig } from "@/modules/subscriptions/lifecycle-config";
+import {
+  NEW_BUSINESS_LIFECYCLE,
+  resetTermFor,
+  resolveLifecycleConfig,
+  serializeLifecycleConfig,
+} from "@/modules/subscriptions/lifecycle-config";
 import { creditHandlingFor } from "@/modules/subscriptions/downgrade-credit";
 import { couponCoversPlan } from "@/modules/subscriptions/plan-change-coupons";
 import { pickResumeAnchor } from "@/modules/subscriptions/service";
@@ -12,7 +17,32 @@ describe("lifecycle config", () => {
       expect(c.planChangeCoupons).toBe("keep");
       expect(c.downgradeCredit).toBe("credit_balance");
       expect(c.reactivationCharges).toBe("invoice_immediately");
+      expect(c.netCreditDocuments).toBeNull();
+      expect(c.blockDowngradeWhenPastDue).toBe(false);
     }
+  });
+
+  it("net_credit_documents: null unless stored; new businesses store two documents", () => {
+    const two = resolveLifecycleConfig({
+      billingRulesConfig: { net_credit_documents: "credit_note_and_invoice" },
+    });
+    expect(two.netCreditDocuments).toBe("credit_note_and_invoice");
+    expect(
+      resolveLifecycleConfig({ billingRulesConfig: { net_credit_documents: "netted" } })
+        .netCreditDocuments,
+    ).toBeNull();
+    expect(serializeLifecycleConfig(two).net_credit_documents).toBe("credit_note_and_invoice");
+    expect(
+      resolveLifecycleConfig({ billingRulesConfig: NEW_BUSINESS_LIFECYCLE }).netCreditDocuments,
+    ).toBe("credit_note_and_invoice");
+  });
+
+  it("block_downgrade_when_past_due: only true turns it on", () => {
+    for (const v of [true, "true", 1, null])
+      expect(
+        resolveLifecycleConfig({ billingRulesConfig: { block_downgrade_when_past_due: v } })
+          .blockDowngradeWhenPastDue,
+      ).toBe(v === true);
   });
 
   it("the call's reset_term wins; only a plan move follows the rule", () => {
@@ -47,6 +77,30 @@ describe("lifecycle config", () => {
     expect(couponCoversPlan({ applyOn: "each_specified_item" }, only([], ["price_b"]), plan)).toBe(
       true,
     );
+  });
+
+  it("a coupon limited to a billing period does not follow a move to another period", () => {
+    const yearly = {
+      productPublicId: "prod_b",
+      pricePublicId: "pb_y",
+      interval: "year",
+      intervalCount: 1,
+    };
+    const monthly = { ...yearly, pricePublicId: "pb_m", interval: "month" };
+    const scoped = { applyOn: "each_specified_item" };
+    const periods = [{ interval: "year", interval_count: 1 }];
+    const all = {
+      constraintType: "all",
+      productIds: null,
+      priceIds: null,
+      billingPeriods: periods,
+    };
+    expect(couponCoversPlan(scoped, all, yearly)).toBe(true);
+    expect(couponCoversPlan(scoped, all, monthly)).toBe(false);
+    const named = { ...all, constraintType: "specific", productIds: ["prod_b"] };
+    expect(couponCoversPlan(scoped, named, yearly)).toBe(true);
+    expect(couponCoversPlan(scoped, named, monthly)).toBe(false);
+    expect(couponCoversPlan(scoped, { ...named, productIds: ["prod_a"] }, yearly)).toBe(false);
   });
 
   it("a resume keeps the billing day when set on purpose or when the month clamps it", () => {

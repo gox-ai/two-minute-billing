@@ -13,6 +13,7 @@ import {
 } from "@/lib/auth-cookies";
 import { forwardedFor } from "@/lib/forwarded-for";
 import { actionError, actionOk, parseForm, type ActionResult } from "@/lib/action-result";
+import { signInUrl } from "@/lib/sign-in-url";
 
 /** The person's own profile, theme and sessions. Every action acts on the caller only. */
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
@@ -23,7 +24,7 @@ async function asMe(
   body?: unknown,
 ): Promise<{ ok: boolean; json: Record<string, unknown>; error?: string }> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {

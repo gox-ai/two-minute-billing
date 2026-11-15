@@ -34,9 +34,9 @@ const TIMING_ROWS: Array<{
   kind: "payment_due" | "pause" | "resume" | "card_expiring";
   label: string;
   help: string;
-  target: string;
   otherLabel: string;
-  otherConsequence: string;
+  /** Only where it says more than the option label. */
+  otherConsequence?: string;
   /** The recommended lead days, put in the field when it is empty. */
   suggested: number[];
 }> = [
@@ -44,34 +44,27 @@ const TIMING_ROWS: Array<{
     kind: "payment_due",
     label: "Payment due",
     help: "Days before the due date of an invoice that we do not collect automatically. We do not send it for invoices that we charge to a payment method.",
-    target: "the due date",
     otherLabel: "Off",
-    otherConsequence: "We send no reminder before the due date.",
     suggested: [3],
   },
   {
     kind: "pause",
     label: "Scheduled pause",
     help: "Days before a scheduled pause starts.",
-    target: "the pause",
     otherLabel: "Off",
-    otherConsequence: "We send no reminder before a scheduled pause.",
     suggested: [7],
   },
   {
     kind: "resume",
     label: "Scheduled resume",
     help: "Days before a paused subscription resumes on its scheduled date.",
-    target: "the resume",
     otherLabel: "Off",
-    otherConsequence: "We send no reminder before a scheduled resume.",
     suggested: [7],
   },
   {
     kind: "card_expiring",
     label: "Card expiring",
     help: "When we tell the customer that a stored card expires. A card stops working after the last day of its expiry month.",
-    target: "the card expires",
     otherLabel: "In the month the card expires",
     otherConsequence: "We send one email when the card enters its expiry month.",
     suggested: [30, 7],
@@ -85,31 +78,26 @@ const ROWS: Array<{
   kind: keyof ReminderLeadDays;
   label: string;
   help: string;
-  target: string;
 }> = [
   {
     kind: "trial_ending",
     label: "Trial ending",
     help: "Days before a free trial ends.",
-    target: "the trial ends",
   },
   {
     kind: "renewal",
     label: "Renewal",
     help: "Days before a subscription renews, for billing periods shorter than one year.",
-    target: "the renewal",
   },
   {
     kind: "renewal_yearly",
     label: "Yearly renewal",
     help: "Days before a subscription renews, for billing periods of one year or more.",
-    target: "the renewal",
   },
   {
     kind: "cancellation",
     label: "Scheduled cancellation",
     help: "Days before a scheduled cancellation occurs.",
-    target: "the cancellation",
   },
 ];
 
@@ -175,7 +163,6 @@ export default async function ReminderSettings({ params }: { params: Promise<{ b
                   kind={r.kind}
                   label={r.label}
                   help={`${r.help} Default: ${(DEFAULTS[r.kind] as number[]).join(", ")}.`}
-                  target={r.target}
                   value={cfg[r.kind]}
                 />
               ))}
@@ -206,7 +193,6 @@ export default async function ReminderSettings({ params }: { params: Promise<{ b
                     kind={r.kind}
                     label={r.label}
                     help={r.help}
-                    target={r.target}
                     otherLabel={r.otherLabel}
                     otherConsequence={r.otherConsequence}
                     value={days}

@@ -1,3 +1,4 @@
+import type { CustomerDiscount } from "@/modules/coupons/service";
 import { and, eq, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { customers, contacts, subscriptions } from "@db/schema";
@@ -35,7 +36,29 @@ type Financials = {
   effectiveCurrency?: string | null;
   /** `collectedRevenue` (payments/revenue.ts); detail GET only — a sum over every payment. */
   lifetimeRevenue?: CollectedRevenue[];
+  /** Active customer coupons (0520); detail GET only. */
+  discounts?: CustomerDiscount[];
 };
+
+/** One coupon attached to a customer (0520). */
+export function serializeCustomerDiscount(d: CustomerDiscount) {
+  return {
+    object: "customer_discount",
+    id: d.id,
+    coupon: d.couponCode,
+    coupon_name: d.couponName,
+    kind: d.kind,
+    percent_off_bps: d.percentOffBps,
+    amount_off_minor: d.amountOffMinor != null ? Number(d.amountOffMinor) : null,
+    currency: d.currency,
+    apply_on: d.applyOn,
+    duration_type: d.durationType,
+    /** Invoices it still discounts; null = every invoice until removed. */
+    remaining_invoices: d.remainingInvoices,
+    total_invoices: d.totalInvoices,
+    created_at: d.createdAt,
+  };
+}
 
 /**
  * The currency this customer actually transacts in: their explicit preference if
@@ -219,6 +242,7 @@ export function serializeCustomer(c: typeof customers.$inferSelect, extra?: Fina
       ? { mrr: extra.mrr, balances: serializeBalances(extra.balances) }
       : {}),
     ...(extra?.lifetimeRevenue ? { lifetime_revenue: extra.lifetimeRevenue } : {}),
+    ...(extra?.discounts ? { discounts: extra.discounts.map(serializeCustomerDiscount) } : {}),
     ...(extra?.roles
       ? {
           primary_payment_source_id: extra.roles.primary,

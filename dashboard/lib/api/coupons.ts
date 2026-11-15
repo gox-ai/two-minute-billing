@@ -37,6 +37,15 @@ export interface ItemConstraint {
   item_kind: "plan" | "addon" | "charge";
   constraint_type: "all" | "specific" | "none";
   product_ids?: string[];
+  /** Prices of this kind, for 'specific'; a line matches its product OR its price. */
+  price_ids?: string[];
+  /** Plans and addons: the line's price must bill on one of these. Empty = any period. */
+  billing_periods?: BillingPeriod[];
+}
+
+export interface BillingPeriod {
+  interval: "day" | "week" | "month" | "year";
+  interval_count: number;
 }
 
 /** Re-exports so callers can import everything from one place. */

@@ -4,16 +4,30 @@
  * on or after the expiry (`usageWindowStart`). Term plan grants expire in the renewal instead;
  * reset-window plan grants (G3b) expire here.
  */
-import { and, eq, inArray, isNotNull, like, lte, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, like, lte, ne, or, sql } from "drizzle-orm";
 import { scanBusinessFilter } from "@/platform/clock";
-import { systemDb, withTenant } from "@/platform/db";
+import { systemDb, withTenant, type Tx } from "@/platform/db";
+import { lockCustomerBalances } from "@/modules/customers/balances-read";
 import { createLogger } from "@/platform/logger";
 import { creditGrants, prices, subscriptionItems, subscriptions } from "@db/schema";
 import { isMeteredPrice, snapshotPrice, type PriceSnapshot } from "@/modules/catalog/pricing";
 import { usageWindowStart } from "@/modules/subscriptions/usage-window";
-import { bookGrantRemainder } from "./service";
+import { ensureCreditWindows } from "./credit-clock";
+import { bookGrantRemainder, type CreditGrant } from "./service";
 
 const log = createLogger("credits.expiry");
+
+/**
+ * Close one grant past its expiry: the one close for this pass and for the gate at ingest
+ * (`bringUnitBalanceToNow`). In a unit that pays usage, what is left moves to the grant's
+ * grace row; otherwise it is booked out. Caller holds `lockCustomerBalances`.
+ */
+export async function closeExpiredGrant(tx: Tx, g: CreditGrant, now: Date): Promise<void> {
+  // A window grant in a unit with no rate waits for no invoice: roll it over first.
+  if (!g.unitRated && g.source === "plan_cycle")
+    await ensureCreditWindows(tx, { customerId: g.customerId, now });
+  await bookGrantRemainder(tx, { grant: g, kind: "expire" });
+}
 
 export async function runExpireCreditGrants(
   now: Date,
@@ -21,7 +35,11 @@ export async function runExpireCreditGrants(
   const scope = scanBusinessFilter(creditGrants.businessId);
   // systemDb: the pass finds due grants across organizations; each is booked under withTenant.
   const due = await systemDb
-    .select({ organization_id: creditGrants.organizationId, id: creditGrants.id })
+    .select({
+      organization_id: creditGrants.organizationId,
+      id: creditGrants.id,
+      customerId: creditGrants.customerId,
+    })
     .from(creditGrants)
     .where(
       and(
@@ -34,6 +52,9 @@ export async function runExpireCreditGrants(
           like(creditGrants.sourceRef, "%:w:%"),
           like(creditGrants.sourceRef, "%:wroll:%"),
         ),
+        // A grant that waits in its grace window is closed by `settle_credit_usage` (0526).
+        sql`not exists (select 1 from credit_grant_grace gg
+          where gg.grant_id = ${creditGrants.id} and gg.locked_at is null)`,
         scope,
       ),
     )
@@ -44,6 +65,8 @@ export async function runExpireCreditGrants(
   for (const r of due) {
     try {
       const done = await withTenant(r.organization_id, async (tx) => {
+        // The customer lock before the grant row, as every credit path takes them.
+        await lockCustomerBalances(tx, r.customerId);
         const [g] = await tx
           .select()
           .from(creditGrants)
@@ -64,14 +87,19 @@ export async function runExpireCreditGrants(
               inArray(subscriptions.status, ["active", "in_trial", "paused"]),
             ),
           );
-        for (const { item, price } of items) {
+        // No invoice draws a unit with no rate: nothing to wait for.
+        for (const { item, price } of g.unitRated ? items : []) {
           const snap = (item.priceSnapshot as PriceSnapshot | null) ?? snapshotPrice(price);
           if (!isMeteredPrice(snap) && !snap.meter) continue;
           const w = await usageWindowStart(tx, item.id);
           if (w && w.start.getTime() < g.expiresAt.getTime()) return false;
         }
-        await bookGrantRemainder(tx, { grant: g, kind: "expire" });
-        return true;
+        await closeExpiredGrant(tx, g, now);
+        const [after] = await tx
+          .select({ status: creditGrants.status })
+          .from(creditGrants)
+          .where(eq(creditGrants.id, g.id));
+        return after?.status === "expired";
       });
       if (done) expired++;
       else waiting++;

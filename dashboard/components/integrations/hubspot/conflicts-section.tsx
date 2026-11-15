@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ConnectedHubSpot, HubSpotConflict } from "@/lib/api/hubspot";
 import { listHubSpotConflicts } from "@/lib/api/hubspot";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { businessTz } from "@/lib/business-tz-server";
 import { RecordCard } from "@/components/patterns/record-page";
 import { ActionForm } from "@/components/form/action-form";

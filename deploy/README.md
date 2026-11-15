@@ -15,6 +15,7 @@ between it and the app.
 |---|---|---|---|
 | **API** | `pm2/tmbilling-api.json` | `pnpm start` | `127.0.0.1:4001` |
 | **Dashboard** | `pm2/tmbilling-dashboard.json` | `next start -H 127.0.0.1 -p 4101` | `127.0.0.1:4101` |
+| **Dashboard standby** | `pm2/tmbilling-dashboard-b.json` | `next start -H 127.0.0.1 -p 4102` (`.next-b`) | `127.0.0.1:4102` (nginx `backup`) |
 | **Billing worker** | `pm2/tmbilling-worker.json` | `pnpm worker` | `127.0.0.1:4002` (probes only) |
 
 **The worker is not optional — it *is* the billing clock.** Nothing renews, duns, sends a
@@ -33,6 +34,7 @@ nothing, so no backlog accumulates while it is absent (`src/platform/jobs.ts` §
 |---|---|
 | `pm2/tmbilling-api.json` | API — `pnpm start`, `PORT=4001` + `HOST=127.0.0.1` |
 | `pm2/tmbilling-dashboard.json` | Dashboard — `next start -H 127.0.0.1 -p 4101` |
+| `pm2/tmbilling-dashboard-b.json` | Dashboard standby on 4102, nginx's fallback during a reload of 4101 |
 | `pm2/tmbilling-worker.json` | Billing worker — `node --import tsx src/worker.ts`, the clock. `kill_timeout` 35s |
 | `create-admin.ts` | Bootstraps the first organization + dashboard login |
 | `reload.sh` | **Deploy/reload — one command.** Change-scoped, health-gated, worker last |
@@ -679,7 +681,55 @@ It takes a single-flight lock, so two overlapping deploys cannot interleave an i
 commit with a build from another, and it refuses to run against a dirty tree (`--allow-dirty`
 to override — but never `git stash` on a deploy box).
 
-### `reload` is not 0-downtime while the apps are fork mode
+### Zero-downtime reloads
+
+Users see the API and the dashboard; each needs its own fix, because a pm2 `reload` of a fork
+app is a stop-then-start (below). The worker already hands over in cluster mode.
+
+| App | How a reload avoids a gap | One-time setup on the box |
+|---|---|---|
+| API | Cluster, 2 instances: pm2 restarts them one at a time on the shared port | Switch to `tmbilling-api-cluster.json` (commands below) |
+| Dashboard | A standby, `tmbilling-dashboard-b` on 4102 with its own build copy (`.next-b`). nginx's `tmb_dashboard` upstream lists it as `backup`. `reload.sh` refreshes the standby first, then restarts 4101; while 4101 refuses, nginx sends every request (POST too, since a refused request was never sent) to the standby | Install `05-upstreams.conf` and the `app`/`portal` sites (`proxy_pass http://tmb_dashboard`); `reload.sh` starts the standby itself on its first dashboard reload |
+| Worker | Cluster + `wait_ready`: the new worker is ready before the old one drains | Done 2026-09-27 |
+
+Measured 2026-11-08 with stand-in apps (1.5 s boot) behind nginx 1.28 and pm2, a request every
+100 ms through one reload: nginx → one fork process **18 of 30 failed (2.0 s)**; upstream + standby
+**0 of 58, GET and POST**; API fork **18 of 30**; API cluster ×2 **0 of 55**.
+
+⚠ **`listen_timeout` in the API cluster config is load-bearing.** pm2 waits that long for a new
+instance to listen before stopping the old one (default 3 s). The API boots in ~10 s on production,
+so with the default both old instances were gone before either new one listened (2026-11-08:
+29 of 102 refused, 3.9 s). It is 60 s.
+
+**Every deploy measures itself.** `reload.sh` probes the API (`/healthz`) and the dashboard
+through nginx (`/login` via `--resolve` to 127.0.0.1) every 100 ms while the API and dashboard
+reload, and prints failed requests and the longest gap; any failure is a warning.
+`deploy/lib/downtime-probe.sh` runs on its own too:
+`bash deploy/lib/downtime-probe.sh 60 api=http://127.0.0.1:4001/healthz`.
+
+**Switching production, in this order** (each step on its own is safe):
+
+```bash
+# 1 · deploy the code (reload.sh copies the live build to .next-b and starts the standby)
+bash deploy/reload.sh --dry-run && bash deploy/reload.sh
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4102/login     # 200
+pm2 save
+# 2 · nginx: render the templates, install the upstream and the two sites, test, reload
+python3 deploy/nginx/nginx-tool.py drift            # live vs templates BEFORE: expect only the tmb_dashboard lines
+python3 deploy/nginx/nginx-tool.py render /tmp/nginx-new
+sudo cp /tmp/nginx-new/conf.d/05-upstreams.conf /etc/nginx/conf.d/
+sudo cp /tmp/nginx-new/sites-available/{app,portal}.<domain> /etc/nginx/sites-available/
+sudo nginx -t && sudo systemctl reload nginx
+sudo nginx -T 2>/dev/null | python3 deploy/nginx/nginx-tool.py validate
+# 3 · API to cluster mode, at a quiet moment (the delete is a ~3 s stop; ids renumber once)
+pm2 delete tmbilling-api && pm2 start deploy/pm2/tmbilling-api-cluster.json && pm2 save
+```
+
+Memory: a second API process is ~420 MB and the standby dashboard ~200–300 MB, against ~5.5 GB
+available (read 2026-11-08). Rollback: `pm2 delete tmbilling-api && pm2 start
+deploy/pm2/tmbilling-api.json`; restore the two sites with `proxy_pass http://127.0.0.1:4101`.
+
+#### Why a fork `reload` is a stop-then-start
 
 pm2 6.x `God.reloadProcessId` (`lib/God/Reload.js:225`) falls through to `restartProcessId`
 unless `exec_mode == 'cluster_mode'`, so for the three shipped configs `reload` and `restart`
@@ -921,3 +971,4 @@ reboot from resurrecting the old pinned binaries.
 - **Backups.** Managed or `pg_dump`, and **rehearse a restore at least once**. The ledger is
   append-only, so a bad restore is unrecoverable money data — an untested backup is not a
   backup.
+

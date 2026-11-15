@@ -1,5 +1,9 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { listBusinesses } from "@/lib/api";
+import { enumLabel, plural } from "@/lib/labels";
+import { eventUser } from "@/components/audit/labels";
+import { IdText, MiddleEllipsis } from "@/components/patterns/id-text";
+import { listBusinesses, isApiNotFound } from "@/lib/api";
 import { getEventForBusiness } from "@/lib/api/developer";
 import type { EventDetail } from "@/lib/api/developer";
 import { requirePermission } from "@/lib/session";
@@ -22,7 +26,7 @@ import { ResendSection } from "@/components/webhooks/resend-section";
 import { DeliveryStatusChip } from "@/components/webhooks/delivery-status-chip";
 import { RedeliverButton } from "@/app/(dashboard)/developer/webhooks/[id]/redeliver-button";
 import { redeliverAction } from "@/app/(dashboard)/developer/actions";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -81,10 +85,13 @@ export default async function BusinessEventDetailPage({
   try {
     [event, businesses] = await Promise.all([getEventForBusiness(biz, evt), listBusinesses()]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <ErrorState
-        title="We could not load the event"
-        description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+        error={e}
+        thing="event"
+        back={{ label: "View events", href: `/businesses/${biz}/events` }}
+        retry
       />
     );
   }
@@ -111,11 +118,14 @@ export default async function BusinessEventDetailPage({
       <span className="font-medium">{event.resource.type}</span>
       {event.resource.id ? (
         resourceHref ? (
-          <Link href={resourceHref} className="ml-1 font-mono text-xs text-primary hover:underline">
-            {event.resource.id}
+          <Link href={resourceHref} className="ml-1 text-primary hover:underline">
+            <MiddleEllipsis value={event.resource.id} className="text-xs" />
           </Link>
         ) : (
-          <span className="ml-1 font-mono text-xs text-muted-foreground">{event.resource.id}</span>
+          <MiddleEllipsis
+            value={event.resource.id}
+            className="ml-1 align-bottom text-xs text-muted-foreground"
+          />
         )
       ) : null}
     </span>
@@ -167,7 +177,7 @@ export default async function BusinessEventDetailPage({
         chips={event.webhook_status ? <DeliveryStatusChip status={event.webhook_status} /> : null}
         facts={[
           <IdChip key="id" id={event.id} />,
-          <span key="type" className="font-mono text-xs">
+          <span key="type" className="font-mono text-xs whitespace-nowrap">
             {event.event_type}
           </span>,
           fmtDateTime(event.occurred_at, tz),
@@ -191,7 +201,7 @@ export default async function BusinessEventDetailPage({
                 return (
                   <details key={key} className="px-5 py-3" open={contentEntries.length === 1}>
                     <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium">
-                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+                      <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
                         {key}
                       </code>
                       <CopyButton value={json} className="shrink-0" />
@@ -212,21 +222,22 @@ export default async function BusinessEventDetailPage({
               { label: "Name", value: title },
               {
                 label: "ID",
-                value: (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="font-mono text-xs wrap-anywhere">{event.id}</span>
-                    <CopyButton value={event.id} />
-                  </span>
-                ),
+                value: <IdText id={event.id} />,
               },
               {
                 label: "Event type",
-                value: <Chip className="font-mono">{event.event_type}</Chip>,
+                value: <Chip className="font-mono whitespace-nowrap">{event.event_type}</Chip>,
               },
-              { label: "Source", value: event.source ?? "—" },
+              { label: "Source", value: event.source ? enumLabel(event.source) : "—" },
               {
                 label: "User",
-                value: event.user ? <span className="font-mono text-xs">{event.user}</span> : "—",
+                value: event.user ? (
+                  <span className={eventUser(event.user).mono ? "font-mono text-xs" : undefined}>
+                    {eventUser(event.user).text}
+                  </span>
+                ) : (
+                  "—"
+                ),
               },
               { label: "API version", value: event.api_version ?? "—" },
               resource ? { label: "Resource", value: resource } : null,
@@ -248,9 +259,9 @@ export default async function BusinessEventDetailPage({
           <div className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
             No webhook deliveries for this event. The system creates a delivery when an event fires
             while an{" "}
-            <a href={`/developer`} className="font-semibold text-primary hover:underline">
+            <Link href="/developer/webhooks" className="font-semibold text-primary hover:underline">
               enabled webhook endpoint
-            </a>{" "}
+            </Link>{" "}
             exists. Endpoints created later do not receive past events.
           </div>
         ) : (
@@ -269,7 +280,7 @@ export default async function BusinessEventDetailPage({
                   status={<DeliveryStatusChip status={d.enabled ? d.status : "disabled"} />}
                   subheading={
                     group.earlier.length > 0
-                      ? `${group.earlier.length + 1} attempts · latest ${d.last_attempt_at ? fmtDateTime(d.last_attempt_at, tz) : "not yet sent"}`
+                      ? `${plural(group.earlier.length + 1, "attempt")} · latest ${d.last_attempt_at ? fmtDateTime(d.last_attempt_at, tz) : "not yet sent"}`
                       : undefined
                   }
                   footer={

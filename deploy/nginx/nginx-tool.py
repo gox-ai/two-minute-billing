@@ -46,6 +46,7 @@ def rendered():
     out = {
         "sites-available/default": open(os.path.join(HERE, "default")).read(),
         "conf.d/00-proxy-only.conf": open(os.path.join(HERE, "00-proxy-only.conf")).read(),
+        "conf.d/05-upstreams.conf": open(os.path.join(HERE, "05-upstreams.conf")).read(),
         "conf.d/10-proxy-buffers.conf": open(os.path.join(HERE, "10-proxy-buffers.conf")).read(),
     }
     for tpl, name in names.items():

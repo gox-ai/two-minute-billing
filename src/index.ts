@@ -357,6 +357,21 @@ export async function start() {
       port: config.PORT,
       edition: edition(),
     });
+    // The assistant's docs index: rebuilt in the background when the published docs changed,
+    // then embeddings for the sections that changed (when the platform OpenAI key is set).
+    void import("./modules/assistant-docs/index-docs")
+      .then((m) => m.ensureDocsIndex())
+      .then(() => import("./modules/assistant-docs/vectors"))
+      .then(async (m) => {
+        await m.ensureDocVectors();
+        await m.warmDocVectors();
+      })
+      .catch((err) =>
+        apiLog.warn("docs index not rebuilt", {
+          event: "assistant_docs_index_failed",
+          error: String(err),
+        }),
+      );
     const ignored = ignoredCloudSettings();
     if (ignored.length)
       apiLog.warn("Cloud-only settings ignored: TMBILLING_EDITION is not cloud", {

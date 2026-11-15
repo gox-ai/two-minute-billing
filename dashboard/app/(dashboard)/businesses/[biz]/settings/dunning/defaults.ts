@@ -177,5 +177,6 @@ export function customerDunningOptions(
     businessLine: dunningLine(
       dunningDefaults(business.dunning_config, business, { legacyDays: true }),
     ),
+    planPolicies: Object.keys(business.dunning_config?.plan_policies ?? {}).length > 0,
   };
 }

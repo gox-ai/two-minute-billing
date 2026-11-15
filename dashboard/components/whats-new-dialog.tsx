@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/patterns/chip";
 import { markReleaseNotesSeenAction } from "@/app/auth-actions";
-import { fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import type { ReleaseNote } from "@/lib/release-note-types";
 
 /** Enough to show what shipped without becoming a wall. The rest is one click away. */

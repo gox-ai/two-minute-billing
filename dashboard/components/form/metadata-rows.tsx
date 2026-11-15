@@ -32,6 +32,16 @@ export function MetadataRows({
     onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <>
+      {rows.length > 0 && (
+        <div
+          aria-hidden
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem] gap-2 text-xs font-medium text-muted-foreground"
+        >
+          <span>Key</span>
+          <span>Value</span>
+          <span />
+        </div>
+      )}
       {rows.map((r, i) => {
         const values = valueSuggestions?.(r.key.trim()) ?? [];
         return (
@@ -41,30 +51,28 @@ export function MetadataRows({
           >
             {keySuggestions ? (
               <SuggestInput
-                aria-label={`Metadata key ${i + 1}`}
+                aria-label={`Key ${i + 1}`}
                 value={r.key}
                 onChange={(key) => {
                   const json = r.value.trim() ? undefined : jsonFor?.(key.trim());
                   upd(i, json === undefined ? { key } : { key, json });
                 }}
                 suggestions={keySuggestions(r)}
-                placeholder="key"
                 maxLength={64}
                 className="font-mono"
               />
             ) : (
               <Input
-                aria-label={`Metadata key ${i + 1}`}
+                aria-label={`Key ${i + 1}`}
                 value={r.key}
                 onChange={(e) => upd(i, { key: e.target.value })}
-                placeholder="key"
                 maxLength={64}
                 className="font-mono"
               />
             )}
             {values.length ? (
               <SuggestInput
-                aria-label={`Metadata value ${i + 1}`}
+                aria-label={`Value ${i + 1}`}
                 value={r.value}
                 onChange={(value) => {
                   // A suggested number or boolean is stored as that type, not as text.
@@ -72,15 +80,15 @@ export function MetadataRows({
                   upd(i, { value, json: hit ? !!hit.json : r.json });
                 }}
                 suggestions={values}
-                placeholder={r.json ? "JSON value" : "value"}
+                placeholder={r.json ? "JSON value" : undefined}
                 className="font-mono"
               />
             ) : (
               <Input
-                aria-label={`Metadata value ${i + 1}`}
+                aria-label={`Value ${i + 1}`}
                 value={r.value}
                 onChange={(e) => upd(i, { value: e.target.value })}
-                placeholder={r.json ? "JSON value" : "value"}
+                placeholder={r.json ? "JSON value" : undefined}
                 className="font-mono"
               />
             )}

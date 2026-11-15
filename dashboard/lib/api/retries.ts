@@ -12,6 +12,12 @@ export interface RetryRow {
   dunning_status: string | null;
   currency: string;
   amount_due_minor: number;
+  /**
+   * `reminder` = auto-collection is off: dunning sends payment reminders and never
+   * charges, so `attempt_count` stays 0 and `next_attempt_at` is the next reminder.
+   * Optional only against an engine predating it; absent reads as `charge`.
+   */
+  collection?: "charge" | "reminder";
   attempt_count: number;
   next_attempt_at: string | null;
   retry_started_at: string;

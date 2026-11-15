@@ -30,9 +30,8 @@ export default async function NewCreditNotePage({
         <PageHeader
           title="New Credit Note"
           breadcrumbs={[
-            { label: "Businesses", href: "/" },
             { label: biz, href: `/businesses/${biz}` },
-            { label: "Credit Notes", href: `/businesses/${biz}/credit_notes` },
+            { label: "Credit notes", href: `/businesses/${biz}/credit_notes` },
             { label: "New" },
           ]}
         />
@@ -48,7 +47,7 @@ export default async function NewCreditNotePage({
 
   const crumbs = [
     { label: name, href: `/businesses/${biz}` },
-    { label: "Credit Notes", href: `/businesses/${biz}/credit_notes` },
+    { label: "Credit notes", href: `/businesses/${biz}/credit_notes` },
     { label: "New credit note" },
   ];
 

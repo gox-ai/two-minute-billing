@@ -1,9 +1,8 @@
 "use client";
 
 import { useDefaultState } from "@/lib/use-default-state";
-import { SelectField } from "@/components/ui/select-field";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { SettingRow } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
 import { FISCAL_MONTHS } from "./fiscal-months";
 
 /**
@@ -17,13 +16,14 @@ export function IssuerRow({ saved, orgUsable }: { saved: string; orgUsable: bool
       label="Invoice issued by"
       htmlFor="invoice_issuer"
       errorFor="invoice_issuer"
+      placement="end"
       help="Whose name, address and tax registration head this business's invoices and credit notes."
       control={
-        <SelectField
+        <SelectAnswer
           name="invoice_issuer"
+          ariaLabel="Invoice issued by"
           value={issuer}
           onValueChange={setIssuer}
-          className="w-full sm:w-72"
           options={[
             { value: "business", label: "This business" },
             { value: "organization", label: "The organization (registered entity)" },
@@ -52,13 +52,14 @@ export function CalendarRows({ weekStart, fyMonth }: { weekStart: string; fyMont
       <SettingRow
         label="Week starts on"
         htmlFor="week_start"
+        placement="end"
         help="Weekly charts, “This week” and “Previous week” run from this day."
         control={
-          <SelectField
+          <SelectAnswer
             name="week_start"
+            ariaLabel="Week starts on"
             value={week}
             onValueChange={setWeek}
-            className="w-full sm:w-44"
             options={[
               { value: "sunday", label: "Sunday" },
               { value: "monday", label: "Monday" },
@@ -70,13 +71,14 @@ export function CalendarRows({ weekStart, fyMonth }: { weekStart: string; fyMont
       <SettingRow
         label="Fiscal year starts in"
         htmlFor="fiscal_year_start_month"
+        placement="end"
         help="Quarters, “This quarter” and “Year to date” use this setting."
         control={
-          <SelectField
+          <SelectAnswer
             name="fiscal_year_start_month"
+            ariaLabel="Fiscal year starts in"
             value={fy}
             onValueChange={setFy}
-            className="w-full sm:w-56"
             options={FISCAL_MONTHS.map((label, i) => ({
               value: String(i + 1),
               label: i === 0 ? `${label} (calendar year)` : label,
@@ -106,7 +108,7 @@ export function VatRow({ saved }: { saved: boolean }) {
       help="When we check a customer's VAT number, we ask VIES, the EU Commission's lookup service."
       placement="end"
       control={
-        <SettingSwitch
+        <ToggleAnswer
           name="vies_validation_enabled"
           label="Validate EU VAT numbers against VIES"
           checked={on}

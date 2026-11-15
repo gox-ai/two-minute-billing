@@ -10,6 +10,8 @@ import {
   listCouponConstraints,
   setCouponActive,
   applyCouponToSubscription,
+  applyCouponToCustomer,
+  removeCustomerDiscount,
   removeDiscount,
   createCouponSet,
   listCouponSets,
@@ -36,22 +38,23 @@ import {
 } from "@/modules/coupons/service";
 import { SlugConflictError } from "@/modules/catalog/service";
 import { getSubscriptionByPublicId } from "@/modules/subscriptions/service";
+import { getCustomerByPublicId } from "@/modules/customers/service";
+import { serializeCustomerDiscount } from "@/modules/customers/serialize";
 import { resolveBusiness, badRequest, notFound, requirePerm } from "./helpers";
 import { catalogListEnvelope, catalogPageQuery, wantsListQuery } from "./catalog-list";
 import type { coupons, couponSetCodes } from "@db/schema";
 import { parseRequest } from "./strict-params";
 
 /**
- * Kept field-for-field in step with the LIST serializer in `portal-routes.ts` — a client
- * that creates a coupon and one that reads it back must not see different shapes. The
- * discount amount and `item_constraints` were missing here, so a create response could not
- * confirm what it had just stored.
+ * The one coupon serializer: create, read and the list route in `portal-routes.ts` all use it,
+ * so a client sees one shape. The dashboard's coupon detail page is built from a list row, and
+ * `catalog.mjs` compares the file with the list, so a field missing here drifts both.
  *
  * `item_constraints` is `null` for an `invoice_amount` coupon (the matcher never consults
  * them) and an array for `each_specified_item`; a kind absent from that array is an
  * implicit `none`, not `all`.
  */
-function serializeCoupon(
+export function serializeCoupon(
   c: typeof coupons.$inferSelect,
   now?: Date,
   constraints?: CouponConstraint[],
@@ -75,6 +78,7 @@ function serializeCoupon(
     redeem_by: c.redeemBy,
     max_redemptions: c.maxRedemptions,
     max_redemptions_per_customer: c.maxRedemptionsPerCustomer,
+    per_customer_limit_by: c.perCustomerLimitBy,
     times_redeemed: c.timesRedeemed,
     metadata: c.metadata,
     item_constraints:
@@ -84,6 +88,10 @@ function serializeCoupon(
             constraint_type: k.constraintType,
             product_ids: k.productIds ?? [],
             price_ids: k.priceIds ?? [],
+            billing_periods: (k.billingPeriods ?? []).map((p) => ({
+              interval: p.interval,
+              interval_count: p.intervalCount,
+            })),
           }))
         : null,
   };
@@ -173,6 +181,16 @@ const itemConstraints = z
       product_ids: z.array(z.string().min(1).max(100)).optional(),
       // 'specific' only: prices of this item kind; a line matches its product OR its price.
       price_ids: z.array(z.string().min(1).max(100)).max(500).optional(),
+      // plan/addon only: the line's price must also bill on one of these periods.
+      billing_periods: z
+        .array(
+          z.object({
+            interval: z.enum(["day", "week", "month", "year"]),
+            interval_count: z.number().int().min(1).max(365).default(1),
+          }),
+        )
+        .max(20)
+        .optional(),
     }),
   )
   .max(3)
@@ -187,6 +205,7 @@ const updateBody = z.object({
   redeem_by: z.string().datetime().nullable().optional(),
   max_redemptions: z.number().int().positive().nullable().optional(),
   max_redemptions_per_customer: z.number().int().positive().nullable().optional(),
+  per_customer_limit_by: z.enum(["customer", "email"]).optional(),
   invoice_name: z.string().max(200).nullable().optional(),
   valid_from: z.string().datetime().nullable().optional(),
   /**
@@ -223,6 +242,7 @@ const createBody = z
     duration_in_periods: z.number().int().positive().optional(),
     max_redemptions: z.number().int().positive().optional(),
     max_redemptions_per_customer: z.number().int().positive().optional(),
+    per_customer_limit_by: z.enum(["customer", "email"]).optional(),
     redeem_by: z.string().datetime().optional(),
     valid_from: z.string().datetime().optional(),
     invoice_name: z.string().max(200).optional(),
@@ -244,6 +264,7 @@ const createBody = z
   });
 
 const applyBody = z.object({ code: z.string().max(LIMITS.code).min(1) });
+const customerDiscountBody = z.object({ coupon: z.string().max(LIMITS.code).min(1) });
 
 export async function registerCouponRoutes(app: FastifyInstance) {
   app.post(
@@ -271,6 +292,7 @@ export async function registerCouponRoutes(app: FastifyInstance) {
           durationInPeriods: parsed.data.duration_in_periods,
           maxRedemptions: parsed.data.max_redemptions,
           maxRedemptionsPerCustomer: parsed.data.max_redemptions_per_customer,
+          perCustomerLimitBy: parsed.data.per_customer_limit_by,
           redeemBy: parsed.data.redeem_by ? new Date(parsed.data.redeem_by) : undefined,
           validFrom: parsed.data.valid_from ? new Date(parsed.data.valid_from) : undefined,
           invoiceName: parsed.data.invoice_name,
@@ -281,6 +303,10 @@ export async function registerCouponRoutes(app: FastifyInstance) {
             constraintType: k.constraint_type,
             productIds: k.product_ids,
             priceIds: k.price_ids,
+            billingPeriods: k.billing_periods?.map((p) => ({
+              interval: p.interval,
+              intervalCount: p.interval_count,
+            })),
           })),
         });
         return reply
@@ -337,6 +363,7 @@ export async function registerCouponRoutes(app: FastifyInstance) {
                 : new Date(d.redeem_by),
           maxRedemptions: d.max_redemptions,
           maxRedemptionsPerCustomer: d.max_redemptions_per_customer,
+          perCustomerLimitBy: d.per_customer_limit_by,
           invoiceName: d.invoice_name,
           validFrom:
             d.valid_from === undefined
@@ -357,6 +384,10 @@ export async function registerCouponRoutes(app: FastifyInstance) {
             constraintType: k.constraint_type,
             productIds: k.product_ids,
             priceIds: k.price_ids,
+            billingPeriods: k.billing_periods?.map((p) => ({
+              interval: p.interval,
+              intervalCount: p.interval_count,
+            })),
           })),
         });
       } catch (e) {
@@ -463,8 +494,6 @@ export async function registerCouponRoutes(app: FastifyInstance) {
           subscriptionId: sub.id,
           code: parsed.data.code,
           now: await businessWallClock(business.id),
-          // A coupon scoped to other products would sit "active" and discount nothing.
-          requireItemMatch: true,
         });
         return reply.code(201).send({
           object: "discount",
@@ -482,6 +511,60 @@ export async function registerCouponRoutes(app: FastifyInstance) {
             .send({ error: { type: "invalid_request_error", message: e.message } });
         throw e;
       }
+    },
+  );
+
+  // ─── Customer coupons (0520): discount the customer's invoices ────────────
+  app.post(
+    "/v1/businesses/:biz/customers/:cus/discounts",
+    {
+      preHandler: [authenticate, requirePerm("customers:manage"), idempotency],
+      onSend: idempotencyOnSend,
+    },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const cusId = (req.params as { cus: string }).cus;
+      const cus = await getCustomerByPublicId(req.organization!.id, business.id, cusId);
+      if (!cus) return notFound(reply, `No such customer: ${cusId}`);
+      const parsed = parseRequest(customerDiscountBody, req.body);
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      try {
+        const d = await applyCouponToCustomer({
+          organizationId: req.organization!.id,
+          businessId: business.id,
+          customerId: cus.id,
+          code: parsed.data.coupon,
+        });
+        return reply.code(201).send({ ...serializeCustomerDiscount(d), customer: cus.publicId });
+      } catch (e) {
+        if (e instanceof CouponError) return badRequest(reply, e.message);
+        throw e;
+      }
+    },
+  );
+
+  app.delete(
+    "/v1/businesses/:biz/customers/:cus/discounts/:id",
+    {
+      preHandler: [authenticate, requirePerm("customers:manage"), idempotency],
+      onSend: idempotencyOnSend,
+    },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const { cus: cusId, id } = req.params as { cus: string; id: string };
+      const cus = await getCustomerByPublicId(req.organization!.id, business.id, cusId);
+      if (!cus) return notFound(reply, `No such customer: ${cusId}`);
+      const removed = await removeCustomerDiscount({
+        organizationId: req.organization!.id,
+        businessId: business.id,
+        customerId: cus.id,
+        discountId: id,
+        now: await businessWallClock(business.id),
+      });
+      if (!removed) return notFound(reply, `No such discount: ${id}`);
+      return { object: "customer_discount", id, customer: cus.publicId, removed: true };
     },
   );
 

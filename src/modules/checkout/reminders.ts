@@ -18,7 +18,7 @@ import { accountHolderName } from "@/modules/customers/names";
 import { applySubjectPrefix, resolveEmailConfig } from "@/modules/emails/config";
 import { blocksFor, renderEmail, type RenderVars } from "@/modules/emails/templates";
 import { loadTemplateOverride } from "@/modules/emails/template-service";
-import { computeLineAmount } from "@/modules/catalog/pricing";
+import { packAwareLineAmount } from "@/modules/catalog/pricing";
 import { tokenHash } from "./service";
 import type { TickError } from "@/modules/subscriptions/renewal";
 
@@ -152,7 +152,7 @@ async function remindOne(
     const amount =
       s.mode === "purchase"
         ? formatMoney(
-            lines.reduce((n, l) => n + computeLineAmount(l.price, l.quantity), 0n),
+            lines.reduce((n, l) => n + packAwareLineAmount(l.price, l.quantity), 0n),
             lines[0]!.price.currency,
           )
         : undefined;

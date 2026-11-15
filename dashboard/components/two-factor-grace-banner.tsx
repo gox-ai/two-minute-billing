@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { OrganizationTwoFactor } from "@/lib/session";
+import { fmtDate } from "@/lib/format-date";
 
 /**
  * "{Org} requires two-factor authentication" (0329), under the top of the shell while a member
@@ -17,12 +18,7 @@ const ymd = (d: Date, tz: string | null) =>
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
-const long = (d: string) =>
-  new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  });
+const long = (d: string) => fmtDate(d, "UTC");
 
 /** The grace period's deadline in words, or null when no 2FA is due. Shared with the sign-in dialog. */
 export function twoFactorGrace(

@@ -15,7 +15,12 @@
  *  - T15 `event_cost_or_list` (G1c): events with a cost bill it + markup on a "reported cost"
  *    line, the others bill from the list; a fixed rate wins over both; free units come off
  *    the list part only; each line carries its own part's cost; list drift compares the
- *    reported cost with the list price of the same tokens, for the organization or one business.
+ *    reported cost with the list price of the same tokens, for the organization or one business;
+ *  - T16 media prices: a meter mapped with `unit: audio_second` bills seconds at a per-hour list
+ *    price; an image meter with `quality_key` takes its cost from your image cost row for that
+ *    quality, else the list; a unit-less mapping still resolves a `request` row;
+ *  - T17 an image meter with `quality_key` and `resolution_key` bills from rows the second
+ *    source gives (USD per image, divisor 1), through the tier order.
  *
  *   pnpm verify:model-price-billing
  */
@@ -29,6 +34,8 @@ import { currentUsage } from "@/modules/subscriptions/current-usage";
 import { listDrift } from "@/modules/metering/list-drift";
 import { foldBusiness } from "@/modules/metering/fold";
 import { ensureRollupState } from "@/modules/metering/meters";
+import { numericText } from "@/modules/model-prices/decimal";
+import { parseMediaFeed } from "@/modules/model-prices/parse-media";
 import { customerMeterBilling, meters, subscriptionItems } from "@db/schema";
 import {
   checker,
@@ -64,16 +71,23 @@ await systemDb
 const run = "00000000-0000-7000-8000-000000000001";
 let rowN = 0;
 /** A dated list row (cents per divisor). `from` null = since before we tracked it. */
-async function listRow(model: string, tokenType: string, cents: string, from: Date | null) {
+async function listRow(
+  model: string,
+  tokenType: string,
+  cents: string,
+  from: Date | null,
+  o: { unit?: string; divisor?: string } = {},
+) {
   await systemDb.execute(sql`
     insert into model_price_models (provider, model) values (${PROVIDER}, ${model})
     on conflict do nothing`);
   const pid = `mpr_t${tag}${++rowN}`;
   await systemDb.execute(sql`
-    insert into model_prices (public_id, provider, model, token_type, currency,
+    insert into model_prices (public_id, provider, model, token_type, unit, currency,
       unit_amount_decimal, quantity_divisor, effective_from, source, source_version,
       source_effective_from, sync_run_id)
-    values (${pid}, ${PROVIDER}, ${model}, ${tokenType}, 'USD', ${cents}::numeric, 1000000,
+    values (${pid}, ${PROVIDER}, ${model}, ${tokenType}, ${o.unit ?? "token"}, 'USD',
+      ${cents}::numeric, ${o.divisor ?? "1000000"}::bigint,
       ${from ? sql`${from.toISOString()}::timestamptz` : sql`'-infinity'::timestamptz`},
       'test-feed', 'v1', ${from ? from.toISOString().slice(0, 10) : null}::date, ${run}::uuid)`);
   return pid;
@@ -84,13 +98,15 @@ async function costRow(
   currency: string,
   cents: string,
   from = new Date(S.getTime() - 24 * HOUR),
+  o: { unit?: string; quality?: string; divisor?: string } = {},
 ) {
   const pid = `mco_t${tag}${++rowN}`;
   await systemDb.execute(sql`
     insert into model_cost_overrides (organization_id, public_id, provider, model, token_type,
-      currency, unit_amount_decimal, quantity_divisor, effective_from)
-    values (${orgId}, ${pid}, ${PROVIDER}, ${model}, ${tokenType}, ${currency},
-      ${cents}::numeric, 1000000, ${from.toISOString()}::timestamptz)`);
+      unit, quality, currency, unit_amount_decimal, quantity_divisor, effective_from)
+    values (${orgId}, ${pid}, ${PROVIDER}, ${model}, ${tokenType}, ${o.unit ?? "token"},
+      ${o.quality ?? ""}, ${currency}, ${cents}::numeric, ${o.divisor ?? "1000000"}::bigint,
+      ${from.toISOString()}::timestamptz)`);
   return pid;
 }
 
@@ -623,6 +639,186 @@ check(
     (driftBiz.body.data as Array<{ model: string }>).some((d) => d.model === m15) &&
     noBiz.status === 404,
   { byBiz: byBiz.status, drift: driftBiz.body, noBiz: noBiz.status },
+);
+
+// ── T16 ──────────────────────────────────────────────────────────────────────────
+console.log("T16. media prices: audio seconds, images by quality, a legacy request row");
+const m16 = `whisper-${tag}`;
+// $0.36 per hour of audio, as the sync stores `input_audio_hours`: 36 ¢ per 3,600 seconds.
+const audio16 = await listRow(m16, "input", "36", null, { unit: "audio_second", divisor: "3600" });
+// The same kind in tokens on the same model: the audio meter must not read it.
+await listRow(m16, "input", "500", null);
+const audio = await createTestMeter(ids, { groupBy: ["model"], valueProperty: "seconds" });
+await systemDb
+  .update(meters)
+  .set({ priceList: { provider: PROVIDER, token_type: "input", unit: "audio_second" } })
+  .where(eq(meters.id, audio.id));
+const img16 = `img-${tag}`;
+const imgList = await listRow(img16, "output", "4", null, { unit: "image", divisor: "1" });
+const imgCostHd = await costRow(img16, "output", "USD", "3", undefined, {
+  unit: "image",
+  quality: "hd",
+  divisor: "1",
+});
+// A token cost row on the same kind: an image never takes it.
+await costRow(img16, "output", "USD", "1");
+const image = await createTestMeter(ids, {
+  groupBy: ["model", "quality"],
+  valueProperty: "images",
+});
+await systemDb
+  .update(meters)
+  .set({
+    priceList: { provider: PROVIDER, token_type: "output", unit: "image", quality_key: "quality" },
+  })
+  .where(eq(meters.id, image.id));
+const m16r = `search-${tag}`;
+// A `_kcount` row as the 0524 backfill leaves it: $10 per 1K requests.
+const req16 = await listRow(m16r, "web_searches", "1000", null, {
+  unit: "request",
+  divisor: "1000",
+});
+
+const flat = { markupPercent: "0", unitAmountDecimal: "1", quantityDivisor: "1" };
+const sAudio = await subscribe(await listPrice({ ...flat, meter: audio.key }), "t16a");
+const sImg = await subscribe(await listPrice({ ...flat, meter: image.key }), "t16i");
+const sImgCost = await subscribe(
+  await listPrice({ ...flat, meter: image.key, markupBase: "cost" }),
+  "t16c",
+);
+const sReq = await subscribe(await listPrice({}), "t16r");
+for (const [sub, eventName, properties] of [
+  [sAudio, audio.eventName, { model: m16, seconds: 5400 }],
+  [sAudio, audio.eventName, { model: m16, seconds: 1000 }],
+  [sImg, image.eventName, { model: img16, quality: "hd", images: 10 }],
+  [sImg, image.eventName, { model: img16, quality: "standard", images: 5 }],
+  [sImgCost, image.eventName, { model: img16, quality: "HD", images: 10 }],
+  [sReq, ai.eventName, { model: m16r, token_type: "web_searches", tokens: 500 }],
+] as const)
+  await sendEvent(ids, {
+    customerId: sub.customer.id,
+    eventName,
+    at: before,
+    properties: properties as Record<string, string | number>,
+  });
+await tick(biz.id);
+const linesOf = async (s: Sub) =>
+  usageLines((await invoicesOf(orgId, s.sub.subscription.id))[0]?.lines ?? []);
+const [l16a, l16i, l16c, l16r] = [
+  await linesOf(sAudio),
+  await linesOf(sImg),
+  await linesOf(sImgCost),
+  await linesOf(sReq),
+];
+check(
+  "6,400 audio seconds at $0.36 per hour = 64 ¢, from the audio row, cost 64 ¢ from the list",
+  JSON.stringify(amounts(l16a)) === "[64]" &&
+    segOf(l16a[0])?.model_price_id === audio16 &&
+    l16a[0]?.costMinor === 64n &&
+    l16a[0]?.costBasis === "price_list",
+  l16a.map((l) => [l.amountMinor, segOf(l), l.costMinor, l.costBasis]),
+);
+const hd = l16i.find((l) => l.amountMinor === 40n);
+const std = l16i.find((l) => l.amountMinor === 20n);
+check(
+  "images bill from the list: 10 hd × 4 ¢ = 40, 5 standard × 4 ¢ = 20",
+  JSON.stringify(amounts(l16i)) === "[20,40]" &&
+    segOf(hd)?.model_price_id === imgList &&
+    segOf(std)?.model_price_id === imgList,
+  l16i.map((l) => [l.amountMinor, segOf(l)]),
+);
+check(
+  "the hd line's cost is your hd image cost (30 ¢); standard has none, so the list (20 ¢)",
+  hd?.costMinor === 30n &&
+    hd?.costBasis === "price_list" &&
+    std?.costMinor === 20n &&
+    std?.costBasis === "price_list",
+  l16i.map((l) => [l.amountMinor, l.costMinor, l.costBasis]),
+);
+check(
+  "a cost markup base bills hd (sent as HD) from your image cost row: 10 × 3 ¢ = 30",
+  JSON.stringify(amounts(l16c)) === "[30]" && segOf(l16c[0])?.model_cost_override_id === imgCostHd,
+  l16c.map((l) => [l.amountMinor, segOf(l)]),
+);
+check(
+  "a unit-less mapping still resolves a request row: 500 at $10 per 1K + 20 % = 600 ¢",
+  JSON.stringify(amounts(l16r)) === "[600]" && segOf(l16r[0])?.model_price_id === req16,
+  l16r.map((l) => [l.amountMinor, segOf(l)]),
+);
+
+// ── T17 ──────────────────────────────────────────────────────────────────────────
+console.log("T17. an image meter with quality and resolution, billed from second-source rows");
+const img17 = `canvas-${tag}`;
+// The rows as the sync writes them from the second source: USD per image, divisor 1.
+const media17 = parseMediaFeed(`{
+  "1024-x-1024/50-steps/${PROVIDER}/${img17}": {"litellm_provider": "${PROVIDER}", "mode": "image_generation", "output_cost_per_image": 0.06},
+  "${PROVIDER}/${img17}": {"litellm_provider": "${PROVIDER}", "mode": "image_generation", "output_cost_per_image": 4e-02},
+  "high/${PROVIDER}/${img17}": {"litellm_provider": "${PROVIDER}", "mode": "image_generation", "output_cost_per_image": 0.05}
+}`);
+const tierPid: Record<string, string> = {};
+for (const p of media17.models[0]?.entries[0]?.prices.values() ?? []) {
+  await systemDb.execute(sql`
+    insert into model_price_models (provider, model) values (${PROVIDER}, ${img17})
+    on conflict do nothing`);
+  const pid = `mpr_t${tag}${++rowN}`;
+  tierPid[`${p.quality}|${p.resolution}`] = pid;
+  await systemDb.execute(sql`
+    insert into model_prices (public_id, provider, model, token_type, unit, quality, resolution,
+      currency, unit_amount_decimal, quantity_divisor, effective_from, source, source_version,
+      sync_run_id)
+    values (${pid}, ${PROVIDER}, ${img17}, ${p.tokenType}, ${p.unit}, ${p.quality ?? ""},
+      ${p.resolution ?? ""}, 'USD', ${numericText(p.value)}::numeric, ${p.divisor.toString()}::bigint,
+      '-infinity', 'litellm', '"m1"', ${run}::uuid)`);
+}
+check(
+  "the second source gives three image tiers: exact, quality only, none",
+  Object.keys(tierPid).sort().join() === "50-steps|1024x1024,high|,|",
+  tierPid,
+);
+const canvas = await createTestMeter(ids, {
+  groupBy: ["model", "quality", "resolution"],
+  valueProperty: "images",
+});
+await systemDb
+  .update(meters)
+  .set({
+    priceList: {
+      provider: PROVIDER,
+      token_type: "output",
+      unit: "image",
+      quality_key: "quality",
+      resolution_key: "resolution",
+    },
+  })
+  .where(eq(meters.id, canvas.id));
+const sCanvas = await subscribe(await listPrice({ ...flat, meter: canvas.key }), "t17");
+for (const properties of [
+  { model: img17, quality: "50-steps", resolution: "1024x1024", images: 10 } as Record<
+    string,
+    string | number
+  >,
+  { model: img17, quality: "50-steps", resolution: "2048x2048", images: 10 },
+  { model: img17, quality: "HIGH", resolution: "1024x1024", images: 2 },
+  { model: img17, images: 3 },
+])
+  await sendEvent(ids, {
+    customerId: sCanvas.customer.id,
+    eventName: canvas.eventName,
+    at: before,
+    properties,
+  });
+await tick(biz.id);
+const l17 = await linesOf(sCanvas);
+const by17 = (cents: bigint) => l17.find((l) => l.amountMinor === cents);
+check(
+  "exact tier 10 × 6 ¢ = 60; no row for 2048x2048 falls to no tier, 10 × 4 ¢ = 40; " +
+    "high at 1024x1024 takes quality alone, 2 × 5 ¢ = 10; no tier 3 × 4 ¢ = 12",
+  JSON.stringify(amounts(l17)) === "[10,12,40,60]" &&
+    segOf(by17(60n))?.model_price_id === tierPid["50-steps|1024x1024"] &&
+    segOf(by17(40n))?.model_price_id === tierPid["|"] &&
+    segOf(by17(10n))?.model_price_id === tierPid["high|"] &&
+    segOf(by17(12n))?.model_price_id === tierPid["|"],
+  l17.map((l) => [l.amountMinor, segOf(l)]),
 );
 
 await app.close();

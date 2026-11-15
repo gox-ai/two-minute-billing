@@ -100,6 +100,22 @@ export async function listUsageEvents(input: {
     }
     const page = rows.slice(0, input.limit);
     const names = new Set(all.map((m) => m.eventName));
+    // What the credit gate recorded for the page's events (0526); none for most businesses.
+    const [gated] = page.length
+      ? rowsOf<{ x: number }>(
+          await tx.execute(sql`select 1 as x from credit_usage_events
+            where business_id = ${input.businessId} limit 1`),
+        )
+      : [];
+    const credit = gated
+      ? await (
+          await import("@/modules/credits/usage-gate")
+        ).creditUsageOfEvents(
+          tx,
+          input.businessId,
+          page.map((r) => r.id),
+        )
+      : null;
     const data = page.map((r) => {
       const counted = metersCounting(
         {
@@ -111,6 +127,7 @@ export async function listUsageEvents(input: {
       return serializeUsageEvent(r, {
         meters: counted,
         flags: names.has(r.event_name) ? [] : ["no_meter"],
+        credit: credit?.get(r.id),
       });
     });
     const hasMore = rows.length > input.limit;

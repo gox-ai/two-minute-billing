@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/patterns/chip";
 import { Button } from "@/components/ui/button";
 import { actionHeadline, changeSentence, diffFields, type ChangeSentence } from "./labels";
 import { RecordDiff } from "./record-diff";
@@ -74,11 +74,7 @@ export function RecordBlock({
   return (
     <div className="anim-rise min-w-0 rounded-xl border bg-card p-4">
       <div className="mb-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-        {creation ? (
-          <Badge variant="outline" className="text-xs">
-            New
-          </Badge>
-        ) : null}
+        {creation ? <Chip>New</Chip> : null}
         <span>
           {href && block.resource_id ? (
             <Link

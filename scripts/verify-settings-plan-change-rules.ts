@@ -17,6 +17,11 @@ import { createBusiness, createOrganization } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createPrice, createProduct } from "@/modules/catalog/service";
+import { applyCouponToSubscription, createCoupon } from "@/modules/coupons/service";
+import { configureIndiaGst } from "@/modules/tax/service";
+import { issueRefundableCreditNote } from "@/modules/credit-notes/service";
+import { PAST_DUE_DOWNGRADE_MESSAGE } from "@/modules/subscriptions/proration";
+import { loadGeoReference } from "@/platform/geo";
 import { createSubscription } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod, createInvoiceFromLines } from "@/modules/invoicing/service";
 import { createPortalSession } from "@/modules/customer-portal/service";
@@ -90,7 +95,7 @@ const net = (r: any) => (r.proration_invoice?.total_minor ?? 0) - (r.credit_note
 /** A business with the given rules, three plans, and one paid subscription on `start`. */
 async function setup(
   rules?: Record<string, unknown>,
-  opts: { start?: Plan; trial?: boolean } = {},
+  opts: { start?: Plan; trial?: boolean; unpaid?: boolean } = {},
 ) {
   const biz = await createBusiness({
     organizationId: orgId,
@@ -142,19 +147,22 @@ async function setup(
     businessId: biz.id,
     email: `r${Math.random().toString(36).slice(2)}@example.com`,
   });
-  const pm = await vaultPaymentMethod({
-    organizationId: orgId,
-    businessId: biz.id,
-    customer,
-    token: "tok_4242",
-  });
+  // `unpaid`: no payment method, so the term invoice stays open.
+  const pm = opts.unpaid
+    ? null
+    : await vaultPaymentMethod({
+        organizationId: orgId,
+        businessId: biz.id,
+        customer,
+        token: "tok_4242",
+      });
   const created = await createSubscription({
     organizationId: orgId,
     businessId: biz.id,
     customerId: customer.id,
     now: new Date(),
     items: [{ price: price[opts.start ?? "basic"], quantity: 1 }],
-    defaultPaymentMethodId: pm.id,
+    ...(pm ? { defaultPaymentMethodId: pm.id } : {}),
     ...(opts.trial ? { trialDays: 14 } : {}),
   });
   const sub = created.subscription;
@@ -311,15 +319,19 @@ const portal = (token: string, method: "GET" | "POST", url: string, payload?: ob
         first_window: "full",
         on_pause: "skip",
         on_cancel_at_period_end: "grant_started_window",
+        grant_when: "invoice_issued",
+        on_unpaid_cancel: "keep",
       }) && r?.allowances?.on_upgrade === "new_window",
     JSON.stringify({ pc: r?.plan_credits, al: r?.allowances }),
   );
   const options: Array<[string, string[]]> = [
     ["on_upgrade", ["prorated", "next_window", "full"]],
-    ["on_downgrade", ["full", "next_window"]],
+    ["on_downgrade", ["full", "prorated", "next_window"]],
     ["first_window", ["prorated", "next_full_window", "full"]],
     ["on_pause", ["keep_granting", "shift", "skip"]],
     ["on_cancel_at_period_end", ["stop_at_request", "grant_started_window"]],
+    ["grant_when", ["invoice_paid", "invoice_issued"]],
+    ["on_unpaid_cancel", ["void_unused", "keep"]],
   ];
   for (const [key, values] of options)
     for (const v of values) {
@@ -363,7 +375,7 @@ const portal = (token: string, method: "GET" | "POST", url: string, payload?: ob
     other?.plan_credits?.on_pause === "shift" && other?.upgrade_proration === "none",
   );
   for (const [body, label] of [
-    [{ plan_credits: { on_downgrade: "prorated" } }, "on_downgrade=prorated"],
+    [{ plan_credits: { on_downgrade: "customer_chooses" } }, "on_downgrade=customer_chooses"],
     [{ plan_credits: { on_pause: "customer_chooses" } }, "on_pause=customer_chooses"],
     [{ allowances: { on_upgrade: "full" } }, "allowances.on_upgrade=full"],
   ] as const) {
@@ -461,6 +473,531 @@ const portal = (token: string, method: "GET" | "POST", url: string, payload?: ob
       dr.proration_invoice === null &&
       (dr.unbilled_charges?.length ?? 0) > 0,
     JSON.stringify({ p: de.change_policy, inv: dr.proration_invoice }),
+  );
+
+  // A net credit is never queued: under the deferring rule an existing (unset) business
+  // books one credit note now and no unbilled charge.
+  const credit = await setup({ downgrade_timing: "now" }, { start: "pro" });
+  await systemDb
+    .update(businesses)
+    .set({ defaultInvoiceImmediately: false })
+    .where(eq(businesses.id, credit.biz.id));
+  const ce = json(await credit.estimate("basic"));
+  const cr = json(await credit.change("basic"));
+  check(
+    "a net-credit downgrade under the deferring rule books a credit note and no unbilled charge",
+    ce.change_policy?.invoice_immediately === false &&
+      ce.change_policy?.net_credit_documents === null &&
+      ce.total_minor < 0 &&
+      !!cr.credit_note?.id &&
+      cr.proration_invoice === null &&
+      (cr.unbilled_charges?.length ?? 0) === 0,
+    JSON.stringify({ p: ce.change_policy, total: ce.total_minor, cr }),
+  );
+  // The preview default (what the change form preselects) resolves `on_change` first.
+  const over = await setup();
+  await systemDb
+    .update(businesses)
+    .set({
+      defaultInvoiceImmediately: false,
+      unbilledChargesConfig: { on_change: "invoice_immediately" },
+    })
+    .where(eq(businesses.id, over.biz.id));
+  const oe = json(await over.estimate("pro"));
+  const or = json(await over.change("pro"));
+  check(
+    "the estimate's invoice_immediately follows unbilled_charges_config.on_change",
+    oe.change_policy?.invoice_immediately === true &&
+      !!or.proration_invoice?.id &&
+      (or.unbilled_charges?.length ?? 0) === 0,
+    JSON.stringify({ p: oe.change_policy, inv: or.proration_invoice?.id }),
+  );
+}
+
+// ── Net-credit documents (`net_credit_documents`, 2026-11-13) ─────────────────────────
+// Unset (an existing business) keeps one credit note; a business a person creates stores
+// two documents; any business opts in by PATCH; one call overrides either way.
+{
+  const TWO = { downgrade_timing: "now", net_credit_documents: "credit_note_and_invoice" };
+  const changeNotes = async (c: Ctx) =>
+    withTenant(orgId, (tx) =>
+      tx
+        .select()
+        .from(creditNotes)
+        .where(
+          and(
+            eq(creditNotes.customerId, c.customer.id),
+            eq(creditNotes.reasonCode, "subscription_change"),
+          ),
+        ),
+    );
+  const invoiceRow = async (publicId: string) =>
+    (
+      await withTenant(orgId, (tx) =>
+        tx.select().from(invoices).where(eq(invoices.publicId, publicId)),
+      )
+    )[0]!;
+  /** What the change booked, in the estimate's `documents` terms. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const booked = async (c: Ctx, r: any) => {
+    const notes = await changeNotes(c);
+    const sum = (kind: string) =>
+      notes.filter((n) => n.kind === kind).reduce((t, n) => t + Number(n.totalMinor), 0);
+    const inv = r.proration_invoice?.id ? await invoiceRow(r.proration_invoice.id) : null;
+    return {
+      adjustment: sum("adjustment"),
+      refundable: sum("refundable"),
+      invoice: inv ? Number(inv.totalMinor) : 0,
+      inv,
+      notes,
+    };
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const previewed = (e: any) => {
+    const docs: Array<{ type: string; kind?: string; total_minor: number }> = e.documents ?? [];
+    const sum = (type: string, kind?: string) =>
+      docs
+        .filter((d) => d.type === type && (kind ? d.kind === kind : true))
+        .reduce((t, d) => t + d.total_minor, 0);
+    return {
+      adjustment: sum("credit_note", "adjustment"),
+      refundable: sum("credit_note", "refundable"),
+      invoice: sum("invoice"),
+    };
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parity = async (name: string, c: Ctx, e: any, r: any) => {
+    const b = await booked(c, r);
+    const p = previewed(e);
+    check(
+      `${name}: the estimate lists the documents the change books`,
+      p.adjustment === b.adjustment && p.refundable === b.refundable && p.invoice === b.invoice,
+      JSON.stringify({
+        previewed: p,
+        booked: { ...b, inv: undefined, notes: undefined },
+        docs: e.documents,
+      }),
+    );
+    return b;
+  };
+
+  // An existing business (unset) keeps the rule before 2026-11-13: one credit note unless
+  // the change is invoiced immediately; the estimate prices the same documents.
+  const legacy = await setup({ downgrade_timing: "now" }, { start: "pro" });
+  await systemDb
+    .update(businesses)
+    .set({ defaultInvoiceImmediately: false })
+    .where(eq(businesses.id, legacy.biz.id));
+  const le = json(await legacy.estimate("basic"));
+  const lr = json(await legacy.change("basic"));
+  check(
+    "unset net_credit_documents, not invoiced now: one credit note, no invoice (unchanged)",
+    le.change_policy?.net_credit_documents === null &&
+      !!lr.credit_note?.id &&
+      lr.proration_invoice === null &&
+      le.lines?.length === 1,
+    JSON.stringify({ le: le.change_policy, lr }),
+  );
+  await parity("unset, not invoiced now", legacy, le, lr);
+  const legacyNow = await setup({ downgrade_timing: "now" }, { start: "pro" });
+  const lne = json(await legacyNow.estimate("basic"));
+  const lnr = json(await legacyNow.change("basic"));
+  check(
+    "unset net_credit_documents, invoiced now: a credit note and an invoice (unchanged)",
+    lne.change_policy?.invoice_immediately === true &&
+      !!lnr.credit_note?.id &&
+      !!lnr.proration_invoice?.id,
+    JSON.stringify({ lne: lne.change_policy, lnr }),
+  );
+  await parity("unset, invoiced now", legacyNow, lne, lnr);
+  const legacyRead = json(await api("GET", `/v1/businesses/${legacy.biz.publicId}`));
+  check(
+    "an unset business reads net_credit_documents null (not saved)",
+    legacyRead.billing_rules_config?.net_credit_documents === null,
+    JSON.stringify(legacyRead.billing_rules_config?.net_credit_documents),
+  );
+
+  // A business a person creates stores two documents.
+  const fresh = initialBillingRulesConfig({ hasOperator: true }) as Record<string, unknown>;
+  check(
+    "a person's new business stores net_credit_documents credit_note_and_invoice",
+    fresh.net_credit_documents === "credit_note_and_invoice",
+  );
+  const newBiz = await setup({ ...fresh, downgrade_timing: "now" }, { start: "pro" });
+  const ne = json(await newBiz.estimate("basic"));
+  const nr = json(await newBiz.change("basic", { invoice_immediately: false }));
+  const nb = await parity("new business, paid term", newBiz, ne, nr);
+  check(
+    "new business, paid term: a refundable note and a paid invoice that draws it",
+    nb.refundable > 0 &&
+      nb.adjustment === 0 &&
+      nb.inv?.status === "paid" &&
+      nb.notes[0]?.allocatedMinor === nb.inv.totalMinor &&
+      (nr.unbilled_charges?.length ?? 0) === 0,
+    JSON.stringify({ nr, nb: { ...nb, inv: nb.inv?.status, notes: undefined } }),
+  );
+
+  // Opt in by PATCH: the same business moves to two documents.
+  const optIn = await setup({ downgrade_timing: "now" }, { start: "pro" });
+  const patched = json(
+    await api("PATCH", `/v1/businesses/${optIn.biz.publicId}`, {
+      billing_rules_config: { net_credit_documents: "credit_note_and_invoice" },
+    }),
+  ).billing_rules_config;
+  const oe = json(await optIn.estimate("basic"));
+  const or = json(await optIn.change("basic"));
+  check(
+    "opt-in by PATCH: stored, previewed and booked as a credit note and an invoice",
+    patched?.net_credit_documents === "credit_note_and_invoice" &&
+      oe.change_policy?.net_credit_documents === "credit_note_and_invoice" &&
+      !!or.credit_note?.id &&
+      !!or.proration_invoice?.id,
+    JSON.stringify({ patched: patched?.net_credit_documents, or }),
+  );
+  await parity("opt-in", optIn, oe, or);
+  check(
+    "both shapes leave the customer the same net credit",
+    net(or) === net(lr),
+    `${net(or)} vs ${net(lr)}`,
+  );
+  const badDocs = await api("PATCH", `/v1/businesses/${optIn.biz.publicId}`, {
+    billing_rules_config: { net_credit_documents: "netted" },
+  });
+  check("net_credit_documents outside its options → 400", badDocs.statusCode === 400);
+
+  // One call overrides the rule, both ways.
+  const callTwo = await setup({ downgrade_timing: "now" }, { start: "pro" });
+  const cte = json(
+    await callTwo.estimate("basic", { net_credit_documents: "credit_note_and_invoice" }),
+  );
+  const ctr = json(
+    await callTwo.change("basic", { net_credit_documents: "credit_note_and_invoice" }),
+  );
+  check(
+    "per call credit_note_and_invoice on an unset business: two documents",
+    !!ctr.credit_note?.id && !!ctr.proration_invoice?.id,
+    JSON.stringify(ctr),
+  );
+  await parity("per call two", callTwo, cte, ctr);
+  const callOne = await setup(TWO, { start: "pro" });
+  const coe = json(await callOne.estimate("basic", { net_credit_documents: "one_credit_note" }));
+  const cor = json(await callOne.change("basic", { net_credit_documents: "one_credit_note" }));
+  check(
+    "per call one_credit_note on a two-document business: one note, no invoice",
+    !!cor.credit_note?.id && cor.proration_invoice === null && coe.lines?.length === 1,
+    JSON.stringify(cor),
+  );
+  await parity("per call one", callOne, coe, cor);
+  const scheduled = await callOne.change("pro", {
+    timing: "end_of_term",
+    net_credit_documents: "one_credit_note",
+  });
+  check(
+    "a change at the end of the term cannot carry net_credit_documents (400)",
+    scheduled.statusCode === 400 && /net_credit_documents/.test(scheduled.payload),
+    scheduled.payload.slice(0, 200),
+  );
+
+  // Paid term, `downgrade_credit: refund`: the invoice takes its share, the rest goes back.
+  const refund = await setup({ ...TWO, downgrade_credit: "refund" }, { start: "pro" });
+  const rr = json(await refund.change("basic"));
+  check(
+    "paid term, downgrade_credit refund: the invoice takes its share, the rest is refunded",
+    !!rr.proration_invoice?.id &&
+      rr.credit_refunds?.[0]?.refunded_minor ===
+        rr.credit_note?.total_minor - rr.proration_invoice?.total_minor,
+    JSON.stringify(rr),
+  );
+
+  // Unpaid term: an adjustment on the term invoice; the new invoice is due.
+  const unpaid = await setup(TWO, { start: "pro", unpaid: true });
+  const [termInv] = await withTenant(orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.subscriptionId, unpaid.sub.id)),
+  );
+  const ue = json(await unpaid.estimate("basic"));
+  const ur = json(await unpaid.change("basic"));
+  const ub = await parity("unpaid term", unpaid, ue, ur);
+  check(
+    "unpaid term: an adjustment note on the term invoice and an open invoice for the new plan",
+    termInv?.status === "payment_due" &&
+      ub.adjustment > 0 &&
+      ub.refundable === 0 &&
+      ub.notes.every((n) => n.invoiceId === termInv.id) &&
+      ub.inv?.status === "payment_due",
+    JSON.stringify({
+      ur,
+      term: termInv?.status,
+      ub: { ...ub, inv: ub.inv?.status, notes: undefined },
+    }),
+  );
+
+  // Partly paid term: an adjustment for what is owed and a refundable note for what was paid.
+  const partly = await setup(TWO, { start: "pro", unpaid: true });
+  const [partInv] = await withTenant(orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.subscriptionId, partly.sub.id)),
+  );
+  const paidPart = await api(
+    "POST",
+    `/v1/businesses/${partly.biz.publicId}/invoices/${partInv!.publicId}/pay`,
+    {
+      amount_minor: 1000,
+      method: "cash",
+    },
+  );
+  const pe = json(await partly.estimate("basic"));
+  const pr = json(await partly.change("basic"));
+  const pb = await parity("partly paid term", partly, pe, pr);
+  check(
+    "partly paid term: an adjustment and a refundable note, and the new invoice draws the refundable part",
+    paidPart.statusCode === 200 &&
+      pb.adjustment > 0 &&
+      pb.refundable > 0 &&
+      pb.inv?.status === "paid",
+    JSON.stringify({
+      pay: paidPart.statusCode,
+      pr,
+      pb: { ...pb, inv: pb.inv?.status, notes: undefined },
+    }),
+  );
+
+  // Capacity: a 2000 service credit already went back on the 3000 term invoice, so it can
+  // take only 1000 more. Two documents still; the note stops at what the invoice can take.
+  const cap = await setup(TWO, { start: "pro" });
+  const [capInv] = await withTenant(orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.subscriptionId, cap.sub.id)),
+  );
+  await issueRefundableCreditNote({
+    organizationId: orgId,
+    businessId: cap.biz.id,
+    invoicePublicId: capInv!.publicId,
+    items: [{ description: "Service credit", amountMinor: 2000 }],
+    reason: "capacity fixture",
+  });
+  const ke = json(await cap.estimate("basic"));
+  const kr = json(await cap.change("basic"));
+  const kb = await parity("capacity", cap, ke, kr);
+  check(
+    "capacity: no netting — a credit note up to the invoice's capacity, and a paid invoice",
+    !!kr.proration_invoice?.id &&
+      kb.inv?.status === "paid" &&
+      kb.refundable > 0 &&
+      kb.refundable <= 1000,
+    JSON.stringify({ kr, kb: { ...kb, inv: kb.inv?.status, notes: undefined } }),
+  );
+
+  // A net debit (an upgrade) is not affected by the setting.
+  const upA = await setup();
+  const upB = await setup({ net_credit_documents: "credit_note_and_invoice" });
+  const ua = json(await upA.change("pro", { invoice_immediately: true }));
+  const ub2 = json(await upB.change("pro", { invoice_immediately: true }));
+  check(
+    "an upgrade books the same documents under either net_credit_documents",
+    !!ua.proration_invoice?.id &&
+      !!ub2.proration_invoice?.id &&
+      ua.proration_invoice.total_minor === ub2.proration_invoice.total_minor &&
+      (ua.credit_note?.total_minor ?? 0) === (ub2.credit_note?.total_minor ?? 0),
+    JSON.stringify({ ua, ub2 }),
+  );
+}
+
+// ── block_downgrade_when_past_due ─────────────────────────────────────────────────────
+{
+  const guarded = await setup(
+    { downgrade_timing: "customer_chooses", block_downgrade_when_past_due: true },
+    { start: "pro", unpaid: true },
+  );
+  const refused = await guarded.change("basic", { timing: "now" });
+  check(
+    "guard on + a past-due invoice: a downgrade now is refused (400) and nothing changes",
+    refused.statusCode === 400 &&
+      json(refused).error?.message === PAST_DUE_DOWNGRADE_MESSAGE &&
+      (await guarded.planPrice()) === guarded.price.pro.id,
+    `${refused.statusCode} ${refused.payload.slice(0, 200)}`,
+  );
+  const later = await guarded.change("basic", { timing: "end_of_term" });
+  check(
+    "guard on: the same downgrade at the end of the term is allowed",
+    later.statusCode === 200 && !!json(later).scheduled_change?.id,
+    `${later.statusCode} ${later.payload.slice(0, 200)}`,
+  );
+  const up = await guarded.change("pro", { timing: "now" });
+  check(
+    "guard on: a change that credits nothing is not refused",
+    up.statusCode === 200,
+    up.payload.slice(0, 200),
+  );
+  const open = await setup({ downgrade_timing: "now" }, { start: "pro", unpaid: true });
+  const allowed = await open.change("basic");
+  check(
+    "guard off (unset) + a past-due invoice: the downgrade applies",
+    allowed.statusCode === 200 && !!json(allowed).credit_note?.id,
+    `${allowed.statusCode} ${allowed.payload.slice(0, 200)}`,
+  );
+  const stored = json(
+    await api("PATCH", `/v1/businesses/${open.biz.publicId}`, {
+      billing_rules_config: { block_downgrade_when_past_due: true },
+    }),
+  ).billing_rules_config;
+  check(
+    "PATCH stores block_downgrade_when_past_due",
+    stored?.block_downgrade_when_past_due === true,
+    JSON.stringify(stored?.block_downgrade_when_past_due),
+  );
+}
+
+// ── Net credit under India GST: each document carries its own tax ─────────────────────
+{
+  await loadGeoReference();
+  const gBiz = await createBusiness({
+    organizationId: orgId,
+    name: "GST Rules",
+    defaultCurrency: "INR",
+    livemode: "test",
+    billingRulesConfig: { net_credit_documents: "credit_note_and_invoice" },
+  });
+  const g = { organizationId: orgId, businessId: gBiz.id };
+  await configureIndiaGst({
+    ...g,
+    homeStateCode: "TN",
+    cgstBps: 900,
+    sgstBps: 900,
+    registrationNumber: "33AAFCN5032R1Z6",
+  });
+  const mkPlan = async (name: string, amountMinor: number) => {
+    const product = await createProduct({ ...g, name, kind: "plan" });
+    const price = await createPrice({
+      ...g,
+      productId: product.id,
+      type: "recurring",
+      model: "flat",
+      currency: "INR",
+      amountMinor,
+      interval: "month",
+    });
+    return { product, price };
+  };
+  const pro = await mkPlan("Pro", 999900);
+  const basic = await mkPlan("Basic", 399900);
+  // 10% off the Pro plan only: the old plan's invoice is discounted, the new plan's is not.
+  await createCoupon({
+    ...g,
+    code: "PRO10",
+    kind: "percentage",
+    percentOffBps: 1000,
+    durationType: "forever",
+    applyOn: "each_specified_item",
+    itemConstraints: [
+      { itemKind: "plan", constraintType: "specific", productIds: [pro.product.publicId] },
+    ],
+  });
+  const cus = await createCustomer({
+    ...g,
+    email: `gst${Date.now()}@example.com`,
+    address: { line1: "1 Mount Rd", city: "Chennai", country: "IN", stateCode: "TN" } as never,
+  } as never);
+  const pm = await vaultPaymentMethod({ ...g, customer: cus, token: "tok_4242" });
+  const { subscription, items } = await createSubscription({
+    ...g,
+    customerId: cus.id,
+    now: new Date(),
+    items: [{ price: pro.price, quantity: 1 }],
+    defaultPaymentMethodId: pm.id,
+  });
+  await applyCouponToSubscription({
+    ...g,
+    subscriptionId: subscription.id,
+    code: "PRO10",
+    now: new Date(),
+  });
+  const { invoice: termInv } = await billSubscriptionPeriod({
+    ...g,
+    subscription,
+    periodStart: subscription.currentPeriodStart!,
+    periodEnd: subscription.currentPeriodEnd!,
+  });
+  const base = `/v1/businesses/${gBiz.publicId}`;
+  const body = { changes: [{ item: items[0]!.publicId, price: basic.price.publicId }] };
+  const ge = json(
+    await api("POST", `${base}/subscriptions/${subscription.publicId}/estimate`, body),
+  );
+  // Booked at the estimate's instant, so an exact-time proration credits the same time.
+  const gr = json(
+    await api("POST", `${base}/subscriptions/${subscription.publicId}/change`, {
+      ...body,
+      priced_at: ge.priced_at,
+      quote: ge.quote,
+    }),
+  );
+  const term = json(await api("GET", `${base}/invoices/${termInv.publicId}`));
+  const note = gr.credit_note?.id
+    ? json(await api("GET", `${base}/credit_notes/${gr.credit_note.id}`))
+    : {};
+  const inv = gr.proration_invoice?.id
+    ? json(await api("GET", `${base}/invoices/${gr.proration_invoice.id}`))
+    : {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const names = (rows: any[] | undefined, key: string) =>
+    (rows ?? []).map((t) => String(t[key])).sort();
+  const half = (bps: number, base: number) => Math.round((base * bps) / 10000);
+  const termTax = (term.taxes ?? []).reduce(
+    (s: number, t: { amount_minor: number }) => s + t.amount_minor,
+    0,
+  );
+  const termTaxable = term.total_minor - termTax;
+  const noteTax = (note.taxes ?? []).reduce(
+    (s: number, t: { amount_minor: number }) => s + t.amount_minor,
+    0,
+  );
+  const noteNet = note.total_minor - noteTax;
+  console.log(
+    `GST: term ${term.total_minor} tax ${termTax} · note ${note.total_minor} tax ${noteTax} ${JSON.stringify(note.taxes)} · invoice ${inv.total_minor} ${JSON.stringify(inv.taxes)}`,
+  );
+  check(
+    "GST net credit: a credit note and an invoice",
+    !!note.id && !!inv.id && gr.proration_invoice?.status === "paid",
+    JSON.stringify(gr),
+  );
+  check(
+    "GST: the credit note reverses CGST + SGST at the term invoice's own rate",
+    names(note.taxes, "description").length === 2 &&
+      names(note.taxes, "description")[0]!.startsWith("CGST") &&
+      names(note.taxes, "description")[1]!.startsWith("SGST") &&
+      note.taxes[0].amount_minor === note.taxes[1].amount_minor &&
+      // The note's tax is the term invoice's tax, in proportion to the net credited.
+      Math.abs(noteTax * termTaxable - termTax * noteNet) <= termTaxable * 2,
+    JSON.stringify({ note, termTax, termTaxable }),
+  );
+  // The note credits the unused list amount at the old plan's 10% discount (its net is
+  // stated after the discount), where the new invoice's base carries none.
+  const unusedList = -(ge.lines ?? [])
+    .filter((l: { amount_minor: number }) => l.amount_minor < 0)
+    .reduce((s: number, l: { amount_minor: number }) => s + l.amount_minor, 0);
+  check(
+    "GST: the credit note carries the old plan's 10% discount",
+    unusedList > 0 && Math.abs(noteNet - (unusedList * 9) / 10) <= 1,
+    JSON.stringify({ noteNet, unusedList }),
+  );
+  check(
+    "GST: the new invoice carries CGST 9% + SGST 9% on the new plan, with no discount",
+    names(inv.taxes, "name").length === 2 &&
+      (inv.taxes ?? []).every(
+        (t: { rate_bps: number; amount_minor: number }) =>
+          t.rate_bps === 900 && t.amount_minor === half(900, inv.subtotal_minor),
+      ) &&
+      (inv.discount_minor ?? 0) === 0,
+    JSON.stringify({ sub: inv.subtotal_minor, taxes: inv.taxes, d: inv.discount_minor }),
+  );
+  check(
+    "GST: the estimate equals the credit note, the invoice and its tax rows",
+    ge.credit_note_total_minor === note.total_minor &&
+      ge.invoice_total_minor === inv.total_minor &&
+      ge.tax_minor ===
+        (inv.taxes ?? []).reduce((s: number, t: { amount_minor: number }) => s + t.amount_minor, 0),
+    JSON.stringify({
+      ge: [ge.credit_note_total_minor, ge.invoice_total_minor, ge.tax_minor],
+      n: note.total_minor,
+      i: inv.total_minor,
+    }),
   );
 }
 
@@ -562,6 +1099,16 @@ const portal = (token: string, method: "GET" | "POST", url: string, payload?: ob
   );
 
   const e = await setup({ downgrade_timing: "end_of_term" }, { start: "pro" });
+  // The preview prices what `/change` will do: the term end, so no credit now.
+  const ee = json(await e.estimate("basic"));
+  check(
+    "downgrade_timing=end_of_term: the estimate prices the term end (no credit now)",
+    new Date(ee.priced_at).getTime() === e.sub.currentPeriodEnd!.getTime() &&
+      ee.total_minor >= 0 &&
+      !ee.credit_note_total_minor &&
+      !ee.lines?.some((l: { amount_minor: number }) => l.amount_minor < 0),
+    JSON.stringify(ee),
+  );
   check(
     "downgrade_timing=end_of_term: now → 400",
     (await e.change("basic", { timing: "now" })).statusCode === 400,
@@ -569,6 +1116,21 @@ const portal = (token: string, method: "GET" | "POST", url: string, payload?: ob
   check(
     "downgrade_timing=end_of_term: a scheduled change cannot carry prorate → 400",
     (await e.change("basic", { prorate: true })).statusCode === 400,
+  );
+  // Hosted checkout: the view says Confirm will refuse, so the page shows why, not a credit.
+  const eSession = await createCheckoutSession({
+    organizationId: orgId,
+    businessId: e.biz.id,
+    priceId: e.price.basic.publicId,
+    mode: "change",
+    subscriptionId: e.sub.publicId,
+  });
+  const eView = await getCheckoutView((await resolveCheckoutSession(eSession.token))!);
+  check(
+    "downgrade_timing=end_of_term: the change-mode checkout view carries `blocked` (change_timing)",
+    eView?.change?.blocked?.code === "change_timing" &&
+      /end of the term/.test(eView?.change?.blocked?.message ?? ""),
+    JSON.stringify(eView?.change?.blocked),
   );
   const eo = json(await e.change("basic"));
   check(

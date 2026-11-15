@@ -48,9 +48,27 @@ export type WebhookEndpointMode =
   | "url_only"
   | "not_applicable";
 
+/**
+ * A deep link to one kind of object on the gateway's own dashboard. Declared only for an id
+ * shape whose URL the gateway's docs or a live URL confirmed; an id that matches no link stays
+ * plain text, never a link to a 404.
+ */
+export interface DashboardLink {
+  /** What the id names. */
+  object: "payment" | "setup" | "mandate" | "order" | "refund" | "customer" | "subscription";
+  /** Anchored regex source the stored id must match. */
+  idPattern: string;
+  /** Per business mode; `{id}` is the URL-encoded id. */
+  url: { live: string; test: string };
+  /** Where the URL was confirmed, or `false` while it is still being checked. */
+  confirmedBy: string | false;
+}
+
 export interface GatewayDefinition {
   key: ProviderKey;
   displayName: string;
+  /** Deep links for the ids we store, per shape. Empty: no confirmed URL yet. */
+  dashboardLinks: readonly DashboardLink[];
   /** Extra line for the dashboard's gateway directory. */
   note?: string;
   /** Moves no real money; refused on a live business. */
@@ -298,6 +316,7 @@ const codes = (list: string): readonly string[] => list.trim().split(/\s+/);
 export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   tmtest: {
     key: "tmtest",
+    dashboardLinks: [],
     displayName: "TM Test Gateway",
     note: "A simulated gateway for testing. No money moves.",
     simulated: true,
@@ -321,6 +340,30 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
 
   stripe: {
     key: "stripe",
+    dashboardLinks: [
+      {
+        // A charge and a payment intent share one page. No `acct_…` in the URL: it opens in
+        // whichever account the operator is signed into. A refund (`re_…`) has no page.
+        object: "payment",
+        idPattern: "^(pi|ch)_[A-Za-z0-9]+$",
+        url: {
+          live: "https://dashboard.stripe.com/payments/{id}",
+          test: "https://dashboard.stripe.com/test/payments/{id}",
+        },
+        confirmedBy:
+          "Stripe's own `request_log_url` in our gateway request logs (mode in the path)",
+      },
+      {
+        object: "setup",
+        idPattern: "^seti_[A-Za-z0-9]+$",
+        url: {
+          live: "https://dashboard.stripe.com/setup_intents/{id}",
+          test: "https://dashboard.stripe.com/test/setup_intents/{id}",
+        },
+        confirmedBy:
+          "a live setup intent, 2026-11-15: the path opened it (Stripe adds the account id)",
+      },
+    ],
     // The Payment Element shows its own ACH mandate text.
     achAuthorization: "gateway",
     displayName: "Stripe",
@@ -387,6 +430,21 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
 
   paypal: {
     key: "paypal",
+    dashboardLinks: [
+      {
+        // A CAPTURE id only: PayPal's docs give a transaction id 17 characters and an order
+        // id 19, and an order id opens nothing in Activity.
+        object: "payment",
+        idPattern: "^[A-Za-z0-9]{17}$",
+        url: {
+          live: "https://www.paypal.com/activity/payment/{id}",
+          test: "https://www.sandbox.paypal.com/activity/payment/{id}",
+        },
+        // ⚠️ PayPal publishes no per-transaction deep link (help and developer docs checked
+        // 2026-11-15: they say to search Activity); the path is not yet confirmed.
+        confirmedBy: false,
+      },
+    ],
     displayName: "PayPal",
     credentialFields: [
       {
@@ -434,6 +492,18 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
 
   razorpay: {
     key: "razorpay",
+    dashboardLinks: [
+      {
+        // No mode in the URL: the dashboard's own Test/Live switch decides.
+        object: "payment",
+        idPattern: "^pay_[A-Za-z0-9]+$",
+        url: {
+          live: "https://dashboard.razorpay.com/app/payments/{id}",
+          test: "https://dashboard.razorpay.com/app/payments/{id}",
+        },
+        confirmedBy: "the dashboard's payment page, linked since 2026-09-14",
+      },
+    ],
     displayName: "Razorpay",
     credentialFields: [
       {
@@ -502,6 +572,29 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
 
   gocardless: {
     key: "gocardless",
+    dashboardLinks: [
+      {
+        object: "payment",
+        idPattern: "^PM[0-9A-Z]+$",
+        url: {
+          live: "https://manage.gocardless.com/payments/{id}",
+          test: "https://manage-sandbox.gocardless.com/payments/{id}",
+        },
+        confirmedBy:
+          "GoCardless's own WooCommerce gateway, get_transaction_url_format() (github.com/gocardless/woocommerce-gateway-gocardless), read 2026-11-15",
+      },
+      {
+        object: "mandate",
+        idPattern: "^MD[0-9A-Z]+$",
+        url: {
+          live: "https://manage.gocardless.com/mandates/{id}",
+          test: "https://manage-sandbox.gocardless.com/mandates/{id}",
+        },
+        confirmedBy:
+          "GoCardless's own WooCommerce gateway, get_mandate_url_format() (github.com/gocardless/woocommerce-gateway-gocardless), read 2026-11-15",
+      },
+      // No official page for a refund (`RF…`) or a billing request (`BRQ…`).
+    ],
     // GoCardless's hosted page shows and records the mandate.
     achAuthorization: "gateway",
     displayName: "GoCardless",
@@ -626,6 +719,9 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   braintree: {
     key: "braintree",
+    // The Control Panel URL carries the merchant id (/merchants/{merchant}/transactions/{id},
+    // per Braintree Auth's reference); a template here holds only the id.
+    dashboardLinks: [],
     displayName: "Braintree",
     // No Apple Pay: Braintree has no hosted payment page, and its Apple Pay on the web needs
     // its own association file at a path our storefront domain serves for another gateway.
@@ -710,6 +806,8 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   cashfree: {
     key: "cashfree",
+    // No official per-object link found; our charge ids are composites (`sub:…`, `ord:…:…`) anyway.
+    dashboardLinks: [],
     displayName: "Cashfree",
     note: "India. UPI Autopay, eNACH and card mandates in INR, and card mandates in USD and EUR. Pay now also takes cards in USD, EUR, GBP, AED and JPY.",
     credentialFields: [
@@ -788,6 +886,20 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   adyen: {
     key: "adyen",
+    dashboardLinks: [
+      {
+        // A refund's pspReference has the same shape; Adyen shows no page for it, so it may
+        // open a search result rather than the refund.
+        object: "payment",
+        idPattern: "^[A-Z0-9]{16}$",
+        url: {
+          live: "https://ca-live.adyen.com/ca/ca/accounts/showTx.shtml?pspReference={id}",
+          test: "https://ca-test.adyen.com/ca/ca/accounts/showTx.shtml?pspReference={id}",
+        },
+        confirmedBy:
+          "Adyen's own Magento plugin, Helper/Data.php getPspReferenceSearchUrl() (github.com/Adyen/adyen-magento2), read 2026-11-15",
+      },
+    ],
     displayName: "Adyen",
     note: "Cards, in the currencies that your Adyen merchant account accepts, and SEPA Direct Debit in EUR. Pay now also takes Google Pay and Apple Pay when you add them in Adyen.",
     credentialFields: [
@@ -870,6 +982,8 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   checkoutcom: {
     key: "checkoutcom",
+    // No official per-object link found: the docs name only Payments > All payments.
+    dashboardLinks: [],
     displayName: "Checkout.com",
     // Apple Pay waits for live proof (`live-proof-pending.json`). Restore its text when it lands.
     note: "Cards. Pay now also takes Google Pay when Checkout.com enables it for your account. Apple Pay is coming soon.",
@@ -945,6 +1059,8 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   authorizenet: {
     key: "authorizenet",
+    // No official per-object link found: the help pages say to select the transaction id.
+    dashboardLinks: [],
     // eCheck: the merchant must capture the payer's authorization (NACHA WEB).
     achAuthorization: "ours",
     displayName: "Authorize.net",
@@ -1010,6 +1126,20 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   square: {
     key: "square",
+    dashboardLinks: [
+      {
+        // A payment id only; a refund id is `<payment id>_<suffix>`.
+        object: "payment",
+        idPattern: "^[A-Za-z0-9]{20,40}$",
+        url: {
+          live: "https://squareup.com/dashboard/sales/transactions/{id}",
+          test: "https://squareupsandbox.com/dashboard/sales/transactions/{id}",
+        },
+        // Square's retired V1Payment.payment_url names a dashboard detail page; the path itself
+        // is from WooCommerce's Square plugin, not from Square.
+        confirmedBy: false,
+      },
+    ],
     // The Web Payments SDK shows its own ACH text, and Square forbids extra text.
     achAuthorization: "gateway",
     displayName: "Square",
@@ -1066,6 +1196,9 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   mollie: {
     key: "mollie",
+    // The dashboard URL carries the organization id (`_links.dashboard` on a payment); a
+    // template here holds only the id.
+    dashboardLinks: [],
     displayName: "Mollie",
     note: "Cards, SEPA Direct Debit and PayPal. Pay now also offers every other method that you activate in Mollie.",
     credentialFields: [
@@ -1123,6 +1256,8 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   payu: {
     key: "payu",
+    // No official per-object link found: the docs say to open Track > Transactions.
+    dashboardLinks: [],
     displayName: "PayU",
     note: "India. Card, UPI Autopay and net banking mandates. One-time payments use every method enabled on your PayU account. INR only. PayU must enable recurring payments (standing instructions) on your account. The connection check cannot see if they did.",
     credentialFields: [
@@ -1197,6 +1332,8 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
   },
   cybersource: {
     key: "cybersource",
+    // No official per-object link found: the Business Center docs say to select the Request ID.
+    dashboardLinks: [],
     displayName: "CyberSource",
     note: "Cards. Bank accounts (eCheck) need the eCheck service on the CyberSource account.",
     credentialFields: [
@@ -1248,6 +1385,17 @@ export const REAL_GATEWAY_KEYS = GATEWAY_KEYS.filter((k) => !GATEWAYS[k].simulat
   ProviderKey,
   ...ProviderKey[],
 ];
+
+/** A gateway's `dashboard_links`, as the catalogue route serves them. */
+export function serializeDashboardLinks(links: readonly DashboardLink[]) {
+  return links.map((l) => ({
+    object: l.object,
+    id_pattern: l.idPattern,
+    live_url: l.url.live,
+    test_url: l.url.test,
+    confirmed: l.confirmedBy !== false,
+  }));
+}
 
 export function isGatewayKey(key: string | null | undefined): key is ProviderKey {
   return key != null && Object.hasOwn(GATEWAYS, key);

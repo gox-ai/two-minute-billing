@@ -96,6 +96,7 @@ export function Combobox({
   onSearchChange,
   selectedLabel,
   loading = false,
+  autoComplete,
 }: {
   name?: string;
   options: ComboboxOption[];
@@ -126,6 +127,12 @@ export function Combobox({
   selectedLabel?: string;
   /** A server search is in flight. */
   loading?: boolean;
+  /**
+   * Browser autofill token (`billing country`). Autofill cannot reach a button, so an
+   * unnamed capture input takes the filled text and selects the option whose value,
+   * label or keyword matches it — later, if the options have not loaded yet.
+   */
+  autoComplete?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -164,6 +171,31 @@ export function Combobox({
     return m;
   }, [options]);
 
+  /** The option a filled text names: value, then label, then a keyword (case-insensitive). */
+  const optionFor = React.useCallback(
+    (text: string) => {
+      const q = text.trim().toLowerCase();
+      if (!q) return undefined;
+      return (
+        options.find((o) => o.value.toLowerCase() === q) ??
+        options.find((o) => o.label.toLowerCase() === q) ??
+        options.find((o) => (o.keywords ?? "").toLowerCase().split(/\s+/).includes(q))
+      );
+    },
+    [options],
+  );
+  const [filled, setFilled] = React.useState("");
+  React.useEffect(() => {
+    if (!filled) return;
+    const hit = optionFor(filled);
+    if (!hit) return;
+    setFilled("");
+    if (hit.value !== real) commit(hit.value);
+    // `commit` and `real` are read at the moment the options arrive; re-running on them
+    // would re-apply a fill the person has since changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filled, optionFor]);
+
   const selected = options.find((o) => o.value === real);
   const triggerLabel = selected?.label ?? (real ? selectedLabel : undefined);
 
@@ -188,6 +220,16 @@ export function Combobox({
         )
       ) : null}
 
+      {autoComplete ? (
+        <input
+          autoComplete={autoComplete}
+          tabIndex={-1}
+          aria-hidden="true"
+          defaultValue=""
+          onChange={(e) => setFilled(e.target.value)}
+          className="pointer-events-none absolute bottom-0 left-3 size-px opacity-0"
+        />
+      ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           id={triggerId}

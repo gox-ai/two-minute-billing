@@ -43,7 +43,7 @@ export const SECTIONS: Array<{
     id: "email_sending",
     label: "Email sending",
     description:
-      "Sender details and the SMTP or Amazon SES settings, with their secrets. Not the templates.",
+      "Sender details and the SMTP or Amazon SES settings. Not the passwords, secret keys or templates.",
     defaultOn: false,
   },
 ];

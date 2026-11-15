@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/api";
+import { listGatewayAccounts } from "@/lib/api/gateways";
 import { listEventsForBusiness } from "@/lib/api/developer";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
@@ -27,11 +28,15 @@ export default async function BusinessEventsPage({
   await requirePermission("events:view", "developer");
 
   let businesses, page;
+  let gatewayNames: Record<string, string> = {};
   try {
-    [businesses, page] = await Promise.all([
+    let accounts;
+    [businesses, page, accounts] = await Promise.all([
       listBusinesses(),
       listEventsForBusiness(biz, { limit: PAGE_SIZE }),
+      listGatewayAccounts(biz).catch(() => null),
     ]);
+    gatewayNames = Object.fromEntries((accounts?.data ?? []).map((a) => [a.id, a.label]));
   } catch (e) {
     return (
       <>
@@ -57,6 +62,7 @@ export default async function BusinessEventsPage({
           description: "Audit every domain event emitted for this business.",
         }}
         biz={biz}
+        gatewayNames={gatewayNames}
         rows={page.data}
         total={page.total ?? page.data.length}
         hasMore={page.has_more}

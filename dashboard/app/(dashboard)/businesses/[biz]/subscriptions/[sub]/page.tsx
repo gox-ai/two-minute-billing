@@ -1,3 +1,5 @@
+import { isApiNotFound, businessLabel } from "@/lib/api";
+import { notFound } from "next/navigation";
 import { billingRules, resetRules } from "@/lib/billing-rules";
 import type { PriceGrantsCredit } from "@/lib/credits";
 import { RemoveScheduledCancellationButton } from "@/components/subscriptions/remove-scheduled-cancellation";
@@ -34,12 +36,16 @@ import { CustomerHistory } from "@/components/customers/customer-history";
 import { cursorSource, HISTORY_PAGE } from "@/lib/cursor-source";
 import { Paged, PagedFooter, PagedItems } from "@/components/patterns/pager";
 import { loadInvoiceTimelines, unpaidInvoices } from "@/components/invoices/invoice-timeline";
-import { removeDiscountAction, deleteSubscriptionAction } from "@/app/actions";
+import {
+  removeDiscountAction,
+  deleteSubscriptionAction,
+  cancelPendingChangeAction,
+} from "@/app/actions";
 import { requirePermission, allows } from "@/lib/session";
-import { currencyFlag } from "@/lib/countries";
 import { PageHeader } from "@/components/page-header";
 import { PaymentMethodRow } from "@/components/payments/payment-method-row";
 import { StatusChip, Chip, IdChip } from "@/components/patterns/chip";
+import { plural, quantityLabel } from "@/lib/labels";
 import { RailLink } from "@/components/patterns/action-rail";
 import {
   Facts,
@@ -100,6 +106,7 @@ import {
   SkippedRenewals,
   type RenewalOption,
 } from "@/components/subscriptions/skip-renewal";
+import { RestartLinkDialog } from "@/components/subscriptions/restart-link-dialog";
 import { resolveResumeDefaults } from "@/lib/api/business-settings";
 import { getTimeTravel } from "@/lib/api/time-travel";
 import type { PlanAddonRule } from "@/lib/api/subscriptions";
@@ -149,6 +156,8 @@ export default async function SubscriptionDetail({
   const isManager = allows(user, "subscriptions:manage", "manager");
   // Skipping a renewal is an ops action, like pause.
   const isOps = allows(user, "subscriptions:lifecycle", "ops");
+  const canSendCheckout = allows(user, "checkout_sessions:manage", "ops");
+  const canEmail = allows(user, "emails:manage", "admin");
 
   let businesses, sub, invoices, prices, products, coupons, scheduled, unbilled, entitlements;
   let customer, paymentMethods, transactions, creditNotes, events, emails;
@@ -206,11 +215,9 @@ export default async function SubscriptionDetail({
     renewalEstimate = await getRenewalEstimate(biz, subId)
       .then((r) => r.estimate)
       .catch(() => null);
-    // Only for a metered item. Usage fields are fixed after create, so the catalog flag
-    // is the snapshot's.
-    const meteredPrices = new Set(prices.data.filter((p) => p.metered).map((p) => p.id));
-    if ((sub.items ?? []).some((it) => meteredPrices.has(it.price)))
-      usage = await getCurrentUsage(biz, subId).catch(() => null);
+    // Every subscription: a meter with a credit cost bills its overage with no metered item.
+    // The card shows only when there is usage (`hasUsage`).
+    usage = await getCurrentUsage(biz, subId).catch(() => null);
     // Edit price on items that bill from the model price list (per-customer selling price).
     const listPrices_ = prices.data.filter((p) => isListSource(p.amount_source));
     const listItems = (sub.items ?? []).filter(
@@ -239,18 +246,22 @@ export default async function SubscriptionDetail({
     // Build plan→addon/charge applicability rules for trigger_charge resolution.
     rules.push(...(await listPlanAddonRules(biz, products.data)));
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
       <>
         <PageHeader
           title="Subscription"
           breadcrumbs={[
             { label: "Businesses", href: "/" },
-            { label: biz, href: `/businesses/${biz}` },
+            { label: await businessLabel(biz), href: `/businesses/${biz}` },
             { label: "Subscription" },
           ]}
         />
         <ErrorState
-          description={<span className="font-mono text-xs">{(e as Error).message}</span>}
+          error={e}
+          thing="subscription"
+          back={{ label: "View subscriptions", href: `/businesses/${biz}/subscriptions` }}
+          retry
         />
       </>
     );
@@ -358,7 +369,7 @@ export default async function SubscriptionDetail({
         // duration: a `repeating` coupon two periods in has three left, not five.
         detail:
           sub.discount.remaining_periods != null
-            ? `${sub.discount.remaining_periods} period(s) remaining`
+            ? `${plural(sub.discount.remaining_periods, "period")} remaining`
             : sub.discount.source === "manual"
               ? "Applicable forever"
               : discountCoupon
@@ -575,7 +586,10 @@ export default async function SubscriptionDetail({
 
   // Unpaid invoices, oldest first. The oldest drives the retry line; the track draws
   // up to two of them, each with its own declined attempts and next retry.
-  const unpaid = unpaidInvoices(subInvoices);
+  // A held change's invoice (`apply_when_paid`) is shown with the change, not as a debt.
+  const heldInvoiceId = sub.pending_change?.invoice ?? null;
+  const unpaid = unpaidInvoices(subInvoices).filter((i) => i.id !== heldInvoiceId);
+  const heldInvoice = heldInvoiceId ? subInvoices.find((i) => i.id === heldInvoiceId) : undefined;
   const oldestUnpaid = unpaid[0] ?? null;
   // Each unpaid invoice's payments and dunning, in the invoice page's words (1–2 only).
   const invoiceTracks = await loadInvoiceTimelines(biz, unpaid);
@@ -646,7 +660,7 @@ export default async function SubscriptionDetail({
             description="This subscription's plan grants no features. Add features to the plan in the catalog."
           />
         ) : (
-          <Table>
+          <Table phone="stack" className="[--phone-row-x:0]">
             <TableHeader>
               <TableRow>
                 <TableHead>Feature</TableHead>
@@ -663,8 +677,11 @@ export default async function SubscriptionDetail({
                     {e.feature_key}
                   </TableCell>
                   <TableCell className="tabular-nums">
-                    {entitlementValue(e.value)}
-                    {e.unit ? <span className="text-muted-foreground"> {e.unit}</span> : null}
+                    {e.unit &&
+                    typeof e.value !== "boolean" &&
+                    !/^(true|false)$/.test(String(e.value))
+                      ? quantityLabel(String(e.value), e.unit)
+                      : entitlementValue(e.value)}
                   </TableCell>
                   <TableCell>
                     <StatusChip status={e.source} />
@@ -890,7 +907,6 @@ export default async function SubscriptionDetail({
               </Link>
             </span>,
             <Chip key="cur" tone="gray">
-              {currencyFlag(sub.currency) ? `${currencyFlag(sub.currency)} ` : ""}
               {sub.currency}
             </Chip>,
             sub.billing_period_unit
@@ -933,9 +949,10 @@ export default async function SubscriptionDetail({
                 />
               ) : null}
               {/* A CANCELLED subscription reactivates through the edit screen, which
-                  previews the invoice the fresh term raises — never a one-click charge. */}
+                  previews the invoice the fresh term raises — never a one-click charge.
+                  Edit is outline: it is not the money action (the unpaid card's Collect is). */}
               {isManager && (active || sub.status === "cancelled") ? (
-                <Button asChild>
+                <Button asChild variant={sub.status === "cancelled" ? "default" : "outline"}>
                   <Link href={`/businesses/${biz}/subscriptions/${sub.id}/change`}>
                     {sub.status === "cancelled" ? "Reactivate subscription" : "Edit subscription"}
                   </Link>
@@ -968,6 +985,18 @@ export default async function SubscriptionDetail({
                   ) : null}
                   {isOps && renewalOptions.length > 0 ? (
                     <SkipRenewalDialog biz={biz} sub={sub.id} renewals={renewalOptions} />
+                  ) : null}
+                  {/* Ended: a checkout the customer pays on restarts it (Reactivate charges now). */}
+                  {canSendCheckout && sub.status === "cancelled" ? (
+                    <RestartLinkDialog
+                      biz={biz}
+                      sub={sub.id}
+                      defaultPrice={
+                        bizRow?.storefront_config?.restart_price === "keep" ? "keep" : "current"
+                      }
+                      customerEmail={customer?.email ?? null}
+                      canEmail={canEmail}
+                    />
                   ) : null}
                   {/* `changeTermEnd` refuses anything but a stored `active` status, which
                       `non_renewing` is; a trial's term end IS its trial end. */}
@@ -1090,6 +1119,32 @@ export default async function SubscriptionDetail({
               : null
           }
           invoiceTracks={invoiceTracks}
+          pending={
+            sub.pending_change
+              ? {
+                  change: sub.pending_change,
+                  number: heldInvoice?.number ?? null,
+                  attempted: (heldInvoice?.attempt_count ?? 0) > 0,
+                  collectable: isManager,
+                  cancel: isManager ? (
+                    <ActionButton
+                      resultAction={cancelPendingChangeAction}
+                      fields={{ biz, sub: sub.id }}
+                      label="Cancel the change"
+                      size="sm"
+                      confirm={{
+                        title: "Cancel the change?",
+                        description:
+                          "We void its invoice. The subscription stays as it is. You cannot undo this.",
+                        confirmLabel: "Cancel the change",
+                        cancelLabel: "Keep it",
+                        destructive: true,
+                      }}
+                    />
+                  ) : null,
+                }
+              : null
+          }
           autoCollection={(sub.auto_collection ?? customer?.auto_collection ?? "on") !== "off"}
           pms={pmList}
           firstTried={chargedPM}
@@ -1400,12 +1455,14 @@ export default async function SubscriptionDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table>
+                  <Table phone="stack">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Description</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead className="pr-5 text-right">Amount</TableHead>
+                        <TableHead phone="aside" className="pr-5 text-right">
+                          Amount
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1427,7 +1484,7 @@ export default async function SubscriptionDetail({
                     <div className="flex">
                       <span className="text-muted-foreground">Total charged, excl. tax</span>
                       <span className="ml-auto font-semibold tabular-nums">
-                        {money(oneTimeTotalMinor, sub.currency)} {sub.currency}
+                        {money(oneTimeTotalMinor, sub.currency)}
                       </span>
                     </div>
                     {oneTimeTruncated ? (
@@ -1468,13 +1525,15 @@ export default async function SubscriptionDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table>
+                  <Table phone="stack">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Date</TableHead>
-                        <TableHead>Description</TableHead>
+                        <TableHead phone="title">Description</TableHead>
                         <TableHead>Invoice</TableHead>
-                        <TableHead className="pr-5 text-right">Amount</TableHead>
+                        <TableHead phone="aside" className="pr-5 text-right">
+                          Amount
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>

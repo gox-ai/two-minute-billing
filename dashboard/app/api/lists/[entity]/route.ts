@@ -197,13 +197,15 @@ const ORG_FETCHERS: Record<
     return { ...(await listDeliveries(scope.endpoint, params)) };
   },
   request_logs: async (params) => ({ ...(await listRequestLogs(params)) }),
-  // The engine takes bare params and no filter grammar, so the builder's provider row is
-  // translated here. `business`, `has_cost` and `used` are the page's own URL scope.
+  // The engine takes bare params and no filter grammar, so the builder's provider and unit
+  // rows are translated here. `business`, `has_cost` and `used` are the page's own URL scope.
   model_prices: async (params, scope) => {
-    const provider = params.filters?.find((f) => f.field === "provider" && f.op === "is")?.value;
+    const is = (field: string) =>
+      params.filters?.find((f) => f.field === field && f.op === "is")?.value;
     const page = await listModelPrices({
       q: params.q,
-      provider,
+      provider: is("provider"),
+      unit: is("unit"),
       business: scope.business,
       has_cost: scope.has_cost === "on",
       used: scope.used === "on",

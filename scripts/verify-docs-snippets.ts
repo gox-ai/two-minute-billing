@@ -39,7 +39,6 @@ const PAGES = [
   "03.recipes/07.failed-payments.md",
   "03.recipes/08.india-gst-invoices.md",
   "03.recipes/09.india-mandates.md",
-  "03.recipes/10.migrate-your-billing.md",
   "03.recipes/11.meter-usage-events.md",
   "03.recipes/12.bill-ai-tokens.md",
 ];

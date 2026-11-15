@@ -1015,10 +1015,15 @@ console.log("9b. per-change plan_credits / allowances");
   );
   const e = await subscribe("ov-down-pro", [big]);
   const er = await changeVia(e, small, mid, { plan_credits: "prorated" });
+  const eg = await grantPair(e, big, small);
+  const downWant = halfUp(
+    10n * BigInt(W1.getTime() - mid.getTime()),
+    BigInt(W1.getTime() - T0.getTime()),
+  );
   check(
-    "a downgrade with plan_credits prorated → 400, nothing changed",
-    er.statusCode === 400 && !(await grantPair(e, big, small)).nw,
-    er.body.slice(0, 200),
+    "override: a downgrade with plan_credits prorated → the old grant ends, the new plan's 10 prorated",
+    er.statusCode === 200 && t(eg.old?.expiresAt) === t(mid) && eg.nw?.amount === downWant,
+    { status: er.statusCode, old: eg.old?.expiresAt, nw: eg.nw?.amount, want: downWant },
   );
 
   await setRules(biz.id, { allowances: { on_upgrade: "new_window" } });

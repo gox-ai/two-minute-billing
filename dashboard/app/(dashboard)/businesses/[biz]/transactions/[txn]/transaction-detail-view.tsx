@@ -3,7 +3,9 @@
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
 import Link from "next/link";
-import { Chip, StatusChip } from "@/components/patterns/chip";
+import { Chip, StatusChip, IdChip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
+import { brandLabel, enumLabel } from "@/lib/labels";
 import { RecordDisputeButton, DisputeOutcomeButtons } from "@/components/disputes/dispute-actions";
 import type { Dispute } from "@/lib/api/disputes";
 import { disputeOutcomeNote, disputeReasonLabel, disputeStatusTone } from "@/lib/dispute-vocab";
@@ -14,25 +16,31 @@ import {
   Zone,
   Row as GridRow,
   RecordCard,
+  PHONE_FACT_VALUE,
 } from "@/components/patterns/record-page";
 import { TransactionReconcileForm } from "@/components/payments/transaction-reconcile";
 import { TransactionSyncPanel } from "@/components/payments/transaction-sync";
 import { RefreshButton } from "@/components/refresh-button";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
-import { gatewayObjectUrl } from "@/components/gateways/gateway-meta";
-import { money, fmtDateTime } from "@/lib/format";
+import { gatewayObjectUrl, type GatewayCatalogEntry } from "@/components/gateways/gateway-meta";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { paymentMethodTypeLabel } from "@/lib/filter-options";
 import type { Transaction, GatewayWebhook } from "@/lib/api/payments";
 import { RECONCILABLE_STATUSES } from "@/lib/transaction-status";
 import { refreshTransactionAction } from "./refresh-action";
 import { GatewayLabel } from "@/components/partner-logo";
 import { gatewayLogsHref } from "@/lib/gateway-logs-href";
+import { cn } from "@/lib/utils";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-3 gap-2 py-2 text-sm">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="col-span-2 break-all">{children}</dd>
+    // On a phone a value that does not fit beside its label takes the full width under it.
+    <div className="grid grid-cols-3 gap-2 py-2 text-sm max-sm:flex max-sm:flex-wrap max-sm:items-baseline max-sm:gap-x-4 max-sm:gap-y-0.5">
+      <dt className="text-muted-foreground max-sm:shrink-0 max-sm:basis-[calc(33.333%-0.667rem)]">
+        {label}
+      </dt>
+      <dd className={cn("col-span-2 min-w-0 wrap-anywhere", PHONE_FACT_VALUE)}>{children}</dd>
     </div>
   );
 }
@@ -95,9 +103,11 @@ export function TransactionDetailView({
   gatewayName,
   tz,
   livemode,
+  gatewayCatalog,
   initialTransaction,
   initialCallbacks,
   initialDisputes,
+  subscriptionName = null,
   canManageDisputes,
 }: {
   biz: string;
@@ -107,10 +117,14 @@ export function TransactionDetailView({
   tz: string | null;
   /** Stripe's dashboard puts the mode in the path, so the link needs it. */
   livemode: "live" | "test" | null;
+  /** Declares which gateway ids link to the gateway's dashboard. */
+  gatewayCatalog: GatewayCatalogEntry[];
   initialTransaction: Transaction;
   initialCallbacks: GatewayWebhook[];
   /** The disputes on this payment (empty for anything but a payment). */
   initialDisputes: Dispute[];
+  /** The subscription's plan name; null shows its id. */
+  subscriptionName?: string | null;
   /** Holds `payments:refund`: may record a dispute and its outcome, and cancel a pending debit. */
   canManageDisputes: boolean;
 }) {
@@ -143,8 +157,9 @@ export function TransactionDetailView({
   // The payer row. `t.customer_name` is resolved server-side through
   // accountHolderName, so it already IS the account holder.
   const holderName = t.customer_name ?? null;
-  const mono = (v: string | null) => (v ? <span className="font-mono text-xs">{v}</span> : "—");
-  const gatewayUrl = gatewayObjectUrl(t.gateway_key, t.id_at_gateway, livemode);
+  const mono = (v: string | null) => (v ? <MiddleEllipsis value={v} className="text-xs" /> : "—");
+  const txnTitle = `${enumLabel(t.type)} of ${money(t.amount_minor, t.currency)}`;
+  const gatewayUrl = gatewayObjectUrl(gatewayCatalog, t.gateway_key, t.id_at_gateway, livemode);
   const recording = canManageDisputes ? (t.dispute_recording ?? null) : null;
 
   return (
@@ -153,7 +168,7 @@ export function TransactionDetailView({
         items={[
           { label: name, href: `/businesses/${biz}` },
           { label: "Transactions", href: `/businesses/${biz}/transactions` },
-          { label: t.id },
+          { label: txnTitle },
         ]}
         right={
           <>
@@ -164,19 +179,10 @@ export function TransactionDetailView({
       />
 
       <RecordHeader
-        title={
-          <span className="flex flex-wrap items-baseline gap-2">
-            Transaction <span className="font-mono text-lg font-semibold">{t.id}</span>
-          </span>
-        }
+        title={txnTitle}
         chips={<StatusChip status={t.status} />}
         facts={[
-          <span key="type" className="capitalize">
-            {t.type.replace(/_/g, " ")}
-          </span>,
-          <span key="amt" className="tabular-nums">
-            {money(t.amount_minor, t.currency)}
-          </span>,
+          <IdChip key="id" id={t.id} />,
           t.customer ? (
             <Link
               key="cus"
@@ -190,19 +196,26 @@ export function TransactionDetailView({
             <Link
               key="inv"
               href={`/businesses/${biz}/invoices/${t.invoice}`}
-              className="font-mono text-xs text-primary hover:underline"
+              className="text-primary hover:underline"
             >
-              {t.invoice}
+              {t.invoice_number ?? <MiddleEllipsis value={t.invoice} className="text-xs" />}
             </Link>
           ) : null,
-          fmtDateTime(t.occurred_at ?? t.created_at, tz),
+          <span key="at" className="whitespace-nowrap">
+            {fmtDateTime(t.occurred_at ?? t.created_at, tz)}
+          </span>,
         ]}
       />
 
       {/* The operator's move, when there is one: a scheduled check to hurry, or a
           verdict to record. Settled or failed rows need nothing, so no card. */}
       {RECONCILABLE_STATUSES.includes(t.status) ? (
-        <TransactionReconcileForm biz={biz} txn={t.id} settledRefund={t.settled_refund} />
+        <TransactionReconcileForm
+          biz={biz}
+          txn={t.id}
+          settledRefund={t.settled_refund}
+          gatewayUrl={(id) => gatewayObjectUrl(gatewayCatalog, t.gateway_key, id, livemode)}
+        />
       ) : t.status === "in_progress" ? (
         <TransactionSyncPanel
           biz={biz}
@@ -219,16 +232,12 @@ export function TransactionDetailView({
         <GridRow span="8/4">
           <RecordCard id="summary" title="Summary">
             <dl className="divide-y">
-              <Row label="Transaction type">
-                <span className="capitalize">{t.type.replace(/_/g, " ")}</span>
-              </Row>
+              <Row label="Transaction type">{enumLabel(t.type)}</Row>
               <Row label="Status">
                 <StatusChip status={t.status} />
               </Row>
               <Row label="Date">{fmtDateTime(t.occurred_at ?? t.created_at, tz)}</Row>
-              <Row label="Amount">
-                {money(t.amount_minor, t.currency)} {t.currency}
-              </Row>
+              <Row label="Amount">{money(t.amount_minor, t.currency)}</Row>
               <Row label="Customer">
                 {t.customer ? (
                   <Link
@@ -250,9 +259,11 @@ export function TransactionDetailView({
                 {t.subscription ? (
                   <Link
                     href={`/businesses/${biz}/subscriptions/${t.subscription}`}
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="flex min-w-0 text-primary hover:underline"
                   >
-                    {t.subscription}
+                    {subscriptionName ?? (
+                      <MiddleEllipsis value={t.subscription} className="text-xs" />
+                    )}
                   </Link>
                 ) : (
                   "—"
@@ -262,9 +273,9 @@ export function TransactionDetailView({
                 {t.invoice ? (
                   <Link
                     href={`/businesses/${biz}/invoices/${t.invoice}`}
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="text-primary hover:underline"
                   >
-                    {t.invoice}
+                    {t.invoice_number ?? <MiddleEllipsis value={t.invoice} className="text-xs" />}
                   </Link>
                 ) : (
                   "—"
@@ -274,9 +285,11 @@ export function TransactionDetailView({
                 {t.credit_note ? (
                   <Link
                     href={`/businesses/${biz}/credit_notes/${t.credit_note}`}
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="text-primary hover:underline"
                   >
-                    {t.credit_note}
+                    {t.credit_note_number ?? (
+                      <MiddleEllipsis value={t.credit_note} className="text-xs" />
+                    )}
                   </Link>
                 ) : (
                   "—"
@@ -307,9 +320,9 @@ export function TransactionDetailView({
                 <Row label="Payment intent">
                   <Link
                     href={`/businesses/${biz}/payment_intents/${t.payment_intent}`}
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="flex min-w-0 text-primary hover:underline"
                   >
-                    {t.payment_intent}
+                    <MiddleEllipsis value={t.payment_intent} className="text-xs" />
                   </Link>
                 </Row>
               ) : null}
@@ -369,7 +382,9 @@ export function TransactionDetailView({
                         last4={t.payment_method.last4}
                         className="h-3.5 w-6"
                       />
-                      <span className="capitalize">{t.payment_method.brand ?? "Card"}</span>
+                      <span>
+                        {t.payment_method.brand ? brandLabel(t.payment_method.brand) : "Card"}
+                      </span>
                       {t.payment_method.last4 ? (
                         <span className="text-muted-foreground">
                           ending {t.payment_method.last4}
@@ -405,12 +420,7 @@ export function TransactionDetailView({
                     href={`/businesses/${biz}/settings/gateways/${t.gateway_account.id}`}
                     className="text-primary hover:underline"
                   >
-                    {t.gateway_account.name ?? t.gateway_account.id}
-                    {t.gateway_account.name ? (
-                      <span className="ml-1.5 text-muted-foreground">
-                        {mono(t.gateway_account.id)}
-                      </span>
-                    ) : null}
+                    {t.gateway_account.name ?? mono(t.gateway_account.id)}
                   </Link>
                 ) : (
                   "—"
@@ -425,10 +435,10 @@ export function TransactionDetailView({
                     href={gatewayUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-xs text-primary hover:underline"
+                    className="flex min-w-0 text-primary hover:underline"
                     title={`Open in ${gatewayName}`}
                   >
-                    {t.id_at_gateway}
+                    <MiddleEllipsis value={t.id_at_gateway ?? ""} className="text-xs" />
                   </a>
                 ) : (
                   mono(t.id_at_gateway)

@@ -1,0 +1,26 @@
+{
+  "name": "@two-minute-billing/cli",
+  "version": "0.0.0",
+  "description": "The tmb command line for Two Minute Billing: check your setup, push a catalog, forward events to your app, trigger test payments.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tmb": "./bin/tmb.mjs"
+  },
+  "files": ["bin", "lib", "scripts", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gox-ai/two-minute-billing.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/gox-ai/two-minute-billing/tree/main/cli#readme",
+  "bugs": "https://github.com/gox-ai/two-minute-billing/issues",
+  "keywords": ["billing", "subscriptions", "invoicing", "webhooks", "cli"],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

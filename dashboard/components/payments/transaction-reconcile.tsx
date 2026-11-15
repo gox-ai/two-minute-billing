@@ -37,11 +37,14 @@ export function TransactionReconcileForm({
   biz,
   txn,
   settledRefund,
+  gatewayUrl = () => null,
 }: {
   biz: string;
   txn: string;
   /** Money on this row that the gateway has already returned. Null ⇒ genuinely unknown. */
   settledRefund?: Transaction["settled_refund"];
+  /** A gateway id's page on the gateway's dashboard (`gatewayObjectUrl`), or null. */
+  gatewayUrl?: (id: string | null) => string | null;
 }) {
   const router = useRouter();
   const returned = settledRefund ?? null;
@@ -103,11 +106,21 @@ export function TransactionReconcileForm({
           <dl className="max-w-xl space-y-1 rounded-md bg-card p-3 text-xs">
             <div className="flex justify-between gap-2">
               <dt className="text-muted-foreground">Gateway charge</dt>
-              <dd className="font-mono break-all">{returned.charge_at_gateway}</dd>
+              <dd className="font-mono break-all">
+                <GatewayId
+                  id={returned.charge_at_gateway}
+                  href={gatewayUrl(returned.charge_at_gateway)}
+                />
+              </dd>
             </div>
             <div className="flex justify-between gap-2">
               <dt className="text-muted-foreground">Gateway refund</dt>
-              <dd className="font-mono break-all">{returned.provider_refund_id ?? "—"}</dd>
+              <dd className="font-mono break-all">
+                <GatewayId
+                  id={returned.provider_refund_id}
+                  href={gatewayUrl(returned.provider_refund_id)}
+                />
+              </dd>
             </div>
             <div className="flex justify-between gap-2">
               <dt className="text-muted-foreground">Refund</dt>
@@ -143,5 +156,17 @@ export function TransactionReconcileForm({
         </div>
       </form>
     </AttentionCard>
+  );
+}
+
+/** A gateway id, opening its page on the gateway's dashboard in a new tab when one is known. */
+function GatewayId({ id, href }: { id: string | null; href: string | null }) {
+  if (!id) return <>—</>;
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+      {id}
+    </a>
+  ) : (
+    <>{id}</>
   );
 }

@@ -133,7 +133,7 @@ export function RefundCreditNoteButton({
               label="Comment"
               help="Optional. We add this text to the Comments timeline."
             >
-              <Input name="comment" maxLength={500} placeholder="optional" />
+              <Input name="comment" maxLength={500} />
             </Field>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
@@ -178,7 +178,7 @@ export function RecordOfflineRefundButton({
         {label ?? "Record an offline refund"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Record an offline refund</DialogTitle>
             <DialogDescription>
@@ -190,59 +190,61 @@ export function RecordOfflineRefundButton({
           <ActionForm
             action={recordOfflineRefundAction}
             onSuccess={() => setOpen(false)}
-            className="space-y-4"
+            className="flex min-h-0 flex-1 flex-col gap-4"
           >
             <input type="hidden" name="biz" value={biz} />
             <input type="hidden" name="cn" value={cn} />
-            <Field
-              name="amount_minor"
-              label="Amount"
-              help={`Available to refund: ${money(availableMinor, currency)}. Enter a lower amount for a partial refund.`}
-            >
-              {/* MAJOR units, prefilled with the full available credit. `MoneyInput`
+            <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6">
+              <Field
+                name="amount_minor"
+                label="Amount"
+                help={`Available to refund: ${money(availableMinor, currency)}. Enter a lower amount for a partial refund.`}
+              >
+                {/* MAJOR units, prefilled with the full available credit. `MoneyInput`
                   posts integer minor under `amount_minor`, so
                   `recordOfflineRefundAction` is untouched. */}
-              <MoneyInput
-                name="amount_minor"
-                currency={currency}
-                max={toMajor(availableMinor, currency)}
-                defaultMajor={toMajorInput(availableMinor, currency)}
-              />
-            </Field>
-            <Field name="method" label="Refund method">
-              <SelectField
-                name="method"
-                defaultValue="cash"
-                ariaLabel="Refund method"
-                options={offlineMethodOptions()}
-              />
-            </Field>
-            <Field
-              name="date"
-              label="Refund date"
-              help="The date when you returned the money. Leave blank to use the current time."
-            >
-              <DateTimeField name="date" />
-            </Field>
-            <Field
-              name="reference"
-              label="Reference number"
-              help="Optional. For example, a check number or a bank transaction ID."
-            >
-              <Input name="reference" placeholder="optional" />
-            </Field>
-            {/* The route already accepted `reason` (src/api/credit-note-routes.ts);
+                <MoneyInput
+                  name="amount_minor"
+                  currency={currency}
+                  max={toMajor(availableMinor, currency)}
+                  defaultMajor={toMajorInput(availableMinor, currency)}
+                />
+              </Field>
+              <Field name="method" label="Refund method">
+                <SelectField
+                  name="method"
+                  defaultValue="cash"
+                  ariaLabel="Refund method"
+                  options={offlineMethodOptions()}
+                />
+              </Field>
+              <Field
+                name="date"
+                label="Refund date"
+                help="The date when you returned the money. Leave blank to use the current time."
+              >
+                <DateTimeField name="date" />
+              </Field>
+              <Field
+                name="reference"
+                label="Reference number"
+                help="Optional. For example, a check number or a bank transaction ID."
+              >
+                <Input name="reference" />
+              </Field>
+              {/* The route already accepted `reason` (src/api/credit-note-routes.ts);
                 it was simply never exposed here, unlike the gateway refund dialog above. */}
-            <RefundReasonField required={reasonRequired} />
-            {/* The Comments timeline, not the refund record. Best-effort post after
+              <RefundReasonField required={reasonRequired} />
+              {/* The Comments timeline, not the refund record. Best-effort post after
                 the refund succeeds. */}
-            <Field
-              name="comment"
-              label="Comment"
-              help="Optional. We add this text to the Comments timeline."
-            >
-              <Input name="comment" maxLength={500} placeholder="optional" />
-            </Field>
+              <Field
+                name="comment"
+                label="Comment"
+                help="Optional. We add this text to the Comments timeline."
+              >
+                <Input name="comment" maxLength={500} />
+              </Field>
+            </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel
@@ -319,12 +321,7 @@ function RefundReasonField({ required }: { required: boolean }) {
           : "Optional. The refund record shows this text."
       }
     >
-      <Input
-        name="reason"
-        maxLength={500}
-        required={required}
-        placeholder={required ? undefined : "optional"}
-      />
+      <Input name="reason" maxLength={500} required={required} />
     </Field>
   );
 }

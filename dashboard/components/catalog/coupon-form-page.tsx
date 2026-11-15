@@ -1,18 +1,18 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ActionForm } from "@/components/form/action-form";
 import { DateTimeField } from "@/components/form/datetime-field";
 import { Field } from "@/components/form/field";
-import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
-import { CheckboxField } from "@/components/ui/checkbox";
 import { Alert } from "@/components/ui/alert";
+import { SelectField } from "@/components/ui/select-field";
 import { CurrencySelect } from "@/components/form/currency-select";
 import { Facts } from "@/components/patterns/record-page";
 import type { Crumb } from "@/components/page-header";
-import { money, fmtDate } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { LIMITS } from "@/lib/limits";
 import { toMajorInput } from "@/lib/money";
 import { useBusinessTz } from "@/components/business-tz";
@@ -21,6 +21,13 @@ import {
   editCouponExtAction,
 } from "@/app/(dashboard)/businesses/[biz]/catalog/coupons/actions";
 import type { Product, CouponDetail } from "@/lib/api/coupons";
+import type { Price, ProductGroup } from "@/lib/api";
+import {
+  ItemScopeRow,
+  type ItemConstraintState as ItemConstraint,
+  type ItemKind,
+} from "@/components/catalog/coupon-item-picker";
+import { periodSuffix, priceLabel } from "@/lib/coupon-scope";
 import {
   ChoiceCards,
   FormCard,
@@ -42,20 +49,8 @@ import {
 type Kind = "percentage" | "fixed_amount";
 type Duration = "once" | "forever" | "repeating";
 type ApplyOn = "invoice_amount" | "each_specified_item";
-type ConstraintType = "all" | "specific" | "none";
-type ItemKind = "plan" | "addon" | "charge";
-
-interface ItemConstraint {
-  item_kind: ItemKind;
-  constraint_type: ConstraintType;
-  product_ids: string[];
-}
+type LimitBy = "customer" | "email";
 const ITEM_KINDS: ItemKind[] = ["plan", "addon", "charge"];
-const KIND_PLURAL: Record<ItemKind, string> = {
-  plan: "Plans",
-  addon: "Addons",
-  charge: "One-time products",
-};
 
 /**
  * A kind the API did NOT return has no constraint row, and the engine treats a
@@ -68,6 +63,8 @@ function seedConstraints(c?: CouponDetail): ItemConstraint[] {
       item_kind: k,
       constraint_type: row?.constraint_type ?? (c ? "none" : "all"),
       product_ids: row?.product_ids ?? [],
+      price_ids: row?.price_ids ?? [],
+      billing_periods: row?.billing_periods ?? [],
     };
   });
 }
@@ -88,6 +85,7 @@ interface Values {
   redeem_by: string;
   max_redemptions: string;
   max_per_customer: string;
+  limit_by: LimitBy;
   meta: MetaRow[];
 }
 
@@ -101,6 +99,8 @@ export function CouponFormPage({
   currencies,
   defaultCurrency,
   products = [],
+  prices = [],
+  productGroups = [],
   existing,
   clone,
   backHref,
@@ -110,6 +110,9 @@ export function CouponFormPage({
   currencies?: string[] | null;
   defaultCurrency?: string | null;
   products?: Product[];
+  /** For the billing periods each product bills on. */
+  prices?: Price[];
+  productGroups?: ProductGroup[];
   /** edit mode when set */
   existing?: CouponDetail;
   /** clone source — prefills the discount on a fresh create */
@@ -147,6 +150,7 @@ export function CouponFormPage({
         existing?.max_redemptions_per_customer != null
           ? String(existing.max_redemptions_per_customer)
           : "",
+      limit_by: existing?.per_customer_limit_by ?? clone?.per_customer_limit_by ?? "customer",
       meta: metaRows(isEdit ? existing!.metadata : clone?.metadata),
     },
     formRef,
@@ -172,6 +176,12 @@ export function CouponFormPage({
         item_kind: c.item_kind,
         constraint_type: c.constraint_type,
         ...(c.constraint_type === "specific" ? { product_ids: c.product_ids } : {}),
+        ...(c.constraint_type === "specific" && c.price_ids.length
+          ? { price_ids: c.price_ids }
+          : {}),
+        ...(c.item_kind !== "charge" && c.billing_periods.length
+          ? { billing_periods: c.billing_periods }
+          : {}),
       })),
   );
 
@@ -185,12 +195,16 @@ export function CouponFormPage({
         ? `${money(Number(majorToMinor(v.amount, v.currency) || 0), v.currency)} off`
         : null;
   const names = (c: ItemConstraint) =>
-    c.constraint_type === "all"
+    (c.constraint_type === "all"
       ? `every ${c.item_kind}`
-      : c.product_ids.map((id) => products.find((p) => p.id === id)?.name ?? id).join(" or ");
+      : [
+          ...c.product_ids.map((id) => products.find((p) => p.id === id)?.name ?? id),
+          ...c.price_ids.map((id) => priceLabel(id, prices, products)),
+        ].join(" or ")) + periodSuffix(c.billing_periods);
   const scoped = v.constraints.filter(
     (c) =>
-      c.constraint_type === "all" || (c.constraint_type === "specific" && c.product_ids.length),
+      c.constraint_type === "all" ||
+      (c.constraint_type === "specific" && (c.product_ids.length || c.price_ids.length)),
   );
   const where =
     v.apply_on === "invoice_amount"
@@ -208,7 +222,9 @@ export function CouponFormPage({
   const validText = `${v.valid_from ? fmtDate(v.valid_from, tz) : "Now"}, ${v.redeem_by ? `until ${fmtDate(v.redeem_by, tz)}` : "no end"}`;
   const limit = [
     v.max_redemptions ? `${v.max_redemptions} redemptions` : "Unlimited",
-    v.max_per_customer ? `${v.max_per_customer} per customer` : null,
+    v.max_per_customer
+      ? `${v.max_per_customer} per ${v.limit_by === "email" ? "email" : "customer"}`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -216,11 +232,18 @@ export function CouponFormPage({
     ? undefined
     : couponCodeError(v.code, suggestCouponCode(v.name) || "LOYAL20");
 
+  const redemptions = existing?.times_redeemed ?? 0;
   const lockedReason = locked ? (
-    <Alert tone="warning" className="text-xs">
-      Locked after {existing!.times_redeemed} redemption{existing!.times_redeemed === 1 ? "" : "s"}.
-      A change would re-price every subscription that has this coupon. Clone it to create a new
-      coupon.
+    <Alert tone="warning">
+      You cannot change the discount or duration of this coupon. It has {redemptions}{" "}
+      {redemptions === 1 ? "redemption" : "redemptions"}, and the subscriptions that use it get
+      their price from these values. To use a different discount, clone this coupon.{" "}
+      <Link
+        href={`/businesses/${biz}/catalog/coupons/new?clone=${existing!.id}`}
+        className="font-medium text-primary hover:underline"
+      >
+        Clone coupon
+      </Link>
     </Alert>
   ) : null;
 
@@ -313,7 +336,7 @@ export function CouponFormPage({
                 <Facts
                   rows={[
                     {
-                      label: "Discount",
+                      label: existing!.kind === "percentage" ? "Percentage off" : "Amount off",
                       value:
                         existing!.kind === "percentage"
                           ? `${(existing!.percent_off_bps ?? 0) / 100}%`
@@ -384,6 +407,7 @@ export function CouponFormPage({
                     help="Fixed amounts apply only in this currency"
                   >
                     <CurrencySelect
+                      className="w-full"
                       name="currency"
                       value={v.currency}
                       onValueChange={(c) => set("currency", c)}
@@ -424,55 +448,26 @@ export function CouponFormPage({
               ]}
             />
           ) : null}
-          {/* Item scope stays editable after redemption — only the math is frozen. */}
+          {/* Locked: the scope may only grow; the engine refuses a removal and names it. */}
           {v.apply_on === "each_specified_item" ? (
-            <div id="item_constraints" className="flex flex-col gap-3">
+            <div id="item_constraints" className="flex flex-col gap-4">
+              {locked ? (
+                <Alert tone="neutral">
+                  You can add plans, add-ons and charges to this coupon. An item that you add also
+                  gets the discount on the subscriptions that use this coupon now. You cannot remove
+                  the items it has now, because those subscriptions would lose the discount.
+                </Alert>
+              ) : null}
               <input type="hidden" name="item_constraints" value={constraintsJson} />
               {v.constraints.map((c, i) => (
-                <div
+                <ItemScopeRow
                   key={c.item_kind}
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-[8rem_14rem_minmax(0,1fr)] sm:items-start"
-                >
-                  <span className="pt-2 text-sm font-medium">{KIND_PLURAL[c.item_kind]}</span>
-                  <SelectField
-                    value={c.constraint_type}
-                    onValueChange={(x) =>
-                      updC(i, { constraint_type: x as ConstraintType, product_ids: [] })
-                    }
-                    ariaLabel={`${KIND_PLURAL[c.item_kind]} this coupon applies to`}
-                    options={[
-                      { value: "none", label: "None" },
-                      { value: "all", label: "All" },
-                      { value: "specific", label: "Specific" },
-                    ]}
-                  />
-                  {c.constraint_type === "specific" ? (
-                    byKind[c.item_kind].length ? (
-                      <div className="flex flex-wrap gap-x-4 gap-y-2 pt-2">
-                        {byKind[c.item_kind].map((p) => (
-                          <CheckboxField
-                            key={p.id}
-                            checked={c.product_ids.includes(p.id)}
-                            onCheckedChange={(on) =>
-                              updC(i, {
-                                product_ids: on
-                                  ? [...c.product_ids, p.id]
-                                  : c.product_ids.filter((x) => x !== p.id),
-                              })
-                            }
-                            label={p.name}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="pt-2 text-sm text-muted-foreground">No {c.item_kind}s yet.</p>
-                    )
-                  ) : (
-                    <span className="pt-2 text-sm text-muted-foreground">
-                      {c.constraint_type === "all" ? `Every ${c.item_kind}` : "—"}
-                    </span>
-                  )}
-                </div>
+                  constraint={c}
+                  onChange={(patch) => updC(i, patch)}
+                  products={byKind[c.item_kind]}
+                  prices={prices}
+                  groups={productGroups}
+                />
               ))}
             </div>
           ) : null}
@@ -515,7 +510,7 @@ export function CouponFormPage({
                   type="number"
                   value={v.periods}
                   onChange={(x) => set("periods", x)}
-                  className="max-w-48"
+                  inputClassName="w-20"
                 />
               ) : null}
             </>
@@ -554,6 +549,27 @@ export function CouponFormPage({
             placeholder="Unlimited"
             help="1 stops a customer from using it two times"
           />
+          {v.max_per_customer ? (
+            <Field
+              name="per_customer_limit_by"
+              label="Count redemptions per customer by"
+              help={
+                v.limit_by === "email"
+                  ? "All customers with the same email address share one limit, for example guest buyers"
+                  : "Each customer record has its own limit"
+              }
+            >
+              <SelectField
+                name="per_customer_limit_by"
+                value={v.limit_by}
+                onValueChange={(x) => set("limit_by", x as LimitBy)}
+                options={[
+                  { value: "customer", label: "Customer" },
+                  { value: "email", label: "Email" },
+                ]}
+              />
+            </Field>
+          ) : null}
         </FormCard>
 
         <FormCard title="Metadata" columns={1}>

@@ -1581,9 +1581,15 @@ export class CheckoutcomProvider implements PaymentProvider {
       failure: { code: "invalid_client_result", message },
     });
     if (!s) return invalid("This payment did not start with the Checkout.com card form.");
-    const paymentId = (
-      input.clientResult.payment_id ?? input.clientResult["cko-payment-id"]
-    )?.trim();
+    let paymentId = (input.clientResult.payment_id ?? input.clientResult["cko-payment-id"])?.trim();
+    // Flow said the payment completed but named no payment: find it by this session's
+    // reference, so the buyer is never sent to pay a second time.
+    if (!paymentId && input.clientResult.lookup === "reference" && s.r) {
+      // A failed search is not an answer: the intent waits and is asked again.
+      const found = await this.findSessionPayment(s).catch(() => null);
+      if (!found) return { intentId: input.intentId, status: "requires_action" };
+      paymentId = found;
+    }
     if (!paymentId?.startsWith("pay_"))
       return invalid("The payment details from the browser are not valid.");
     const p = await this.readPayment(paymentId);
@@ -1631,6 +1637,28 @@ export class CheckoutcomProvider implements PaymentProvider {
         : {}),
       raw: p,
     };
+  }
+
+  /** The payment made on this Flow session, found by the session's reference; null if none yet. */
+  private async findSessionPayment(s: CheckoutcomSyntheticIntent): Promise<string | null> {
+    const r = await this.call<{ data?: CkoPayment[] }>(
+      "find_session_payment",
+      "GET",
+      `/payments?reference=${encodeURIComponent(s.r!)}&limit=10`,
+    );
+    if (r.status === 404) return null;
+    if (r.status !== 200 || !Array.isArray(r.body?.data))
+      throw this.apiError("find_session_payment", r);
+    const mine = r.body.data.filter(
+      (p) =>
+        p.id &&
+        p.reference === s.r &&
+        (p.metadata?.cko_payment_session_id === undefined ||
+          p.metadata.cko_payment_session_id === s.s),
+    );
+    // A payment that holds or moved money first; a refused one only says the attempt failed.
+    const live = mine.find((p) => !REFUSED.has(p.status ?? ""));
+    return (live ?? mine[0])?.id ?? null;
   }
 
   /**
@@ -1727,8 +1755,24 @@ export class CheckoutcomProvider implements PaymentProvider {
   }
 
   async voidIntent(input: VoidIntentInput): Promise<VoidIntentResult> {
-    // An unanswered challenge holds nothing.
-    if (decodeCheckoutcomIntent(input.intentId)) return { voided: true, held: false };
+    // A Flow session we never heard back from: its payment, if one was made, carries the
+    // session's reference. Find it and void it; with none, nothing is held.
+    const session = decodeCheckoutcomIntent(input.intentId);
+    if (session) {
+      if (!session.r || session.p !== "payment") return { voided: true, held: false };
+      let paid: string | null;
+      try {
+        paid = await this.findSessionPayment(session);
+      } catch (e) {
+        // We could not ask: report the hold as unknown, never as released.
+        log.warn("we could not look up the payment of a Checkout.com session to void it", {
+          event: "checkoutcom_session_void_lookup_failed",
+          error: String(e),
+        });
+        return { voided: true };
+      }
+      return paid ? this.voidIntent({ ...input, intentId: paid }) : { voided: true, held: false };
+    }
     // A hosted page has no cancel call and expires after 24 hours. A payment made on it
     // carries the page's reference, so a hold is found and voided by its id.
     if (input.intentId.startsWith(CHECKOUTCOM_HOSTED_PREFIX)) {

@@ -327,7 +327,10 @@ export async function reactivateAndBill(input: {
       // Defer the fresh period to an unbilled charge. Rate the FULL recurring charge from item
       // snapshots, not the monthly-normalised MRR.
       const { addAdHocCharge, recurringChargeMinor } = await import("./items");
-      const amount = await recurringChargeMinor(organizationId, subscription.id);
+      const { amountMinor: amount, discounted } = await recurringChargeMinor(
+        organizationId,
+        subscription.id,
+      );
       if (amount > 0n) {
         await addAdHocCharge({
           organizationId,
@@ -335,6 +338,7 @@ export async function reactivateAndBill(input: {
           subscriptionId: subscription.id,
           description: "Reactivated period charge",
           amountMinor: Number(amount),
+          discounted,
           invoiceNow: false,
           now,
         });
@@ -933,8 +937,13 @@ async function billWithIntent(input: {
   };
 }
 
-/** The subscription's own lines, as a reactivation that changes nothing rebuilds them. */
-async function currentItems(
+/**
+ * The subscription's own lines, priced for an ESTIMATE of a reactivation that keeps them.
+ * Kept lines bill their frozen snapshot, so a flat or per-unit line is quoted at that
+ * amount, not today's catalogue price: a moved catalogue otherwise made the up-front charge
+ * differ from the invoice, and every pay-first reactivation of such a subscription refused.
+ */
+export async function currentItems(
   organizationId: string,
   subscriptionId: string,
 ): Promise<ReactivationItemInput[]> {
@@ -952,13 +961,17 @@ async function currentItems(
   );
   return rows.map((r) => {
     const snap = (r.snapshot ?? null) as {
+      model?: string;
       amountOverridden?: boolean;
       amountMinor?: number | null;
     } | null;
+    const frozen =
+      snap?.amountMinor != null &&
+      (snap.amountOverridden || snap.model === "flat" || snap.model === "per_unit");
     return {
       price: r.price,
       quantity: r.quantity,
-      unitPriceMinor: snap?.amountOverridden && snap.amountMinor != null ? snap.amountMinor : null,
+      unitPriceMinor: frozen ? snap!.amountMinor! : null,
       freeQuantity: r.freeQuantity,
     };
   });

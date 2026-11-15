@@ -10,6 +10,8 @@
  * resolves the window on the server and the picker only writes `?range=`.
  */
 
+import { fmtAxisDate, fmtRange } from "@/lib/format-date";
+
 export interface CancellationRange {
   id: string;
   label: string;
@@ -63,11 +65,6 @@ const MONTH_LABEL = new Intl.DateTimeFormat("en", {
   month: "short",
   year: "numeric",
 });
-const DAY_LABEL = new Intl.DateTimeFormat("en", {
-  timeZone: "UTC",
-  day: "numeric",
-  month: "short",
-});
 
 /** Today, as the business reckons it. Falls back to UTC on a zone the runtime rejects. */
 export function todayInBusinessZone(timezone: string | null | undefined, now = new Date()): string {
@@ -103,7 +100,7 @@ function weekBuckets(start: string, end: string): CancellationBucket[] {
   const out: CancellationBucket[] = [];
   for (let s = start; s <= end; s = addDays(s, 7)) {
     const last = addDays(s, 6);
-    out.push({ key: s, label: DAY_LABEL.format(civil(s)), start: s, end: last > end ? end : last });
+    out.push({ key: s, label: fmtAxisDate(s), start: s, end: last > end ? end : last });
   }
   return out;
 }
@@ -168,13 +165,7 @@ export function windowLabel(win: CancellationWindow): string {
 
 /** An inclusive `YYYY-MM-DD` span as the page heading prints it. */
 export function spanLabel(start: string, end: string): string {
-  const fmt = new Intl.DateTimeFormat("en", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-  return `${fmt.format(civil(start))} – ${fmt.format(civil(end))}`;
+  return fmtRange(start, end);
 }
 
 /** The same number of days immediately before `win` — what a headline is compared with. */

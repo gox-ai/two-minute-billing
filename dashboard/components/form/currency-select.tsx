@@ -203,7 +203,7 @@ export function CurrenciesField({
                     step="any"
                     min="0"
                     defaultValue={rates?.[c] ?? ""}
-                    placeholder="rate"
+                    aria-label={`Rate for ${c}`}
                     className="h-7 w-28 rounded-md border bg-card px-2 text-xs tabular-nums"
                   />
                 </Field>
@@ -227,7 +227,7 @@ export function CurrenciesField({
       )}
       {addable.length === 0 ? null : (
         <Select value="" onValueChange={(c) => setSelected((s) => (s.includes(c) ? s : [...s, c]))}>
-          <SelectTrigger className="w-56">
+          <SelectTrigger className="w-56" aria-label="Add a currency">
             <SelectValue placeholder="Add a currency…" />
           </SelectTrigger>
           <SelectContent position="popper" className="max-h-72">

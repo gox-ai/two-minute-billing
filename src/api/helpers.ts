@@ -206,8 +206,11 @@ export async function refusedByRateLimit(
   return true;
 }
 
-export function conflict(reply: FastifyReply, message: string) {
-  return reply.code(409).send({ error: { type: "conflict_error", message } });
+/** `code`: a machine-readable reason, for a 409 a client must tell apart from the others. */
+export function conflict(reply: FastifyReply, message: string, code?: string) {
+  return reply
+    .code(409)
+    .send({ error: { type: "conflict_error", ...(code ? { code } : {}), message } });
 }
 
 /**

@@ -134,6 +134,8 @@ export const creditNotes = pgTable(
     exchangeRate: numeric("exchange_rate", { precision: 20, scale: 10 }),
     exchangeRateBase: char("exchange_rate_base", { length: 3 }),
     reason: text("reason"),
+    /** A pack line credited in full, used credits too (0529). Null = the unused part only. */
+    packRefund: text("pack_refund").$type<"full">(),
     // Note to the customer, set at creation (0309).
     customerNotes: text("customer_notes"),
     // When the note was voided. `status` records THAT it was voided; this records when.

@@ -12,6 +12,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { money, moneyCompact } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { BAR_GROW, barStyle, drawKey } from "@/lib/chart-draw";
 import {
   reportValue,
   type BreakdownRow,
@@ -55,7 +57,7 @@ function SortHead({
         onClick={() => onSort(col)}
         aria-label={`Sort by ${typeof children === "string" ? children : col}`}
         className={
-          "touch-target relative -mx-1 flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:text-foreground " +
+          "touch-target relative -mx-1 flex w-full items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:text-foreground " +
           (align === "right" ? "justify-end" : "") +
           (active ? " text-foreground" : "")
         }
@@ -313,8 +315,9 @@ export function BreakdownTable({
                 <div className="flex items-center justify-end gap-2">
                   <div className="h-1.5 w-24 overflow-hidden rounded-md bg-muted">
                     <div
-                      className="anim-grow h-full rounded-md bg-primary"
-                      style={{ width: `${(shareOf(r.value) * 100).toFixed(1)}%` }}
+                      key={drawKey([shareOf(r.value)])}
+                      className={cn(BAR_GROW, "h-full rounded-md bg-primary")}
+                      style={barStyle(`${(shareOf(r.value) * 100).toFixed(1)}%`)}
                     />
                   </div>
                   <span className="w-10 text-right text-xs text-muted-foreground tabular-nums">

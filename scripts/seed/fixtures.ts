@@ -40,7 +40,7 @@ export interface Showcase {
   dunning?: SubRec;
 }
 
-/** Acme, ~33 days out: a Pro customer whose renewal will fail days before today. */
+/** Halyard, ~33 days out: a Pro customer whose renewal will fail days before today. */
 export async function acmeDunningSetup(lc: Lifecycle, t: Date, state: Showcase): Promise<void> {
   const rec = await lc.signup(t, {
     plan: "pro",
@@ -57,7 +57,7 @@ export async function acmeDunningSetup(lc: Lifecycle, t: Date, state: Showcase):
   }
 }
 
-/** Acme, a couple of days later: the card behind it starts failing (retriable). */
+/** Halyard, a couple of days later: the card behind it starts failing (retriable). */
 export async function acmeDunningBreak(lc: Lifecycle, t: Date, state: Showcase): Promise<void> {
   if (!state.dunning) return;
   await lc.sim.at(t, () => lc.swapCard(state.dunning!, "4000000000009995", "card_insufficient"));
@@ -168,10 +168,10 @@ export async function acmeToday(lc: Lifecycle, t: Date): Promise<string[]> {
 
   // Manual invoices in every state, for a customer whose address resolves US-CA tax.
   await sim.at(at(8), async () => {
-    const globex = await createCustomer({
+    const larkspur = await createCustomer({
       ...sim.ctx,
-      email: "billing@globex.example",
-      company: "Globex Corp",
+      email: "billing@larkspur-freight.example",
+      company: "Larkspur Freight",
       address: {
         line1: "1 Market St",
         city: "San Francisco",
@@ -181,10 +181,10 @@ export async function acmeToday(lc: Lifecycle, t: Date): Promise<string[]> {
         country: "US",
       },
     });
-    await vaultPaymentMethod({ ...sim.ctx, customer: globex, token: "tok_4242" });
+    await vaultPaymentMethod({ ...sim.ctx, customer: larkspur, token: "tok_4242" });
     const paid = await createManualInvoice({
       ...sim.ctx,
-      customerId: globex.id,
+      customerId: larkspur.id,
       currency: "USD",
       lines: lines("Consulting — analytics audit", 50000),
       collect: true,
@@ -202,7 +202,7 @@ export async function acmeToday(lc: Lifecycle, t: Date): Promise<string[]> {
     });
     const net = await createManualInvoice({
       ...sim.ctx,
-      customerId: globex.id,
+      customerId: larkspur.id,
       currency: "USD",
       lines: lines("Implementation — Net 30", 120000),
       netDays: 30,
@@ -215,21 +215,21 @@ export async function acmeToday(lc: Lifecycle, t: Date): Promise<string[]> {
     });
     const dup = await createManualInvoice({
       ...sim.ctx,
-      customerId: globex.id,
+      customerId: larkspur.id,
       currency: "USD",
       lines: lines("Duplicate charge", 3000),
     });
     await voidInvoice(sim.orgId, sim.bizId, dup.invoice.publicId);
     const bad = await createManualInvoice({
       ...sim.ctx,
-      customerId: globex.id,
+      customerId: larkspur.id,
       currency: "USD",
       lines: lines("Uncollectible balance", 8000),
     });
     await writeOffInvoice(sim.orgId, sim.bizId, bad.invoice.publicId);
   });
   out.push(
-    "Globex Corp — manual invoices: paid + credit note · Net-30 partial wire · voided · written off",
+    "Larkspur Freight — manual invoices: paid + credit note · Net-30 partial wire · voided · written off",
   );
   return out;
 }

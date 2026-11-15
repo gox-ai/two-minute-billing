@@ -194,6 +194,8 @@ export async function renderInvoicePdf(
   const tz = doc.seller.timezone;
   const money = (m: bigint) => formatMoney(m, cur);
   const date = (d: Date | null) => formatDateInTz(d, tz);
+  // A held renewal is a draft: its usage is not in yet, so nothing on it is owed.
+  const heldUntil = doc.meta.holdUntil;
 
   const left = pdf.page.margins.left;
   const right = pdf.page.width - pdf.page.margins.right;
@@ -224,7 +226,7 @@ export async function renderInvoicePdf(
     .font("Bold")
     .fontSize(20)
     .fillColor("#111111")
-    .text(doc.title, left, top, { width: contentW, align: "right" });
+    .text(heldUntil ? "DRAFT" : doc.title, left, top, { width: contentW, align: "right" });
 
   // ── Seller (left) + invoice meta (right) ─────────────────────────────────
   let y = top + (logo ? 62 : 46);
@@ -270,8 +272,9 @@ export async function renderInvoicePdf(
       lineGap: 3,
     });
   pdf.font("Bold").fontSize(8.5).fillColor("#111111").text(doc.meta.number);
-  kv(`${labels.metaPrefix} Date   `, date(doc.meta.issuedDate));
-  kv(`${labels.metaPrefix} Amount   `, money(doc.totals.totalMinor));
+  // A held draft is not issued yet: its date is when we created it.
+  kv(heldUntil ? "Created   " : `${labels.metaPrefix} Date   `, date(doc.meta.issuedDate));
+  if (!heldUntil) kv(`${labels.metaPrefix} Amount   `, money(doc.totals.totalMinor));
   if (doc.billTo.id) kv("Customer ID   ", doc.billTo.id);
   // A credit note's "Invoice date" — the date of the document being credited. Sits with
   // the invoice reference (`poNumber`) that names it.
@@ -284,7 +287,16 @@ export async function renderInvoicePdf(
   }
   // Suppressed status draws NOTHING, not a blank line: an empty coloured row reads as a
   // rendering fault rather than as a choice.
-  if (doc.meta.status) {
+  if (heldUntil) {
+    pdf.moveDown(0.4);
+    pdf
+      .font("Bold")
+      .fontSize(9.5)
+      .fillColor("#9a6700")
+      .text(`Draft. Finalizes on ${formatDateTimeInTz(heldUntil, tz)}.`, metaX, undefined, {
+        width: right - metaX,
+      });
+  } else if (doc.meta.status) {
     const chip = statusChip(doc.meta.status);
     pdf.moveDown(0.4);
     pdf
@@ -556,7 +568,8 @@ export async function renderInvoicePdf(
     });
   for (const tx of doc.taxLines) sumRows.push({ label: tx.label || "Tax", value: tx.amountMinor });
   if (t.roundingMinor !== 0n) sumRows.push({ label: "Rounding", value: t.roundingMinor });
-  sumRows.push({ label: "Total", value: t.totalMinor, bold: true });
+  // A held draft is not what will be due: usage and its tax are added when it finalizes.
+  sumRows.push({ label: heldUntil ? "Total so far" : "Total", value: t.totalMinor, bold: true });
   if (t.withholdingMinor !== 0n)
     sumRows.push({ label: "Withholding (TDS)", value: -t.withholdingMinor, muted: true });
   // Promotional credit is PRE-tax and already sits in the discount rows above the
@@ -584,7 +597,8 @@ export async function renderInvoicePdf(
   const unexplainedCredit = t.totalMinor - explainedAfterTotal - t.amountDueMinor;
   if (unexplainedCredit > 0n)
     sumRows.push({ label: "Credits", value: -unexplainedCredit, muted: true });
-  sumRows.push({ label: labels.closing, unit: cur, value: t.amountDueMinor, big: true });
+  if (!heldUntil)
+    sumRows.push({ label: labels.closing, unit: cur, value: t.amountDueMinor, big: true });
 
   /**
    * The summary block:
@@ -795,6 +809,43 @@ export async function renderInvoicePdf(
     y = pdf.y + 2;
   }
 
+  // Usage that credits paid: stated as information, with no amount (it is not a charge).
+  const creditUsage = doc.creditUsage ?? [];
+  if (creditUsage.length > 0) {
+    if (y + 34 + creditUsage.length * 22 > bottomLimit()) {
+      pdf.addPage();
+      y = pdf.page.margins.top;
+    }
+    y += 8;
+    pdf
+      .moveTo(left, y)
+      .lineTo(left + 46, y)
+      .strokeColor("#bbbbbb")
+      .lineWidth(0.8)
+      .stroke();
+    y += 10;
+    pdf
+      .font("Bold")
+      .fontSize(7)
+      .fillColor("#666666")
+      .text("USAGE PAID WITH CREDITS", left, y, { width: contentW, characterSpacing: 0.8 });
+    y = pdf.y + 3;
+    for (const line of creditUsage) {
+      pdf.font("Body").fontSize(8.5).fillColor("#111111");
+      pdf.text(line.text, left, y, { width: contentW });
+      y = pdf.y + 1;
+      // When the usage arrived: not the invoice's billing period.
+      if (line.period) {
+        pdf.fontSize(7.5).fillColor("#666666");
+        pdf.text(`Usage from ${date(line.period.start)} to ${date(line.period.end)}`, left, y, {
+          width: contentW,
+        });
+        y = pdf.y + 1;
+      }
+      y += 3;
+    }
+  }
+
   const contact = [doc.seller.supportEmail, doc.seller.website].filter(Boolean).join("   ·   ");
   if (doc.meta.notes) {
     pdf
@@ -807,7 +858,8 @@ export async function renderInvoicePdf(
   // ── Payment instructions ─────────────────────────────────────────────────
   // Where an offline payer sends the money. Empty for every business that has not
   // configured any, so the document is unchanged by default.
-  if (doc.paymentInstructions.length > 0) {
+  // Not on a held draft: its total is not final, so there is nothing to pay yet.
+  if (!heldUntil && doc.paymentInstructions.length > 0) {
     for (const pi of doc.paymentInstructions) {
       const needed = 30 + (pi.description ? 14 : 0) + pi.fields.length * 12;
       if (pdf.y + needed > bottomLimit()) {

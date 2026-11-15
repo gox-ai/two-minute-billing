@@ -94,6 +94,9 @@ export default function proxy(req: NextRequest) {
     // is the API's — every `/v1/*` call stays 403 until the factor is confirmed.
     const headers = new Headers(req.headers);
     headers.set("x-tmb-path", pathname);
+    // The query too, so a session that expired on the server returns to the same tab and
+    // filters after sign-in (`lib/sign-in-url.ts`). Kept apart: `x-tmb-path` is compared exactly.
+    headers.set("x-tmb-search", req.nextUrl.search);
     return NextResponse.next({ request: { headers } });
   }
 
@@ -105,16 +108,13 @@ export default function proxy(req: NextRequest) {
   }
   const url = req.nextUrl.clone();
   url.pathname = "/login";
-  // Drop the query rather than carrying it to /login: it can hold ids and filters from the
-  // tenant the visitor was NOT authenticated for.
-  //
-  // The PATH is carried, as `redirectTo`, so signing in lands where the visitor was going
-  // instead of dumping them on the home page. It is a different kind of value from the
-  // query: they just requested it, so echoing it back discloses nothing they did not have,
-  // and `requirePermission()` still gates the destination when they arrive. Read only
-  // through `safeRedirectTo` — the parameter is an open redirect otherwise.
+  // The page, with its query (tab, filters), is carried as `redirectTo`, so signing in lands
+  // exactly where the visitor was going. It is their own request echoed back to them, and
+  // `requirePermission()` still gates the destination when they arrive. Read only through
+  // `safeRedirectTo`: the parameter is an open redirect otherwise.
+  const dest = pathname + req.nextUrl.search;
   url.search = "";
-  url.searchParams.set(REDIRECT_PARAM, pathname);
+  url.searchParams.set(REDIRECT_PARAM, dest);
   return NextResponse.redirect(url);
 }
 

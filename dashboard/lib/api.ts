@@ -402,6 +402,10 @@ export interface Business {
     cancel_timing?: "immediately" | "end_of_term";
     allow_pause_resume?: boolean;
     allow_reactivate?: boolean;
+    allow_restart?: boolean;
+    restart_price?: "current" | "keep";
+    restart_window_days?: number | null;
+    restart_open_invoices?: "pay_first" | "allow";
     /** Buyer may skip an upcoming renewal. Default OFF. */
     allow_skip_renewal?: boolean;
     /** Most renewals a buyer may skip in 12 months, 1–12. Default 3. Operators are not capped. */
@@ -482,7 +486,7 @@ export interface Business {
     /** Copied on every send. `cc` is visible to the customer; `bcc` is not. Max 10 each. */
     cc?: string[] | null;
     bcc?: string[] | null;
-    /** Prepended to every subject at send time, e.g. "[Acme]". */
+    /** Prepended to every subject at send time, e.g. "[Halyard]". */
     subjectPrefix?: string | null;
     /** The merchant's sign-off, under the button on every email. Plain text, max 300. */
     footerNote?: string | null;
@@ -625,6 +629,23 @@ export interface CustomerBalance {
   refundable_credits: number;
   excess_payments: number;
 }
+/** A coupon applied to a customer (`customer.discounts[]`). */
+export interface CustomerDiscount {
+  id: string;
+  coupon: string;
+  coupon_name: string | null;
+  kind: string;
+  percent_off_bps: number | null;
+  amount_off_minor: number | null;
+  currency: string | null;
+  apply_on: string;
+  duration_type: string;
+  /** Invoices it still discounts; null = every invoice until removed. */
+  remaining_invoices: number | null;
+  total_invoices: number | null;
+  created_at: string;
+}
+
 export interface Customer {
   id: string;
   email: string | null;
@@ -637,6 +658,8 @@ export interface Customer {
   /** DERIVED read-only: explicit `currency`, else the live subscriptions' currency. Use this, not `currency`, for money defaults. */ effective_currency?:
     | string
     | null;
+  /** Coupons applied to the customer; they discount its invoices (detail GET only). */
+  discounts?: CustomerDiscount[];
   /** Cash collected, net of refunds, per currency (detail GET only). */
   lifetime_revenue?: Array<{
     currency: string;
@@ -870,6 +893,8 @@ export interface SubscriptionItem {
   /** List price this item departed from (set only when unit_price_overridden is true). */ catalog_amount_minor?:
     | number
     | null;
+  /** The product's id, for the link to its page. */
+  product?: string;
   product_name?: string;
   product_kind?: string;
   free_quantity?: number | null;
@@ -1007,6 +1032,8 @@ export interface InvoiceLine {
   item_level_discount_minor?: number;
   /** What a credit note can still credit on this line, tax-inclusive (detail read only). */
   creditable_minor?: number;
+  /** A credit pack line: the maximum with a full refund, used credits included. */
+  pack_full_creditable_minor?: number;
   /** How a usage line was rated; null on other lines. */
   rating?: LineRating | null;
   /** Usage lines on an interim or final invoice: usage to date, and the part billed before. */
@@ -1096,8 +1123,10 @@ export interface Invoice {
   status: string;
   /** Detail read: all tax on the invoice, added and included (Σ `taxes`). */
   tax_minor?: number;
-  /** usage_interim (threshold invoicing) | credit_purchase; null = an ordinary invoice. */
-  purpose?: "usage_interim" | "credit_purchase" | null;
+  /** usage_interim (threshold) | credit_purchase | late_usage; null = an ordinary invoice. */
+  purpose?: "usage_interim" | "credit_purchase" | "late_usage" | null;
+  /** A held renewal invoice (usage grace window, `pending`): when it finalizes. */
+  usage_closes_at?: string | null;
   currency: string;
   number?: string | null;
   /**
@@ -1235,6 +1264,8 @@ export interface Coupon {
   max_redemptions: number | null;
   /** Redemptions allowed per customer; null = no cap. */
   max_redemptions_per_customer?: number | null;
+  /** What the per-customer cap counts: the customer record, or every customer with the email. */
+  per_customer_limit_by?: "customer" | "email";
   active: boolean;
 }
 /** `unredeemed_count` is counted server-side, NOT `total_count - redeemed_count` — archived codes are neither. */
@@ -1418,7 +1449,9 @@ export interface Event {
   id: string;
   type: string;
   data: unknown;
-  created_at: string;
+  created_at?: string;
+  /** What `/v1/events` sends; `created_at` is the older name. */
+  occurred_at?: string;
 }
 // --- Business Home analytics (GET /v1/businesses/:biz/analytics) ---
 export type AnalyticsRange = "daily" | "3m" | "6m" | "12m";
@@ -1569,12 +1602,32 @@ export async function authHeaders(extra?: Record<string, string>): Promise<Recor
   };
 }
 
+/**
+ * A non-2xx answer from the engine. The message keeps its old shape (code matches on it),
+ * and `status` lets a detail page turn a 404 into `notFound()` instead of an error panel.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+  constructor(path: string, status: number) {
+    super(`tmbilling API ${path} → ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
+/** True when `e` is the engine saying the record does not exist. */
+export function isApiNotFound(e: unknown): boolean {
+  return e instanceof ApiError ? e.status === 404 : e instanceof Error && /→ 404$/.test(e.message);
+}
+
 async function api<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: await authHeaders(),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`tmbilling API ${path} → ${res.status}`);
+  if (!res.ok) throw new ApiError(path, res.status);
   return res.json() as Promise<T>;
 }
 
@@ -1665,7 +1718,7 @@ export const apiGet = <T>(path: string) => api<T>(path);
 export async function apiGetOrNull<T>(path: string): Promise<T | null> {
   const res = await fetch(`${BASE}${path}`, { headers: await authHeaders(), cache: "no-store" });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`tmbilling API ${path} → ${res.status}`);
+  if (!res.ok) throw new ApiError(path, res.status);
   return res.json() as Promise<T>;
 }
 
@@ -1678,6 +1731,11 @@ export const apiDelete = (path: string) => apiWrite(path, {}, "DELETE");
 
 export const getMe = () => api<Organization>("/v1/me");
 export const listBusinesses = () => api<List<Business>>("/v1/businesses");
+/** The business's name for a crumb when the page itself failed to load; never the raw id. */
+export const businessLabel = (biz: string) =>
+  listBusinesses()
+    .then((r) => r.data.find((b) => b.id === biz)?.name ?? "Business")
+    .catch(() => "Business");
 /** One filter row of the list API's `field[op]=value` grammar. */
 export interface ListFilterParam {
   field: string;
@@ -2141,19 +2199,34 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]", ":
  *
  * True in development, where loopback is the correct answer.
  */
-export const publicApiReachable = (() => {
+function reachableFromOutside(url: string): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   try {
-    const host = new URL(PUBLIC_API_URL).hostname;
+    const host = new URL(url).hostname;
     return !LOOPBACK_HOSTS.has(host) && !host.endsWith(".localhost");
   } catch {
     return false;
   }
-})();
+}
+
+export const publicApiReachable = reachableFromOutside(PUBLIC_API_URL);
+
+/**
+ * The API base URL we tell developers to call (Developer page, API reference links): the
+ * engine's own `ADVERTISED_API_URL`, read from the same root `.env`. Not the gateway webhook
+ * base above: gateways keep the URL they registered. Unset or empty: `PUBLIC_API_URL`.
+ */
+export const ADVERTISED_API_URL = (process.env.ADVERTISED_API_URL || PUBLIC_API_URL).replace(
+  /\/+$/,
+  "",
+);
+
+export const advertisedApiReachable = reachableFromOutside(ADVERTISED_API_URL);
 
 // Presentation helpers live in lib/format (client-safe); re-exported here so the
 // many server components importing them from '@/lib/api' keep working.
-export { fmtDate, fmtDateTime, money, intervalLabel, INTERVAL_LABEL } from "@/lib/format";
+export { money, intervalLabel, INTERVAL_LABEL } from "@/lib/format";
+export { fmtDate, fmtDateTime, fmtRange } from "@/lib/format-date";
 
 /** `invoice_rules_config` as the business read returns it (every key resolved). */
 export interface InvoiceRulesConfig {

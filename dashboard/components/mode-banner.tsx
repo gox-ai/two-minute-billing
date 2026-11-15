@@ -1,6 +1,5 @@
 "use client";
 
-import { Info } from "lucide-react";
 import { useDashboardMode } from "@/components/mode-provider";
 
 /**
@@ -17,10 +16,12 @@ export function ModeBanner() {
   const state = useDashboardMode();
   if (!state || state.mode !== "test") return null;
   return (
-    <div className="z-50 flex flex-none items-center justify-center gap-1.5 bg-warning-soft px-3 py-1 text-center text-xs font-medium text-warning">
-      <strong className="font-semibold">Test mode</strong> — nothing here bills a real customer.
-      Email goes only to team members.
-      <Info className="size-3" aria-hidden />
+    // The label never breaks; on a phone the sentence wraps beside it.
+    <div className="z-50 flex flex-none items-center justify-center gap-1.5 bg-warning-soft px-3 py-1 text-xs font-medium text-warning">
+      <strong className="shrink-0 font-semibold whitespace-nowrap">Test mode</strong>
+      <span className="min-w-0 text-pretty">
+        — nothing here bills a real customer. Email goes only to team members.
+      </span>
     </div>
   );
 }

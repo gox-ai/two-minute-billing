@@ -118,7 +118,7 @@ export function ReportFigureBones({ chart = true }: { chart?: boolean }) {
         <Skeleton className="h-4 w-24" />
         <Skeleton className="h-6 w-36" />
       </div>
-      {chart ? <Skeleton className="mt-5 h-[300px] w-full rounded-lg" /> : null}
+      {chart ? <Skeleton className="mt-5 h-[300px] w-full rounded-xl" /> : null}
     </Busy>
   );
 }
@@ -167,7 +167,7 @@ export function StatLoading() {
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-6 w-36" />
             </div>
-            <Skeleton className="mt-5 h-[300px] w-full rounded-lg" />
+            <Skeleton className="mt-5 h-[300px] w-full rounded-xl" />
           </div>
           <div className="border-t px-5 py-3">
             <Skeleton className="h-3 w-64 max-w-full" />

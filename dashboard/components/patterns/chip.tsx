@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "@/components/patterns/copy-button";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 
 type Tone = "green" | "tan" | "red" | "gray" | "blue" | "slate";
 
@@ -13,9 +14,10 @@ const TONE_FILL: Record<Tone, string> = {
   green: "border-success/25 bg-success-soft text-success",
   tan: "border-warning/25 bg-warning-soft text-warning",
   red: "border-destructive/25 bg-destructive-soft text-destructive",
-  gray: "border-border bg-muted text-muted-foreground",
+  // `--chip-foreground`: muted ink on the muted fill is 4.23:1, under AA (globals.css).
+  gray: "border-border bg-muted text-chip-foreground",
   blue: "border-info/25 bg-info-soft text-info",
-  slate: "border-border bg-muted text-muted-foreground",
+  slate: "border-border bg-muted text-chip-foreground",
 };
 
 const STATUS_TONE: Record<string, Tone> = {
@@ -31,6 +33,28 @@ const STATUS_TONE: Record<string, Tone> = {
   due_now: "blue",
   upcoming: "gray",
   active: "green",
+  // Ops / system monitor and outbound-delivery vocabulary (was a second chip
+  // component, `status-badge.tsx`, with a dot; one chip now).
+  alive: "green",
+  ok: "green",
+  running: "blue",
+  scheduled: "blue",
+  stale: "red",
+  stopped: "gray",
+  overran: "tan",
+  gap: "gray",
+  errors: "red",
+  delivered: "green",
+  exhausted: "red",
+  skipped: "gray",
+  superseded: "gray",
+  no_payment_method: "red",
+  draft: "gray",
+  credited: "gray",
+  disabled: "gray",
+  // VAT number check (customer record).
+  valid: "green",
+  invalid: "red",
   // Team vocabulary (2026-08-30). An INVITED member cannot sign in yet, so the row is
   // unfinished business — it fills, like the other states waiting on a person. The
   // person is the invitee rather than the admin reading the screen, but "who can
@@ -40,6 +64,8 @@ const STATUS_TONE: Record<string, Tone> = {
   succeeded: "green",
   success: "green",
   enabled: "green",
+  // Not paying yet: a trial must not look like Active (owner decision 2026-11-12; it was
+  // tan until polish batch 2 turned it green). Green on a subscription means it pays.
   trialing: "tan",
   in_trial: "tan",
   open: "tan",
@@ -142,6 +168,11 @@ const STATUS_TONE: Record<string, Tone> = {
 // Overrides for statuses whose default `s.replace(/_/g, ' ')` label doesn't
 // carry enough context on its own.
 const STATUS_LABEL: Record<string, string> = {
+  // The label only; the status value stays `non_renewing`.
+  non_renewing: "non-renewing",
+  // Payment intents and attempts: plain words for the engine's `inited` and `consumed`.
+  inited: "open",
+  consumed: "used",
   refund_due: "refund due: credit available",
   abandoned: "abandoned: dead worker",
 };
@@ -162,7 +193,7 @@ const STATUS_TITLE: Record<string, string> = {
   attempt_failed:
     "The gateway refused the newest attempt. The intent stays open, so a new attempt can use it." +
     " The intent has no failed status of its own. It expires at its expiry date unless someone" +
-    " retries or voids it. The Intent Status row shows the stored value.",
+    " retries or voids it. The Intent status row shows the stored value.",
   refund_due:
     "A credit note with money still on it. Nothing was attempted and nothing failed." +
     " The Available row shows what the customer can still get paid or can still spend. The status" +
@@ -209,7 +240,10 @@ export function StatusChip({
   );
 }
 
-/** Neutral informational chip (channel, currency, frequency, trial countdown…). */
+/**
+ * Neutral informational chip (channel, currency, frequency, trial countdown…). One height
+ * (24px) and one padding (10px) with `StatusChip`; a chip never carries its own size.
+ */
 export function Chip({
   children,
   tone = "gray",
@@ -227,7 +261,7 @@ export function Chip({
       title={title}
       className={cn(
         "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        tone === "gray" ? "border-border bg-muted/60 text-foreground/80" : TONE_FILL[tone],
+        TONE_FILL[tone],
         className,
       )}
     >
@@ -236,7 +270,7 @@ export function Chip({
   );
 }
 
-/** Id chip with copy-to-clipboard (e.g. "Subscription ID sub_…"). */
+/** Id chip with copy-to-clipboard (e.g. "Subscription ID sub_…"). One line; the id shortens in the middle. */
 export function IdChip({
   label,
   id,
@@ -247,13 +281,14 @@ export function IdChip({
   className?: string;
 }) {
   return (
-    // May shrink below the ID's width (a phone header): the ID truncates, copy keeps it whole.
-    <Chip className={cn("max-w-full min-w-0 shrink font-mono text-xs", className)}>
-      {label ? <span className="shrink-0 font-sans text-muted-foreground">{label}</span> : null}
-      <span className="min-w-0 truncate" title={id}>
-        {id}
-      </span>
-      <CopyButton value={id} className="-mr-1 shrink-0" />
+    <Chip
+      className={cn("max-w-full min-w-0 shrink py-0 pr-0.5 pl-2.5 font-mono text-xs", className)}
+    >
+      {label ? (
+        <span className="shrink-0 font-sans whitespace-nowrap text-muted-foreground">{label}</span>
+      ) : null}
+      <MiddleEllipsis value={id} />
+      <CopyButton value={id} className="shrink-0" />
     </Chip>
   );
 }

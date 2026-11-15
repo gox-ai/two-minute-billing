@@ -2,6 +2,7 @@ import { measureValueCompact } from "@/components/analytics/format";
 import { CompareDelta } from "@/components/analytics/compare-delta";
 import { measurePolarity } from "@/components/analytics/series-format";
 import { TileFooter } from "@/components/analytics/tile-footer";
+import { RollingNumber } from "@/components/ui/rolling-number";
 import type { AnalyticsResult } from "@/lib/analytics-api";
 
 /**
@@ -13,8 +14,10 @@ import type { AnalyticsResult } from "@/lib/analytics-api";
 export function FigureTile({ result }: { result: AnalyticsResult }) {
   return (
     <div className="flex h-full flex-col gap-2">
-      <div className="text-2xl font-semibold tabular-nums">
-        {measureValueCompact(result.total, result.unit, result.currency)}
+      {/* Clipped on y: the rolling digits' 0–9 column hangs below the figure and would
+          give the tile a scrollbar. */}
+      <div className="overflow-y-clip text-2xl font-semibold tabular-nums">
+        <RollingNumber value={measureValueCompact(result.total, result.unit, result.currency)} />
       </div>
       {result.compare ? (
         <CompareDelta compare={result.compare} polarity={measurePolarity(result.measure)} quiet />

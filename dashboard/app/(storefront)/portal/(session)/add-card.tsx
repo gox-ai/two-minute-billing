@@ -24,11 +24,18 @@ import {
 import type { PortalMe, PortalVaultSetup, PortalGateway } from "@/lib/portal-api";
 import { accountHolderName } from "@/lib/names";
 import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
-import { MethodTypeChoice, type MethodType } from "../../method-choice";
+import { MethodTypeChoice, railsForCurrency, type MethodType } from "../../method-choice";
 import { useReportInstrument } from "../../storefront-footer";
 import { CommitBar } from "../../chrome";
 import { AchAuthorization } from "../../ach-authorization";
-import { PaymentDialog, StripeIntentForm } from "../../payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+  StripeIntentForm,
+  refusalMessage,
+} from "../../payment-dialog";
 
 /**
  * Buyer add-card flow (P14). First lets the buyer pick WHICH of the business's
@@ -53,9 +60,12 @@ export function AddCard({
   gateways,
   expectedDebitMinor,
   unattendedLimitMinor,
+  currency,
 }: {
   /** Non-secret per-buyer key for the redirect-leg stash — see lib/pending-vault-setup.ts. */
   scope: string;
+  /** The currency this buyer is billed in, when known: a rail that cannot move it is not offered. */
+  currency?: string | null;
   me: PortalMe;
   gateways: PortalGateway[];
   /** The customer's largest recurring debit, from the gateway-list envelope. */
@@ -79,10 +89,13 @@ export function AddCard({
    * Stripe account with nothing configured it would have offered UPI. `card` is the only
    * honest guess when the server told us nothing, and one option renders no chooser at all.
    */
-  const allowedMethodTypes =
+  const gatewayRails =
     selectedGw?.method_types && selectedGw.method_types.length > 0
       ? selectedGw.method_types
       : ["card"];
+  // UPI moves only rupees: a buyer billed in dollars is not offered it.
+  const currencyRails = railsForCurrency(gatewayRails, currency);
+  const allowedMethodTypes = currencyRails.length > 0 ? currencyRails : ["card"];
   /**
    * DERIVED, never the raw state: switching gateway would otherwise submit a rail the new
    * one cannot do — pick SEPA on Stripe, switch to RazorPay, and the state still says
@@ -98,6 +111,11 @@ export function AddCard({
     activeMethodType === "us_bank_account" ? (selectedGw?.ach_authorization ?? null) : null;
   const [achAccepted, setAchAccepted] = React.useState(false);
   /** The e-mandate authorization URL, while the buyer is approving it — see `begin`. */
+  /**
+   * The last refusal, shown beside Add card and kept there until the next try. A toast went
+   * by itself after the gateway's sheet had closed, and the page then looked unchanged.
+   */
+  const [refusal, setRefusal] = React.useState<string | null>(null);
   const [awaitingMandate, setAwaitingMandate] = React.useState<string | null>(null);
 
   // Card networks (and Indian gateways in particular — export regulations)
@@ -138,6 +156,9 @@ export function AddCard({
    * Finish a setup that was authorized on our own page (a Stripe `pm_…`, a RazorPay
    * payment id, a test token) THROUGH THE INTENT — see the note in
    * `runEmbeddedCheckout` for why the intent and not the raw token.
+   *
+   * Returns the refusal and does not show it: a caller whose dialog is still open shows it
+   * there, where the buyer is looking. The others use `completeVaultInline`.
    */
   const completeVault = async (
     providerToken: string | undefined,
@@ -153,11 +174,26 @@ export function AddCard({
       },
       selected ?? undefined,
     );
-    if (!res.ok) return void toast.error(res.error ?? "We could not save that card.");
+    if (!res.ok) return res.error ?? "We could not save your payment method.";
     toast.success("Payment method added");
     setSetup(null);
     router.refresh();
+    return null;
   };
+  /** For a gateway whose own sheet has already closed: the refusal shows beside Add card. */
+  const completeVaultInline = async (...args: Parameters<typeof completeVault>) => {
+    const refused = await completeVault(...args);
+    if (refused) refuse(refused);
+  };
+  /** The gateway's or the engine's words, kept whole, then the next step unless they say one. */
+  const refuse = (reason: string) =>
+    setRefusal(
+      refusalMessage(
+        "We could not save your payment method.",
+        reason,
+        /try again|contact/i.test(reason) ? "" : "Try again, or use a different payment method.",
+      ).trim(),
+    );
 
   const begin = async () => {
     if (!selected) return;
@@ -185,12 +221,21 @@ export function AddCard({
     const strandedRail =
       selectedGw?.gateway_key === "razorpay" && activeMethodType === "bank_transfer";
     const authTab = strandedRail ? window.open("", "_blank") : null;
+    setRefusal(null);
     setStarting(true);
-    const res = await portalBeginSetupAction(window.location.origin, selected, activeMethodType);
+    const res = await portalBeginSetupAction(
+      window.location.origin,
+      selected,
+      activeMethodType,
+    ).catch(() => ({
+      ok: false as const,
+      // A server action that throws (the network) must not leave the button looking untouched.
+      error: "We could not start adding your payment method. The request did not finish.",
+    }));
     setStarting(false);
     if (!res.ok) {
       authTab?.close();
-      return void toast.error(res.error);
+      return void refuse(res.error);
     }
     if (strandedRail && res.setup.mode === "redirect" && res.setup.approval_url) {
       // The panel renders the link as an anchor too, so a blocked popup is a non-event —
@@ -263,15 +308,24 @@ export function AddCard({
         name: accountHolderName(me.customer),
         email: me.customer.email,
         contact: me.customer.phone ?? me.customer.address.phone,
+        address: {
+          line1: me.customer.address.line1,
+          city: me.customer.address.city,
+          state: me.customer.address.state,
+          state_code: me.customer.address.state_code,
+          postal_code: me.customer.address.postal_code,
+          country: me.customer.address.country,
+        },
       },
+      confirmLabel: "Save payment method",
     });
     if (result.status === "dismissed") {
       clearPendingVaultSetup(scope);
       return;
     }
-    if (result.status === "failed") return void toast.error(result.message);
+    if (result.status === "failed") return void refuse(result.message);
     setSaving(true);
-    await completeVault(undefined, paymentIntent, result.clientResult);
+    await completeVaultInline(undefined, paymentIntent, result.clientResult);
     clearPendingVaultSetup(scope);
     setSaving(false);
   };
@@ -307,15 +361,17 @@ export function AddCard({
      * thing the recovery had to complete through. Cleared on a dismissal (they left) and
      * on success (spent) — never on a failure.
      */
-    if (result.status === "failed") return void toast.error(result.message);
+    if (result.status === "failed") return void refuse(result.message);
     // Complete through the setup INTENT, not the payment id. RazorPay's own
     // `payment.authorized` webhook harvests the same intent for the buyer who closes the
     // tab, and only the intent's atomic claim keeps the two from each vaulting the
     // mandate — measured 2026-08-21, posting the payment id here produced two identical
     // UPI payment methods 15s apart. The payment id rides along as the fallback for a
     // provider with no intent.
+    // A setup always names its payment; "unconfirmed" is only for a charge.
+    if (result.status !== "authorized") return;
     setSaving(true);
-    await completeVault(result.paymentId, paymentIntent);
+    await completeVaultInline(result.paymentId, paymentIntent);
     clearPendingVaultSetup(scope);
     setSaving(false);
   };
@@ -324,7 +380,8 @@ export function AddCard({
   if (gateways.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        This business has no payment provider yet. You cannot add a card now. Contact the business.
+        {me.business.name} has no payment provider yet. You cannot add a card now. Contact{" "}
+        {me.business.name}.
       </p>
     );
   }
@@ -397,7 +454,10 @@ export function AddCard({
                 screen — the account's own label is the only part addressed to them. */}
             <RadioGroup
               value={selected}
-              onValueChange={setSelected}
+              onValueChange={(v) => {
+                setSelected(v);
+                setRefusal(null);
+              }}
               aria-label="Payment provider"
               className="flex flex-col gap-2"
             >
@@ -427,8 +487,12 @@ export function AddCard({
         {allowedMethodTypes.length > 1 ? (
           <MethodTypeChoice
             value={activeMethodType}
-            onValueChange={setMethodType}
+            onValueChange={(v) => {
+              setMethodType(v);
+              setRefusal(null);
+            }}
             allowed={allowedMethodTypes}
+            currency={currency}
             /* No visible heading: the block's own "Choose how you would like to pay for
                future invoices." says it one line above. The checkout, which has no such
                line, passes one. */
@@ -495,18 +559,15 @@ export function AddCard({
                               : "Add card"}
           </Button>
         </CommitBar>
+        <RefusalAlert message={refusal} />
       </div>
 
       <PaymentDialog
         open={setup != null}
         onClose={() => setSetup(null)}
         title="Add a payment method"
-        description={
-          stripeSetup
-            ? "Your card details go directly to Stripe. They never reach this page or our servers."
-            : undefined
-        }
       >
+        {stripeSetup ? <PaymentPrivacyNote business={me.business.name} /> : null}
         {stripeSetup ? (
           // No publishable key means Elements cannot mount. Say so, rather than
           // falling through to the token box: that box is the TM Test gateway's
@@ -534,63 +595,94 @@ export function AddCard({
                 })
               }
               onCancel={() => setSetup(null)}
+              // A refusal is returned, so the Stripe dialog shows it: it stays open over the page.
               onAuthorized={async (pm) => {
-                await completeVault(pm, stripeSetup.payment_intent);
+                const refused = await completeVault(pm, stripeSetup.payment_intent);
                 clearPendingVaultSetup(scope);
+                return refused
+                  ? refusalMessage(
+                      "We could not save your payment method.",
+                      refused,
+                      "Select Save card to try again.",
+                    )
+                  : undefined;
               }}
             />
           ) : (
             <p className="text-sm text-muted-foreground">
-              This payment provider is not fully configured. You cannot enter a card now. Contact
-              support.
+              The payment setup of {me.business.name} is not complete. You cannot enter a card now.
+              Contact {me.business.name}.
             </p>
           )
         ) : setup ? (
           // tmtest (and any client_secret provider without a browser SDK): complete
-          // with a provider test token directly.
-          <TokenSetup
-            onSubmit={(value) => completeVault(value, setup.payment_intent)}
-            onCancel={() => setSetup(null)}
-          />
+          // with the typed test token alone. Through the setup intent the gateway saves
+          // its default card and drops this one; the intent is never approved here.
+          <TokenSetup onSubmit={(value) => completeVault(value)} onCancel={() => setSetup(null)} />
         ) : null}
       </PaymentDialog>
     </>
   );
 }
 
+/** Shows a refusal in this dialog, not as a toast behind it. */
 function TokenSetup({
   onSubmit,
   onCancel,
 }: {
-  onSubmit: (value: string) => Promise<void>;
+  /** The refusal, or null when the card was saved. */
+  onSubmit: (value: string) => Promise<string | null>;
   onCancel: () => void;
 }) {
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const submit = async () => {
     setBusy(true);
+    setError(null);
     try {
-      await onSubmit(value.trim());
+      const refused = await onSubmit(value.trim());
+      if (refused)
+        setError(refusalMessage("We could not save your payment method.", refused, "Try again."));
+    } catch {
+      setError(
+        refusalMessage(
+          "We could not save your payment method.",
+          "The request did not finish",
+          "Try again.",
+        ),
+      );
     } finally {
       setBusy(false);
     }
   };
   return (
     <div className="flex flex-col gap-4">
-      <Input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Card token (test gateway)"
-        className="font-mono"
-      />
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="portal-test-card-token" className="text-sm font-medium">
+          Test card number
+        </label>
+        <Input
+          id="portal-test-card-token"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="4242424242424242"
+          className="font-mono"
+        />
+        <p className="m-0 text-xs text-muted-foreground">
+          This is a test. No money moves and no real card is saved. Enter a test card number, for
+          example 4242424242424242.
+        </p>
+      </div>
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={busy || !value.trim()}>
           {busy ? "Saving…" : "Save card"}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </div>
   );
 }

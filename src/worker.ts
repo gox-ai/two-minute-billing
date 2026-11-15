@@ -6,6 +6,7 @@ import {
   crontabFor,
   tasksFor,
   WORKER_CONCURRENCY,
+  queueDatabaseUrl,
 } from "./platform/jobs";
 import { config } from "./platform/config";
 import { beginShutdown } from "./platform/shutdown";
@@ -264,7 +265,7 @@ try {
   // password, and this line goes to an aggregator.
   const target = (() => {
     try {
-      const u = new URL(config.DATABASE_URL);
+      const u = new URL(queueDatabaseUrl());
       return {
         dbHost: u.hostname,
         dbPort: u.port || "5432",

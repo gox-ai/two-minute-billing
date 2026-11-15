@@ -4,7 +4,7 @@ export function DropSlot({ columns, row, start }: { columns: number; row: number
   return (
     <div className="flex min-h-40 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-primary bg-primary/5 text-primary">
       <span className="text-sm font-medium">Lands here</span>
-      <span className="hidden text-xs xl:inline">
+      <span className="hidden text-xs @min-[56.875rem]/main:inline">
         {columns === 1 ? `column ${start}` : `columns ${start} to ${end}`}, row {row}
       </span>
     </div>

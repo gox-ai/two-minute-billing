@@ -15,8 +15,8 @@ import type { MeasureUnit } from "@/lib/analytics-api";
  * `:root` and re-read when the theme changes — the same contract `useChartLine` documents.
  * The fallbacks are theme-aware: a light-theme palette on a dark card is worse than no chart.
  */
-const LIGHT = ["#4e4eda", "#067647", "#0284c7", "#7c9ec9", "#b42318"];
-const DARK = ["#8b8bf2", "#4ac68b", "#38bdf8", "#7f9cc0", "#ef7f75"];
+const LIGHT = ["#4e4eda", "#067647", "#0284c7", "#0c5484", "#b42318"];
+const DARK = ["#8184f1", "#1eac76", "#009edb", "#3c6aa4", "#db6c64"];
 const GRID = "rgba(128,128,128,0.18)";
 const LABEL = "#9ca3af";
 
@@ -134,7 +134,7 @@ export function BusinessMixChart({
                 React will not patch up. Only ECharts, which cannot read a custom property,
                 gets the resolved colour. */}
             <span
-              className="size-2 rounded-sm"
+              className="size-2 rounded-xs"
               style={{ background: `var(--chart-${(i % palette.length) + 1})` }}
               aria-hidden
             />
@@ -143,7 +143,7 @@ export function BusinessMixChart({
         ))}
         {notDrawn.map((label) => (
           <span key={label} className="inline-flex items-center gap-2 text-xs text-warning">
-            <span className="size-2 rounded-sm border border-warning" aria-hidden />
+            <span className="size-2 rounded-xs border border-warning" aria-hidden />
             {label}: no rate, not drawn
           </span>
         ))}

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { resetPasswordAction } from "@/app/auth-actions";
@@ -31,7 +32,9 @@ export default async function ResetPasswordPage({
       </div>
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Choose a new password</CardTitle>
+          <CardTitle className="text-xl">
+            <h1>Choose a new password</h1>
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
             When you set it, we sign you out on all browsers.
           </p>
@@ -81,9 +84,9 @@ export default async function ResetPasswordPage({
           </ActionForm>
 
           <p className="text-center text-sm text-muted-foreground">
-            <a href="/login" className="text-primary hover:underline">
+            <Link href="/login" className="text-primary hover:underline">
               Back to sign in
-            </a>
+            </Link>
           </p>
         </CardContent>
       </Card>

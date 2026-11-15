@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { intervalLabel } from "@/lib/format";
+import { plural } from "@/lib/labels";
 import { money, type Price } from "@/lib/api";
 import {
   Table,
@@ -32,20 +33,20 @@ export function priceDisplay(p: Price): string {
   if (p.amount_minor != null) return money(p.amount_minor, p.currency);
   if (p.model === "percentage" && p.percentage_bps != null)
     return `${(p.percentage_bps / 100).toFixed(2)}%`;
-  if (p.tiers?.length) return `${p.tiers.length} tiers`;
+  if (p.tiers?.length) return plural(p.tiers.length, "tier");
   return "—";
 }
 
 export const MODEL_LABEL: Record<string, string> = {
-  flat: "Flat Fee",
-  per_unit: "Per Unit",
+  flat: "Flat fee",
+  per_unit: "Per unit",
   tiered: "Tiered",
   volume: "Volume",
   stairstep: "Stairstep",
   usage: "Usage",
   package: "Package",
   percentage: "Percentage",
-  graduated_percentage: "Graduated Percentage",
+  graduated_percentage: "Graduated percentage",
 };
 
 export function PricingMatrix({
@@ -96,7 +97,8 @@ export function PricingMatrix({
 
   return (
     <Paged size={10} items={rows}>
-      <Table className="table-fixed max-lg:min-w-3xl">
+      {/* A currency × frequency matrix: on a phone it scrolls with the currency frozen. */}
+      <Table phone="scroll" className="table-fixed max-lg:min-w-3xl">
         <colgroup>
           <col className="w-[14%]" />
           <col className="w-[14%]" />
@@ -144,17 +146,17 @@ function PriceRow({ biz, p, freq }: { biz: string; p: Price; freq: string }) {
       <TableCell className="text-right font-medium tabular-nums">
         <Link
           href={`/businesses/${biz}/catalog/products/${p.product}/prices/${p.id}`}
-          className="text-primary hover:underline"
+          className="figure-link"
         >
           {priceDisplay(p)}
         </Link>
       </TableCell>
       <TableCell className="truncate">{MODEL_LABEL[p.model] ?? p.model}</TableCell>
       <TableCell className="text-muted-foreground">
-        {p.billing_cycles ? `${p.billing_cycles} cycles` : "Forever"}
+        {p.billing_cycles ? plural(p.billing_cycles, "cycle") : "Forever"}
       </TableCell>
       <TableCell className="text-muted-foreground">
-        {p.trial_period ? `${p.trial_period} ${p.trial_period_unit ?? "day"}s` : "—"}
+        {p.trial_period ? plural(p.trial_period, p.trial_period_unit ?? "day") : "—"}
       </TableCell>
       <TableCell className="text-muted-foreground">
         {p.is_taxable === false ? "No" : "Yes"}

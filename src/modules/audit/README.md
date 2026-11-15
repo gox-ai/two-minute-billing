@@ -50,6 +50,7 @@ None.
   address would be a claim about an origin that never existed.
 
 ## Changelog
+- **2026-11-12** — `writeAuditLog` without a `tx` leaves an `onReplica` scope (`onPrimary`): inside a report route its `withTenant` was a read-only transaction, so `GET …/raw_export/:dataset?format=csv` answered 500 on the `data.export` row.
 - **2026-10-26** — New actions `dispute.record` (full snapshot) and `dispute.mark_won` /
   `dispute.mark_lost` (status + funds_withdrawn diff), written in the dispute's own transaction.- **2026-10-25** — **Security trail, part 2 + `category` filter.** New actions:
   `gateway_account.create|update|delete|set_webhook_secret|rotate_webhook_secret|provision_webhook`
@@ -151,3 +152,7 @@ None.
 - **2026-10-21** — Audit log list total counts up to 10,000 and stops (`cappedTotal`, `total_capped`; `total=exact` opts in): an exact count over a large book cost seconds per page.
 - **2026-10-25** — `role.` joins the security category (`category[is]=security`): `role.create`,
   `role.update` (with `added`/`removed`), `role.delete`.
+- **2026-11-12** — List routes add `channel` (`checkout` | `portal`) and `actor_customer`
+  (`{ id, name }`) for an entry whose actor is a checkout or portal session (`sessionActors`:
+  one query per channel per page, org- and business-filtered). `actor` and `source` are
+  unchanged; `actor_customer` is null when the session has no customer.

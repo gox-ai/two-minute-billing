@@ -6,6 +6,9 @@
  * agree: if the card pairs `invoice.void` with `invoice_voided` but the page calls
  * it something else, the same act reads as two different things.
  */
+// Relative, so the root typecheck can follow test/unit/audit-action-labels.test.ts here.
+import { ASSISTANT_NAME } from "../../lib/assistant";
+import { enumLabel, sourcePhrase } from "../../lib/labels";
 
 /**
  * `action` → the verb phrase for the prose summary. Only actions we actually write
@@ -29,6 +32,12 @@ const ACTION_PHRASE: Record<string, string> = {
   "credit_note.void": "voided the credit note",
   "subscription.cancel": "cancelled the subscription",
   "subscription.change": "changed the subscription",
+  "subscription.change_reverted": "reverted the plan change because the payment failed",
+  "subscription.pending_change_created": "held a change until its invoice is paid",
+  "subscription.pending_change_applied": "applied a change when its invoice was paid",
+  "subscription.pending_change_expired": "ended a change that was not paid",
+  "subscription.pending_change_money_kept":
+    "kept the payment for a change that did not apply as credit",
   "subscription.pause": "paused the subscription",
   "subscription.resume": "resumed the subscription",
   "price.create": "created the price",
@@ -94,6 +103,29 @@ export function actorLabel(actor: string | null | undefined): { text: string; mo
   return { text: actor, mono: actor.startsWith("key_") };
 }
 
+/** Event sources as a label. A code we do not know reads as plain words, never snake_case. */
+const NAMED_SOURCES: Record<string, string> = {
+  assistant: ASSISTANT_NAME,
+  api: "API",
+  dashboard: "Dashboard",
+  billing_clock: "Billing clock",
+  scheduled_job: "Billing clock",
+  migration: "Migration",
+  system: "System",
+  hubspot: "HubSpot",
+};
+
+/** How an event's `source` reads: "assistant" → "Billy", "scheduled_job" → "Billing clock". */
+export function sourceLabel(source: string): string {
+  return NAMED_SOURCES[source] ?? source.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+/** The "who caused it" phrase for a log row: "by the billing clock", "through the API". */
+export function sourceByPhrase(source: string): string {
+  if (source === "assistant") return `by ${ASSISTANT_NAME}`;
+  return sourcePhrase(source) ?? `from ${sourceLabel(source).toLowerCase()}`;
+}
+
 /** `invoice.void` → "Invoice void" (the title when we have no better name). */
 export function humaniseAction(action: string): string {
   return action.replace(/[._]/g, " ").replace(/^./, (c) => c.toUpperCase());
@@ -105,7 +137,7 @@ export function actionPhrase(action: string): string {
 }
 
 /** Initialisms that must not read as words ("PO number", not "Po number"). */
-const ACRONYMS = new Set(["po", "id", "ip", "url", "cn", "tds", "api"]);
+const ACRONYMS = new Set(["po", "id", "ip", "url", "cn", "tds", "api", "ses", "smtp", "gdpr"]);
 
 /**
  * `amount_due_minor` → "Amount due (minor units)"; `poNumber` → "PO number".
@@ -326,6 +358,11 @@ const ACTION_HEADLINE: Record<string, string> = {
   "subscription.activate": "activated.",
   "subscription.renew": "renewed.",
   "subscription.change": "changed.",
+  "subscription.change_reverted": "change reverted.",
+  "subscription.pending_change_created": "change held for payment.",
+  "subscription.pending_change_applied": "held change applied.",
+  "subscription.pending_change_expired": "held change ended.",
+  "subscription.pending_change_money_kept": "payment kept as credit.",
   "subscription.update": "updated.",
   "subscription.cancel": "cancelled.",
   "subscription.pause": "paused.",
@@ -336,7 +373,7 @@ const ACTION_HEADLINE: Record<string, string> = {
   "subscription.change_trial_end": "trial end changed.",
   "subscription.end_trial": "trial ended.",
   subscription_cancel_scheduled: "cancellation scheduled.",
-  "invoice.update": "details edited.",
+  "invoice.update": "details changed.",
   "invoice.void": "voided.",
   "invoice.close": "closed.",
   "invoice.collect": "collection attempted.",
@@ -354,11 +391,24 @@ const ACTION_HEADLINE: Record<string, string> = {
   "mandatory_addon.skipped": "mandatory addon skipped.",
 };
 
-/** `customer` → `Customer`; the noun the headline's link wraps. */
+/** `api_key` → `API key`; the noun the headline's link wraps. */
 export function resourceNoun(resourceType: string | null): string {
   if (!resourceType) return "Record";
-  return resourceType.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  const words = resourceType
+    .split(/[._]/)
+    .filter(Boolean)
+    .map((w) => (ACRONYMS.has(w) ? w.toUpperCase() : w));
+  return words.join(" ").replace(/^./, (c) => c.toUpperCase());
 }
+
+/** Plain CRUD verbs an action has no headline for. */
+const PAST: Record<string, string> = {
+  create: "created",
+  update: "updated",
+  archive: "archived",
+  restore: "restored",
+  delete: "deleted",
+};
 
 export function actionHeadline(
   action: string,
@@ -367,8 +417,164 @@ export function actionHeadline(
   const noun = resourceNoun(resourceType);
   const verb = ACTION_HEADLINE[action];
   if (verb) return { noun, verb };
+  // The title already reads "<Noun> <verb>"; keep its verb when it names this noun.
+  const title = ACTION_TITLE[action];
+  if (title?.startsWith(`${noun} `)) return { noun, verb: `${title.slice(noun.length + 1)}.` };
   // Strip the resource prefix so `coupon.expire` reads "Coupon expire." and not
   // "Coupon coupon expire." — the noun already carries it.
   const tail = action.includes(".") ? action.slice(action.indexOf(".") + 1) : action;
-  return { noun, verb: `${tail.replace(/_/g, " ")}.` };
+  return { noun, verb: `${PAST[tail] ?? tail.replace(/_/g, " ")}.` };
+}
+
+/**
+ * Every action the engine writes (`writeAuditLog` and its wrappers in src/), as
+ * "<Noun> <past participle>". Tested in test/unit/audit-action-labels.test.ts.
+ */
+const ACTION_TITLE: Record<string, string> = {
+  "api_key.create": "API key created",
+  "api_key.revoke": "API key revoked",
+  "api_key.rotate": "API key rotated",
+  "api_key.update": "API key updated",
+  "business.remove_currency": "Business currency removed",
+  "business.set_currency_rate_source": "Exchange rate source changed",
+  "business.settings_update": "Business settings updated",
+  "coupon.archive": "Coupon archived",
+  "coupon.create": "Coupon created",
+  "coupon.restore": "Coupon restored",
+  "coupon.update": "Coupon updated",
+  "coupon_set.add_codes": "Coupon codes added",
+  "coupon_set.archive": "Coupon set archived",
+  "coupon_set.archive_code": "Coupon code archived",
+  "coupon_set.create": "Coupon set created",
+  "coupon_set.delete_unused_codes": "Unused coupon codes deleted",
+  "coupon_set.rename": "Coupon set renamed",
+  "coupon_set.update": "Coupon set updated",
+  "credit.large_grant": "Large credit grant recorded",
+  "credit_note.create": "Credit note issued",
+  "credit_note.record_refund": "Credit note offline refund recorded",
+  "credit_note.refund": "Credit note refunded",
+  "credit_note.resolve_payout": "Credit note payout resolved",
+  "credit_note.void": "Credit note voided",
+  "customer.add_payment_method": "Customer payment method added",
+  "customer.archive": "Customer archived",
+  "customer.change_billing_date": "Customer billing date changed",
+  "customer.clear_personal_data": "Customer personal data erased (GDPR)",
+  "customer.create": "Customer created",
+  "customer.payment_method_orphaned_at_gateway": "Payment method left active at the gateway",
+  "customer.payment_method_role": "Customer payment method role changed",
+  "customer.remove_payment_method": "Customer payment method removed",
+  "customer.restore": "Customer restored",
+  "customer.update": "Customer updated",
+  "data.export": "Data exported",
+  "dispute.mark_lost": "Dispute marked as lost",
+  "dispute.mark_won": "Dispute marked as won",
+  "dispute.record": "Dispute recorded",
+  "dunning_policy.archive": "Dunning policy archived",
+  "dunning_policy.create": "Dunning policy created",
+  "dunning_policy.update": "Dunning policy updated",
+  "gateway_account.create": "Gateway account created",
+  "gateway_account.delete": "Gateway account deleted",
+  "gateway_account.provision_webhook": "Gateway webhook created",
+  "gateway_account.rotate_webhook_secret": "Gateway webhook secret rotated",
+  "gateway_account.set_webhook_secret": "Gateway webhook secret set",
+  "gateway_account.update": "Gateway account updated",
+  "integration.hubspot.connect": "HubSpot connected",
+  "integration.hubspot.disconnect": "HubSpot disconnected",
+  "invoice.apply_credits": "Invoice credits applied",
+  "invoice.close": "Invoice closed",
+  "invoice.collect": "Invoice collection attempted",
+  "invoice.pause_dunning": "Invoice dunning paused",
+  "invoice.record_payment": "Invoice offline payment recorded",
+  "invoice.regenerate": "Invoice regenerated",
+  "invoice.resume_dunning": "Invoice dunning resumed",
+  "invoice.stop_dunning": "Invoice dunning stopped",
+  "invoice.update": "Invoice details changed",
+  "invoice.void": "Invoice voided",
+  "invoice.write_off": "Invoice written off as bad debt",
+  "mail_transport.ses.update": "SES email settings updated",
+  "mail_transport.smtp.update": "SMTP email settings updated",
+  "mandatory_addon.skipped": "Mandatory addon skipped",
+  "model_cost_override.create": "Model cost override created",
+  "model_cost_override.delete": "Model cost override deleted",
+  "model_cost_override.end": "Model cost override ended",
+  "organization.session_policy.update": "Session policy updated",
+  "organization.two_factor.disable": "Two-factor requirement disabled",
+  "organization.two_factor.enable": "Two-factor requirement enabled",
+  "payment.cancel_pending_debit": "Pending debit cancelled",
+  "price.archive": "Price archived",
+  "price.create": "Price created",
+  "price.restore": "Price restored",
+  "price.update": "Price updated",
+  "product.archive": "Product archived",
+  "product.create": "Product created",
+  "product.restore": "Product restored",
+  "product.update": "Product updated",
+  "product_group.archive": "Product group archived",
+  "product_group.create": "Product group created",
+  "product_group.restore": "Product group restored",
+  "product_group.update": "Product group updated",
+  "role.create": "Role created",
+  "role.delete": "Role deleted",
+  "role.update": "Role updated",
+  "subscription.activate": "Subscription activated",
+  "subscription.cancel": "Subscription cancelled",
+  "subscription.change": "Subscription changed",
+  "subscription.change_reverted": "Subscription change reverted",
+  "subscription.pending_change_created": "Change held for payment",
+  "subscription.pending_change_applied": "Held change applied",
+  "subscription.pending_change_expired": "Held change ended",
+  "subscription.pending_change_money_kept": "Payment for a change kept as credit",
+  "subscription.change_term_end": "Subscription term end changed",
+  "subscription.change_trial_end": "Subscription trial end changed",
+  "subscription.commitment_change": "Subscription commitment changed",
+  "subscription.create": "Subscription created",
+  "subscription.delete": "Subscription deleted",
+  "subscription.end_trial": "Subscription trial ended",
+  "subscription.pause": "Subscription paused",
+  "subscription.reactivate": "Subscription reactivated",
+  "subscription.remove_scheduled_cancellation": "Subscription scheduled cancellation removed",
+  "subscription.renew": "Subscription renewed",
+  "subscription.renewal_skipped": "Subscription renewal skipped",
+  "subscription.resume": "Subscription resumed",
+  "subscription.selling_price_change": "Subscription selling price changed",
+  "subscription.skip_renewal": "Subscription renewal skip scheduled",
+  "subscription.unskip_renewal": "Subscription renewal skip removed",
+  "subscription.update": "Subscription updated",
+  subscription_cancel_scheduled: "Subscription cancellation scheduled",
+  "team.accept_invite": "Team invite accepted",
+  "team.decline_invite": "Team invite declined",
+  "team.invite": "Teammate invited",
+  "team.remove": "Teammate removed",
+  "team.resend_invite": "Team invite sent again",
+  "team.role_change": "Teammate role changed",
+  "transfer.apply": "Data transfer applied",
+  "transfer.cancel": "Data transfer cancelled",
+  "transfer.live_override": "Data transfer run in live mode",
+  "transfer.retry": "Data transfer retried",
+  "transfer.run": "Data transfer run",
+  "webhook_endpoint.create": "Webhook endpoint created",
+  "webhook_endpoint.delete": "Webhook endpoint deleted",
+  "webhook_endpoint.rotate_secret": "Webhook endpoint secret rotated",
+  "webhook_endpoint.update": "Webhook endpoint updated",
+};
+
+/**
+ * An audit action as a title: `invoice.void` → "Invoice voided". The code stays in a title
+ * attribute. An action not in the table reads "<Noun> <verb>" from its own parts.
+ */
+export function actionTitle(action: string): string {
+  const known = ACTION_TITLE[action];
+  if (known) return known;
+  const cut = action.lastIndexOf(".");
+  if (cut < 0) return humaniseAction(action);
+  const tail = action.slice(cut + 1);
+  const verb = PAST[tail] ?? tail.replace(/_/g, " ");
+  return `${resourceNoun(action.slice(0, cut))} ${verb}`;
+}
+
+/** Who raised an event: a key id stays mono, a code (`billing_clock`) reads as words. */
+export function eventUser(user: string | null | undefined): { text: string; mono: boolean } {
+  const { text, mono } = actorLabel(user);
+  if (mono || !user || user.includes("@") || text !== user) return { text, mono };
+  return { text: enumLabel(user), mono: false };
 }

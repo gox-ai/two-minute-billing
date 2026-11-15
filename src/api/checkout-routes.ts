@@ -125,7 +125,7 @@ const prefillAddress = z
   })
   .superRefine(addressRefinement);
 
-const mintBody = z
+export const mintBody = z
   .object({
     /** Single-item sugar; equivalent to `items: [{price, quantity}]`. */
     price: z.string().max(LIMITS.id).min(1).optional(), // price_… public id
@@ -148,7 +148,10 @@ const mintBody = z
      * 'purchase' sells one-time items: a paid invoice, no subscription.
      */
     mode: z.enum(["create", "change", "purchase"]).optional(),
-    /** mode='purchase': a known customer (cus_…) buying more. Their details stay theirs. */
+    /**
+     * A known customer (cus_…) of this business: 'create' subscribes them, 'purchase' sells to
+     * them. Their email is fixed; the buyer may correct the billing address.
+     */
     customer_id: z.string().max(LIMITS.id).min(1).optional(),
     subscription: z.string().max(LIMITS.id).min(1).optional(), // sub_… — required when mode='change'
     /**
@@ -171,8 +174,8 @@ const mintBody = z
     /** Caller context, returned on retrieve. */
     pass_thru_content: z.string().max(2048).optional(),
     /**
-     * Metadata to write onto the resulting subscription on completion. Valid in both
-     * modes.
+     * Metadata written on completion: onto the resulting subscription (create, change), or
+     * onto the purchase's invoice (purchase).
      *
      * Applied only after the checkout actually completes, so a caller whose change moves
      * both items and a flag can send them in ONE call and get both or neither. Sending
@@ -220,8 +223,9 @@ const mintBody = z
     (v) => v.reactivate || !!v.price || (v.items?.length ?? 0) > 0 || (v.coupons?.length ?? 0) > 0,
     { message: "a checkout session needs at least one item or coupon", path: ["items"] },
   )
-  .refine((v) => v.mode === "purchase" || !v.customer_id, {
-    message: 'customer_id is only valid when mode is "purchase"',
+  .refine((v) => v.mode !== "change" || !v.customer_id, {
+    message:
+      'customer_id is not valid when mode is "change". A change checkout uses the customer of the subscription',
     path: ["customer_id"],
   })
   .refine((v) => !(v.customer_id && (v.customer || v.billing_address)), {

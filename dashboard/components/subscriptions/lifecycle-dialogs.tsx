@@ -35,7 +35,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { useDisplayTz } from "@/components/business-tz";
 import { ChevronDown } from "lucide-react";
 import { cn, fieldClass } from "@/lib/utils";
@@ -80,10 +81,7 @@ function DialogShell({
           previous (possibly failed) attempt don't leak into the next one. */}
       {/* The BODY scrolls, not the dialog: `overflow-y-auto` on DialogContent takes
           the close button with it (see the note on DialogClose). */}
-      <DialogContent
-        key={String(open)}
-        className="flex max-h-[85vh] max-w-lg flex-col overflow-hidden"
-      >
+      <DialogContent key={String(open)} className="flex max-h-[85vh] flex-col overflow-hidden">
         <DialogHeader className="pr-12">
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
@@ -140,8 +138,7 @@ const CANCEL_REASONS: Array<{ code: string; label: string }> = [
 
 /**
  * One row of an {@link InlineMenu}. `label` is the menu row's title; `short`
- * overrides what the trigger shows once picked (the menu row is title-cased,
- * the collapsed trigger sentence-cased) and `description` renders the grey
+ * overrides what the trigger shows once picked, and `description` renders the grey
  * explainer line under the credit/refund choices.
  */
 type MenuOption = { value: string; label: string; short?: string; description?: string };
@@ -176,7 +173,7 @@ function InlineMenu({
         <button
           type="button"
           aria-label={ariaLabel}
-          className="flex w-52 items-start justify-end gap-1 text-right text-sm font-medium text-primary hover:underline focus:outline-none focus-visible:underline"
+          className="flex items-start gap-1 text-left text-sm font-medium text-primary hover:underline focus:outline-none focus-visible:underline sm:w-52 sm:justify-end sm:text-right"
         >
           <span>{current ? (current.short ?? current.label) : placeholder}</span>
           <ChevronDown className="mt-0.5 size-4 shrink-0" aria-hidden />
@@ -676,44 +673,47 @@ function CancelOutcome({
 function CancelRow({
   label,
   help,
+  htmlFor,
   children,
 }: {
   label: React.ReactNode;
   help?: string;
+  /** The control's id, when it is a plain input the label can name. */
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-3">
+    <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div className="min-w-0">
-        <div className="text-sm text-foreground">{label}</div>
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className="text-sm text-foreground">
+            {label}
+          </label>
+        ) : (
+          <div className="text-sm text-foreground">{label}</div>
+        )}
         {help ? <div className="mt-0.5 text-xs text-muted-foreground">{help}</div> : null}
       </div>
-      <div className="shrink-0 pt-0.5">{children}</div>
+      <div className="shrink-0 sm:pt-0.5">{children}</div>
     </div>
   );
 }
 
-/**
- * Credit handling for the unused part of the current term. `short` is the
- * collapsed-trigger form.
- */
+/** Credit handling for the unused part of the current term. */
 const CREDIT_OPTIONS: MenuOption[] = [
   {
     value: "none",
-    label: "Do Not Issue Credits",
-    short: "Do not issue credits",
+    label: "Do not issue credits",
     description: "We do not create credit notes.",
   },
   {
     value: "prorate",
-    label: "Issue Prorated Credits",
-    short: "Issue prorated credits",
+    label: "Issue prorated credits",
     description: "We issue prorated credits.",
   },
   {
     value: "full",
-    label: "Issue Full Credits",
-    short: "Issue full credits",
+    label: "Issue full credits",
     description: "We issue credits for the full value of the current term charges.",
   },
 ];
@@ -731,22 +731,19 @@ const CREDIT_OPTIONS: MenuOption[] = [
 const UNBILLED_OPTIONS: MenuOption[] = [
   {
     value: "invoice",
-    label: "Invoice Them Now",
-    short: "Invoice them now",
+    label: "Invoice them now",
     description: "Raises one final invoice for the pending charges.",
   },
   {
     value: "delete",
-    label: "Delete Them",
-    short: "Delete them",
+    label: "Delete them",
     description: "Voids the pending charges. We never bill them.",
   },
 ];
 
 const UNBILLED_LEAVE_OPTION: MenuOption = {
   value: "",
-  label: "Leave Them Pending",
-  short: "Leave them pending",
+  label: "Leave them pending",
   description: "The charges stay unbilled and are never invoiced.",
 };
 
@@ -758,26 +755,22 @@ const UNBILLED_LEAVE_OPTION: MenuOption = {
 const AR_OPTIONS: MenuOption[] = [
   {
     value: "no_action",
-    label: "Leave Them As Is",
-    short: "Leave them as is",
+    label: "Leave them as is",
     description: "Open invoices stay open and keep dunning.",
   },
   {
     value: "schedule_payment_collection",
-    label: "Collect Them Now",
-    short: "Collect them now",
+    label: "Collect them now",
     description: "Tries to collect each open invoice immediately.",
   },
   {
     value: "void",
-    label: "Void Them",
-    short: "Void them",
+    label: "Void them",
     description: "Withdraws each open invoice, as if it never existed.",
   },
   {
     value: "write_off",
-    label: "Write Them Off",
-    short: "Write them off",
+    label: "Write them off",
     description: "Writes off the outstanding balance on each open invoice.",
   },
 ];
@@ -785,14 +778,12 @@ const AR_OPTIONS: MenuOption[] = [
 const REFUNDABLE_OPTIONS: MenuOption[] = [
   {
     value: "no_action",
-    label: "Retain Credits",
-    short: "Keep credits",
+    label: "Keep credits",
     description: "The credits stay on the account.",
   },
   {
     value: "schedule_refund",
-    label: "Initiate Refund",
-    short: "Initiate refund",
+    label: "Initiate refund",
     description: "Starts a refund of the remaining credits.",
   },
 ];
@@ -822,12 +813,13 @@ const CREDITS_ON_CANCEL_OPTIONS: MenuOption[] = [
   {
     value: "grant_started_window",
     label: CREDIT_CANCEL_LABELS.grant_started_window,
-    description: "Each window that starts before the subscription ends gives credits.",
+    description: "We give the credits of each window that starts before the subscription ends.",
   },
   {
     value: "stop_at_request",
     label: CREDIT_CANCEL_LABELS.stop_at_request,
-    description: "No window gives credits after this cancellation is scheduled.",
+    description:
+      "We give no credits for a window that starts after you schedule this cancellation.",
   },
 ];
 
@@ -949,7 +941,7 @@ export function CancelSubscriptionDialog({
   );
   const cancelReasons = reasons?.length ? reasons : CANCEL_REASONS;
   const reasonLabel = cancelReasons.find((r) => r.code === reasonCode)?.label ?? "";
-  const actionLabel = immediate ? "Cancel Now" : "Schedule Cancellation";
+  const actionLabel = immediate ? "Cancel now" : "Schedule cancellation";
 
   // ONE source for what gets posted and what gets priced. The hidden inputs below and
   // the outcome rail both read this, so the preview cannot describe a different
@@ -1011,22 +1003,26 @@ export function CancelSubscriptionDialog({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="rounded px-1 py-0.5 text-left text-sm font-medium text-destructive hover:underline"
+          className="rounded-md px-1 py-0.5 text-left text-sm font-medium text-destructive hover:underline"
         >
-          Cancel Subscription ▶
+          Cancel subscription ▶
         </button>
       )}
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           key={String(open)}
-          size="xl"
+          size="lg"
           className="flex max-h-[85vh] flex-col overflow-hidden"
         >
+          {/* `pr-12` reserves the close button's corner. */}
+          <DialogHeader className="pr-12">
+            <DialogTitle>
+              Cancel subscription{customerName ? ` for ${customerName}` : ""}
+            </DialogTitle>
+          </DialogHeader>
           <ActionForm
             action={cancelSubscriptionFullAction}
-            /* The form is the scroll body, so the close button — a sibling of this,
-               outside the scroller — stays where it is. */
-            className="-mx-6 min-h-0 flex-1 space-y-1 overflow-y-auto px-6"
+            className="flex min-h-0 flex-1 flex-col gap-4"
             onSuccess={() => setOpen(false)}
           >
             <input type="hidden" name="biz" value={biz} />
@@ -1069,207 +1065,198 @@ export function CancelSubscriptionDialog({
               value={posted.plan_credits_on_cancel_at_period_end}
             />
 
-            {/* Header: title left, red action + Dismiss right.
-                `pr-12` reserves the close button's corner — the × is positioned
-                against the dialog box and landed on the action without it. */}
-            <div className="flex items-start justify-between gap-4 pr-12 pb-2">
-              <DialogHeader className="space-y-0 text-left">
-                <DialogTitle className="text-lg font-bold">
-                  Cancel Subscription{customerName ? ` for ${customerName}` : ""}
-                </DialogTitle>
-              </DialogHeader>
-              <div className="flex flex-col items-center gap-1.5">
-                <SubmitButton variant="destructive" disabled={reasonRequired && !reasonCode}>
-                  {actionLabel}
-                </SubmitButton>
-                <button
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  className="text-sm font-medium text-primary hover:underline"
-                >
-                  Keep subscription
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <CancelRow label="When do you want to cancel the subscription?">
-                <InlineMenu
-                  value={when}
-                  options={whenOptions}
-                  onChange={setWhen}
-                  aria-label="When to cancel"
-                />
-              </CancelRow>
-
-              {when === "specific_date" ? (
-                <CancelRow label="Cancellation date">
-                  <DateTimeField
-                    onUtcChange={setCancelAt}
-                    required
-                    className="w-56"
-                    aria-label="Cancellation date"
+            {/* The body scrolls; the header and the footer stay. */}
+            <div className="-mx-6 min-h-0 flex-1 space-y-1 overflow-y-auto px-6">
+              <div>
+                <CancelRow label="When do you want to cancel the subscription?">
+                  <InlineMenu
+                    value={when}
+                    options={whenOptions}
+                    onChange={setWhen}
+                    aria-label="When to cancel"
                   />
                 </CancelRow>
-              ) : null}
 
-              {when === "specific_date" ? (
+                {when === "specific_date" ? (
+                  <CancelRow label="Cancellation date" htmlFor="cancel_at_date">
+                    <DateTimeField
+                      id="cancel_at_date"
+                      onUtcChange={setCancelAt}
+                      required
+                      className="w-56"
+                    />
+                  </CancelRow>
+                ) : null}
+
+                {when === "specific_date" ? (
+                  <CancelRow
+                    label="How do you want to bill the last term?"
+                    help={thisCallOnly("cancellation", FINAL_PERIOD_LABELS[defaultFinalPeriod])}
+                  >
+                    <InlineMenu
+                      value={finalPeriod}
+                      options={FINAL_PERIOD_OPTIONS}
+                      onChange={setFinalPeriod}
+                      aria-label="Last term billing"
+                    />
+                  </CancelRow>
+                ) : null}
+
+                {/* Only for plan credits on a reset window: other credits ignore this rule. */}
+                {!immediate && defaultCreditsOnCancel ? (
+                  <CancelRow
+                    label="What do you want to do with plan credits until the subscription ends?"
+                    help={thisCallOnly(
+                      "cancellation",
+                      CREDIT_CANCEL_LABELS[defaultCreditsOnCancel],
+                    )}
+                  >
+                    <InlineMenu
+                      value={creditsOnCancel}
+                      options={CREDITS_ON_CANCEL_OPTIONS}
+                      onChange={setCreditsOnCancel}
+                      aria-label="Plan credits until the end"
+                    />
+                  </CancelRow>
+                ) : null}
+
                 <CancelRow
-                  label="How do you want to bill the last term?"
-                  help={thisCallOnly("cancellation", FINAL_PERIOD_LABELS[defaultFinalPeriod])}
+                  label={reasonRequired ? "Cancellation reason (required)" : "Cancellation reason"}
+                  help={
+                    reasonRequired
+                      ? "This business requires a reason for each cancellation."
+                      : "Record why a customer is cancelling their subscription."
+                  }
                 >
                   <InlineMenu
-                    value={finalPeriod}
-                    options={FINAL_PERIOD_OPTIONS}
-                    onChange={setFinalPeriod}
-                    aria-label="Last term billing"
+                    value={reasonCode}
+                    options={cancelReasons.map((r) => ({ value: r.code, label: r.label }))}
+                    onChange={setReasonCode}
+                    placeholder="Select"
+                    scrollable
+                    aria-label="Cancellation reason"
                   />
                 </CancelRow>
-              ) : null}
 
-              {/* Only for plan credits on a reset window: other credits ignore this rule. */}
-              {!immediate && defaultCreditsOnCancel ? (
-                <CancelRow
-                  label="What do you want to do with plan credits until the subscription ends?"
-                  help={thisCallOnly("cancellation", CREDIT_CANCEL_LABELS[defaultCreditsOnCancel])}
-                >
-                  <InlineMenu
-                    value={creditsOnCancel}
-                    options={CREDITS_ON_CANCEL_OPTIONS}
-                    onChange={setCreditsOnCancel}
-                    aria-label="Plan credits until the end"
-                  />
-                </CancelRow>
-              ) : null}
-
-              <CancelRow
-                label={reasonRequired ? "Cancellation reason (required)" : "Cancellation reason"}
-                help={
-                  reasonRequired
-                    ? "This business requires a reason for each cancellation."
-                    : "Record why a customer is cancelling their subscription."
-                }
-              >
-                <InlineMenu
-                  value={reasonCode}
-                  options={cancelReasons.map((r) => ({ value: r.code, label: r.label }))}
-                  onChange={setReasonCode}
-                  placeholder="Select"
-                  scrollable
-                  aria-label="Cancellation reason"
-                />
-              </CancelRow>
-
-              {/* No "Decommission this subscription" row: there is no decommission
+                {/* No "Decommission this subscription" row: there is no decommission
                   flag. No "Include cancellation date in the billing period" row under
                   prorated credits either — the inclusive-day boundary is decided by the
                   business's billing mode (Settings → Billing rules → Billing mode), not
                   per cancel. Add either row WITH the backend, never before. */}
-              {immediate ? (
-                <CancelRow
-                  label={`How do you want to handle credits for the unused period${
-                    typeof unusedDays === "number" && unusedDays > 0
-                      ? ` (${unusedDays} ${unusedDays === 1 ? "day" : "days"})`
-                      : ""
-                  }?`}
-                >
-                  <InlineMenu
-                    value={creditOption}
-                    options={CREDIT_OPTIONS}
-                    onChange={setCreditOption}
-                    aria-label="Credit handling"
-                  />
-                </CancelRow>
-              ) : null}
+                {immediate ? (
+                  <CancelRow
+                    label={`How do you want to handle credits for the unused period${
+                      typeof unusedDays === "number" && unusedDays > 0
+                        ? ` (${unusedDays} ${unusedDays === 1 ? "day" : "days"})`
+                        : ""
+                    }?`}
+                  >
+                    <InlineMenu
+                      value={creditOption}
+                      options={CREDIT_OPTIONS}
+                      onChange={setCreditOption}
+                      aria-label="Credit handling"
+                    />
+                  </CancelRow>
+                ) : null}
 
-              {/* Both rows render only when there is something for them to act on —
+                {/* Both rows render only when there is something for them to act on —
                   the engine's unbilled step only touches `pending` rows and the AR step
                   only touches OPEN invoices (posted / payment_due / not_paid, the same
                   set behind `due_invoices_count`). With none of either, the option would
                   be a choice about nothing. */}
-              {immediate && hasUnbilled ? (
-                <CancelRow
-                  label={
-                    <>
-                      What do you want to do with the unbilled charges of{" "}
-                      <span className="font-semibold">
-                        {money(unbilledChargesMinor, currency ?? "USD")}
-                      </span>
-                      ?
-                    </>
-                  }
-                >
-                  <InlineMenu
-                    value={unbilledOption}
-                    options={unbilledOptions}
-                    onChange={setUnbilledOption}
-                    aria-label="Unbilled charges handling"
-                  />
-                </CancelRow>
-              ) : null}
+                {immediate && hasUnbilled ? (
+                  <CancelRow
+                    label={
+                      <>
+                        What do you want to do with the unbilled charges of{" "}
+                        <span className="font-semibold">
+                          {money(unbilledChargesMinor, currency ?? "USD")}
+                        </span>
+                        ?
+                      </>
+                    }
+                  >
+                    <InlineMenu
+                      value={unbilledOption}
+                      options={unbilledOptions}
+                      onChange={setUnbilledOption}
+                      aria-label="Unbilled charges handling"
+                    />
+                  </CancelRow>
+                ) : null}
 
-              {immediate && hasOpenInvoices ? (
-                <CancelRow
-                  label={
-                    <>
-                      How do you want to handle the {openInvoicesCount} open invoice
-                      {openInvoicesCount === 1 ? "" : "s"} totaling{" "}
-                      <span className="font-semibold">
-                        {money(openInvoicesMinor, currency ?? "USD")}
-                      </span>
-                      ?
-                    </>
-                  }
-                >
-                  <InlineMenu
-                    value={arHandling}
-                    options={AR_OPTIONS}
-                    onChange={setArHandling}
-                    aria-label="Open invoices handling"
-                  />
-                </CancelRow>
-              ) : null}
+                {immediate && hasOpenInvoices ? (
+                  <CancelRow
+                    label={
+                      <>
+                        How do you want to handle the {openInvoicesCount} open invoice
+                        {openInvoicesCount === 1 ? "" : "s"} totaling{" "}
+                        <span className="font-semibold">
+                          {money(openInvoicesMinor, currency ?? "USD")}
+                        </span>
+                        ?
+                      </>
+                    }
+                  >
+                    <InlineMenu
+                      value={arHandling}
+                      options={AR_OPTIONS}
+                      onChange={setArHandling}
+                      aria-label="Open invoices handling"
+                    />
+                  </CancelRow>
+                ) : null}
 
-              {immediate && hasRefundable ? (
-                <CancelRow
-                  label={
-                    <>
-                      What do you want to do with the remaining refundable credits of{" "}
-                      <span className="font-semibold">
-                        {money(refundableAfterCancel, currency ?? "USD")}
-                      </span>
-                      ?
-                    </>
-                  }
-                >
-                  <InlineMenu
-                    value={refundHandling}
-                    options={REFUNDABLE_OPTIONS}
-                    onChange={setRefundHandling}
-                    aria-label="Refundable credits handling"
-                  />
-                </CancelRow>
+                {immediate && hasRefundable ? (
+                  <CancelRow
+                    label={
+                      <>
+                        What do you want to do with the remaining refundable credits of{" "}
+                        <span className="font-semibold">
+                          {money(refundableAfterCancel, currency ?? "USD")}
+                        </span>
+                        ?
+                      </>
+                    }
+                  >
+                    <InlineMenu
+                      value={refundHandling}
+                      options={REFUNDABLE_OPTIONS}
+                      onChange={setRefundHandling}
+                      aria-label="Refundable credits handling"
+                    />
+                  </CancelRow>
+                ) : null}
+              </div>
+
+              <CancelOutcome
+                biz={biz}
+                sub={sub}
+                currency={currency ?? "USD"}
+                options={posted}
+                onEstimate={(e) =>
+                  setEstimatedNewRefundableMinor(
+                    e?.cancellation_credit.refundable_credit_note_minor ?? 0,
+                  )
+                }
+              />
+
+              {billingTerm ? (
+                <Alert tone="warning" className="mt-2">
+                  The subscription is cancelled at the end of the current term, because no advance
+                  invoice exists.
+                </Alert>
               ) : null}
             </div>
-
-            <CancelOutcome
-              biz={biz}
-              sub={sub}
-              currency={currency ?? "USD"}
-              options={posted}
-              onEstimate={(e) =>
-                setEstimatedNewRefundableMinor(
-                  e?.cancellation_credit.refundable_credit_note_minor ?? 0,
-                )
-              }
-            />
-
-            {billingTerm ? (
-              <div className="mt-2 rounded border border-warning/25 bg-warning-soft px-3 py-2 text-xs text-warning">
-                The subscription is canceled at the end of the current term, because no advance
-                invoice exists.
-              </div>
-            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Keep subscription
+              </Button>
+              <SubmitButton variant="destructive" disabled={reasonRequired && !reasonCode}>
+                {actionLabel}
+              </SubmitButton>
+            </DialogFooter>
           </ActionForm>
         </DialogContent>
       </Dialog>
@@ -1321,7 +1308,7 @@ export function PauseSubscriptionDialog({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+        className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
       >
         Pause subscription
       </button>
@@ -1329,7 +1316,7 @@ export function PauseSubscriptionDialog({
         open={open}
         onOpenChange={handleOpenChange}
         title="Pause subscription"
-        description="We do not raise renewal invoices while the subscription is paused. To resume automatically, pause for N billing cycles."
+        description="While the subscription is paused, we raise no renewal invoices."
       >
         <ActionForm
           action={pauseSubscriptionFullAction}
@@ -1340,7 +1327,7 @@ export function PauseSubscriptionDialog({
           <input type="hidden" name="sub" value={sub} />
           <Field
             name="pause_option"
-            label="Pause"
+            label="When to pause"
             help={isLocked("pause_option") ? LOCKED_HELP : undefined}
           >
             <SelectField
@@ -1355,8 +1342,11 @@ export function PauseSubscriptionDialog({
                   value: "end_of_term",
                   label: `At the end of the current term${periodEnd ? ` (${periodEnd})` : ""}`,
                 },
-                { value: "specific_date", label: "On a specific date…" },
-                { value: "billing_cycles", label: "For N billing cycles (auto-resume)" },
+                { value: "specific_date", label: "On a specific date" },
+                {
+                  value: "billing_cycles",
+                  label: "For a number of billing cycles, then resume",
+                },
               ]}
             />
           </Field>
@@ -1494,7 +1484,7 @@ export function ResumeSubscriptionDialog({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded px-1 py-0.5 text-left text-sm text-primary hover:underline"
+        className="rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline"
       >
         Resume subscription
       </button>
@@ -1576,7 +1566,7 @@ export function ChangeTermEndDialog({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "rounded px-1 py-0.5 text-left text-sm text-primary hover:underline",
+          "rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline",
           className,
         )}
       >
@@ -1641,7 +1631,7 @@ export function EditTrialEndDialog({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "rounded px-1 py-0.5 text-left text-sm text-primary hover:underline",
+          "rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline",
           className,
         )}
       >
@@ -1720,7 +1710,7 @@ export function AddManualDiscountDialog({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "rounded px-1 py-0.5 text-left text-sm text-primary hover:underline",
+          "rounded-md px-1 py-0.5 text-left text-sm text-primary hover:underline",
           className,
         )}
       >
@@ -1758,11 +1748,21 @@ export function AddManualDiscountDialog({
               reinterpreting "20" as ₹0.20. */}
           <Field
             name="value"
-            label={type === "percent" ? "Percent (1-100)" : "Amount off"}
+            label={type === "percent" ? "Percent off" : "Amount off"}
+            help={type === "percent" ? "From 1 to 100." : undefined}
             required
           >
             {type === "percent" ? (
-              <Input key="percent" name="value" type="number" min={1} max={100} step={1} required />
+              <Input
+                key="percent"
+                name="value"
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                required
+                className="w-30 tabular-nums"
+              />
             ) : (
               <MoneyInput key="amount" name="value" currency={currency} required />
             )}
@@ -1778,7 +1778,7 @@ export function AddManualDiscountDialog({
               ]}
             />
           </Field>
-          <Field name="note" label="Note (optional)">
+          <Field name="note" label="Note" help="Optional.">
             <Input name="note" type="text" maxLength={500} />
           </Field>
           <FooterButtons onCancel={() => setOpen(false)} submitLabel="Add discount" />

@@ -12,6 +12,13 @@ export const dynamic = "force-dynamic";
 export async function GET(_req: Request, { params }: { params: Promise<{ link: string }> }) {
   const { link } = await params;
   const res = await openPaymentLink(link);
-  if (!res.ok) redirect(`/buy/unavailable${res.status === 429 ? "?busy=1" : ""}`);
+  if (!res.ok) {
+    const q = new URLSearchParams();
+    if (res.status === 429) q.set("busy", "1");
+    // A known link that is refused names its business, so the page can show its contact.
+    else if (res.business) q.set("biz", res.business);
+    const qs = q.toString();
+    redirect(`/buy/unavailable${qs ? `?${qs}` : ""}`);
+  }
   await exchangeTokenForCookie("checkout", res.token);
 }

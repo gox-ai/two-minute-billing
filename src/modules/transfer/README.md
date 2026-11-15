@@ -4,10 +4,13 @@
 > Layer: tooling (see docs/architecture/architecture.json)
 
 ## Purpose
-A promote-to-live mechanism: a job that copies **catalog, coupons, tax, settings, company profile and
-email sending** between two businesses of one organization (test↔live, live↔live), with a
-field-by-field preview first, plus test-business sample-data tools. Never transfers
-customers/subscriptions/invoices/gateway creds/keys/webhooks/email templates.
+A promote-to-live mechanism: copies **catalog (incl. meters, credit units, rate cards), coupons,
+tax, settings, company profile and email sending** between two businesses of one organization
+(test↔live, live↔live). The dashboard path is asynchronous: a persisted **plan** (one item per
+object or setting, with its action and diff) that the member reviews, then an **apply** that the
+`transfer_run` job runs item by item with persisted progress. The legacy synchronous run stays
+for the API. Plus test-business sample-data tools. Never transfers customers/subscriptions/
+invoices/gateway creds/keys/webhooks/email templates, and never any secret.
 
 ## Responsibilities
 - Preview a transfer: per pair, every field from → to (secrets masked), the tax plan, the blockers,
@@ -18,7 +21,13 @@ customers/subscriptions/invoices/gateway creds/keys/webhooks/email templates.
 - Reap stuck transfer jobs.
 
 ## Data model
-`db/schema/transfer.ts` — transfer job rows (sections, direction, wipe flag, status, per-object report).
+`db/schema/transfer.ts` — `transfer_configurations`: one row per run. `run_kind` `sync` (legacy:
+status running/succeeded/failed, per-section report) or `async` (0517: status planned → queued →
+running → succeeded | partially_failed | failed | cancelled, or superseded; conflict policy,
+validation, counts, who planned/started/cancelled, timings, the runner's lease).
+`transfer_items` (0517): one row per object or setting of an async plan — action, exclusion,
+dependencies, diff, messages, fingerprint, status, skip reason, error, and `replaced` (the
+destination values an update replaced: the undo record). Unique `(transfer_id, pair, key)`.
 
 ## Public surface (service entry points)
 | Function | What it does |
@@ -28,7 +37,16 @@ customers/subscriptions/invoices/gateway creds/keys/webhooks/email templates.
 | `runTransfer` | preflight (blockers, live-override checks), then one transaction per pair |
 | `getTransfer` | job status + per-object report |
 | `createSampleData` / `deleteSampleData` | test-business sample content |
-| `reapStuckTransfers` | recover stalled jobs |
+| `reapStuckTransfers` | fail a crashed sync run; re-queue a stalled async run (`requeueStalledRuns`) |
+| `createTransferPlan` (`runs.ts`) | plan both pairs as items and store them; supersedes the pair's open plan |
+| `getTransferRun` / `currentTransferRun` | a run with its summary and (unless `items: false`) its items with their effective (dependency) state / the open plan or active run of a source |
+| `listTransferItems` | one page of a run's items in plan order; section, result, status and label filters in SQL |
+| `setItemExclusions` | leave items out of an open plan, or put them back |
+| `applyTransferPlan` | re-validate (blockers, drift, live override), skip what does not write, queue the job |
+| `cancelTransferRun` / `retryTransferRun` | stop after the current item / re-queue failed + dependency-skipped items only |
+| `runTransferJob` (`runner.ts`) | the `transfer_run` task: lease, drift check, per-item transaction, finish, audit, email |
+| `planPairItems` (`items.ts`) / `applyItem` (`apply.ts`) | plan one pair as items / apply one item |
+| `graph.ts` | pure rules: order, dependency blocking, live-override need, counts, result per item, run summary, end state (unit-tested) |
 
 ## API routes
 | Method · Path | Purpose |
@@ -36,18 +54,40 @@ customers/subscriptions/invoices/gateway creds/keys/webhooks/email templates.
 | `POST /v1/businesses/:biz/transfer_configurations/preview` | preview a transfer (no writes) |
 | `POST /v1/businesses/:biz/transfer_configurations` | run a transfer |
 | `GET /v1/businesses/:biz/transfer_configurations` | history (`scope`, cursor paging) |
-| `GET .../transfer_configurations/:job` | job status |
+| `GET .../transfer_configurations/:job` | job status; an async run with its `summary` and items (items and blockers for an all-mode caller; `items=none` leaves the items out) |
+| `GET .../transfer_configurations/:job/items` | one page of an async run's items (`section`, `result`, `status`, `q`, `limit` ≤ 500, `starting_after`); all-mode only |
+| `POST .../transfer_configurations/plans` | build and store a plan (async) |
+| `POST .../transfer_configurations/:job/items` | leave items out / put them back (open plan only) |
+| `POST .../transfer_configurations/:job/apply` | validate again and queue (202); `confirm` = destination name when live records change |
+| `POST .../transfer_configurations/:job/retry` | re-queue failed items only (202) |
+| `POST .../transfer_configurations/:job/cancel` | stop after the current item |
 | `POST/DELETE /v1/businesses/:biz/sample_data` | sample data (test-only) |
 
 ## Events emitted
 None.
 
 ## Dependencies
-- **Upstream (calls into):** audit, auth (roles), catalog, coupons, customers, emails (SMTP/SES
-  secret envelopes), invoicing (numbering separators), tax.
-- **Downstream (called by):** none.
+- **Upstream (calls into):** audit, auth (roles), catalog, coupons, customers, emails (deployment mailer for the end-of-run email), invoicing (numbering separators), tax.
+- **Downstream (called by):** the worker (`transfer_run`, `reap_transfers`), assistant-tools (`get_transfer_status`).
 
 ## Invariants & gotchas
+- **Async apply is per item, never all-or-nothing.** Each item's write and its `done` commit in
+  one transaction, so a killed worker leaves each item applied or not; the next runner resumes.
+  One runner per run (lease token + heartbeat, stale after 90s); the clock's `reap_transfers` pass
+  re-queues a run whose heartbeat stopped. A failed item skips its dependants
+  (`skip_reason = dependency`); a failed twin item skips the whole live pair.
+- **Validation runs three times**: at plan, at apply (full re-plan; any fingerprint or action that
+  moved → 409 "check the changes again"), and at every lease (items still to apply). Blockers stop
+  the apply; warnings do not. Rules: `items.ts` and `plan.ts`, listed in `docs/PROGRESS.md`.
+- **Conflict policy per section**: `skip` | `update`; test default update, live default skip. Any
+  update/delete on a live destination needs `transfers:live_override` + the typed name. A live
+  price or meter that live subscriptions bill from cannot take a billing change (blocked item).
+- **References are remapped by natural key**: a product's tax profile by name, a price's meter by
+  key and credit unit by key, a rate card with its price. A coupon's `times_redeemed` starts at 0.
+- **Secrets are never copied** (both paths): SMTP/SES credentials stay with each business. A copied
+  enabled transport the destination has no credential for blocks a live destination, warns a test one.
+- One active async run per destination (unique partial index + a check covering the twin destination
+  and a running sync run).
 - **Asymmetry:** `wipe_destination` is only honored when the destination is a **test** business.
   A **live** destination is merge-only: catalog and coupons skip what exists, tax creates only new
   profiles, and settings / company profile / email sending / numbering write nothing.
@@ -102,3 +142,51 @@ None.
   `operatorPermissions`.
 - **2026-11-03 (slice F)** — A settings copy keeps the destination's `dunning_config.plan_policies` (dunning policies are not copied).
 - **2026-11-03 (0489)** — The company-profile section also copies `tax_settings`.
+- **2026-11-10 (0517, feat/transfer-async)** — Async transfers: persisted plans with item-level
+  actions, diffs, dependencies, exclusions and per-section conflict policy; validation with
+  blockers and warnings, re-checked at apply and at job start; the `transfer_run` job (lease,
+  resume, cancel, retry failed only, one active run per destination); audit `transfer.apply` /
+  `transfer.cancel` / `transfer.retry` / `transfer.run` | `transfer.live_override`; email to the
+  member who started it; undo record (`transfer_items.replaced`). Meters, credit units and rate
+  cards are copied; tax-profile and meter references are remapped (they pointed at the source's
+  rows). Behaviour changes on BOTH paths: SMTP/SES secrets are no longer copied; a coupon's
+  `times_redeemed` is no longer copied. Billy reads status through `get_transfer_status`.
+- **2026-11-10** — Async transfer hardening (`verify:transfer-async`): a test destination without
+  the credential gets a copied SMTP/SES transport switched off (an enabled one broke
+  `businesses_*_config_ck`); switching one transport on switches the other off in the same write;
+  differential prices match on currency too (key `dprice:<addon>@<plan>@<cur>@<interval>`, in
+  the sync copy as well); a clear-first the destination's rows refuse is blocked at plan time
+  (probed in a rolled-back savepoint) and every item of a cleared section depends on its clear;
+  an unexpected item error shows a neutral message (detail in the log); the runner frees its
+  lease on an error; the clock re-queue no longer passes a `Date` in raw SQL; a retry of live
+  updates needs `confirm`; a drift 409 carries `code: "transfer_drift"`; the list takes
+  `run_kind` and `direction`; the gateway warning shows once per currency.
+- **2026-11-12** — A plan stores its items in INSERTs of 500 rows, and every update by item id
+  binds the ids as ONE `uuid[]` parameter (`itemIdIn`). One INSERT of every item bound 16
+  parameters per item: a business with 5,044 coupons (~10.6k items, ~170k parameters) made the
+  plan 500 with `Maximum call stack size exceeded` in the query builder, and anything past 65,535
+  parameters is refused by Postgres anyway. The exclude and apply scans use Sets (they were
+  quadratic). `verify:transfer-async` s: a 5,000-coupon plan stores, excludes, applies, reads back.
+- **2026-11-12 (feat/transfer-plan-paging)** — Large plans page instead of shipping whole. A run
+  view carries `summary`: counts per result (new, updated, deleted, unchanged, kept, blocked, left
+  out, by `resultOf`), the same per pair × section with the progress of the queued items,
+  `retryable`, and the open blockers with their messages. `?items=none` (GET and every write
+  route) leaves the items out; the default response is unchanged. New
+  `GET …/:job/items` pages them in `seq` order with `section`, `result` (a kind or `changes`),
+  `status` (`queued`, `open`, `done`, `failed`, `skipped`), `q` (label, case-insensitive, `%`/`_`
+  literal) and `limit` (100, max 500). Filters run in SQL on `(transfer_id, seq)`; the effective
+  blocked set comes from one scan of the light columns (no diff), bound as one `text[]`. No
+  migration. The dashboard loads the counts and the first page only (5,000-item run: see
+  PROGRESS for the bytes) and pages with "Show more".
+
+- **2026-11-12 (feat/transfer-plan-paging, redesign)** — `result=changes` is now exactly the
+  items that write: `new`, `updated` and `deleted` (it used to be every result but `unchanged`,
+  so blocked, kept and left-out items were in it). Each `summary.sections[]` carries `applied`:
+  the done items by result (`new`, `updated`, `deleted`), so a finished run reports what it
+  wrote, not what it planned. The dashboard page is three URL tabs (`?tab=copy|history|test`):
+  a From/To route band with the destination picker, a read-only step bar driven by the run
+  status, section cards with the "in both" choice inline, outcome tabs with counts, a section
+  list, an opened row showing only the changed fields, blocked items pinned with "Leave out
+  blocked items", one sticky action bar; "Repeat" is `?tab=copy&repeat=<id>` and "View"
+  `?tab=copy&run=<id>`. `verify:transfer-async` s: changes lists only writes and drops
+  left-out items; `applied` counts the copied coupons.

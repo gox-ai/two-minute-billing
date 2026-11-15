@@ -14,7 +14,18 @@ import { publicId } from "@/platform/ids";
 import { postEntries } from "@/modules/ledger/service";
 import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
-import { disputes, ledgerEntries, payments, refunds, transactions, businesses } from "@db/schema";
+import {
+  disputes,
+  ledgerEntries,
+  payments,
+  refunds,
+  transactions,
+  businesses,
+  customers,
+  invoices,
+  subscriptions,
+} from "@db/schema";
+import { accountHolderName } from "@/modules/customers/names";
 import type { NormalizedProviderEvent } from "@/providers/types";
 import type { EventType } from "@/modules/events/registry";
 import { createLogger } from "@/platform/logger";
@@ -61,105 +72,14 @@ async function correlate(
   ev: NormalizedProviderEvent,
   ctx?: DisputeContext,
 ): Promise<Correlation | null> {
-  const chargeId = ev.providerChargeId;
-  if (chargeId) {
-    // ── THE DELIVERING BUSINESS IS A FILTER, NOT A FALLBACK (2026-08-26) ──────────
-    // This matched a BARE `provider_charge_id` — no business, no provider, `limit(1)` —
-    // and the row it happened to pick BECAME the tenant: the returned `organizationId`
-    // is what `handleDisputeEvent` then opens `withTenant` on, and what the
-    // `disputed_funds` / `dispute_losses` clawback is posted against.
-    //
-    // Two ways that books a chargeback in someone else's ledger. A shared gateway
-    // account — two of our organizations pointing at one Stripe account — makes charge
-    // ids collide for free, and `limit(1)` silently picks one. And webhook signatures
-    // are verified against the MERCHANT'S OWN stored secret, so a tenant who registers a
-    // gateway account knows the secret their deliveries are checked against and can post
-    // a validly-signed `dispute.*` naming any charge id at all.
-    //
-    // `ctx.businessId` was already here, described by this function's own doc as
-    // "best-effort scoping" and used only as a fallback when nothing else resolved. It
-    // comes from the VERIFIED gateway account (`gateway/inbound.ts`), so it is the one
-    // trustworthy fact about the delivery — it belongs in the WHERE clause.
-    //
-    // Ambiguity is declined rather than guessed, mirroring `resolvePaymentByCharge` in
-    // webhooks/inbound.ts. That sibling — forty lines from this one — already matched on
-    // the provider key, took `limit(2)` and refused, logging "risk booking against the
-    // wrong tenant". This is the copy that posts the ledger entry and had none of it.
-    const payRows = await systemDb
-      .select()
-      .from(payments)
-      .where(
-        and(
-          eq(payments.providerChargeId, chargeId),
-          ...(ctx?.providerKey ? [eq(payments.providerKey, ctx.providerKey)] : []),
-          ...(ctx?.businessId ? [eq(payments.businessId, ctx.businessId)] : []),
-        ),
-      )
-      .limit(2);
-    if (payRows.length > 1) {
-      log.error(new Error("ambiguous disputed charge id — refusing to guess whose payment it is"), {
-        event: "dispute_charge_ambiguous",
-        provider_charge_id: chargeId,
-        provider: ctx?.providerKey ?? null,
-        businessId: ctx?.businessId ?? null,
-        detail:
-          "two payments share this charge id within the delivering business; the dispute is skipped rather than booked against the wrong tenant",
-      });
-      return null;
-    }
-    const pay = payRows[0];
-    if (pay) {
-      return {
-        organizationId: pay.organizationId,
-        businessId: pay.businessId,
-        customerId: pay.customerId ?? null,
-        invoiceId: pay.invoiceId ?? null,
-        paymentId: pay.id,
-      };
-    }
-    // Same treatment for the transactions fallback: scoped, and ambiguity declined.
-    const txnRows = await systemDb
-      .select()
-      .from(transactions)
-      .where(
-        and(
-          eq(transactions.idAtGateway, chargeId),
-          ...(ctx?.providerKey ? [eq(transactions.gatewayKey, ctx.providerKey)] : []),
-          ...(ctx?.businessId ? [eq(transactions.businessId, ctx.businessId)] : []),
-        ),
-      )
-      .limit(2);
-    if (txnRows.length > 1) {
-      log.error(new Error("ambiguous disputed charge id across transactions — refusing to guess"), {
-        event: "dispute_txn_ambiguous",
-        provider_charge_id: chargeId,
-        provider: ctx?.providerKey ?? null,
-        businessId: ctx?.businessId ?? null,
-      });
-      return null;
-    }
-    const txn = txnRows[0];
-    // A payment request's charge (0388): attribute to the newest invoice it reaches.
-    if (txn?.paymentRequestId) {
-      const { requestDisputeTarget } = await import("@/modules/payment-requests/gateway-hooks");
-      const target = await requestDisputeTarget(txn, ev.disputeAmountMinor ?? txn.amountMinor);
-      return {
-        organizationId: txn.organizationId,
-        businessId: txn.businessId,
-        customerId: txn.customerId ?? null,
-        invoiceId: target?.invoiceId ?? null,
-        paymentId: target?.paymentId ?? null,
-      };
-    }
-    if (txn) {
-      return {
-        organizationId: txn.organizationId,
-        businessId: txn.businessId,
-        customerId: txn.customerId ?? null,
-        invoiceId: txn.invoiceId ?? null,
-        paymentId: txn.paymentId ?? null,
-      };
-    }
+  // The charge id first. Then the intent id, when the adapter names one: a payment whose
+  // charge never answered at once is stored under the intent (a PayPal order), while the
+  // gateway's dispute names the capture.
+  for (const id of new Set([ev.providerChargeId, ev.providerIntentId])) {
+    if (!id) continue;
+    const hit = await correlateByCharge(ev, id, ctx);
+    if (hit === "ambiguous") return null;
+    if (hit) return hit;
   }
   // Uncorrelated: fall back to the business the inbound route resolved (best-effort).
   if (ctx?.businessId) {
@@ -177,6 +97,112 @@ async function correlate(
         paymentId: null,
       };
     }
+  }
+  return null;
+}
+
+/** Our payment for one gateway charge id, scoped to the delivering business and gateway. */
+async function correlateByCharge(
+  ev: NormalizedProviderEvent,
+  chargeId: string,
+  ctx?: DisputeContext,
+): Promise<Correlation | "ambiguous" | null> {
+  // ── THE DELIVERING BUSINESS IS A FILTER, NOT A FALLBACK (2026-08-26) ──────────
+  // This matched a BARE `provider_charge_id` — no business, no provider, `limit(1)` —
+  // and the row it happened to pick BECAME the tenant: the returned `organizationId`
+  // is what `handleDisputeEvent` then opens `withTenant` on, and what the
+  // `disputed_funds` / `dispute_losses` clawback is posted against.
+  //
+  // Two ways that books a chargeback in someone else's ledger. A shared gateway
+  // account — two of our organizations pointing at one Stripe account — makes charge
+  // ids collide for free, and `limit(1)` silently picks one. And webhook signatures
+  // are verified against the MERCHANT'S OWN stored secret, so a tenant who registers a
+  // gateway account knows the secret their deliveries are checked against and can post
+  // a validly-signed `dispute.*` naming any charge id at all.
+  //
+  // `ctx.businessId` was already here, described by this function's own doc as
+  // "best-effort scoping" and used only as a fallback when nothing else resolved. It
+  // comes from the VERIFIED gateway account (`gateway/inbound.ts`), so it is the one
+  // trustworthy fact about the delivery — it belongs in the WHERE clause.
+  //
+  // Ambiguity is declined rather than guessed, mirroring `resolvePaymentByCharge` in
+  // webhooks/inbound.ts. That sibling — forty lines from this one — already matched on
+  // the provider key, took `limit(2)` and refused, logging "risk booking against the
+  // wrong tenant". This is the copy that posts the ledger entry and had none of it.
+  const payRows = await systemDb
+    .select()
+    .from(payments)
+    .where(
+      and(
+        eq(payments.providerChargeId, chargeId),
+        ...(ctx?.providerKey ? [eq(payments.providerKey, ctx.providerKey)] : []),
+        ...(ctx?.businessId ? [eq(payments.businessId, ctx.businessId)] : []),
+      ),
+    )
+    .limit(2);
+  if (payRows.length > 1) {
+    log.error(new Error("ambiguous disputed charge id — refusing to guess whose payment it is"), {
+      event: "dispute_charge_ambiguous",
+      provider_charge_id: chargeId,
+      provider: ctx?.providerKey ?? null,
+      businessId: ctx?.businessId ?? null,
+      detail:
+        "two payments share this charge id within the delivering business; the dispute is skipped rather than booked against the wrong tenant",
+    });
+    return "ambiguous";
+  }
+  const pay = payRows[0];
+  if (pay) {
+    return {
+      organizationId: pay.organizationId,
+      businessId: pay.businessId,
+      customerId: pay.customerId ?? null,
+      invoiceId: pay.invoiceId ?? null,
+      paymentId: pay.id,
+    };
+  }
+  // Same treatment for the transactions fallback: scoped, and ambiguity declined.
+  const txnRows = await systemDb
+    .select()
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.idAtGateway, chargeId),
+        ...(ctx?.providerKey ? [eq(transactions.gatewayKey, ctx.providerKey)] : []),
+        ...(ctx?.businessId ? [eq(transactions.businessId, ctx.businessId)] : []),
+      ),
+    )
+    .limit(2);
+  if (txnRows.length > 1) {
+    log.error(new Error("ambiguous disputed charge id across transactions — refusing to guess"), {
+      event: "dispute_txn_ambiguous",
+      provider_charge_id: chargeId,
+      provider: ctx?.providerKey ?? null,
+      businessId: ctx?.businessId ?? null,
+    });
+    return "ambiguous";
+  }
+  const txn = txnRows[0];
+  // A payment request's charge (0388): attribute to the newest invoice it reaches.
+  if (txn?.paymentRequestId) {
+    const { requestDisputeTarget } = await import("@/modules/payment-requests/gateway-hooks");
+    const target = await requestDisputeTarget(txn, ev.disputeAmountMinor ?? txn.amountMinor);
+    return {
+      organizationId: txn.organizationId,
+      businessId: txn.businessId,
+      customerId: txn.customerId ?? null,
+      invoiceId: target?.invoiceId ?? null,
+      paymentId: target?.paymentId ?? null,
+    };
+  }
+  if (txn) {
+    return {
+      organizationId: txn.organizationId,
+      businessId: txn.businessId,
+      customerId: txn.customerId ?? null,
+      invoiceId: txn.invoiceId ?? null,
+      paymentId: txn.paymentId ?? null,
+    };
   }
   return null;
 }
@@ -896,6 +922,8 @@ export async function listDisputesPage(
     sort?: "created" | "evidence_due_by";
     /** Only disputes on this payment (its public id). An unknown id answers empty. */
     payment?: string;
+    /** Only this customer's disputes (its public id). An unknown id answers empty. */
+    customer?: string;
     limit?: number;
     startingAfter?: string;
     before?: Date;
@@ -927,6 +955,15 @@ export async function listDisputesPage(
         .limit(1);
       if (!pay) return { data: [], hasMore: false, nextCursor: null, total: 0 };
       conds.push(eq(disputes.paymentId, pay.id));
+    }
+    if (opts?.customer) {
+      const [cus] = await tx
+        .select({ id: customers.id })
+        .from(customers)
+        .where(and(eq(customers.businessId, businessId), eq(customers.publicId, opts.customer)))
+        .limit(1);
+      if (!cus) return { data: [], hasMore: false, nextCursor: null, total: 0 };
+      conds.push(eq(disputes.customerId, cus.id));
     }
 
     const byDeadline = opts?.sort === "evidence_due_by";
@@ -1052,7 +1089,111 @@ export function disputeOutcomeSettableByOperator(
   return r.source === "operator" || operatorRecordsDisputeOutcome(r.providerKey);
 }
 
-export function serializeDispute(r: DisputeRow) {
+/** Public ids and display names of the records a dispute points at. */
+export interface DisputeRefs {
+  customer: string | null;
+  customer_name: string | null;
+  invoice: string | null;
+  invoice_number: string | null;
+  subscription: string | null;
+  transaction: string | null;
+}
+
+const NO_REFS: DisputeRefs = {
+  customer: null,
+  customer_name: null,
+  invoice: null,
+  invoice_number: null,
+  subscription: null,
+  transaction: null,
+};
+
+/**
+ * Resolve each dispute's customer, invoice, subscription and transaction in four batched
+ * reads. The subscription comes through the invoice: a dispute stores no subscription.
+ */
+export async function loadDisputeRefs(
+  organizationId: string,
+  rows: DisputeRow[],
+): Promise<Map<string, DisputeRefs>> {
+  const out = new Map<string, DisputeRefs>();
+  if (rows.length === 0) return out;
+  const ids = (pick: (r: DisputeRow) => string | null) => [
+    ...new Set(rows.map(pick).filter((v): v is string => !!v)),
+  ];
+  const cusIds = ids((r) => r.customerId);
+  const invIds = ids((r) => r.invoiceId);
+  const payIds = ids((r) => r.paymentId);
+
+  return withTenant(organizationId, async (tx) => {
+    const [cusRows, invRows, txnRows] = await Promise.all([
+      cusIds.length
+        ? tx
+            .select({
+              id: customers.id,
+              publicId: customers.publicId,
+              firstName: customers.firstName,
+              lastName: customers.lastName,
+              company: customers.company,
+              email: customers.email,
+            })
+            .from(customers)
+            .where(inArray(customers.id, cusIds))
+        : [],
+      invIds.length
+        ? tx
+            .select({
+              id: invoices.id,
+              publicId: invoices.publicId,
+              number: invoices.number,
+              subscriptionId: invoices.subscriptionId,
+            })
+            .from(invoices)
+            .where(inArray(invoices.id, invIds))
+        : [],
+      // A payment can carry more than one transaction row; the earliest is the charge.
+      payIds.length
+        ? tx
+            .select({ paymentId: transactions.paymentId, publicId: transactions.publicId })
+            .from(transactions)
+            .where(inArray(transactions.paymentId, payIds))
+            .orderBy(asc(transactions.createdAt))
+        : [],
+    ]);
+    const subIds = [
+      ...new Set(invRows.map((i) => i.subscriptionId).filter((v): v is string => !!v)),
+    ];
+    const subRows = subIds.length
+      ? await tx
+          .select({ id: subscriptions.id, publicId: subscriptions.publicId })
+          .from(subscriptions)
+          .where(inArray(subscriptions.id, subIds))
+      : [];
+
+    const cus = new Map(cusRows.map((c) => [c.id, c]));
+    const inv = new Map(invRows.map((i) => [i.id, i]));
+    const sub = new Map(subRows.map((s) => [s.id, s.publicId]));
+    const txn = new Map<string, string>();
+    for (const t of txnRows)
+      if (t.paymentId && !txn.has(t.paymentId)) txn.set(t.paymentId, t.publicId);
+
+    for (const r of rows) {
+      const c = r.customerId ? cus.get(r.customerId) : undefined;
+      const i = r.invoiceId ? inv.get(r.invoiceId) : undefined;
+      out.set(r.id, {
+        customer: c?.publicId ?? null,
+        customer_name: c ? accountHolderName(c) : null,
+        invoice: i?.publicId ?? null,
+        invoice_number: i?.number ?? null,
+        subscription: i?.subscriptionId ? (sub.get(i.subscriptionId) ?? null) : null,
+        transaction: r.paymentId ? (txn.get(r.paymentId) ?? null) : null,
+      });
+    }
+    return out;
+  });
+}
+
+export function serializeDispute(r: DisputeRow, refs: DisputeRefs = NO_REFS) {
   return {
     object: "dispute",
     id: r.publicId,
@@ -1072,6 +1213,7 @@ export function serializeDispute(r: DisputeRow) {
     payment_id: r.paymentId,
     invoice_id: r.invoiceId,
     customer_id: r.customerId,
+    ...refs,
     evidence_due_by: r.evidenceDueBy,
     opened_at: r.openedAt,
     closed_at: r.closedAt,

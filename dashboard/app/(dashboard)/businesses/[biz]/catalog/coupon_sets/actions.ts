@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { apiWrite } from "@/lib/api";
 import { renameCouponSet } from "@/lib/api/catalog-stats";
 import { requirePermission } from "@/lib/session";
+import { plural } from "@/lib/labels";
 import { z } from "zod";
 import { actionOk, actionError, parseForm, numberFromForm } from "@/lib/action-result";
 import type { ActionResult } from "@/lib/action-result";
@@ -43,7 +44,7 @@ export async function addCouponSetCodesAction(
   revalidatePath(setDetailPath(d.biz, d.set));
   if (!res.ok) return actionError(res.error ?? "We could not add the codes.");
   const added = (res.data as { added?: number } | undefined)?.added;
-  return actionOk(added != null ? `${added} code(s) added` : "Codes added");
+  return actionOk(added != null ? `${plural(added, "code")} added` : "Codes added");
 }
 
 /** Archive a single not-yet-redeemed code. */
@@ -81,7 +82,9 @@ export async function deleteUnusedCodesAction(
   revalidatePath(setDetailPath(biz, set));
   if (!res.ok) return actionError(res.error ?? "We could not delete the unused codes.");
   const deleted = (res.data as { deleted?: number } | undefined)?.deleted;
-  return actionOk(deleted != null ? `${deleted} unused code(s) deleted` : "Unused codes deleted");
+  return actionOk(
+    deleted != null ? `${plural(deleted, "unused code")} deleted` : "Unused codes deleted",
+  );
 }
 
 const renameSchema = z.object({

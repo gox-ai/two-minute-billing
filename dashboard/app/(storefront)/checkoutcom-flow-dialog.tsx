@@ -3,8 +3,15 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
+import { checkoutcomFailure, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog } from "./payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+} from "./payment-dialog";
+import { sdkAmountLabel } from "./storefront-text";
 
 /**
  * Checkout.com Flow. Checkout.com publishes one unversioned URL and no SRI hash, and PCI
@@ -37,9 +44,7 @@ function loadFlow(): Promise<void> {
     el.onload = () => resolve();
     el.onerror = () => {
       loading = null;
-      reject(
-        new Error("We could not connect to Checkout.com. Check your connection. Then try again."),
-      );
+      reject(new Error("We could not load the payment form. Reload the page. Then try again."));
     };
     document.head.appendChild(el);
   });
@@ -51,9 +56,11 @@ function CheckoutcomFlowDialog({
   params,
   purpose,
   amountLabel,
+  businessName,
   onSettle,
 }: {
   open: boolean;
+  businessName: string;
   params: { publicKey: string; environment: string; paymentSession: Record<string, unknown> };
   purpose: GatewaySdkContext["purpose"];
   amountLabel: string | null;
@@ -79,13 +86,22 @@ function CheckoutcomFlowDialog({
           onPaymentCompleted: (_c: unknown, response: { id?: string }) => {
             if (response?.id)
               onSettle({ status: "completed", clientResult: { payment_id: response.id } });
+            // A payment with no id: the engine finds it by this session's reference,
+            // so the buyer is never sent to pay again.
+            else if (!setup)
+              onSettle({ status: "completed", clientResult: { lookup: "reference" } });
+            else
+              onSettle({
+                status: "failed",
+                // The provider reported a completed payment that we cannot read: a second
+                // try could pay twice, so the buyer is not sent to one.
+                message: `We could not confirm the result. It is possible that the payment is complete. Do not pay again. ${contactBusiness(businessName)}`,
+              });
           },
-          onError: () =>
-            setError(
-              setup
-                ? "We could not complete the card check. Examine the card details and try again, or use a different card."
-                : "We could not complete the payment. Examine the details and try again, or use a different payment method.",
-            ),
+          // Flow's own words (a decline, a failed 3DS check), shown here as well as in Flow.
+          onError: (_c: unknown, error: unknown) => {
+            if (!cancelled) setError(checkoutcomFailure(purpose, error));
+          },
         });
         if (cancelled || !container.current) return;
         component = checkout.create("flow");
@@ -103,7 +119,7 @@ function CheckoutcomFlowDialog({
       cancelled = true;
       component?.unmount?.();
     };
-  }, [open, params, onSettle, setup]);
+  }, [open, params, onSettle, setup, purpose]);
 
   return (
     <PaymentDialog
@@ -117,12 +133,13 @@ function CheckoutcomFlowDialog({
       }
     >
       <div ref={container} className="min-h-40" />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2">
+      <PaymentPrivacyNote business={businessName} instrument={setup ? "card" : "other"} />
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
           Cancel
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }
@@ -141,12 +158,9 @@ export function openCheckoutcomFlow(
   if (!publicKey || !paymentSession)
     return Promise.resolve({
       status: "failed",
-      message: `We could not open the ${context.purpose === "setup" ? "card" : "payment"} form. Contact the business.`,
+      message: `We could not open the ${context.purpose === "setup" ? "card" : "payment"} form. ${contactBusiness(context.businessName)}`,
     });
-  const amountLabel =
-    typeof params.amount === "string" && typeof params.currency === "string"
-      ? `${params.amount} ${params.currency}`
-      : null;
+  const amountLabel = sdkAmountLabel(params.amount, params.currency);
   const flowParams = { publicKey, environment, paymentSession };
   return new Promise((resolve) => {
     const host = document.createElement("div");
@@ -160,6 +174,7 @@ export function openCheckoutcomFlow(
           params={flowParams}
           purpose={context.purpose}
           amountLabel={amountLabel}
+          businessName={context.businessName}
           onSettle={settle}
         />,
       );

@@ -9,7 +9,7 @@ import { Chip } from "@/components/patterns/chip";
 import { DeliveryStatusChip } from "@/components/webhooks/delivery-status-chip";
 import { EmptyState } from "@/components/states";
 import { useDisplayTz } from "@/components/business-tz";
-import { fmtDateTimeShort } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { EVENT_TYPES } from "@/lib/api/event-types";
 import type { WebhookDeliveryDetail } from "@/lib/api/developer";
 import { Webhook } from "lucide-react";
@@ -118,9 +118,7 @@ export function DeliveriesTable({
         accessorFn: (d) => d.last_attempt_at ?? "",
         cell: ({ row }) => (
           <TextCell className="whitespace-nowrap">
-            {row.original.last_attempt_at
-              ? fmtDateTimeShort(row.original.last_attempt_at, tz)
-              : null}
+            {row.original.last_attempt_at ? fmtDateTime(row.original.last_attempt_at, tz) : null}
           </TextCell>
         ),
       },
@@ -148,9 +146,7 @@ export function DeliveriesTable({
         accessorFn: (d) => d.next_attempt_at ?? "",
         cell: ({ row }) => (
           <TextCell className="whitespace-nowrap">
-            {row.original.next_attempt_at
-              ? fmtDateTimeShort(row.original.next_attempt_at, tz)
-              : null}
+            {row.original.next_attempt_at ? fmtDateTime(row.original.next_attempt_at, tz) : null}
           </TextCell>
         ),
       },
@@ -160,7 +156,7 @@ export function DeliveriesTable({
         header: "Created",
         cell: ({ row }) => (
           <TextCell className="whitespace-nowrap">
-            {fmtDateTimeShort(row.original.created_at, tz)}
+            {fmtDateTime(row.original.created_at, tz)}
           </TextCell>
         ),
       },
@@ -270,7 +266,7 @@ export function DeliveriesTable({
       filterFields={filterFields}
       defaultSort={{ id: "created_at", desc: true }}
       sortOptions={[{ id: "created_at", label: "Created" }]}
-      searchPlaceholder="Search for delivery ID / event ID / object ID…"
+      searchPlaceholder="Search by delivery, event or object ID"
       exportName={`webhook-deliveries-${endpointId}`}
       persistKey={`webhook_deliveries:${endpointId}`}
       emptyState={

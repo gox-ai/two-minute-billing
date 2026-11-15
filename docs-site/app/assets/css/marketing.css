@@ -224,28 +224,32 @@ html {
 .mk h2,
 .mk h3 {
   letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 .mk h1 {
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 .mk h2 {
-  font-weight: 400;
+  font-weight: 500;
+  letter-spacing: -0.025em;
 }
 
 /* One heading scale for every page: a page title, a section heading, a block heading. Set the
-   class, never a size: hard-coded sizes drifted into six display sizes within 16px. */
+   class, never a size: hard-coded sizes drifted into six display sizes within 16px. Weight and
+   tracking match the /pricing title, so every page title reads the same. */
 .mk-h1 {
   font-size: 2.5rem;
-  line-height: 1.08;
-  font-weight: 500;
-  letter-spacing: -0.02em;
+  line-height: 1.06;
+  font-weight: 600;
+  letter-spacing: -0.03em;
   text-wrap: balance;
 }
 .mk-h2 {
   font-size: 1.875rem;
   line-height: 1.15;
-  font-weight: 400;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 .mk-h3 {
@@ -253,6 +257,7 @@ html {
   line-height: 1.3;
   font-weight: 400;
   letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 @media (min-width: 640px) {
   .mk-h1 {
@@ -578,9 +583,10 @@ section[data-orientation="vertical"] [data-slot="headline"].mk-kicker {
   > [data-slot="header"]
   > [data-slot="title"] {
   font-size: clamp(1.875rem, 1.5rem + 1vw, 2.25rem);
-  font-weight: 400;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.025em;
   line-height: 1.15;
+  text-wrap: balance;
 }
 /* Section headings sit on the page's left axis; only a page hero is centred. */
 .mk
@@ -699,4 +705,52 @@ section[data-orientation="vertical"] [data-slot="headline"].mk-kicker {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   A campaign (Black Friday 2026 first): black, with the campaign's name in a lime tag. The dark
+   ground is already near-black, so dark mode goes to pure black with a faint edge. The whole
+   bar is a link.
+--------------------------------------------------------------------------- */
+:root {
+  --mk-campaign: #0a0a0a;
+  --mk-campaign-edge: transparent;
+}
+.dark {
+  --mk-campaign: #000;
+  --mk-campaign-edge: rgb(255 255 255 / 0.16);
+}
+:root {
+  --mk-campaign-h: 0px;
+}
+/* The bar sticks above the sticky header, so everything offset by the header adds its height. */
+html:has(.mk-campaign-bar) {
+  --mk-campaign-h: 2.25rem;
+}
+.mk-campaign-bar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: var(--mk-campaign-h);
+  color: #fff;
+  background: var(--mk-campaign);
+  border-bottom: 1px solid var(--mk-campaign-edge);
+}
+.mk-campaign-bar:hover .mk-campaign-go,
+.mk-campaign-bar:focus-visible .mk-campaign-go {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mk-campaign-bar:focus-visible {
+  outline: 2px solid var(--mk-lime);
+  outline-offset: -2px;
+}
+.mk-campaign-tag {
+  white-space: nowrap;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--mk-lime);
+  color: var(--mk-lime-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
 }

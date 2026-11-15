@@ -41,7 +41,7 @@ export default async function MetersPage({ params }: { params: Promise<{ biz: st
         description: "What to count from the usage events that your app sends.",
         breadcrumbs: [
           { label: name, href: `/businesses/${biz}` },
-          { label: "Product Catalog" },
+          { label: "Product catalog" },
           { label: "Meters" },
         ],
       }}

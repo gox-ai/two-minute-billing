@@ -3,10 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePermission } from "@/lib/session";
+import { priceListFieldErrors } from "@/lib/model-prices";
 import { actionError, actionOk, parseForm, type ActionResult } from "@/lib/action-result";
 import {
   archiveMeter,
   createMeter,
+  deleteMeterCreditCost,
+  putMeterCreditCost,
   sendUsageEvent,
   updateMeter,
   type MeterPriceList,
@@ -21,6 +24,7 @@ import {
   needsUniqueProperty,
   needsValueProperty,
 } from "@/lib/meters";
+import { creditCostBody, creditCostErrorField } from "@/lib/meter-credit-cost";
 
 const metersPath = (biz: string) => `/businesses/${biz}/catalog/meters`;
 
@@ -114,7 +118,13 @@ const priceListFromForm = z
       });
       return z.NEVER;
     }
-    for (const k of ["provider_key", "model_key", "token_type_key"] as const) {
+    for (const k of [
+      "provider_key",
+      "model_key",
+      "token_type_key",
+      "quality_key",
+      "resolution_key",
+    ] as const) {
       const v = m[k];
       if (v != null && v !== "" && !isPropertyName(v)) {
         ctx.addIssue({
@@ -127,7 +137,7 @@ const priceListFromForm = z
     if (!m.token_type && !m.token_type_key) {
       ctx.addIssue({
         code: "custom",
-        message: "Select the token type, or the property that holds it.",
+        message: "Select the price type, or the property that holds it.",
       });
       return z.NEVER;
     }
@@ -180,6 +190,12 @@ const meterSchema = z
       .refine((v) => !v || /^[A-Za-z]{3}$/.test(v), { message: "Select a currency." }),
   })
   .superRefine((v, ctx) => {
+    // Under the field, in the form's words: the API names its own fields.
+    if (v.price_list)
+      for (const [field, message] of Object.entries(
+        priceListFieldErrors(v.price_list, v.locked === "1" ? null : v.group_by),
+      ))
+        ctx.addIssue({ code: "custom", path: [field], message });
     if (v.locked === "1") return;
     if (!v.event_name)
       ctx.addIssue({ code: "custom", path: ["event_name"], message: "Enter the event name." });
@@ -334,4 +350,65 @@ export async function sendTestEventAction(
       ? `Event ${key} sent. No customer has this usage key, so the event is unmatched.`
       : `Event ${key} sent.`,
   );
+}
+
+const creditCostSchema = z.object({
+  biz: z.string().min(1),
+  meter: z.string().min(1, "The meter ID is missing. Reload the page."),
+  unit: z.string().max(100),
+  credits_per_unit: z.string().max(40),
+  /** `[{product, cost}]` as typed. */
+  plans: z.string().max(100_000),
+  /** The subscription overrides as stored: the PUT replaces them, so they go back unchanged. */
+  subscriptions: z.string().max(100_000),
+});
+
+/** Set a meter's credit cost: the unit, the cost and the plan overrides (PUT replaces all). */
+export async function saveMeterCreditCostAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("meters:manage", "manager");
+  const parsed = parseForm(creditCostSchema, fd);
+  if (parsed.error) return parsed.error;
+  const d = parsed.data;
+  let plans: Array<{ product: string; cost: string }>;
+  let subscriptions: Array<{ subscription: string; credits_per_unit: string }>;
+  try {
+    plans = JSON.parse(d.plans);
+    subscriptions = JSON.parse(d.subscriptions);
+  } catch {
+    return actionError("We could not read the credit cost. Reload the page.");
+  }
+  const built = creditCostBody({ unit: d.unit, cost: d.credits_per_unit, plans }, subscriptions);
+  if (!built.ok) return actionError("Correct the highlighted fields.", { errors: built.errors });
+  const res = await putMeterCreditCost(d.biz, d.meter, built.body);
+  revalidatePath(`${metersPath(d.biz)}/${d.meter}`);
+  if (!res.ok) {
+    const message = res.error ?? "We could not set the credit cost. Try again.";
+    const field = creditCostErrorField(message, plans.length);
+    return actionError(message, {
+      requestId: res.requestId,
+      ...(field ? { errors: { [field]: message } } : {}),
+    });
+  }
+  return actionOk("Credit cost saved.");
+}
+
+/** Remove a meter's credit cost: its events spend no credits from then on. */
+export async function removeMeterCreditCostAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("meters:manage", "manager");
+  const biz = String(fd.get("biz") ?? "");
+  const meter = String(fd.get("meter") ?? "");
+  if (!biz || !meter) return actionError("The meter ID is missing. Reload the page.");
+  const res = await deleteMeterCreditCost(biz, meter);
+  revalidatePath(`${metersPath(biz)}/${meter}`);
+  if (!res.ok)
+    return actionError(res.error ?? "We could not remove the credit cost. Try again.", {
+      requestId: res.requestId,
+    });
+  return actionOk("Credit cost removed.");
 }

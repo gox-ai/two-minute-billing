@@ -4,7 +4,7 @@
  *
  * The claims under test are the ones a reader would otherwise have to take on trust:
  *
- *  - all four ad-hoc types compose against a real record and record what carried them;
+ *  - all five ad-hoc types compose against a real record and record what carried them;
  *  - **no variable TEMPLATE_VARS marks `always: true` renders empty** — asserted by
  *    reading TEMPLATE_VARS itself, not by eyeballing four subjects, because the failure
  *    mode is silent ("Invoice  for " reaches the customer and nothing throws);
@@ -38,6 +38,8 @@ import {
 import { matchTemplate, stripTemplateTail } from "./lib/template-match";
 import { resolveFooter } from "@/modules/emails/templates";
 import { publicId } from "@/platform/ids";
+import { createProduct, createPrice } from "@/modules/catalog/service";
+import { cancelSubscription, createSubscription } from "@/modules/subscriptions/service";
 import { createContact } from "@/modules/customers/contacts";
 import { asTeamMembers } from "./lib/team-addresses";
 
@@ -77,7 +79,7 @@ async function fixture(
     livemode: "test",
   });
 
-  return withTenant(orgId, async (tx) => {
+  const base = await withTenant(orgId, async (tx) => {
     await tx
       .update(businesses)
       .set({
@@ -158,8 +160,41 @@ async function fixture(
       currency: "USD",
     });
 
-    return { orgId, bizId: biz.id, cusPid, invPid, cnPid };
+    return { orgId, bizId: biz.id, cusId: cus.id, cusPid, invPid, cnPid };
   });
+
+  // An ENDED subscription, for `subscription_restart`. Collected by invoice: no card needed.
+  const product = await createProduct({
+    organizationId: orgId,
+    businessId: biz.id,
+    name: "Insight Plan",
+  });
+  const price = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: product.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 4900,
+    interval: "month",
+  });
+  const { subscription } = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: base.cusId,
+    now: new Date(),
+    items: [{ price, quantity: 1 }],
+    autoCollection: "off",
+  });
+  await cancelSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscriptionId: subscription.id,
+    atPeriodEnd: false,
+    now: new Date(),
+  });
+  return { ...base, subPid: subscription.publicId };
 }
 
 /**
@@ -176,7 +211,11 @@ function renderedValues(tpl: string, text: string): Map<string, string[]> | null
 }
 
 /** The id argument each type needs, so the four can be driven from one loop. */
-function recordFor(type: EmailType, f: { cusPid: string; invPid: string; cnPid: string }) {
+function recordFor(
+  type: EmailType,
+  f: { cusPid: string; invPid: string; cnPid: string; subPid: string },
+) {
+  if (type === "subscription_restart") return { subscriptionId: f.subPid };
   if (type === "credit_note_sent") return { creditNoteId: f.cnPid };
   if (type === "payment_method_request") return { customerId: f.cusPid };
   return { invoiceId: f.invPid };
@@ -202,10 +241,10 @@ async function main() {
 
   const f = await fixture("Adhoc Co");
 
-  // ── 1. All four types compose, send and record ──────────────────────────────
+  // ── 1. All five types compose, send and record ──────────────────────────────
   ok(
-    "ADHOC_EMAIL_TYPES still has exactly the four operator-sendable types",
-    ADHOC_EMAIL_TYPES.length === 4,
+    "ADHOC_EMAIL_TYPES still has exactly the five operator-sendable types",
+    ADHOC_EMAIL_TYPES.length === 5,
     ADHOC_EMAIL_TYPES,
   );
 
@@ -394,6 +433,7 @@ async function main() {
     ["payment_request", {}, "invoice"],
     ["credit_note_sent", {}, "credit note"],
     ["payment_method_request", {}, "customer"],
+    ["subscription_restart", {}, "subscription"],
   ];
   for (const [type, args, word] of missingCases) {
     const before = sent.length;
@@ -510,7 +550,55 @@ async function main() {
     customRow?.bodyText,
   );
 
-  // ── 6. Only the four ad-hoc types are sendable by hand ──────────────────────
+  // ── 5b. A restart link restarts THAT subscription, pay first, and only an ended one ──
+  {
+    const { resolveCheckoutSession } = await import("@/modules/checkout/service");
+    const before = sent.length;
+    const res = await sendAdhocEmail(f.orgId, f.bizId, {
+      type: "subscription_restart",
+      subscriptionId: f.subPid,
+      restartPrice: "keep",
+    });
+    ok("subscription_restart: sent", res.ok && sent.length === before + 1, res);
+    const msg = lastSent();
+    const link = msg.html.match(/https:\/\/portal\.test\/checkout\/s\/(cstk_[A-Za-z0-9_-]+)/);
+    ok("subscription_restart: the button is a checkout link", !!link, msg.html.slice(0, 200));
+    ok(
+      "subscription_restart: the button says Restart subscription",
+      msg.html.includes("Restart subscription"),
+    );
+    ok("subscription_restart: the plan is named", msg.text.includes("Insight Plan"));
+    const ctx = link ? await resolveCheckoutSession(link[1]!) : null;
+    ok("subscription_restart: the link reactivates", ctx?.reactivate === true);
+    ok("subscription_restart: keep lists no items", (ctx?.items?.length ?? 0) === 0, ctx?.items);
+
+    // The preview must not mint a checkout; another business's subscription does not resolve.
+    const { previewAdhocEmail } = await import("@/modules/emails/adhoc-service");
+    const preview = await previewAdhocEmail(f.orgId, f.bizId, {
+      type: "subscription_restart",
+      subscriptionId: f.subPid,
+    });
+    ok(
+      "subscription_restart: the preview links no checkout",
+      !/cstk_/.test(JSON.stringify(preview)),
+    );
+    let foreign: unknown = null;
+    try {
+      await sendAdhocEmail(f.orgId, f.bizId, {
+        type: "subscription_restart",
+        subscriptionId: other.subPid,
+      });
+    } catch (e) {
+      foreign = e;
+    }
+    ok(
+      "subscription_restart: another business's subscription does not resolve",
+      foreign instanceof AdhocEmailError,
+      foreign,
+    );
+  }
+
+  // ── 6. Only the five ad-hoc types are sendable by hand ──────────────────────
   let engineType: unknown = null;
   try {
     await sendAdhocEmail(f.orgId, f.bizId, {

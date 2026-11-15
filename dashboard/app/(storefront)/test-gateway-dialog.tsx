@@ -4,7 +4,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog } from "./payment-dialog";
+import { PaymentDialog, PaymentDialogFooter } from "./payment-dialog";
 
 /** The nonces the test gateway's adapter expects back as `client_result.nonce`. */
 const APPROVE = { nonce: "tmtest_ok" };
@@ -23,14 +23,15 @@ function TestGatewayDialog({
     <PaymentDialog
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
-      title="Test gateway"
+      title={purpose === "setup" ? "Test payment method" : "Test payment"}
       description={
         purpose === "setup"
           ? "This is a test payment method. No money moves. Select Approve to save it or Decline to refuse it."
           : "This is a test payment. No money moves. Select Approve to authorize it or Decline to refuse it."
       }
     >
-      <div className="flex justify-end gap-2">
+      {/* Decline is an outcome, not a way out (the × is), so it takes the outline slot. */}
+      <PaymentDialogFooter>
         <Button
           variant="outline"
           onClick={() => onSettle({ status: "completed", clientResult: DECLINE })}
@@ -40,7 +41,7 @@ function TestGatewayDialog({
         <Button onClick={() => onSettle({ status: "completed", clientResult: APPROVE })}>
           Approve
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }

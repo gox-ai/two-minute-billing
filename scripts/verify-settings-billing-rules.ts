@@ -3,7 +3,9 @@
  *
  * Each option must change behaviour, and an unset business must behave as before:
  * trial-end action, a date-specific cancel's final period, required reasons, a failed change
- * charge, new-customer auto-collection and a revoked mandate.
+ * charge, new-customer auto-collection and a revoked mandate. Also the coupon keys
+ * (`zero_invoice_paid_event`, `mid_term_coupons`, `customer_coupons`) and the `invoice_paid`
+ * that a zero-total invoice sends under `zero_invoice_paid_event`.
  *
  *   pnpm verify:settings-billing-rules
  */
@@ -28,6 +30,8 @@ import {
   sweepExpiredParkedDunning,
 } from "@/modules/subscriptions/dunning";
 import { collectInvoice, createInvoiceFromLines } from "@/modules/invoicing/service";
+import { createManualInvoice } from "@/modules/invoicing/ops";
+import { numberAwaitingInvoices } from "@/modules/invoicing/batch-number";
 import { settlePaymentFailed } from "@/modules/payments/settlement";
 import { applyMandateStatus, handleProviderEvent } from "@/modules/webhooks/inbound";
 import { presentationBlock } from "@/modules/invoicing/representment";
@@ -40,6 +44,7 @@ import {
   resolveBillingRulesConfig,
 } from "@/modules/subscriptions/billing-rules-config";
 import {
+  auditLogs,
   businesses,
   customers,
   emailMessages,
@@ -193,6 +198,21 @@ async function endedTrial(
     resolveBillingRulesConfig({ defaultCreditOptionForCancel: "prorate" })
       .specificDateCancelFinalPeriod === "prorated",
   );
+  const pinned = resolveBillingRulesConfig({
+    billingRulesConfig: initialBillingRulesConfig({ hasOperator: true }),
+  });
+  check(
+    "a person's new business applies a change when it is paid (23 h, slow 168 h)",
+    pinned.failedChangeCharge === "apply_when_paid" &&
+      pinned.pendingChangeExpiryHours === 23 &&
+      pinned.pendingChangeExpiryHoursSlow === 168,
+  );
+  check(
+    "expiry hours outside 1–720 resolve to the default",
+    resolveBillingRulesConfig({
+      billingRulesConfig: { pending_change_expiry_hours: 0, pending_change_expiry_hours_slow: 721 },
+    }).pendingChangeExpiryHours === 23,
+  );
   check(
     "a person's new business is pinned to today's values; a key's is not",
     resolveBillingRulesConfig({
@@ -216,7 +236,33 @@ async function endedTrial(
   check(
     "GET returns resolved defaults",
     created.billing_rules_config?.trial_end_action === "activate" &&
-      created.billing_rules_config?.mandate_revoked === "follow_dunning",
+      created.billing_rules_config?.mandate_revoked === "follow_dunning" &&
+      created.billing_rules_config?.failed_change_charge === "start_dunning" &&
+      created.billing_rules_config?.pending_change_expiry_hours === 23 &&
+      created.billing_rules_config?.pending_change_expiry_hours_slow === 168,
+  );
+  const held = await req("PATCH", `/v1/businesses/${created.id}`, {
+    billing_rules_config: {
+      failed_change_charge: "apply_when_paid",
+      pending_change_expiry_hours: 12,
+      pending_change_expiry_hours_slow: 96,
+    },
+  });
+  const heldRules = json(held).billing_rules_config ?? {};
+  check(
+    "PATCH apply_when_paid with its expiry hours reads back",
+    heldRules.failed_change_charge === "apply_when_paid" &&
+      heldRules.pending_change_expiry_hours === 12 &&
+      heldRules.pending_change_expiry_hours_slow === 96,
+    JSON.stringify(heldRules),
+  );
+  const tooLong = await req("PATCH", `/v1/businesses/${created.id}`, {
+    billing_rules_config: { pending_change_expiry_hours: 721 },
+  });
+  check(
+    "expiry hours above 720 are refused (400)",
+    tooLong.statusCode === 400,
+    String(tooLong.statusCode),
   );
   await req("PATCH", `/v1/businesses/${created.id}`, {
     billing_rules_config: { trial_end_action: "pause", required_reasons: { refund: true } },
@@ -241,6 +287,58 @@ async function endedTrial(
     await req("PATCH", `/v1/businesses/${created.id}`, { billing_rules_config: null }),
   );
   check("null resets every key", reset.billing_rules_config?.trial_end_action === "activate");
+
+  // A settings form re-posts every field it owns. Saved unchanged, nothing moves.
+  const audits = async () =>
+    (
+      await systemDb
+        .select({ after: auditLogs.after })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.resourceId, created.id),
+            eq(auditLogs.action, "business.settings_update"),
+          ),
+        )
+        .orderBy(desc(auditLogs.createdAt))
+    ).map((r) => r.after as Record<string, unknown>);
+  const set1 = json(
+    await req("PATCH", `/v1/businesses/${created.id}`, {
+      billing_rules_config: { plan_credits: { on_upgrade: "full", on_downgrade: "full" } },
+    }),
+  );
+  const v1 = set1.resource_version as number;
+  const n1 = (await audits()).length;
+  const same = await req("PATCH", `/v1/businesses/${created.id}`, {
+    name: "Key-made",
+    billing_rules_config: { plan_credits: { on_downgrade: "full", on_upgrade: "full" } },
+    expected_version: v1,
+  });
+  check(
+    "a PATCH that changes nothing keeps resource_version and writes no audit row",
+    same.statusCode === 200 && json(same).resource_version === v1 && (await audits()).length === n1,
+    JSON.stringify({ status: same.statusCode, v1, v2: json(same).resource_version }),
+  );
+  const stale = await req("PATCH", `/v1/businesses/${created.id}`, {
+    name: "Key-made",
+    expected_version: v1 - 1,
+  });
+  check("a no-op PATCH with a stale expected_version still conflicts", stale.statusCode === 409);
+  const moved = json(
+    await req("PATCH", `/v1/businesses/${created.id}`, {
+      name: "Key-made",
+      billing_rules_config: { plan_credits: { on_upgrade: "next_window" } },
+      expected_version: v1,
+    }),
+  );
+  const last = (await audits())[0] ?? {};
+  check(
+    "a real change bumps the version once and audits only what moved",
+    moved.resource_version === v1 + 1 &&
+      Object.keys(last).join() === "billingRulesConfig" &&
+      moved.billing_rules_config?.plan_credits?.on_upgrade === "next_window",
+    JSON.stringify({ v: moved.resource_version, keys: Object.keys(last) }),
+  );
 }
 
 // ── 2.5 Trial-end action ─────────────────────────────────────────────────────────────
@@ -1549,6 +1647,293 @@ async function reversedRequestDebit(rules?: Record<string, unknown>) {
     "2: a delayed activation dated before the revocation does not clear the block",
     (await blockOf(pm)) === "mandate_revoked",
     `block=${await blockOf(pm)} authorized=${(await pmRow(pm)).authorizedAt?.toISOString()}`,
+  );
+}
+
+// ── Coupon keys: resolver, API, new-business seeding ─────────────────────────────────
+{
+  const d = resolveBillingRulesConfig(null);
+  check(
+    "coupon keys: unset → never / skip / fallback",
+    d.zeroInvoicePaidEvent === "never" &&
+      d.midTermCoupons === "skip" &&
+      d.customerCoupons === "fallback",
+  );
+  const bad = resolveBillingRulesConfig({
+    billingRulesConfig: {
+      zero_invoice_paid_event: "always",
+      mid_term_coupons: "some",
+      customer_coupons: 1,
+    },
+  });
+  check(
+    "coupon keys: malformed values resolve to the default",
+    bad.zeroInvoicePaidEvent === "never" &&
+      bad.midTermCoupons === "skip" &&
+      bad.customerCoupons === "fallback",
+  );
+  const seeded = resolveBillingRulesConfig({
+    billingRulesConfig: initialBillingRulesConfig({ hasOperator: true }),
+  });
+  check(
+    "coupon keys: a person's new business gets all / all / fallback",
+    seeded.zeroInvoicePaidEvent === "all" &&
+      seeded.midTermCoupons === "all" &&
+      seeded.customerCoupons === "fallback",
+  );
+
+  const created = json(
+    await req("POST", "/v1/businesses", { default_currency: "USD", name: "Coupon rules" }),
+  );
+  const r0 = created.billing_rules_config ?? {};
+  check(
+    "coupon keys: GET returns the resolved defaults",
+    r0.zero_invoice_paid_event === "never" &&
+      r0.mid_term_coupons === "skip" &&
+      r0.customer_coupons === "fallback",
+    JSON.stringify(r0),
+  );
+  await req("PATCH", `/v1/businesses/${created.id}`, {
+    billing_rules_config: { trial_end_action: "pause" },
+  });
+  for (const [key, value] of [
+    ["zero_invoice_paid_event", "one_off"],
+    ["zero_invoice_paid_event", "all"],
+    ["mid_term_coupons", "unbilled_and_edits"],
+    ["mid_term_coupons", "all"],
+    ["customer_coupons", "stack"],
+  ] as const) {
+    const r = json(
+      await req("PATCH", `/v1/businesses/${created.id}`, {
+        billing_rules_config: { [key]: value },
+      }),
+    );
+    check(
+      `coupon keys: PATCH ${key}=${value} round-trips and keeps other keys`,
+      r.billing_rules_config?.[key] === value &&
+        r.billing_rules_config?.trial_end_action === "pause",
+      JSON.stringify(r.billing_rules_config),
+    );
+  }
+  const back = json(await req("GET", `/v1/businesses/${created.id}`));
+  check(
+    "coupon keys: a GET reads the saved values",
+    back.billing_rules_config?.zero_invoice_paid_event === "all" &&
+      back.billing_rules_config?.mid_term_coupons === "all" &&
+      back.billing_rules_config?.customer_coupons === "stack",
+  );
+  for (const [key, value] of [
+    ["zero_invoice_paid_event", "always"],
+    ["mid_term_coupons", "renewals"],
+    ["customer_coupons", "replace"],
+  ] as const) {
+    const r = await req("PATCH", `/v1/businesses/${created.id}`, {
+      billing_rules_config: { [key]: value },
+    });
+    check(`coupon keys: ${key}=${value} is refused`, r.statusCode === 400);
+  }
+}
+
+// ── zero_invoice_paid_event: invoice_paid (amount 0) on a zero-total invoice ──────────
+{
+  const paidEvents = (invoicePublicId: string) =>
+    systemDb
+      .select({ data: events.data })
+      .from(events)
+      .where(
+        and(
+          eq(events.type, "invoice_paid"),
+          eq(events.resourceType, "invoice"),
+          eq(events.resourceId, invoicePublicId),
+        ),
+      );
+  const freeLine = [{ description: "Free sample", amountMinor: 0n, quantity: 1, kind: "one_time" }];
+
+  /** A zero renewal (numbered at once), a zero renewal (batch-numbered), a zero manual and a zero ad-hoc. */
+  async function zeroInvoices(rule: string) {
+    const { biz } = await newBiz({ zero_invoice_paid_event: rule });
+    const product = await createProduct({
+      organizationId: orgId,
+      businessId: biz.id,
+      name: "Free plan",
+    });
+    const free = await createPrice({
+      organizationId: orgId,
+      businessId: biz.id,
+      productId: product.id,
+      type: "recurring",
+      model: "per_unit",
+      currency: "USD",
+      amountMinor: 0,
+      interval: "month",
+    });
+    const { c, pm } = await customerWithCard(biz.id, "tok_4242");
+    const s = (
+      await createSubscription({
+        organizationId: orgId,
+        businessId: biz.id,
+        customerId: c.id,
+        now: new Date(Date.now() - 70 * 86_400_000),
+        items: [{ price: free, quantity: 1 }],
+        defaultPaymentMethodId: pm!.id,
+      })
+    ).subscription;
+    await renewSubscription(orgId, s.id, new Date(Date.now() - 35 * 86_400_000));
+    const first = await newestInvoice(s.id);
+    await renewSubscription(orgId, s.id, new Date(), { deferNumber: true });
+    await numberAwaitingInvoices(orgId, biz.id);
+    const renewal = await newestInvoice(s.id);
+    const manual = (
+      await createManualInvoice({
+        organizationId: orgId,
+        businessId: biz.id,
+        customerId: c.id,
+        currency: "USD",
+        lines: freeLine,
+      })
+    ).invoice;
+    const adHoc = (
+      await createInvoiceFromLines({
+        organizationId: orgId,
+        businessId: biz.id,
+        customerId: c.id,
+        currency: "USD",
+        lines: freeLine,
+      })
+    ).invoice;
+    const count = async (inv: { publicId: string } | null) =>
+      inv ? (await paidEvents(inv.publicId)).length : -1;
+    return {
+      biz,
+      c,
+      renewalIsNew: renewal != null && renewal.id !== first?.id,
+      renewalBatched: renewal?.awaitingNumber === false && renewal?.number != null,
+      allZeroPaid: [first, renewal, manual, adHoc].every(
+        (i) => i != null && i.totalMinor === 0n && i.status === "paid",
+      ),
+      signup: await count(first),
+      renewal: await count(renewal),
+      manual: await count(manual),
+      adHoc: await count(adHoc),
+      manualData: (await paidEvents(manual.publicId))[0]?.data as
+        | { invoice?: { total_minor?: number; amount_paid_minor?: number } }
+        | undefined,
+      manualInvoice: manual,
+    };
+  }
+
+  const never = await zeroInvoices("never");
+  check(
+    "zero invoices: the four test invoices are zero-total, paid, and the renewal is batch-numbered",
+    never.allZeroPaid && never.renewalIsNew && never.renewalBatched,
+    JSON.stringify({ ...never, biz: undefined, c: undefined, manualInvoice: undefined }),
+  );
+  check(
+    "zero_invoice_paid_event=never: no invoice_paid on any zero invoice",
+    never.signup === 0 && never.renewal === 0 && never.manual === 0 && never.adHoc === 0,
+    JSON.stringify([never.signup, never.renewal, never.manual, never.adHoc]),
+  );
+
+  const oneOff = await zeroInvoices("one_off");
+  check(
+    "zero_invoice_paid_event=one_off: one event for the manual invoice only",
+    oneOff.manual === 1 && oneOff.signup === 0 && oneOff.renewal === 0 && oneOff.adHoc === 0,
+    JSON.stringify([oneOff.signup, oneOff.renewal, oneOff.manual, oneOff.adHoc]),
+  );
+  check(
+    "zero_invoice_paid_event: the event carries a total of 0",
+    oneOff.manualData?.invoice?.total_minor === 0,
+    JSON.stringify(oneOff.manualData),
+  );
+
+  const all = await zeroInvoices("all");
+  check(
+    "zero_invoice_paid_event=all: exactly one event on every zero invoice",
+    all.signup === 1 && all.renewal === 1 && all.manual === 1 && all.adHoc === 1,
+    JSON.stringify([all.signup, all.renewal, all.manual, all.adHoc]),
+  );
+
+  // Re-processing the same period goes through the period backstop: still one event.
+  {
+    const { biz } = await newBiz({ zero_invoice_paid_event: "all" });
+    const product = await createProduct({
+      organizationId: orgId,
+      businessId: biz.id,
+      name: "Free",
+    });
+    const free = await createPrice({
+      organizationId: orgId,
+      businessId: biz.id,
+      productId: product.id,
+      type: "recurring",
+      model: "per_unit",
+      currency: "USD",
+      amountMinor: 0,
+      interval: "month",
+    });
+    const { c, pm } = await customerWithCard(biz.id, "tok_4242");
+    const s = (
+      await createSubscription({
+        organizationId: orgId,
+        businessId: biz.id,
+        customerId: c.id,
+        now: new Date(Date.now() - 40 * 86_400_000),
+        items: [{ price: free, quantity: 1 }],
+        defaultPaymentMethodId: pm!.id,
+      })
+    ).subscription;
+    const before = await getSub(s.id);
+    await renewSubscription(orgId, s.id, new Date());
+    const r = (await newestInvoice(s.id))!;
+    const first = r ? (await paidEvents(r.publicId)).length : -1;
+    // Rewind the period and renew again: the period backstop refuses the second invoice.
+    await systemDb
+      .update(subscriptions)
+      .set({
+        currentPeriodStart: before.currentPeriodStart,
+        currentPeriodEnd: before.currentPeriodEnd,
+      })
+      .where(eq(subscriptions.id, s.id));
+    let rerun = "ok";
+    try {
+      await renewSubscription(orgId, s.id, new Date());
+    } catch (e) {
+      rerun = (e as Error).message;
+    }
+    const samePeriod = await systemDb
+      .select({ id: invoices.id })
+      .from(invoices)
+      .where(and(eq(invoices.subscriptionId, s.id), eq(invoices.periodStart, r.periodStart!)));
+    const after = (await paidEvents(r.publicId)).length;
+    check(
+      "zero_invoice_paid_event=all: a re-processed 0 renewal keeps exactly one invoice_paid",
+      r.totalMinor === 0n &&
+        first === 1 &&
+        after === 1 &&
+        samePeriod.length === 1 &&
+        /already bills this subscription period/.test(rerun),
+      JSON.stringify({ first, after, invoices: samePeriod.length, rerun }),
+    );
+  }
+
+  // An invoice issued under `never` gets no event after the rule changes to `all`.
+  await systemDb
+    .update(businesses)
+    .set({ billingRulesConfig: { zero_invoice_paid_event: "all" } })
+    .where(eq(businesses.id, never.biz.id));
+  const later = (
+    await createManualInvoice({
+      organizationId: orgId,
+      businessId: never.biz.id,
+      customerId: never.c.id,
+      currency: "USD",
+      lines: freeLine,
+    })
+  ).invoice;
+  check(
+    "zero_invoice_paid_event: no event for an invoice issued before the change",
+    (await paidEvents(never.manualInvoice.publicId)).length === 0 &&
+      (await paidEvents(later.publicId)).length === 1,
   );
 }
 

@@ -7,6 +7,7 @@ import { ErrorState } from "@/components/states";
 import { SettingsPage } from "@/components/settings/settings-layout";
 import { CreditSettingsForm } from "@/components/credits/credit-settings-form";
 import { listMeters } from "@/lib/api/meters";
+import { listCreditUnits } from "@/lib/api/credits";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,15 @@ export default async function CreditSettingsPage({ params }: { params: Promise<{
       r.data.map((m) => ({ key: m.id, name: m.name, archived: m.status === "archived" })),
     )
     .catch(() => []);
+  // The active units with no money value: each has its own limit on free credit. A failed
+  // read shows no fields, and the save then leaves the stored limits as they are.
+  const limitUnits = await listCreditUnits(biz)
+    .then((r) =>
+      r.data
+        .filter((u) => u.status === "active" && u.minor_per_unit === null)
+        .map((u) => ({ key: u.id, name: u.name, plural: u.plural_name, decimals: u.decimals })),
+    )
+    .catch(() => []);
 
   return (
     <SettingsPage
@@ -58,6 +68,7 @@ export default async function CreditSettingsPage({ params }: { params: Promise<{
         config={config}
         currencies={currencies}
         meters={meters}
+        limitUnits={limitUnits}
         version={b.resource_version ?? undefined}
       />
     </SettingsPage>

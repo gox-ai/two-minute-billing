@@ -1,9 +1,10 @@
 /**
  * One measure for every usage control (design G5 §3.1): spend (rated usage, pre-tax, before
- * credits), quantity per meter, live balance and burn, for a customer and an instant. Reads
+ * credits; with the money a price bills for usage beyond the credits of a credit-cost meter), quantity per meter, live balance and burn, for a customer and an instant. Reads
  * are exact at any instant: rollups inside the window plus the raw tail (metering/read.ts),
  * so a check never waits for the fold. Read-only.
  */
+import { countsAsUsage } from "@/modules/metering/usage-sql";
 import { eq, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import {
@@ -21,6 +22,7 @@ import { readMeterUsage } from "@/modules/metering/read";
 import { liveMeteredItems, type MeteredItem } from "@/modules/credits/usage";
 import { liveAt, liveBalance } from "@/modules/credits/balance";
 import { faceMinorFor } from "@/modules/credits/units";
+import { overageSpend } from "@/modules/credits/overage";
 
 export type { UsageControlInterval };
 
@@ -270,9 +272,22 @@ export async function measureSpend(
       amountMinor,
     });
   }
+  // Usage beyond the credits that a money price bills: spend, on no item. Its events carry
+  // no property split, so a property measure leaves it out.
+  const over = q.where
+    ? null
+    : await overageSpend(tx, {
+        customerId: q.customerId,
+        currency: cur,
+        now,
+        window: cal,
+        meterIds: q.meterIds ?? null,
+        subscriptionId: q.subscriptionId ?? null,
+      });
+  if (over && !window) window = over.window;
   const win = window ?? cal ?? { start: now, end: now };
   return {
-    amountMinor: out.reduce((a, i) => a + i.amountMinor, 0n),
+    amountMinor: out.reduce((a, i) => a + i.amountMinor, over?.amountMinor ?? 0n),
     window: win,
     resetsAt: win.end,
     items: out,
@@ -308,7 +323,14 @@ export async function measureSpendBetween(
     if (q.meterIds && (!r.snap.meter || !q.meterIds.includes(r.snap.meter.id))) continue;
     total += await itemSpendBetween(tx, ctx, r, q.from, q.to);
   }
-  return total;
+  const over = await overageSpend(tx, {
+    customerId: q.customerId,
+    currency: cur,
+    now: q.to,
+    window: { start: q.from, end: q.to },
+    meterIds: q.meterIds ?? null,
+  });
+  return total + (over?.amountMinor ?? 0n);
 }
 
 /**
@@ -396,9 +418,9 @@ export async function measureBurn(
   const from = new Date(q.now.getTime() - 7 * DAY_MS);
   const rows = (await tx.execute(sql`
     select least(
-      (select min("timestamp") from usage_events where business_id = ${q.businessId}
-        and customer_id = ${q.customerId} and voided_at is null
-        and "timestamp" >= ${from.toISOString()}::timestamptz),
+      (select min(e."timestamp") from usage_events e where e.business_id = ${q.businessId}
+        and e.customer_id = ${q.customerId} and ${countsAsUsage("e")}
+        and e."timestamp" >= ${from.toISOString()}::timestamptz),
       (select min(r."timestamp") from usage_records r
         join subscriptions s on s.id = r.subscription_id
         where s.customer_id = ${q.customerId} and r."timestamp" >= ${from.toISOString()}::timestamptz)
@@ -440,6 +462,13 @@ export function runwayFrom(input: {
   const days = bal <= 0n ? 0n : (bal * 7n) / input.spend7dMinor;
   const n = Number(days);
   return { runwayDays: n, runsOutAt: new Date(input.now.getTime() + n * DAY_MS) };
+}
+
+/** The runway sentence. `usedUp`: nothing is left to run out (balance, with any top-up, is 0 or less). */
+export function runwayMessage(runwayDays: number | null, usedUp: boolean): string {
+  if (runwayDays == null) return "Not enough usage to estimate";
+  if (runwayDays === 0) return usedUp ? "Used up" : "Runs out in less than a day";
+  return `Runs out in about ${runwayDays} ${runwayDays === 1 ? "day" : "days"}`;
 }
 
 /** What an active auto top-up can still add this calendar month (cap − open and paid runs). */

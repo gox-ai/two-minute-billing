@@ -1,6 +1,7 @@
 import { MousePointerClick } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { portalPeek } from "@/lib/portal-api";
+import { portalPeekLink } from "@/lib/portal-api";
+import { ExpiredCard } from "../../(session)/portal-dead-ends";
 import { BrandTheme, NoticeCard, StorefrontHeader } from "../../../chrome";
 import { continuePortalLinkAction } from "./actions";
 
@@ -42,9 +43,12 @@ const TASK: Record<string, { title: string; text: string; button: string }> = {
 
 export default async function ContinuePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  // A failed peek (dead link, rate limit, error) still gets the button: the POST decides,
-  // and a dead link then lands on the portal's expired card. Never spent on this load.
-  const peek = await portalPeek(token);
+  // A link the engine refused gets the expired card here, branded, instead of a Continue
+  // button that only leads to it. A rate limit or an error still gets the button: the POST
+  // decides. Never spent on this load.
+  const result = await portalPeekLink(token);
+  if (result.kind === "dead") return <ExpiredCard business={result.business} reason="link" />;
+  const peek = result.kind === "live" ? result.peek : null;
   const task = (peek?.task && TASK[peek.task]) || {
     title: "Open your billing account",
     text: "Continue to see your invoices, plan and payment methods.",

@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import {
   businesses,
@@ -209,7 +209,14 @@ export async function usageWindowForNextInvoice(
       periodEnd: invoices.periodEnd,
     })
     .from(invoices)
-    .where(and(eq(invoices.subscriptionId, sub.id), eq(invoices.status, "pending")))
+    // A held invoice bills the CLOSED term; the next invoice bills the current one.
+    .where(
+      and(
+        eq(invoices.subscriptionId, sub.id),
+        eq(invoices.status, "pending"),
+        isNull(invoices.holdUntil),
+      ),
+    )
     .orderBy(desc(invoices.createdAt))
     .limit(1);
   if (open)
@@ -234,4 +241,38 @@ export async function usageWindowForNextInvoice(
     pending = biz?.pending ?? false;
   }
   return { ...w, billedBy: pending ? "pending_invoice" : "renewal", invoiceId: null };
+}
+
+/**
+ * The closed window a held renewal invoice (`hold_until`) still bills at its close, or null.
+ * Readers of the credit balance rate it beside the next invoice's window during the grace.
+ */
+export async function heldUsageWindow(
+  tx: Tx,
+  subscriptionId: string,
+): Promise<(UsageWindow & { invoiceId: string; holdUntil: Date }) | null> {
+  const [held] = await tx
+    .select({
+      publicId: invoices.publicId,
+      metadata: invoices.metadata,
+      periodStart: invoices.periodStart,
+      periodEnd: invoices.periodEnd,
+      holdUntil: invoices.holdUntil,
+    })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.subscriptionId, subscriptionId),
+        eq(invoices.status, "pending"),
+        isNotNull(invoices.holdUntil),
+      ),
+    )
+    .orderBy(desc(invoices.createdAt))
+    .limit(1);
+  if (!held) return null;
+  return {
+    ...pendingInvoiceUsageWindow(held),
+    invoiceId: held.publicId,
+    holdUntil: held.holdUntil!,
+  };
 }

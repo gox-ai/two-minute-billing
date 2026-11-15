@@ -51,6 +51,8 @@ const cols = computed(() => COLS[props.steps.length] ?? "lg:grid-cols-4");
           <p class="mt-1.5 text-sm leading-relaxed text-muted">{{ s.body }}</p>
         </li>
       </ol>
+      <!-- Optional: a link under the steps. -->
+      <slot />
     </div>
   </section>
 </template>

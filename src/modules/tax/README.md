@@ -102,6 +102,7 @@ A per-state override vector (keyed on the **place of supply**) wins over the reg
   Taxation"), bulk tax import, per-invoice tax display currency.
 
 ## Changelog
+- **2026-11-12** — Per-line estimates tax a credit line too: `componentTotalsFor` and `inclusiveTaxMinorFor` dropped a negative line base, so a plan-change estimate whose credit lines sit on the invoice quoted the charges' tax alone (3490 against a booked 3288). Rounded sign-symmetric, as `computeInvoiceTax` does.
 - **2026-11-03** — `deleteTaxStateRegistration` takes the region public id and deletes only when the registration belongs to that region. The route ignored `:txg` before.
 - **2026-08-25** — `taxComponentLabel(name, rateBps)` exported: the single spelling of a tax component
   on a printed document, `IGST (18.00%)`. It existed as a template literal duplicated at the two
@@ -195,3 +196,4 @@ A per-state override vector (keyed on the **place of supply**) wins over the reg
   are refused naming GB / GR (`VAT_PREFIX_ISO`), since `customers.country` never holds them.
 - **2026-11-03 (0489, browser check)** — `inclusiveTaxMinorFor`: the tax inside a gross, backed out as
   `computeInvoiceTax` does (floored, combined rate; per line under per-line rounding), for estimates.
+- **2026-11-11** — A state registration saved without a name (the home state at GST setup, an API call without `state_name`) takes the known subdivision name; the region read names older unnamed rows the same way. `verify:tax` checks it.

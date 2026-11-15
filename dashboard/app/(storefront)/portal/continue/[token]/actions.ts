@@ -13,7 +13,12 @@ export async function continuePortalLinkAction(token: string): Promise<void> {
   const session = await portalExchange(token);
   if (session.business) await rememberPortalBusiness(session.business);
   if (session.ok) await setStorefrontToken("portal", session.token);
+  // `link=expired` lets the card say the LINK failed, not that a session ended.
   redirect(
-    session.ok && session.forwardUrl?.startsWith("/portal") ? session.forwardUrl : "/portal",
+    session.ok
+      ? session.forwardUrl?.startsWith("/portal")
+        ? session.forwardUrl
+        : "/portal"
+      : "/portal?link=expired",
   );
 }

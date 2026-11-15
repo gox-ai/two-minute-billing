@@ -10,112 +10,74 @@ import {
   resetDeclineCode,
 } from "@/lib/api/decline-rules";
 
-const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
+/** "" = no code-level answer (each rule keeps its own). */
+type Tri = "" | "yes" | "no";
+
+export type DeclineChanges = {
+  codes: Array<{ code: string; retriable: Tri; exposed_to_payer: Tri }>;
+  rules: Array<
+    { rule: string; reset: true } | { rule: string; retriable: boolean; exposed_to_payer: boolean }
+  >;
+};
+
+const MAX_CHANGES = 2000;
+const tri = (v: Tri) => (v === "yes" ? true : v === "no" ? false : null);
 
 /**
- * A checkbox posts nothing when unchecked, so presence is the value — the same contract
- * every other form here reads (`CheckboxField` renders its hidden input only while
- * checked). That is why these read `fd.has(...)` rather than comparing a string.
- */
-export async function setDeclineRuleAction(
-  _prev: ActionResult | null,
-  fd: FormData,
-): Promise<ActionResult> {
-  await requirePermission("settings:manage", "admin");
-  const biz = str(fd, "biz");
-  const rule = str(fd, "rule");
-  if (!biz || !rule) return actionError("The business ID or the rule is missing. Reload the page.");
-
-  try {
-    await patchDeclineRule(biz, rule, {
-      retriable: fd.has("retriable"),
-      exposed_to_payer: fd.has("exposed_to_payer"),
-    });
-  } catch (e) {
-    return actionError((e as Error).message);
-  }
-  revalidatePath(`/businesses/${biz}/settings/decline-rules`);
-  return actionOk("Saved");
-}
-
-/**
- * Put the built-in answer back. The API answers 200 even when there was nothing to
- * remove, so clicking this twice is not an error and the button never needs disabling
- * based on state we might have stale.
- */
-export async function resetDeclineRuleAction(
-  _prev: ActionResult | null,
-  fd: FormData,
-): Promise<ActionResult> {
-  await requirePermission("settings:manage", "admin");
-  const biz = str(fd, "biz");
-  const rule = str(fd, "rule");
-  if (!biz || !rule) return actionError("The business ID or the rule is missing. Reload the page.");
-
-  try {
-    await resetDeclineRule(biz, rule);
-  } catch (e) {
-    return actionError((e as Error).message);
-  }
-  revalidatePath(`/businesses/${biz}/settings/decline-rules`);
-  return actionOk("Reset to the built-in answer");
-}
-
-/**
- * The same two settings, made once for a canonical code instead of rule by rule.
+ * The page's one Save: every pending code-level and rule-level change in one post.
  *
- * A rule that has its own setting keeps it — narrower wins — so this reaches the rules
- * nobody has touched, which is the point of having the level at all.
+ * Codes go first, so a rule saved in the same batch still wins (narrower wins). A code
+ * with neither answer set is a removal, not an empty override. Each write is idempotent,
+ * so after a partial failure the client keeps its drafts and Save can simply run again.
  */
-export async function setDeclineCodeAction(
+export async function saveDeclineRulesAction(
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
   await requirePermission("settings:manage", "admin");
-  const biz = str(fd, "biz");
-  const code = str(fd, "code");
-  if (!biz || !code) return actionError("The business ID or the code is missing. Reload the page.");
+  const biz = String(fd.get("biz") ?? "").trim();
+  if (!biz) return actionError("The business ID is missing. Reload the page.");
 
-  /**
-   * Tri-state, unlike the rule form above: "" means leave it alone, so it must post as an
-   * ABSENT key rather than as `false`. `fd.has()` cannot express that — a select always
-   * posts something — which is why this reads the value instead of its presence.
-   */
-  const tri = (k: string) => {
-    const v = str(fd, k);
-    return v === "yes" ? true : v === "no" ? false : undefined;
-  };
-  const retriable = tri("retriable");
-  const exposed = tri("exposed_to_payer");
-  if (retriable === undefined && exposed === undefined)
-    return actionError("Select at least one setting. To remove this setting, use Clear.");
-
+  let changes: DeclineChanges;
   try {
-    await patchDeclineCode(biz, code, {
-      ...(retriable !== undefined ? { retriable } : {}),
-      ...(exposed !== undefined ? { exposed_to_payer: exposed } : {}),
-    });
+    changes = JSON.parse(String(fd.get("changes") ?? "")) as DeclineChanges;
+  } catch {
+    return actionError("We could not read the changes. Reload the page and try again.");
+  }
+  const codes = Array.isArray(changes?.codes) ? changes.codes : [];
+  const rules = Array.isArray(changes?.rules) ? changes.rules : [];
+  const total = codes.length + rules.length;
+  if (total === 0) return actionError("There are no changes to save.");
+  if (total > MAX_CHANGES) return actionError("Too many changes. Save fewer at a time.");
+
+  let done = 0;
+  try {
+    for (const c of codes) {
+      if (!c.retriable && !c.exposed_to_payer) await resetDeclineCode(biz, c.code);
+      else
+        await patchDeclineCode(biz, c.code, {
+          retriable: tri(c.retriable),
+          exposed_to_payer: tri(c.exposed_to_payer),
+        });
+      done++;
+    }
+    for (const r of rules) {
+      if ("reset" in r) await resetDeclineRule(biz, r.rule);
+      else
+        await patchDeclineRule(biz, r.rule, {
+          retriable: !!r.retriable,
+          exposed_to_payer: !!r.exposed_to_payer,
+        });
+      done++;
+    }
   } catch (e) {
-    return actionError((e as Error).message);
+    revalidatePath(`/businesses/${biz}/settings/decline-rules`);
+    return actionError(
+      done > 0
+        ? `We saved ${done} of ${total} changes. ${(e as Error).message}`
+        : (e as Error).message,
+    );
   }
   revalidatePath(`/businesses/${biz}/settings/decline-rules`);
-  return actionOk("Saved for every rule with this code");
-}
-
-export async function resetDeclineCodeAction(
-  _prev: ActionResult | null,
-  fd: FormData,
-): Promise<ActionResult> {
-  await requirePermission("settings:manage", "admin");
-  const biz = str(fd, "biz");
-  const code = str(fd, "code");
-  if (!biz || !code) return actionError("The business ID or the code is missing. Reload the page.");
-
-  try {
-    await resetDeclineCode(biz, code);
-  } catch (e) {
-    return actionError((e as Error).message);
-  }
-  revalidatePath(`/businesses/${biz}/settings/decline-rules`);
-  return actionOk("Code-level setting removed");
+  return actionOk(total === 1 ? "Change saved." : `${total} changes saved.`);
 }

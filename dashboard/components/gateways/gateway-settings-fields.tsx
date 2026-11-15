@@ -3,10 +3,9 @@
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
 import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
 import { CurrenciesField } from "@/components/form/currency-select";
 import { SettingRow } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { SelectAnswer, ToggleAnswer } from "@/components/patterns/settings-page";
 import { MethodTypesField } from "@/components/gateways/method-types-field";
 import type { GatewayAccount } from "@/lib/api/gateways";
 import type { GatewayCatalogEntry, MethodTypeMeta } from "@/components/gateways/gateway-meta";
@@ -39,6 +38,7 @@ export function GatewaySettingsFields({
         label="Label"
         htmlFor="label"
         errorFor="label"
+        placement="end"
         control={
           <Input
             id="label"
@@ -46,7 +46,7 @@ export function GatewaySettingsFields({
             defaultValue={account.label}
             required
             maxLength={200}
-            className="max-w-md"
+            className="w-full sm:w-72"
           />
         }
       />
@@ -79,14 +79,15 @@ export function GatewaySettingsFields({
       <SettingRow
         label="Status"
         htmlFor="status"
+        placement="end"
         control={
-          // SelectField, not raw Select: it ignores the mount-time value Radix restores
-          // on React's post-action form reset, which once re-enabled a disabled account.
-          <SelectField
+          // SelectAnswer wraps SelectField, not raw Select: it ignores the mount-time value Radix
+          // restores on React's post-action form reset, which once re-enabled a disabled account.
+          <SelectAnswer
             name="status"
+            ariaLabel="Status"
             value={status}
             onValueChange={setStatus}
-            className="w-44"
             options={[
               { value: "active", label: "Active" },
               { value: "disabled", label: "Disabled" },
@@ -125,10 +126,11 @@ export function InternationalPaymentsRow({
     <SettingRow
       label="International payments"
       help={`Ask ${gatewayName} to enable international payments on your ${gatewayName} account first. Then enable this setting.`}
+      placement="end"
       control={
         <>
           <input type="hidden" name="international_switch" value="1" />
-          <SettingSwitch
+          <ToggleAnswer
             name="international_enabled"
             label="International payments"
             checked={international}

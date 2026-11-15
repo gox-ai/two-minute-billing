@@ -18,6 +18,8 @@ type Transaction = typeof transactions.$inferSelect;
 
 export interface TransactionSerializeExtra {
   invoicePublicId?: string | null;
+  invoiceNumber?: string | null;
+  creditNoteNumber?: string | null;
   customerPublicId?: string | null;
   customerEmail?: string | null;
   /** Already resolved by the caller's query (`accountHolderName`), never `customers.name`. */
@@ -179,10 +181,12 @@ export function serializeTransaction(t: Transaction, extra?: TransactionSerializ
     // existing API response shape — pass `extra.invoicePublicId` to override
     // with the invoice's public id (used by the event-snapshot loader below).
     invoice: extra && "invoicePublicId" in extra ? (extra.invoicePublicId ?? null) : t.invoiceId,
+    invoice_number: extra?.invoiceNumber ?? null,
     customer: extra?.customerPublicId ?? null,
     customer_email: extra?.customerEmail ?? null,
     customer_name: extra?.customerName ?? null,
     credit_note: extra?.creditNotePublicId ?? null,
+    credit_note_number: extra?.creditNoteNumber ?? null,
     subscription: extra?.subscriptionPublicId ?? null,
     /**
      * The authorization ceremony behind this charge, walkable from here (the forward hop

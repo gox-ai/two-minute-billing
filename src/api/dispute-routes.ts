@@ -4,7 +4,13 @@ import { authenticate } from "@/platform/auth";
 import { idempotency, idempotencyOnSend } from "@/platform/idempotency";
 import { resolveBusiness, notFound, requirePerm, badRequest, conflict } from "./helpers";
 import { parseRequest } from "./strict-params";
-import { listDisputesPage, getDispute, serializeDispute } from "@/modules/disputes/service";
+import {
+  listDisputesPage,
+  getDispute,
+  loadDisputeRefs,
+  serializeDispute,
+  type DisputeRow,
+} from "@/modules/disputes/service";
 import {
   DISPUTE_REASONS,
   DisputeError,
@@ -20,6 +26,11 @@ const recordBody = z.object({
   opened_at: z.number().int().positive().optional(),
 });
 const outcomeBody = z.object({ outcome: z.enum(["won", "lost"]) });
+
+async function serializeWithRefs(organizationId: string, row: DisputeRow) {
+  const refs = await loadDisputeRefs(organizationId, [row]);
+  return serializeDispute(row, refs.get(row.id));
+}
 
 function mapError(reply: FastifyReply, e: unknown) {
   if (e instanceof DisputeError) {
@@ -67,10 +78,12 @@ export async function registerDisputeRoutes(app: FastifyInstance) {
         startingAfter: q.starting_after,
         before: q.before ? new Date(q.before) : undefined,
         payment: q.payment || undefined,
+        customer: q.customer || undefined,
       });
+      const refs = await loadDisputeRefs(req.organization!.id, page.data);
       return {
         object: "list",
-        data: page.data.map(serializeDispute),
+        data: page.data.map((r) => serializeDispute(r, refs.get(r.id))),
         has_more: page.hasMore,
         next_cursor: page.nextCursor,
         total: page.total,
@@ -87,7 +100,7 @@ export async function registerDisputeRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const row = await getDispute(req.organization!.id, business.id, id);
       if (!row) return notFound(reply, "Dispute not found");
-      return serializeDispute(row);
+      return serializeWithRefs(req.organization!.id, row);
     },
   );
 
@@ -113,7 +126,7 @@ export async function registerDisputeRoutes(app: FastifyInstance) {
           processorReference: parsed.data.processor_reference ?? null,
           openedAt: parsed.data.opened_at ? new Date(parsed.data.opened_at * 1000) : undefined,
         });
-        return reply.code(201).send(serializeDispute(row));
+        return reply.code(201).send(await serializeWithRefs(req.organization!.id, row));
       } catch (e) {
         return mapError(reply, e);
       }
@@ -139,7 +152,7 @@ export async function registerDisputeRoutes(app: FastifyInstance) {
           disputePublicId: id,
           outcome: parsed.data.outcome,
         });
-        return serializeDispute(row);
+        return serializeWithRefs(req.organization!.id, row);
       } catch (e) {
         return mapError(reply, e);
       }

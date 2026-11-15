@@ -29,6 +29,7 @@ import {
 } from "@/modules/invoicing/document";
 import { customerTaxIdOf, fromFrozen } from "@/modules/invoicing/billing-snapshot";
 import { resolveInvoiceCustomization, taxRegLabelFor } from "@/modules/invoicing/customization";
+import { creditNoteTaxTotal, itemsStatedAsTax } from "./tax-items";
 
 /**
  * Presentation model for a credit note.
@@ -80,30 +81,9 @@ const DISCOUNT_LABELS: Record<string, string> = {
   document_level_coupon: "Discount",
 };
 
-/**
- * The tax a credit note carries, DERIVED — a credit note stores no tax column, so
- * rearranging the totals identity is the only source of truth available:
- *
- *     total = sub_total − Σ discounts + tax
- *
- * Exact by construction: the writers size `subtotal_minor` net of the tax the note
- * carries precisely so it is (`creditOneInvoice`: `Σ cashable + bucketReturned −
- * taxOnNote`). A cancellation credit carries no tax line at all, so this comes out 0.
- *
- * A NULL `subtotal_minor` means "gross not recorded; it equals total_minor" — the
- * pre-0186 convention and the state of all 918 backfilled historical rows. There is no
- * ladder to rearrange on those, so the answer is 0 and no tax row prints.
- *
- * Exported so the REST read derives the number with the SAME code the PDF does, rather
- * than a second copy of the identity that can drift from it.
- */
-export function creditNoteTaxTotal(
-  note: { subtotalMinor: bigint | null; totalMinor: bigint },
-  discounts: Array<{ amountMinor: bigint }>,
-): bigint {
-  if (note.subtotalMinor === null) return 0n;
-  return note.totalMinor - note.subtotalMinor + discounts.reduce((s, d) => s + d.amountMinor, 0n);
-}
+// `creditNoteTaxTotal` lives in `./tax-items` (pure) so the detail read can use it
+// without this module; re-exported for the callers that import it from here.
+export { creditNoteTaxTotal };
 
 /** One tax component the credited invoice booked, summed over its lines. */
 export interface CreditedTaxComponent {
@@ -335,6 +315,13 @@ export async function assembleCreditNoteDocument(
       taxTotalMinor,
       taxTotalMinor > 0n ? await creditedTaxComponents(tx, cn.invoiceId) : [],
     );
+    // The change path also writes that tax as an item; the ladder states it, so the line
+    // table leaves it out and the tax prints once. Same rule as the REST detail read.
+    const statedAsTax = itemsStatedAsTax(
+      items.map(({ it }) => it),
+      taxTotalMinor,
+    );
+    const lineItems = items.filter(({ it }) => !statedAsTax.has(it));
 
     const consumed = cn.allocatedMinor + cn.refundedMinor;
     const available = cn.totalMinor - consumed;
@@ -424,6 +411,7 @@ export async function assembleCreditNoteDocument(
         creditNoteNumbers: [],
         // The rate it inherited from the invoice it credits (0228).
         exchangeRate: printedExchangeRate(custom, cn),
+        holdUntil: null,
       },
       /**
        * The custom-fields switch lives on the INVOICES tab only, with no counterpart on
@@ -447,7 +435,7 @@ export async function assembleCreditNoteDocument(
               position: custom.signature.position,
             }
           : null,
-      chargeLines: items.map(({ it, taxCode }) => ({
+      chargeLines: lineItems.map(({ it, taxCode }) => ({
         description: it.description,
         /**
          * The "Service period" setting on the Credit Notes tab. A credit note has no
@@ -475,15 +463,8 @@ export async function assembleCreditNoteDocument(
         // hands back are DOCUMENT-level (`discountLines` above). 0 keeps the per-line
         // Discount column off the printed memo.
         //
-        // ⚠ The note's items are its CASHABLE lines, so they sum to `totals.totalMinor`,
-        // NOT to `totals.subtotalMinor` — the gap is precisely the discount rows, which is
-        // why printing them is what makes the document add up. On the change path the tax
-        // the ladder states is also one of these items ("Tax reversal on credited time"):
-        // `credit_note_items` records no line kind and that item carries no
-        // `invoice_line_item_id`, so there is no way to tell a tax item from a supply item
-        // without guessing at its amount or its wording, and a guess that misfires
-        // mislabels a supply line on a legal document. Both blocks tie to the same bottom
-        // line either way.
+        // A tax item the ladder states is not a line here (`itemsStatedAsTax`), so the
+        // table holds supply only and the tax prints once, in the tax rows.
         discountMinor: 0n,
         // INHERITED from the invoice line this credits, never re-resolved from the
         // product. A GST credit note must carry the HSN/SAC of the supply it reverses,

@@ -30,6 +30,8 @@ function comes from the price (`usageAggregation`).
 | `runUsageFold` / `foldBusiness` (`fold.ts`) | the `usage_fold` cron: matching, 15-minute rollups, backfill; `registerFoldHook` runs in each fold transaction |
 | `readMeterUsage` / `readMeterEvents` / `takeUsageCutoff` (`read.ts`) | exact reads: rollups inside the window, raw edges and tail |
 | `rateMeterItem` (`meter-rating.ts`) | rates a meter price per combination of group values, plus late usage (builder B) |
+| `UsageCost` / `lineCost` (`price-list-rating.ts`) | the one cost rule of usage: event cost, else your cost, else the list; a usage line and the daily cost fold both use it |
+| `foldUsageCostDays` (`cost-fold.ts`) | restates `usage_cost_daily` for business-local days: every customer's usage cost per day, meter and group values (0522) |
 | `ensurePartition` / `requireUsagePartitions` (`partitions.ts`) | monthly partitions on demand and the boot check |
 | `runUsageRetention` (`archive.ts`) | archive, then drop, partitions older than `USAGE_EVENTS_LIVE_MONTHS` |
 | `runUnmatchedNotice` (`notice.ts`) | the hourly `usage_event_unmatched` notice |
@@ -59,6 +61,36 @@ Recorded via `POST …/subscriptions/:sub/usage` (`subscription-routes.ts`); lis
 - Prepaid credit lots with expiry (usage drawn from lots) are **not** modeled — a deferred item.
 
 ## Changelog
+- **2026-11-13 (0530)** — `rateMeterItem` reads no quantity for a meter with a credit cost (and no late lines): credits pay its usage, and the part they do not pay is billed as a charge (`credits/overage.ts`). Current usage and spend measures show 0 for its usage price.
+- **2026-11-13 (0527)** — **A refused event is cost, not usage.** `usage_events.refused_at`, set by the credit gate in the transaction that stores an event it refuses for credit. `countsAsUsage(e)` (`usage-sql.ts`: not voided, not refused) is the one predicate of every usage read and fold: `readMeterUsage`, `readMeterEvents`, the rollup fold and backfill, the void's bucket rebuild, `meter-rating`, the late-usage probe, spend-limit property values and burn. The daily cost fold reads refused events apart (`readMeterUsage` `refusedOnly`) and adds their cost with no quantity. A capture that pays a refused event clears the mark and folds it if the watermark passed it (`foldEventsBehindWatermark`). The events API returns `refused_at`. No backfill: no production data exists for meters with a credit cost. Cover: `verify:credit-holds-units` § 12.
+- **2026-11-13 (0526, exact gate)** — The credits gate may take the customer lock in the ingest
+  transaction, when a credit grant starts or ends at that instant. `bill` refuses a short event
+  of a meter with a credit cost as `block` does (402 `insufficient_credit`). Cover:
+  `verify:credits-gate`.
+- **2026-11-13 (0526)** — **Meters with a credit cost.** `activeMetersFor` reads each meter's
+  credit cost with the meters (left joins; a meter with none adds no query). For an event of
+  such a meter, `storeReady` calls the credits gate in its transaction
+  (`credits/usage-gate.ts`, loaded on demand): the event's credits leave the customer's balance,
+  or the event is refused with `insufficient_credit` (402 on the single route, a per-event error
+  in a batch) and still stored. A repeat of a refused key is refused again. `backfill: true` on an
+  event spends no credits; it has no effect on any other meter. `ingestUsageEventsTx` takes
+  `coveredUnitId` (the capture of a hold in that credit unit is never refused for it). `voidUsageEvent` gives back credits that no
+  settlement drew, and refuses after that. A usage event shows `credit` when such a meter
+  counted it. The 35-day limit (`timestamp_too_old`) is unchanged and is the same for every
+  meter. Cover: `verify:credits-own-unit`.
+- **2026-11-13** — Late lines verified on tiered and volume prices: a late line is
+  rate(whole period, late usage included, at its stored pricing) − what the period billed, so
+  tiers price the period total, never the late units alone; a negative difference bills nothing
+  (a correction is a credit note). Checks in `verify:usage-late`. No engine change. Late usage
+  of a cancelled subscription with no live owner of the meter now bills through the opt-in
+  `late_usage_invoices` pass (subscriptions README); `customer_meter_billing.late_checked_at`
+  (0521) is that pass's marker.
+- **2026-11-13** — `takeMeterCutoff` for a time-travelled business (a clock pin for it is
+  active) moves the cutoff on by `FOLD_GRACE_MS`, so a billing run takes in every event received
+  by then. Before, usage received less than 5 real minutes before a clock advance was on no
+  invoice of that advance (it billed as a late line only on an advance 5 real minutes later).
+  The stored cutoff keeps its meaning (`at` − 5 min), so late lines and recurring levels stay
+  consistent. A live business has no pin: unchanged. Gate: `verify:credits-follow-money`.
 - **2026-07-06** — As-built baseline documented (post clone-program phases 0→H).
 - **2026-08-19** — Module logger adopted (`createLogger`): failure paths that previously swallowed their error now log it with the execution's `traceId`. Lines also reach Google Cloud Logging when `CLOUD_LOGGING=TRUE` (`src/platform/cloud-logging.ts`).
 - **2026-09-27** — Time Travel stamps: event timestamps written here (`paid_at`, `voided_at`, `settled_at`, …) use `stampNow()` (platform/clock.ts), and `created_at`/`updated_at` default to `app_now()` (0296), so a time-travelled business records its simulated instant. Unpinned writes are unchanged. `verify:time-travel-stamps`.
@@ -79,3 +111,7 @@ Recorded via `POST …/subscriptions/:sub/usage` (`subscription-routes.ts`); lis
 - **2026-11-02 (Tier 3 PR 3)** — Usage controls hook in: `ingest.ts` writes one insert-only `usage_control_dirty` mark per customer when the business has a usage control; `fold.ts` registers the dirty-set backstop as a fold hook. `readMeterUsage` and `rateMeterItem` take `where: {key, value}` (a property spend limit; reads raw), and `rateMeterItem` takes `measureOnly` (no line cost, no late lines).
 - **2026-11-03** — **Real cost first (`event_cost_or_list`, design G1c).** `rateCombos`: per combination, the events that carried a `cost` bill it × (1 + markup) on a `part: "reported_cost"` line (`reportedCostLine`; markup = the combination's rate row or customer override, else the price's), and only `uncostedQuantity` bills from the list (`part: "list"`; free units come off it alone); a fixed selling rate wins over both. `MeterCombo.uncostedQuantity`, `lineCost({ part })` counts one part only; late lines hold both parts. `list-drift.ts`: per model over 7 days, reported cost vs the list price of the same tokens (USD only) → `GET /v1/organization/model_prices/drift`. Cover: `verify:model-price-billing` T15.
 - **2026-11-04** — Ingest refuses a meter value, `amount` or `cost` outside ±10^12 (`withinMaxMagnitude`, `MAX_AMOUNT_MAGNITUDE` in `platform/fixed.ts`) as `invalid_value`; `POST …/subscriptions/:sub/usage` bounds `quantity` to the same. Gate: `verify:usage-events` §4.
+- **2026-11-13** — The usage grace window (`usage_close_delay_minutes`, 0–43200) no longer moves the renewal: a held renewal invoice takes its meter cutoff at its close, so events received in the grace bill on it as period usage. See `subscriptions/README.md`. Cover: `verify:usage-grace`.
+- **2026-11-13** — **Daily cost fold (0522, cost-only margin).** `lineCost`'s rule is now the `UsageCost` accumulator (same arithmetic, same bases); `lineCost` reads the line and feeds it. `cost-fold.ts` `foldUsageCostDays` writes `usage_cost_daily`: per business-local day, customer, meter and group values, the cost of ALL usage by `UsageCost` over the reader's 15-minute buckets (each priced at its start, converted at the day's end), with the customer's subscription live that day (a price on the meter first, then the earliest start, then the lowest id; it gives the plan and the currency, else the customer's currency, else the business default). Summed and counted meters only. A day is replaced whole. Run by `metric_daily_restate` over the trailing 35 days, the ingest limit for a late event. Cover: `verify:cost-margin`.
+- **2026-11-13 (feat/media-prices, 0524)** — `meters.price_list` takes `unit` (`MODEL_PRICE_UNITS`) and a price tier: `quality` / `quality_key`, `resolution` / `resolution_key` (a `_key` must be in `group_by`, as `token_type_key`). `listKeyOf` puts them on the list key (event tier values lower-cased); a map with none of them gives exactly the old key, so a unit-less meter resolves `token`, else `request`. An audio, image or video meter that sends a count now bills from the list and gets its cost from the list (cost basis `price_list`) like tokens. `unpriced_keys` carry `unit`, `quality`, `resolution`. Cover: `verify:model-price-billing` T16.
+- **2026-11-13** — A fixed `quality` / `resolution` in `meters.price_list` is trimmed and lower-cased on create and update (`normalizePriceListMap`, `normalizeTier`), as a cost row and an event value are; a value that still fails the pattern, or is only spaces, keeps the same 400. Cover: `verify:meters` §1, unit `meter-price-list-map.test.ts`.

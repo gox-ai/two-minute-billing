@@ -18,7 +18,7 @@ function Box({
   children?: React.ReactNode;
 }) {
   return (
-    <div className={cn("flex flex-col rounded-xl border bg-card p-6", spanClass(span))}>
+    <div className={cn("flex min-w-0 flex-col rounded-xl border bg-card p-6", spanClass(span))}>
       {title ? <Skeleton className="h-4 w-40" /> : null}
       <div className={cn("min-w-0", title && "mt-4")}>{children}</div>
     </div>
@@ -92,7 +92,7 @@ function ChartBones({ height }: { height: number }) {
   return (
     <div className="space-y-3">
       <Skeleton className="h-6 w-32" />
-      <Skeleton className="w-full rounded-lg" style={{ height }} />
+      <Skeleton className="w-full rounded-xl" style={{ height }} />
     </div>
   );
 }
@@ -114,9 +114,10 @@ export function OverviewCurrentSkeleton() {
   return (
     <Busy label="overview">
       <Stack>
+        {/* Four KPI cards: MRR, Paying customers, Churn, Trial conversion. */}
         <Grid>
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Box key={i} span={4} title={false}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Box key={i} span={3} title={false}>
               <FigureBones />
             </Box>
           ))}
@@ -209,7 +210,7 @@ export function RecurringPerformanceSkeleton() {
       <Stack>
         <Grid>
           <Box span={8}>
-            <Skeleton className="h-[180px] w-full rounded-lg" />
+            <Skeleton className="h-[180px] w-full rounded-xl" />
             <div className="mt-3 flex justify-between gap-2">
               {Array.from({ length: 6 }).map((_, i) => (
                 <Skeleton key={i} className="h-3 w-14" />
@@ -222,7 +223,7 @@ export function RecurringPerformanceSkeleton() {
         </Grid>
         <Grid>
           <Box span={12}>
-            <Skeleton className="h-[240px] w-full rounded-lg" />
+            <Skeleton className="h-[240px] w-full rounded-xl" />
           </Box>
         </Grid>
         <Grid>
@@ -274,7 +275,7 @@ export function CollectionsPerformanceSkeleton() {
   return (
     <Busy label="collections performance">
       <Stack>
-        <TileBones count={4} cols="grid-cols-1 md:grid-cols-2 xl:grid-cols-4" />
+        <TileBones count={4} cols="grid-cols-1 md:grid-cols-2 @min-[56.875rem]/main:grid-cols-4" />
         <Grid>
           <Box span={8}>
             <LineBones lines={8} />
@@ -288,7 +289,7 @@ export function CollectionsPerformanceSkeleton() {
         </Grid>
         <Grid>
           <Box span={12}>
-            <Skeleton className="h-[220px] w-full rounded-lg" />
+            <Skeleton className="h-[220px] w-full rounded-xl" />
           </Box>
         </Grid>
         <Grid>
@@ -304,7 +305,7 @@ export function CollectionsPerformanceSkeleton() {
             <LineBones lines={2} />
           </Box>
         </Grid>
-        <TileBones count={3} cols="grid-cols-1 xl:grid-cols-3" />
+        <TileBones count={3} cols="grid-cols-1 @min-[56.875rem]/main:grid-cols-3" />
       </Stack>
     </Busy>
   );
@@ -313,7 +314,8 @@ export function CollectionsPerformanceSkeleton() {
 /** The header, the view tabs and the Overview body — what the route's own `loading.tsx` shows. */
 export function BusinessHomeLoading() {
   return (
-    <div>
+    // `overflow-x-clip`: a skeleton must never be the thing that scrolls the page sideways.
+    <div aria-busy="true" aria-label="Loading overview" className="overflow-x-clip">
       <div className="mb-8 flex items-start justify-between gap-4">
         <div className="space-y-2.5">
           <Skeleton className="h-3 w-32" />
@@ -324,10 +326,11 @@ export function BusinessHomeLoading() {
           <Skeleton className="h-8 w-32" />
         </div>
       </div>
-      <div className="mb-6 flex gap-6 border-b pb-3">
-        <Skeleton className="h-4 w-16" />
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-4 w-20" />
+      {/* The view tabs are a segmented pill, not an underline strip. */}
+      <div className="mb-6 inline-flex max-w-full flex-wrap gap-1 rounded-xl border bg-muted/60 p-1">
+        {[24, 36, 20, 28].map((w, i) => (
+          <Skeleton key={i} className="h-8 rounded-md" style={{ width: `${w * 4}px` }} />
+        ))}
       </div>
       <Stack>
         <OverviewCurrentSkeleton />

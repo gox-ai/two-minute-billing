@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Alert } from "@/components/ui/alert";
 import { useDisplayTz } from "@/components/business-tz";
-import { fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format-date";
 import { loadGatewayBalanceAction } from "@/app/(dashboard)/businesses/[biz]/settings/gateways/actions";
 import type { GatewayBalance } from "@/lib/api/gateways";
 

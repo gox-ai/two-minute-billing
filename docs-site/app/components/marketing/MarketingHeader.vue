@@ -15,7 +15,6 @@ const menus = headerMenus(repo);
 const LINKS = [
   { label: "Pricing", to: "/pricing" },
   { label: "Docs", to: "/help" },
-  { label: "Blog", to: "/blog" },
 ];
 
 const items = computed<NavigationMenuItem[]>(() => [
@@ -40,7 +39,7 @@ const sheet = menus.map((m) => ({ label: m.label, value: m.value, menu: m }));
  */
 const ui = {
   // 64px on phones, 80px from 860px up, as on the other Two Minute sites.
-  root: "[--ui-header-height:4rem] min-[860px]:[--ui-header-height:5rem] bg-default/85 backdrop-blur-md border-b border-muted shadow-[0_1px_12px_-6px_rgb(16_24_40/0.12)]",
+  root: "top-(--mk-campaign-h) [--ui-header-height:4rem] min-[860px]:[--ui-header-height:5rem] bg-default/85 backdrop-blur-md border-b border-muted shadow-[0_1px_12px_-6px_rgb(16_24_40/0.12)]",
   center: "min-[860px]:flex flex-1 justify-start min-[860px]:ml-6",
   toggle: "min-[860px]:hidden size-11 justify-center",
   content: "min-[860px]:hidden mk-sheet",
@@ -57,7 +56,7 @@ const navUi = {
   viewportWrapper: "pointer-events-none pt-2.25 px-4",
   viewport:
     "pointer-events-auto w-(--reka-navigation-menu-viewport-width) rounded-2xl ring-0 bg-transparent",
-  content: "w-max max-h-[calc(100dvh-6rem)]",
+  content: "w-max max-h-[calc(100dvh-6rem-var(--mk-campaign-h))]",
 };
 
 const sheetUi = {
@@ -101,7 +100,7 @@ const sheetUi = {
         aria-label="GitHub"
         class="hidden xl:inline-flex"
       />
-      <UColorModeButton class="hidden xl:inline-flex" />
+      <UColorModeButton class="hidden min-[860px]:inline-flex" />
       <UButton
         :to="signIn"
         color="neutral"
@@ -111,13 +110,7 @@ const sheetUi = {
       >
         Sign in
       </UButton>
-      <UButton
-        :to="signUp"
-        size="lg"
-        trailing-icon="i-lucide-arrow-up-right"
-        class="hidden whitespace-nowrap min-[860px]:inline-flex"
-        :ui="{ trailingIcon: 'max-lg:hidden' }"
-      >
+      <UButton :to="signUp" size="lg" class="hidden whitespace-nowrap min-[860px]:inline-flex">
         Start for free
       </UButton>
     </template>

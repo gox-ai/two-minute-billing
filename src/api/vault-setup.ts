@@ -395,6 +395,18 @@ export function serializeVaultSetup(outcome: VaultSetupOutcome) {
  * this add-card (another customer's, not a `setup`, or a challenge genuinely
  * unfinished).
  */
+/** A refused setup, with its next step: the checkout shows this text as it is. */
+function setupRefusedMessage(reason: string): string {
+  const said = reason.trim();
+  const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
+  const opening = /^We could not /.test(sentence)
+    ? sentence
+    : `We could not save your payment method. ${sentence}`;
+  return /\b(try again|contact)\b/i.test(sentence)
+    ? opening
+    : `${opening} Try again, or use a different payment method.`;
+}
+
 export class VaultSetupIntentError extends Error {
   readonly status: 400 | 404;
   /** The provider/engine's own words, for the log rather than the buyer. */
@@ -480,8 +492,8 @@ export async function completeVaultFromIntent(input: {
     if (applied?.outcome === "failed" || applied?.outcome === "pending")
       throw new VaultSetupIntentError(
         applied.outcome === "failed"
-          ? `We could not save this payment method. ${applied.failure!.message}`
-          : "The gateway did not confirm this payment method yet. Try again in a few minutes.",
+          ? setupRefusedMessage(applied.failure!.message)
+          : "The payment provider did not confirm this payment method yet. Try again in a few minutes.",
         400,
         applied.failure?.code ?? null,
       );

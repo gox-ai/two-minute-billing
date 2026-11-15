@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useDefaultState } from "@/lib/use-default-state";
 import { RadioField } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,10 +36,13 @@ export function AddressFormatField({
   defaultFormat,
   defaultCustom,
   address,
+  profileHref,
 }: {
   defaultFormat: "expanded" | "single_line" | "custom";
   defaultCustom: string;
   address: Address;
+  /** Where the business address is set; linked when there is none to preview. */
+  profileHref?: string;
 }) {
   const lines = React.useMemo(() => {
     const a = address ?? {};
@@ -54,10 +58,11 @@ export function AddressFormatField({
   // an empty seller address is unreachable from either side.
   const [custom, setCustom] = useDefaultState(defaultCustom || lines.join("\n"));
 
-  const expanded = lines.length ? lines.join("\n") : "—";
+  const hasAddress = lines.length > 0;
+  const expanded = lines.join("\n");
   // Mirrors the engine's join, trailing punctuation and all: merchant address lines
   // often end in their own comma, and a naive join shows "Mogappair East,, Chennai".
-  const single = lines.length
+  const single = hasAddress
     ? lines
         .map((l) =>
           l
@@ -67,13 +72,29 @@ export function AddressFormatField({
         )
         .filter(Boolean)
         .join(", ")
-    : "—";
+    : "";
 
   return (
     <SettingsCard title="Seller address" meta="The layout of your address">
       <SettingRow
         label="Address layout"
-        help="The preview uses your business address."
+        help={
+          hasAddress ? (
+            "The preview uses your business address."
+          ) : (
+            <>
+              Add a business address on{" "}
+              {profileHref ? (
+                <Link href={profileHref} className="text-primary hover:underline">
+                  Business profile
+                </Link>
+              ) : (
+                "Business profile"
+              )}{" "}
+              to see the preview.
+            </>
+          )
+        }
         control={
           <RadioField
             name="address_format"
@@ -85,12 +106,20 @@ export function AddressFormatField({
               {
                 value: "expanded",
                 label: "Expanded",
-                hint: <span className="font-mono text-xs whitespace-pre-line">{expanded}</span>,
+                hint: hasAddress ? (
+                  <span className="font-mono text-xs whitespace-pre-line">{expanded}</span>
+                ) : (
+                  "Each part of the address on its own line."
+                ),
               },
               {
                 value: "single_line",
                 label: "Single line",
-                hint: <span className="font-mono text-xs wrap-anywhere">{single}</span>,
+                hint: hasAddress ? (
+                  <span className="font-mono text-xs wrap-anywhere">{single}</span>
+                ) : (
+                  "The full address on one line, with commas between the parts."
+                ),
               },
               {
                 value: "custom",

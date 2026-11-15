@@ -285,6 +285,7 @@ export function PriceForm({
           <FormCard title="Price">
             <Field name="currency" label="Currency" required>
               <CurrencySelect
+                className="w-full"
                 name="currency"
                 value={v.currency}
                 onValueChange={(c) => {
@@ -354,33 +355,38 @@ export function PriceForm({
             }
           />
           {recurring ? (
-            <Field name="billing_cycles" label="Billing cycles">
-              <div className="flex gap-2">
-                <SelectField
-                  value={v.cycles}
-                  onValueChange={(x) => set("cycles", x as Values["cycles"])}
-                  ariaLabel="Billing cycles"
-                  options={[
-                    { value: "forever", label: "Forever" },
-                    { value: "fixed", label: "A fixed number" },
-                  ]}
+            <Field name="cycles" label="Billing cycles">
+              <SelectField
+                value={v.cycles}
+                onValueChange={(x) => set("cycles", x as Values["cycles"])}
+                ariaLabel="Billing cycles"
+                options={[
+                  { value: "forever", label: "Forever" },
+                  { value: "fixed", label: "A fixed number" },
+                ]}
+              />
+            </Field>
+          ) : null}
+          {recurring && v.cycles === "fixed" ? (
+            <Field name="billing_cycles" label="Number of cycles" required>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="billing_cycles"
+                  name="billing_cycles"
+                  type="number"
+                  min={1}
+                  required
+                  value={v.billing_cycles}
+                  onChange={(e) => set("billing_cycles", e.target.value)}
+                  className="w-20 tabular-nums"
                 />
-                {v.cycles === "fixed" ? (
-                  <Input
-                    name="billing_cycles"
-                    aria-label="Number of billing cycles"
-                    type="number"
-                    min={1}
-                    required
-                    value={v.billing_cycles}
-                    onChange={(e) => set("billing_cycles", e.target.value)}
-                    className="w-24 tabular-nums"
-                  />
-                ) : editing ? (
-                  <input type="hidden" name="billing_cycles" value="" />
-                ) : null}
+                <span className="text-sm text-muted-foreground">
+                  {Number(v.billing_cycles) === 1 ? "cycle" : "cycles"}
+                </span>
               </div>
             </Field>
+          ) : recurring && editing ? (
+            <input type="hidden" name="billing_cycles" value="" />
           ) : null}
         </FormCard>
 
@@ -433,7 +439,7 @@ export function PriceForm({
                 min={1}
                 value={v.portal_min}
                 onChange={(e) => set("portal_min", e.target.value)}
-                className="w-24 tabular-nums"
+                className="w-20 tabular-nums"
               />
             </Field>
             <Field name="portal_max_quantity" label="Maximum seats">
@@ -443,7 +449,7 @@ export function PriceForm({
                 min={1}
                 value={v.portal_max}
                 onChange={(e) => set("portal_max", e.target.value)}
-                className="w-24 tabular-nums"
+                className="w-20 tabular-nums"
               />
             </Field>
           </FormCard>
@@ -454,21 +460,23 @@ export function PriceForm({
             <Field name="trial_period" label="Trial period" help="Leave empty for no trial">
               <div className="flex gap-2">
                 <Input
+                  id="trial_period"
                   name="trial_period"
                   type="number"
                   min={0}
                   value={v.trial_period}
                   onChange={(e) => set("trial_period", e.target.value)}
-                  className="w-24 tabular-nums"
+                  className="w-20 tabular-nums"
                 />
                 <SelectField
                   name="trial_period_unit"
                   value={v.trial_unit}
                   onValueChange={(x) => set("trial_unit", x)}
                   ariaLabel="Trial period unit"
+                  className="w-30"
                   options={["day", "week", "month", "year"].map((u) => ({
                     value: u,
-                    label: `${u}s`,
+                    label: Number(v.trial_period) === 1 ? u : `${u}s`,
                   }))}
                 />
               </div>
@@ -537,23 +545,25 @@ export function PriceForm({
           <Wide>
             <CheckboxField
               name="is_taxable"
-              label="This charge is subject to taxes"
+              label="This price is subject to taxes"
               checked={v.is_taxable}
               onCheckedChange={(c) => set("is_taxable", c)}
             />
           </Wide>
-          <Field name="tax_behavior" label="Tax behavior">
-            <ChoiceCards
-              name="tax_behavior"
-              value={v.tax_behavior}
-              onValueChange={(x) => set("tax_behavior", x)}
-              ariaLabel="Tax behavior"
-              options={[
-                { value: "exclusive", label: "Exclusive", hint: "Price excludes tax" },
-                { value: "inclusive", label: "Inclusive", hint: "Price includes tax" },
-              ]}
-            />
-          </Field>
+          <Wide>
+            <Field name="tax_behavior" label="Tax behavior">
+              <ChoiceCards
+                name="tax_behavior"
+                value={v.tax_behavior}
+                onValueChange={(x) => set("tax_behavior", x)}
+                ariaLabel="Tax behavior"
+                options={[
+                  { value: "exclusive", label: "Exclusive", hint: "Price excludes tax" },
+                  { value: "inclusive", label: "Inclusive", hint: "Price includes tax" },
+                ]}
+              />
+            </Field>
+          </Wide>
           <TextField
             name="tax_code"
             label="HSN/SAC code"

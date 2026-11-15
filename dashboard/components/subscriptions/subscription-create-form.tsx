@@ -33,9 +33,10 @@ import { DateTimeField } from "@/components/form/datetime-field";
 import { useBusinessTz } from "@/components/business-tz";
 import { ErrorState } from "@/components/states";
 import { Alert } from "@/components/ui/alert";
-import { ActionForm, useFieldError } from "@/components/form/action-form";
+import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
-import { money, isQuantityBased, fmtDate, toMajor, toMinor } from "@/lib/format";
+import { money, isQuantityBased, toMajor, toMinor } from "@/lib/format";
+import { fmtDate } from "@/lib/format-date";
 import { accountHolderName } from "@/lib/names";
 import { cn } from "@/lib/utils";
 import { MoreVertical, Plus, UserRound } from "lucide-react";
@@ -52,6 +53,9 @@ import { RadioField } from "@/components/ui/radio-group";
 import { makeEstimateLineFormatter } from "@/lib/estimate-lines";
 import {
   CouponPickerModal,
+  DISCOUNT_DURATION_OPTIONS,
+  DISCOUNT_TYPE_OPTIONS,
+  InlineEditorPanel,
   couponDiscountLabel,
   couponDurationLabel,
 } from "@/components/subscriptions/coupon-picker-modal";
@@ -99,20 +103,6 @@ interface EstimateView {
   refundable_credits_applied_minor?: number;
   excess_payments_applied_minor?: number;
   amount_due_minor?: number;
-}
-
-/**
- * Standalone inline error for a field that isn't inside a `<Field>` wrapper (e.g.
- * the compact coupon/manual-discount row, which is deliberately one line rather
- * than a stacked label+input). Must be its own component — `useFieldError` reads
- * the nearest `<ActionForm>` provider ABOVE it in the render tree, which only
- * exists for components rendered as children of the form, not for the parent
- * function that returns it.
- */
-function InlineFieldError({ name }: { name: string }) {
-  const error = useFieldError(name);
-  if (!error) return null;
-  return <p className="text-xs font-medium text-destructive">{error}</p>;
 }
 
 /**
@@ -199,6 +189,8 @@ export function SubscriptionCreateForm({
   const [showCouponCode, setShowCouponCode] = React.useState(false);
   /** What's being typed into `Add Coupon Code`, before Apply promotes it. */
   const [couponDraft, setCouponDraft] = React.useState("");
+  /** The "+ Add coupon" links: only while no coupon is set or being typed. */
+  const couponLinks = !couponCode && !showCouponCode;
   /** The catalog row for a typed/picked code, when it resolves to a known coupon. */
   const appliedCoupon = coupons.find((c) => c.id === couponCode);
   // Controlled so the value field beside it can switch UNITS: a percent is a plain
@@ -765,14 +757,14 @@ export function SubscriptionCreateForm({
                 {isPlan ? (
                   <>
                     <DropdownMenuItem onSelect={() => setEditingRow({ index: i, freqOnly: false })}>
-                      Change Plan
+                      Change plan
                     </DropdownMenuItem>
                     {/* Only offered when another cadence of this plan actually exists. */}
                     {sameProductOtherCadence.length > 0 ? (
                       <DropdownMenuItem
                         onSelect={() => setEditingRow({ index: i, freqOnly: true })}
                       >
-                        Change Frequency
+                        Change frequency
                       </DropdownMenuItem>
                     ) : null}
                   </>
@@ -894,21 +886,29 @@ export function SubscriptionCreateForm({
   }));
 
   const estCurrency = planPrice?.currency ?? estimate?.currency ?? "";
+  /** Money due on Create. Auto-collection off sends the invoice: no card is charged. */
+  const autoCollectOff =
+    autoCollection === "off" || (autoCollection === "" && inheritedAutoCollection === "off");
+  const dueNowLabel = autoCollectOff
+    ? "We send the invoice now. The customer pays it."
+    : "Chargeable immediately";
+  /** Auto-collection off invoices the customer; nothing is charged to a card. */
+  const billVerb = autoCollectOff ? "invoice" : "charge";
   /** What the first invoice will come to, whenever it is raised. */
   const estTotalMinor = estimate?.amount_due_minor ?? estimate?.total_minor ?? 0;
   const headlineLabel = inTrial
-    ? `Nothing due now. We charge ${money(estTotalMinor, estCurrency)} ${estCurrency} when the trial ends on ${activationLabel}`
+    ? `Nothing due now. We ${billVerb} ${money(estTotalMinor, estCurrency)} when the trial ends on ${activationLabel}.`
     : startsInFuture
-      ? `Nothing due now. We charge when the subscription starts on ${activationLabel}`
+      ? `Nothing due now. We ${billVerb} when the subscription starts on ${activationLabel}.`
       : firstInvoiceDeferred
-        ? `Nothing due now. ${money(estTotalMinor, estCurrency)} ${estCurrency} goes to unbilled charges and is added to the next invoice`
-        : "Chargeable immediately";
+        ? `Nothing due now. ${money(estTotalMinor, estCurrency)} goes to unbilled charges and is added to the next invoice.`
+        : dueNowLabel;
 
-  const footerNote = "Create asks you to confirm before we charge anything";
+  const footerNote = "Create asks you to confirm before we invoice or charge anything.";
   const breakdownNote = inTrial
-    ? `We charge nothing on create. The first invoice contains these charges when the trial ends on ${activationLabel}.`
+    ? `We bill nothing on create. The first invoice contains these charges when the trial ends on ${activationLabel}.`
     : startsInFuture
-      ? `We charge nothing on create. The first invoice contains these charges when the subscription starts on ${activationLabel}.`
+      ? `We bill nothing on create. The first invoice contains these charges when the subscription starts on ${activationLabel}.`
       : firstInvoiceDeferred
         ? "We invoice nothing on create. These charges go to unbilled charges and are added to the next invoice."
         : "Summary of the charges that we raise on create.";
@@ -963,7 +963,7 @@ export function SubscriptionCreateForm({
             ) : null}
             <div
               className={cn(
-                "space-y-2 rounded-lg border p-4",
+                "space-y-2 rounded-xl border p-4",
                 // No money moves on Create when it charges later, so this must not read
                 // as an alert (a fill is for things that need action now).
                 nothingDueNow ? "border-info/25 bg-info-soft" : "border-warning/25 bg-warning-soft",
@@ -1000,7 +1000,7 @@ export function SubscriptionCreateForm({
                       {money(estTotalMinor, estimate.currency)} {estimate.currency}
                     </div>
                     <div className="mt-0.5 text-xs font-medium text-muted-foreground">
-                      Chargeable immediately
+                      {dueNowLabel}
                     </div>
                   </div>
                 )}
@@ -1027,7 +1027,7 @@ export function SubscriptionCreateForm({
             {/* The breakdown, inline: items → subtotal → promotional credit (pre-tax) →
                 tax → total → balance credits → amount due. */}
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+              <div className="flex items-baseline justify-between gap-3 text-xs font-semibold text-muted-foreground">
                 <span>Items</span>
                 <span>Amount ({estimate.currency})</span>
               </div>
@@ -1091,8 +1091,8 @@ export function SubscriptionCreateForm({
               </p>
             )}
             <SummaryBox>
-              Usage-model items bill in arrears and are not included. A trial moves the first charge
-              to the trial end.
+              Usage-model items bill in arrears and are not included. A trial moves the first
+              invoice to the trial end.
             </SummaryBox>
           </>
         ) : null}
@@ -1314,46 +1314,63 @@ export function SubscriptionCreateForm({
                   ) : null}
                 </LineActionsBar>
                 {/* Coupons + manual discount, the second bar. Two coupon entry
-                    points: this used to be the free-text box alone, so an operator
-                    had to know the code by heart. Both fill the same `coupon_code`
-                    field. Hidden once one is applied — a second coupon would
-                    silently replace the first. */}
-                <LineActionsBar>
-                  {/* The real posted field, whichever control filled it. */}
-                  <input type="hidden" name="coupon_code" value={couponCode} />
-                  {!couponCode && !showCouponCode ? (
-                    <>
-                      <CouponPickerModal
-                        coupons={coupons}
-                        currency={estCurrency}
-                        label="Add coupon"
-                        onSelect={(code) => {
-                          setCouponCode(code);
-                          setShowCouponCode(false);
-                          setCouponDraft("");
-                        }}
-                      />
-                      <LineActionSeparator label="OR" />
-                      <LineActionLink onClick={() => setShowCouponCode(true)}>
-                        Add coupon code
+                    points, both filling the same `coupon_code` field. Hidden once one is
+                    applied: a second coupon would silently replace the first. */}
+                {/* The real posted field, whichever control filled it. */}
+                <input type="hidden" name="coupon_code" value={couponCode} />
+                {couponLinks || !showManualDiscount ? (
+                  <LineActionsBar>
+                    {couponLinks ? (
+                      <>
+                        <CouponPickerModal
+                          coupons={coupons}
+                          currency={estCurrency}
+                          label="Add coupon"
+                          onSelect={(code) => {
+                            setCouponCode(code);
+                            setShowCouponCode(false);
+                            setCouponDraft("");
+                          }}
+                        />
+                        <LineActionSeparator label="OR" />
+                        <LineActionLink onClick={() => setShowCouponCode(true)}>
+                          Add coupon code
+                        </LineActionLink>
+                      </>
+                    ) : null}
+                    {couponLinks && !showManualDiscount ? <LineActionSeparator /> : null}
+                    {!showManualDiscount ? (
+                      <LineActionLink onClick={() => setShowManualDiscount(true)}>
+                        Add manual discount
                       </LineActionLink>
-                      <LineActionSeparator />
-                    </>
-                  ) : null}
-                  {showCouponCode ? (
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Input
-                        autoFocus
-                        value={couponDraft}
-                        onChange={(e) => setCouponDraft(e.target.value)}
-                        placeholder="Coupon code"
-                        maxLength={100}
-                        className="w-56 max-w-full"
-                        aria-label="Coupon code"
-                      />
+                    ) : null}
+                  </LineActionsBar>
+                ) : null}
+                {showCouponCode ? (
+                  <InlineEditorPanel
+                    title="Add coupon code"
+                    closeLabel="Close coupon code"
+                    onClose={() => {
+                      setShowCouponCode(false);
+                      setCouponDraft("");
+                    }}
+                  >
+                    <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+                      <Field
+                        name="coupon_code_draft"
+                        label="Coupon code"
+                        className="w-72 max-w-full"
+                      >
+                        <Input
+                          id="coupon_code_draft"
+                          autoFocus
+                          value={couponDraft}
+                          onChange={(e) => setCouponDraft(e.target.value)}
+                          maxLength={100}
+                        />
+                      </Field>
                       <Button
                         type="button"
-                        size="sm"
                         variant="outline"
                         disabled={!couponDraft.trim()}
                         onClick={() => {
@@ -1362,95 +1379,82 @@ export function SubscriptionCreateForm({
                           setShowCouponCode(false);
                         }}
                       >
-                        Apply
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setShowCouponCode(false);
-                          setCouponDraft("");
-                        }}
-                      >
-                        Cancel
+                        Apply coupon
                       </Button>
                     </div>
-                  ) : null}
-                  {!showManualDiscount ? (
-                    <LineActionLink onClick={() => setShowManualDiscount(true)}>
-                      Add manual discount
-                    </LineActionLink>
-                  ) : (
-                    <div className="flex min-w-0 flex-wrap items-center gap-2 text-foreground">
-                      <SelectField
-                        name="md_type"
-                        value={mdType}
-                        // Switching the unit clears the number (the inputs are
-                        // `key`ed for the same reason), so the mirror must clear
-                        // with it or the rail would quote 25 CURRENCY as 25%.
-                        onValueChange={(v) => {
-                          setMdType(v);
-                          setMdValue("");
-                        }}
-                        ariaLabel="Manual discount type"
-                        className="w-44"
-                        options={[
-                          { value: "percent", label: "Percentage (%)" },
-                          { value: "amount", label: "Fixed amount" },
-                        ]}
-                      />
+                  </InlineEditorPanel>
+                ) : null}
+                {showManualDiscount ? (
+                  <InlineEditorPanel
+                    title="Manual discount"
+                    closeLabel="Remove manual discount"
+                    onClose={() => {
+                      setShowManualDiscount(false);
+                      setMdValue("");
+                    }}
+                  >
+                    <div className="grid items-start gap-x-4 gap-y-3 sm:grid-cols-3">
+                      <Field name="md_type" label="Discount type">
+                        <SelectField
+                          id="md_type"
+                          name="md_type"
+                          value={mdType}
+                          // Switching the unit clears the number (the inputs are
+                          // `key`ed for the same reason), so the mirror must clear
+                          // with it or the rail would quote 25 CURRENCY as 25%.
+                          onValueChange={(v) => {
+                            setMdType(v);
+                            setMdValue("");
+                          }}
+                          ariaLabel="Discount type"
+                          options={DISCOUNT_TYPE_OPTIONS}
+                        />
+                      </Field>
                       {/* One `md_value` field, two units — a percent is a plain
                           integer, a fixed amount is money. The money branch posts
                           integer minor under the same name, in the plan's currency.
                           Keyed so switching type clears the number rather than
                           reinterpreting it. */}
-                      {mdType === "amount" ? (
-                        <MoneyInput
-                          key="md-amount"
-                          name="md_value"
-                          currency={planPrice?.currency ?? ""}
-                          className="w-40"
-                          onMinorChange={(minor) => setMdValue(minor == null ? "" : String(minor))}
-                        />
-                      ) : (
-                        <Input
-                          key="md-percent"
-                          name="md_value"
-                          type="number"
-                          min={1}
-                          max={100}
-                          placeholder="Value"
-                          className="w-28 tabular-nums"
-                          aria-label="Manual discount value"
-                          onChange={(e) => setMdValue(e.target.value)}
-                        />
-                      )}
-                      <SelectField
-                        name="md_duration"
-                        defaultValue="one_time"
-                        ariaLabel="Manual discount duration"
-                        className="w-36"
-                        options={[
-                          { value: "one_time", label: "One time" },
-                          { value: "forever", label: "Forever" },
-                        ]}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setShowManualDiscount(false);
-                          setMdValue("");
-                        }}
+                      <Field
+                        name="md_value"
+                        label={mdType === "amount" ? "Amount off" : "Percent off"}
+                        help={mdType === "amount" ? undefined : "From 1 to 100."}
                       >
-                        Remove
-                      </Button>
-                      <InlineFieldError name="md_value" />
+                        {mdType === "amount" ? (
+                          <MoneyInput
+                            key="md-amount"
+                            id="md_value"
+                            name="md_value"
+                            currency={planPrice?.currency ?? ""}
+                            onMinorChange={(minor) =>
+                              setMdValue(minor == null ? "" : String(minor))
+                            }
+                          />
+                        ) : (
+                          <Input
+                            key="md-percent"
+                            id="md_value"
+                            name="md_value"
+                            type="number"
+                            min={1}
+                            max={100}
+                            className="tabular-nums"
+                            onChange={(e) => setMdValue(e.target.value)}
+                          />
+                        )}
+                      </Field>
+                      <Field name="md_duration" label="Duration">
+                        <SelectField
+                          id="md_duration"
+                          name="md_duration"
+                          defaultValue="one_time"
+                          ariaLabel="Duration"
+                          options={DISCOUNT_DURATION_OPTIONS}
+                        />
+                      </Field>
                     </div>
-                  )}
-                </LineActionsBar>
+                  </InlineEditorPanel>
+                ) : null}
               </>
             }
           >
@@ -1542,13 +1546,9 @@ export function SubscriptionCreateForm({
             label="Subscription ID"
             help="If you do not enter an ID, we generate one automatically."
           >
-            <Input
-              name="subscription_id"
-              placeholder="ID used to uniquely identify the subscription"
-              maxLength={50}
-            />
+            <Input name="subscription_id" maxLength={50} />
           </Field>
-          <Field name="po_number" label="PO number" help="Enter the Purchase Order Number.">
+          <Field name="po_number" label="PO number" help="Your customer's purchase order number.">
             <Input name="po_number" maxLength={100} />
           </Field>
 
@@ -1570,11 +1570,15 @@ export function SubscriptionCreateForm({
                 ]}
               />
               {startMode === "specific" ? (
-                <DateTimeField
-                  name="start_date"
-                  defaultValue={startDate}
-                  onUtcChange={setStartDate}
-                />
+                <Field name="start_date_at" label="Start on" className="pt-1">
+                  <DateTimeField
+                    id="start_date_at"
+                    name="start_date"
+                    defaultValue={startDate}
+                    onUtcChange={setStartDate}
+                    className="w-72 max-w-full"
+                  />
+                </Field>
               ) : null}
             </FieldBlock>
           </Wide>
@@ -1599,15 +1603,21 @@ export function SubscriptionCreateForm({
                 ]}
               />
               {cyclesMode === "fixed" ? (
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={cyclesCount}
-                  onChange={(e) => setCyclesCount(e.target.value)}
-                  className="w-32 tabular-nums"
-                  aria-label="Number of billing cycles"
-                />
+                <Field
+                  name="billing_cycles_number"
+                  label="Number of billing cycles"
+                  className="pt-1"
+                >
+                  <Input
+                    id="billing_cycles_number"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={cyclesCount}
+                    onChange={(e) => setCyclesCount(e.target.value)}
+                    className="w-30 tabular-nums"
+                  />
+                </Field>
               ) : null}
             </FieldBlock>
           </Wide>
@@ -1642,7 +1652,7 @@ export function SubscriptionCreateForm({
           <Field
             name="net_term_days"
             label="Net term days"
-            help="Payment due N days after the invoice date."
+            help="Days after the invoice date until payment is due."
           >
             <Input
               name="net_term_days"
@@ -1689,8 +1699,8 @@ export function SubscriptionCreateForm({
                   {
                     value: "",
                     label: inheritedAutoCollection
-                      ? `Use customer's setting (currently ${inheritedAutoCollection === "on" ? "On" : "Off"})`
-                      : "Use customer's setting",
+                      ? `Customer's setting (${inheritedAutoCollection === "on" ? "On" : "Off"})`
+                      : "Customer's setting",
                   },
                   { value: "on", label: "On: charge the card automatically" },
                   { value: "off", label: "Off: send the invoice" },

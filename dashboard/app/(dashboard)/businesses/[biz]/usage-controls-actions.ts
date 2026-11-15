@@ -19,6 +19,7 @@ import {
   putPlanUsageThreshold,
   putSubscriptionUsageThreshold,
   saveAutoTopup,
+  saveUnitAutoTopup,
   saveUsageWidgetOrigins,
   setAutoTopupEnabled,
   updateSpendLimit,
@@ -27,6 +28,7 @@ import {
   type UsageAlertWrite,
 } from "@/lib/api/usage-controls";
 import type { AlertKind, AlertThreshold, LimitInterval } from "@/lib/usage-controls";
+import { unitTopupBody, unitTopupErrorField, type UnitTopupDraft } from "@/lib/unit-topup";
 
 const MANAGE = "usage_controls:manage" as const;
 const VIEW = "usage_controls:view" as const;
@@ -467,9 +469,75 @@ export async function saveAutoTopupAction(
     : actionOk("Automatic top-up saved.");
 }
 
+const unitTopupSchema = z.object({
+  ...customerIds,
+  unit: z.string().min(1, "Select a credit unit.").max(100),
+  currency,
+  decimals: z.coerce.number().int().min(0).max(4),
+  /** The price of one pack in minor units, when the page knows it; "" = unknown. */
+  pack_minor: z.string().max(20).optional(),
+  pack_price: z.string().max(100),
+  method: z.enum(["", "fixed", "target"]),
+  pack_quantity: z.string().max(10),
+  target_units: z.string().max(40),
+  threshold_units: z.string().max(40),
+  monthly_cap: z.string().max(40),
+  max_runs_per_day: z.string().max(10),
+  payment_method: z.string().max(100).optional(),
+  /** `{hour: {count, amount}, …}` as typed. */
+  limits: z.string().max(2000),
+});
+
+/** Automatic top-up of a credit unit with no money value: it buys a credit pack. */
+export async function saveUnitAutoTopupAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission(MANAGE, "manager");
+  const parsed = parseForm(unitTopupSchema, fd);
+  if (parsed.error) return parsed.error;
+  const d = parsed.data;
+  let limits: UnitTopupDraft["limits"];
+  try {
+    limits = JSON.parse(d.limits);
+  } catch {
+    return actionError("We could not read the purchase limits. Reload the page.");
+  }
+  const cur = d.currency.toUpperCase();
+  const packMinor = d.pack_minor && /^\d+$/.test(d.pack_minor) ? Number(d.pack_minor) : null;
+  const built = unitTopupBody(
+    {
+      pack_price: d.pack_price,
+      method: d.method,
+      pack_quantity: d.pack_quantity,
+      target_units: d.target_units,
+      threshold_units: d.threshold_units,
+      monthly_cap: d.monthly_cap,
+      max_runs_per_day: d.max_runs_per_day,
+      payment_method: d.payment_method ?? "",
+      limits,
+    },
+    { unit: d.unit, currency: cur, decimals: d.decimals, packMinor },
+  );
+  if (!built.ok) return actionError("Correct the highlighted fields.", { errors: built.errors });
+  const res = await saveUnitAutoTopup(d.biz, d.cus, built.body);
+  revalidatePath(usageControlsPath(d.biz, d.cus));
+  if (!res.ok) {
+    const message = res.error ?? "We could not save automatic top-up. Try again.";
+    const field = unitTopupErrorField(message);
+    return actionError(message, {
+      requestId: res.requestId,
+      ...(field ? { errors: { [field]: message } } : {}),
+    });
+  }
+  return actionOk("Automatic top-up saved.");
+}
+
 const toggleSchema = z.object({
   ...customerIds,
   currency,
+  /** Set for the top-up of a credit unit with no money value. */
+  unit: z.string().max(100).optional(),
   on: z.enum(["true", "false"]),
 });
 
@@ -482,13 +550,21 @@ export async function setAutoTopupEnabledAction(
   if (parsed.error) return parsed.error;
   const d = parsed.data;
   const on = d.on === "true";
-  const res = await setAutoTopupEnabled(d.biz, d.cus, d.currency.toUpperCase(), on);
+  const res = await setAutoTopupEnabled(
+    d.biz,
+    d.cus,
+    d.currency.toUpperCase(),
+    on,
+    d.unit || undefined,
+  );
   revalidatePath(usageControlsPath(d.biz, d.cus));
   if (!res.ok)
     return fail(
       res,
       on ? "We could not turn on automatic top-up." : "We could not turn off automatic top-up.",
     );
+  // The unit card's buttons say Enable / Disable; the money card's say Turn on / Turn off.
+  if (d.unit) return actionOk(on ? "Automatic top-up enabled." : "Automatic top-up disabled.");
   return actionOk(on ? "Automatic top-up turned on." : "Automatic top-up turned off.");
 }
 

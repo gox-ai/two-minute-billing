@@ -38,7 +38,7 @@ export function CurrencyPicker({
 
   if (available.length < 2) {
     return (
-      <span className="inline-flex h-9 items-center rounded-lg bg-muted/70 px-3 text-sm text-foreground/80">
+      <span className="inline-flex h-9 items-center rounded-md bg-muted/70 px-3 text-sm text-foreground/80">
         {label(value)}
       </span>
     );
@@ -54,7 +54,7 @@ export function CurrencyPicker({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="inline-flex h-9 items-center gap-2 rounded-lg border bg-card px-3 text-sm hover:bg-accent">
+      <DropdownMenuTrigger className="inline-flex h-9 items-center gap-2 rounded-md border bg-card px-3 text-sm hover:bg-accent">
         {label(value)}
         {pending ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden />

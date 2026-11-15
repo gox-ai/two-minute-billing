@@ -22,7 +22,11 @@ import { and, eq } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
 import { auditSubscription, subscriptionSnapshot } from "@/modules/subscriptions/audit";
 import { prices, products, subscriptionItems } from "@db/schema";
-import { changeSubscription, type ItemChange } from "@/modules/subscriptions/proration";
+import {
+  changeSubscription,
+  type ItemAdd,
+  type ItemChange,
+} from "@/modules/subscriptions/proration";
 import { addSubscriptionItem, removeSubscriptionItem } from "@/modules/subscriptions/items";
 import { emitEvent, flushDeferredEvents, type DeferredEvents } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
@@ -176,8 +180,22 @@ export async function applyItemOperations(input: {
    * metadata-only edit still announces itself. The caller checks the metadata rules first.
    */
   metadata?: Record<string, unknown> | null;
+  /** `apply_when_paid`: who asked, and what a void of the held invoice puts back. */
+  pendingSource?: import("./pending-change").PendingSource;
+  pendingRestore?: import("./pending-change").PendingRestore | null;
 }): Promise<void> {
-  const { organizationId, businessId, subscriptionId, now, ops } = input;
+  const { organizationId, businessId, subscriptionId, now } = input;
+  let { ops } = input;
+  // `apply_when_paid`: the whole edit is ONE held change with ONE invoice. As separate legs, a
+  // held swap would stop the edit before its adds, and each add would hold its own invoice.
+  const { loadBillingRulesRow, resolveBillingRulesConfig } = await import("./billing-rules-config");
+  const holdAll =
+    resolveBillingRulesConfig(await loadBillingRulesRow(organizationId, businessId))
+      .failedChangeCharge === "apply_when_paid" && ops.additions.length > 0;
+  const folded: ItemAdd[] = holdAll
+    ? ops.additions.map((a) => ({ priceId: a.price.publicId, quantity: a.quantity }))
+    : [];
+  if (holdAll) ops = { ...ops, additions: [] };
 
   /**
    * ONE `subscription_changed` for the whole reconcile.
@@ -226,15 +244,19 @@ export async function applyItemOperations(input: {
     // which is what lets one atomic call do what three could not" — and names this file as
     // getting the same property the other way. So the guard is preserved by construction,
     // and the standalone loop below now handles only removals with no change to ride with.
-    const ridingRemovals = ops.changes.length > 0 ? ops.removals : [];
-    const standaloneRemovals = ops.changes.length > 0 ? [] : ops.removals;
-    if (ops.changes.length > 0) {
+    const rides = ops.changes.length > 0 || folded.length > 0;
+    const ridingRemovals = rides ? ops.removals : [];
+    const standaloneRemovals = rides ? [] : ops.removals;
+    if (rides) {
       await changeSubscription({
         organizationId,
         businessId,
         subscriptionId,
         now,
         changes: ops.changes,
+        ...(folded.length ? { adds: folded } : {}),
+        ...(input.pendingSource ? { pendingSource: input.pendingSource } : {}),
+        ...(input.pendingRestore ? { pendingRestore: input.pendingRestore } : {}),
         removes: ridingRemovals.map((r) => r.itemPublicId),
         resetTerm: input.resetTerm,
         prorate: input.prorate,

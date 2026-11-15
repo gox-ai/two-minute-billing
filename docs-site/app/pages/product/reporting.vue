@@ -214,13 +214,14 @@ useMarketingSeo({
       :links="[
         { label: 'Expansion MRR from seats and add-ons', to: '/solutions/saas' },
         { label: 'Churn on repeat orders', to: '/solutions/ecommerce' },
+        { label: 'Ask Billy about MRR', to: '/product/ai-assistant' },
       ]"
     >
       <MkShot
         src="/product/fragments/mrr-chart"
         alt="The MRR trend over 30 days, with the change against the previous period"
-        :width="1560"
-        :height="858"
+        :width="1344"
+        :height="1247"
       />
     </MkPageZig>
 

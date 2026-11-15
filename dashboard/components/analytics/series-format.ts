@@ -147,6 +147,11 @@ export function measurePolarity(id: string): SeriesPolarity {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/** An engine bucket label in our date order: "Oct 12" → "12 Oct"; "Oct 2026" is unchanged. */
+export function axisLabel(label: string): string {
+  return label.replace(/\b([A-Z][a-z]{2}) (\d{1,2})\b/g, "$2 $1");
+}
+
 /**
  * A stock's chart points, led by its opening (the previous window's closing value).
  *
@@ -162,11 +167,33 @@ export function stockPoints(r: {
   series: Array<{ label: string; value: number | null }>;
   compare?: { previous_total: number | null } | null;
 }): Array<{ label: string; value: number | null }> {
-  const points = r.series.map((p) => ({ label: p.label, value: p.value ?? null }));
+  const points = r.series.map((p) => ({ label: axisLabel(p.label), value: p.value ?? null }));
   const opening = r.compare?.previous_total;
   if (r.kind !== "stock" || opening == null || points.length === 0) return points;
   const [y, m, d] = r.range.start.slice(0, 10).split("-").map(Number);
   const month = MONTHS[(m ?? 1) - 1] ?? "";
-  const start = r.grain === "day" || r.grain === "week" ? `${month} ${d}` : `${month} ${y}`;
+  const start = r.grain === "day" || r.grain === "week" ? `${d} ${month}` : `${month} ${y}`;
   return [{ label: `${start} (opening)`, value: opening }, ...points];
 }
+
+/**
+ * What each measure actually counts — including the caveats the backend recorded
+ * rather than approximating. A tile that quietly means something narrower than its
+ * label is worse than no tile, so the ⓘ says so.
+ */
+export const SERIES_HINTS: Record<string, string> = {
+  gross_volume: "Successful payment volume in this period, before refunds and chargebacks.",
+  refunds: "Refunds successfully issued in this period.",
+  chargebacks: "Amounts disputed against you in this period, from the disputes log.",
+  net_volume: "Gross volume less refunds and chargebacks.",
+  transaction_count: "Every gateway attempt in this period, whatever its outcome.",
+  successful_payments: "Payment attempts the gateway approved in this period.",
+  failed_transactions:
+    "Declined attempts in this period. This metric counts TRANSACTIONS from the transaction log, not payment attempts. A retried intent counts once for each declined transaction, not once per intent.",
+  failed_amount:
+    "The amount of the declined attempts in this period. It counts transactions, for the same reason as Failed Transactions.",
+  failure_rate:
+    "Declined ÷ (declined + approved). The denominator excludes voided attempts and attempts with an unknown outcome, such as a timeout or a wait for an operator decision. To count them as declines would make the rate too high. They still count in Transactions.",
+  pending_payment_intents:
+    "Intents still pending, counted over intents CREATED in this period. An older intent that is still pending does not count.",
+};

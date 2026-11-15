@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { enumLabel } from "@/lib/labels";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/form/field";
 import type { CustomFieldDefinition } from "@/lib/api/custom-fields";
@@ -55,8 +56,8 @@ export function CustomFieldsFields({
             required={d.required}
             help={
               <>
-                <span className="font-mono">{d.cf_name}</span> · {d.data_type}
-                {d.is_pii ? " · PII" : ""}
+                {enumLabel(d.data_type)}
+                {d.is_pii ? " · Personal data" : ""}
               </>
             }
           >

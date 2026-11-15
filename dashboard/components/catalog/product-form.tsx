@@ -47,7 +47,7 @@ import {
 } from "@/components/catalog/pricing-fields";
 
 type Kind = "plan" | "addon" | "charge";
-const NOUN: Record<Kind, string> = { plan: "Plan", addon: "Addon", charge: "One-time product" };
+const NOUN: Record<Kind, string> = { plan: "Plan", addon: "Add-on", charge: "One-time product" };
 
 export interface ProductFormBusiness {
   default_currency?: string | null;
@@ -247,7 +247,8 @@ export function ProductForm({
   }
   // A new plan asks for its unit beside the price it qualifies.
   const uomInPrice = kind === "plan" && !editing && v.with_price;
-  const codeError = editing ? undefined : slugError(v.code, suggestSlug(v.name) || `team-${lower}`);
+  const idExample = `team-${suggestSlug(lower)}`;
+  const codeError = editing ? undefined : slugError(v.code, suggestSlug(v.name) || idExample);
   const groupName = groups.find((g) => g.id === v.product_group)?.name ?? v.product_group;
   const unit = v.unit_of_measure.trim();
 
@@ -334,7 +335,6 @@ export function ProductForm({
   ) : (
     <FormCard title="After payment" columns={1}>
       {redirectField}
-      {kind === "plan" && !editing ? meteredRow() : null}
     </FormCard>
   );
 
@@ -401,9 +401,7 @@ export function ProductForm({
       : "Tax added at checkout";
   const buyerPreview = oneTime ? (
     <div className="space-y-2">
-      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        Buyers see
-      </p>
+      <p className="text-xs font-medium text-muted-foreground">Buyers see</p>
       <div className="flex items-start gap-3 rounded-md border bg-card p-3">
         <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/50 text-muted-foreground">
           {imageUrl ? (
@@ -435,7 +433,7 @@ export function ProductForm({
       <SwitchRow
         name="metered"
         label="Usage-based (metered)"
-        hint="Catalog lists and the API show it as metered. To bill usage, use a Usage pricing model on the price."
+        hint="Lists and the API show it as metered. To bill usage, give the price a Usage pricing model."
         checked={v.metered}
         onCheckedChange={(c) => set("metered", c)}
       />
@@ -483,7 +481,14 @@ export function ProductForm({
           <SummaryCard
             lead={lead}
             rows={[
-              !editing && { label: noun, value: [v.name || "—", groupName].join(" · ") },
+              !editing && {
+                label: noun,
+                value: v.name.trim() ? (
+                  [v.name, groupName].filter(Boolean).join(" · ")
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                ),
+              },
               !editing &&
                 v.with_price && {
                   label: "Price",
@@ -566,7 +571,7 @@ export function ProductForm({
               onChange={(x) => set("code", x)}
               error={codeError}
               help="If empty, we make one from the name."
-              placeholder={suggestSlug(v.name) || `team-${lower}`}
+              placeholder={suggestSlug(v.name) || idExample}
               maxLength={100}
               mono
             />
@@ -613,9 +618,7 @@ export function ProductForm({
               maxLength={100}
             />
           )}
-          {oneTime || (kind === "plan" && !editing) ? null : (
-            <div className="flex items-end pb-1">{meteredRow()}</div>
-          )}
+          {oneTime ? null : <Wide>{meteredRow()}</Wide>}
         </FormCard>
 
         {editing ? null : (
@@ -639,6 +642,7 @@ export function ProductForm({
               <>
                 <Field name="pp_currency" label="Currency" required>
                   <CurrencySelect
+                    className="w-full"
                     name="pp_currency"
                     value={v.currency}
                     onValueChange={(c) => {
@@ -711,21 +715,23 @@ export function ProductForm({
                     >
                       <div className="flex gap-2">
                         <Input
+                          id="pp_trial_period"
                           name="pp_trial_period"
                           type="number"
                           min={0}
                           value={v.trial_period}
                           onChange={(e) => set("trial_period", e.target.value)}
-                          className="w-24 tabular-nums"
+                          className="w-20 tabular-nums"
                         />
                         <SelectField
                           name="pp_trial_period_unit"
                           value={v.trial_unit}
                           onValueChange={(x) => set("trial_unit", x)}
                           ariaLabel="Trial period unit"
+                          className="w-30"
                           options={["day", "week", "month", "year"].map((u) => ({
                             value: u,
-                            label: `${u}s`,
+                            label: Number(v.trial_period) === 1 ? u : `${u}s`,
                           }))}
                         />
                       </div>
@@ -745,32 +751,37 @@ export function ProductForm({
                   </>
                 ) : null}
                 {oneTime ? null : (
-                  <Field name="pp_billing_cycles" label="Billing cycles">
-                    <div className="flex gap-2">
-                      <SelectField
-                        value={v.cycles}
-                        onValueChange={(x) => set("cycles", x as Values["cycles"])}
-                        ariaLabel="Billing cycles"
-                        options={[
-                          { value: "forever", label: "Forever, until cancelled" },
-                          { value: "fixed", label: "A fixed number" },
-                        ]}
-                      />
-                      {v.cycles === "fixed" ? (
-                        <Input
-                          name="pp_billing_cycles"
-                          aria-label="Number of billing cycles"
-                          type="number"
-                          min={1}
-                          required
-                          value={v.billing_cycles}
-                          onChange={(e) => set("billing_cycles", e.target.value)}
-                          className="w-24 tabular-nums"
-                        />
-                      ) : null}
-                    </div>
+                  <Field name="pp_cycles" label="Billing cycles">
+                    <SelectField
+                      value={v.cycles}
+                      onValueChange={(x) => set("cycles", x as Values["cycles"])}
+                      ariaLabel="Billing cycles"
+                      options={[
+                        { value: "forever", label: "Forever, until cancelled" },
+                        { value: "fixed", label: "A fixed number" },
+                      ]}
+                    />
                   </Field>
                 )}
+                {!oneTime && v.cycles === "fixed" ? (
+                  <Field name="pp_billing_cycles" label="Number of cycles" required>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="pp_billing_cycles"
+                        name="pp_billing_cycles"
+                        type="number"
+                        min={1}
+                        required
+                        value={v.billing_cycles}
+                        onChange={(e) => set("billing_cycles", e.target.value)}
+                        className="w-20 tabular-nums"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        {Number(v.billing_cycles) === 1 ? "cycle" : "cycles"}
+                      </span>
+                    </div>
+                  </Field>
+                ) : null}
               </>
             ) : (
               <Wide>
@@ -840,21 +851,21 @@ export function ProductForm({
             </Wide>
           ) : null}
           {!editing && v.with_price ? (
-            <Field name="pp_tax_behavior" label="Tax behavior">
-              <ChoiceCards
-                name="pp_tax_behavior"
-                value={v.tax_behavior}
-                onValueChange={(x) => set("tax_behavior", x)}
-                ariaLabel="Tax behavior"
-                options={[
-                  { value: "exclusive", label: "Exclusive", hint: "Price excludes tax" },
-                  { value: "inclusive", label: "Inclusive", hint: "Price includes tax" },
-                ]}
-              />
-            </Field>
-          ) : (
-            <div />
-          )}
+            <Wide>
+              <Field name="pp_tax_behavior" label="Tax behavior">
+                <ChoiceCards
+                  name="pp_tax_behavior"
+                  value={v.tax_behavior}
+                  onValueChange={(x) => set("tax_behavior", x)}
+                  ariaLabel="Tax behavior"
+                  options={[
+                    { value: "exclusive", label: "Exclusive", hint: "Price excludes tax" },
+                    { value: "inclusive", label: "Inclusive", hint: "Price includes tax" },
+                  ]}
+                />
+              </Field>
+            </Wide>
+          ) : null}
           <Wide>
             <MetadataEditor rows={v.meta} onChange={(rows) => set("meta", rows)} />
           </Wide>

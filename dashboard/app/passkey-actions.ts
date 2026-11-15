@@ -13,6 +13,7 @@ import {
   mfaCodesCookieOptions,
   sessionCookieOptions,
 } from "@/lib/auth-cookies";
+import { THEME_COOKIE } from "@/lib/theme-cookie";
 import {
   clearMfaChallenge,
   mfaStepUrl,
@@ -100,6 +101,7 @@ async function storeSession(setCookie: string | null): Promise<boolean> {
   const token = setCookie ? /tmb_session=([^;]+)/.exec(setCookie)?.[1] : undefined;
   if (!token) return false;
   (await cookies()).set(SESSION_COOKIE, token, sessionCookieOptions());
+  (await cookies()).set(THEME_COOKIE, "", { path: "/", maxAge: 0 });
   return true;
 }
 

@@ -5,8 +5,17 @@ import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SelectField } from "@/components/ui/select-field";
+import { Combobox } from "@/components/ui/combobox";
+import { contactBusiness, microformFailure } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog } from "./payment-dialog";
+import {
+  PaymentDialog,
+  PaymentDialogFooter,
+  PaymentPrivacyNote,
+  RefusalAlert,
+} from "./payment-dialog";
+import { countryOptions, sdkAmountLabel } from "./storefront-text";
 
 /**
  * CyberSource Microform. The card number and security code are entered in CyberSource's own
@@ -27,7 +36,10 @@ interface Microform {
   createField(name: "number" | "securityCode", options?: Record<string, unknown>): MicroformField;
   createToken(
     options: Record<string, string>,
-    cb: (err: { message?: string } | null, token?: string) => void,
+    cb: (
+      err: { message?: string; details?: Array<{ location?: string; message?: string }> } | null,
+      token?: string,
+    ) => void,
   ): void;
 }
 interface FlexInstance {
@@ -53,9 +65,7 @@ function loadScript(src: string, integrity: string | null): Promise<void> {
       el.onload = () => resolve();
       el.onerror = () => {
         loaded.delete(src);
-        reject(
-          new Error("We could not connect to CyberSource. Check your connection. Then try again."),
-        );
+        reject(new Error("We could not load the payment form. Reload the page. Then try again."));
       };
       document.head.appendChild(el);
     });
@@ -71,30 +81,60 @@ interface Params {
 }
 
 const BILLING: Array<{ key: string; label: string; autoComplete: string; wide?: boolean }> = [
-  { key: "firstName", label: "First name", autoComplete: "given-name" },
-  { key: "lastName", label: "Last name", autoComplete: "family-name" },
-  { key: "address1", label: "Address", autoComplete: "address-line1", wide: true },
-  { key: "locality", label: "City", autoComplete: "address-level2" },
-  { key: "administrativeArea", label: "State or province", autoComplete: "address-level1" },
-  { key: "postalCode", label: "ZIP or postal code", autoComplete: "postal-code" },
-  { key: "country", label: "Country code", autoComplete: "country" },
+  { key: "firstName", label: "First name", autoComplete: "billing given-name" },
+  { key: "lastName", label: "Last name", autoComplete: "billing family-name" },
+  { key: "address1", label: "Address", autoComplete: "billing address-line1", wide: true },
+  { key: "locality", label: "City", autoComplete: "billing address-level2" },
+  { key: "administrativeArea", label: "State or province", autoComplete: "billing address-level1" },
+  { key: "postalCode", label: "ZIP or postal code", autoComplete: "billing postal-code" },
 ];
+/** CyberSource refuses the card check without these. */
+const REQUIRED = ["firstName", "lastName", "address1", "locality", "postalCode", "country"];
+
+const MONTHS = Array.from({ length: 12 }, (_, i) => {
+  const v = String(i + 1).padStart(2, "0");
+  return { value: v, label: v };
+});
+const YEARS = (() => {
+  const now = new Date().getFullYear();
+  return Array.from({ length: 21 }, (_, i) => ({ value: String(now + i), label: String(now + i) }));
+})();
+
+/**
+ * What a hosted page may hand a gateway dialog beyond `GatewaySdkContext`: the billing
+ * address it already took, and the label its own commit button uses ("Subscribe").
+ */
+type SdkExtras = {
+  prefill?: {
+    address?: {
+      line1?: string | null;
+      city?: string | null;
+      state?: string | null;
+      state_code?: string | null;
+      postal_code?: string | null;
+      country?: string | null;
+    } | null;
+  };
+  confirmLabel?: string;
+};
 
 function CybersourceMicroformDialog({
   open,
   params,
-  purpose,
+  context,
   amountLabel,
-  prefill,
   onSettle,
 }: {
   open: boolean;
   params: Params;
-  purpose: GatewaySdkContext["purpose"];
+  context: GatewaySdkContext;
   amountLabel: string | null;
-  prefill: GatewaySdkContext["prefill"];
   onSettle: (result: GatewaySdkResult) => void;
 }) {
+  const purpose = context.purpose;
+  const prefill = context.prefill;
+  const address = (context as GatewaySdkContext & SdkExtras).prefill?.address ?? null;
+  const confirmLabel = (context as GatewaySdkContext & SdkExtras).confirmLabel;
   const numberRef = React.useRef<HTMLDivElement>(null);
   const cvvRef = React.useRef<HTMLDivElement>(null);
   const microform = React.useRef<Microform | null>(null);
@@ -107,12 +147,23 @@ function CybersourceMicroformDialog({
       firstName: first ?? "",
       lastName: rest.join(" "),
       email: prefill?.email ?? "",
+      address1: address?.line1 ?? "",
+      locality: address?.city ?? "",
+      administrativeArea: address?.state_code || address?.state || "",
+      postalCode: address?.postal_code ?? "",
+      country: (address?.country ?? "").toUpperCase(),
       expMonth: "",
       expYear: "",
     };
   });
+  // The page already took the name and address: show them as one line, editable on request.
+  const [editBilling, setEditBilling] = React.useState(
+    () => !REQUIRED.every((k) => (values[k] ?? "").trim()),
+  );
+  const countries = React.useMemo(() => countryOptions(), []);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }));
+  const setValue = (k: string) => (v: string) => setValues((prev) => ({ ...prev, [k]: v }));
 
   React.useEffect(() => {
     if (!open) return;
@@ -124,8 +175,8 @@ function CybersourceMicroformDialog({
         const flex = new window.Flex(params.captureContext);
         const styles = { input: { "font-size": "14px" } };
         const mf = flex.microform("card", { styles });
-        mf.createField("number", { placeholder: "Card number" }).load(numberRef.current);
-        mf.createField("securityCode", { placeholder: "CVV" }).load(cvvRef.current);
+        mf.createField("number", { placeholder: "1234 1234 1234 1234" }).load(numberRef.current);
+        mf.createField("securityCode", { placeholder: "123" }).load(cvvRef.current);
         microform.current = mf;
         setReady(true);
       } catch (e) {
@@ -146,12 +197,11 @@ function CybersourceMicroformDialog({
   const submit = () => {
     const mf = microform.current;
     if (!mf) return;
-    const month = values.expMonth.trim().padStart(2, "0");
-    const year = values.expYear.trim();
-    const missing = ["firstName", "lastName", "address1", "locality", "postalCode", "country"].some(
-      (k) => !(values[k] ?? "").trim(),
-    );
-    if (missing || !/^(0[1-9]|1[0-2])$/.test(month) || !/^\d{4}$/.test(year)) {
+    const month = values.expMonth;
+    const year = values.expYear;
+    const missing = REQUIRED.some((k) => !(values[k] ?? "").trim());
+    if (missing || !month || !year) {
+      if (missing) setEditBilling(true);
       setError("Correct the highlighted fields.");
       return;
     }
@@ -160,11 +210,11 @@ function CybersourceMicroformDialog({
     mf.createToken({ expirationMonth: month, expirationYear: year }, (err, token) => {
       setBusy(false);
       if (err || !token) {
-        setError("We could not read the card details. Examine them and try again.");
+        setError(microformFailure(err));
         return;
       }
       const clientResult: Record<string, string> = { transientToken: token };
-      for (const k of [...BILLING.map((b) => b.key), "email"]) {
+      for (const k of [...BILLING.map((b) => b.key), "country", "email"]) {
         const v = (values[k] ?? "").trim();
         if (v) clientResult[k] = v;
       }
@@ -173,6 +223,15 @@ function CybersourceMicroformDialog({
   };
 
   const invalid = (k: string) => error !== null && !(values[k] ?? "").trim();
+  const countryName = countries.find((c) => c.value === values.country)?.label ?? values.country;
+  const billingLine = [
+    [values.firstName, values.lastName].filter(Boolean).join(" "),
+    values.address1,
+    [values.locality, values.administrativeArea, values.postalCode].filter(Boolean).join(" "),
+    countryName,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <PaymentDialog
@@ -192,59 +251,92 @@ function CybersourceMicroformDialog({
         </div>
         <div className="grid grid-cols-3 gap-3">
           <div className="grid gap-1.5">
-            <Label htmlFor="cybs-exp-month">Month (MM)</Label>
-            <Input
+            <Label htmlFor="cybs-exp-month">Expiration month</Label>
+            <SelectField
               id="cybs-exp-month"
-              inputMode="numeric"
-              maxLength={2}
-              autoComplete="cc-exp-month"
+              options={MONTHS}
               value={values.expMonth}
-              onChange={set("expMonth")}
-              aria-invalid={error !== null && !/^(0?[1-9]|1[0-2])$/.test(values.expMonth.trim())}
+              onValueChange={setValue("expMonth")}
+              placeholder="Month"
+              aria-invalid={invalid("expMonth")}
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="cybs-exp-year">Year (YYYY)</Label>
-            <Input
+            <Label htmlFor="cybs-exp-year">Expiration year</Label>
+            <SelectField
               id="cybs-exp-year"
-              inputMode="numeric"
-              maxLength={4}
-              autoComplete="cc-exp-year"
+              options={YEARS}
               value={values.expYear}
-              onChange={set("expYear")}
-              aria-invalid={error !== null && !/^\d{4}$/.test(values.expYear.trim())}
+              onValueChange={setValue("expYear")}
+              placeholder="Year"
+              aria-invalid={invalid("expYear")}
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>CVV</Label>
+            <Label>Security code</Label>
             <div ref={cvvRef} className="h-9 rounded-md border border-input px-3 py-2" />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          {BILLING.map((b) => (
-            <div key={b.key} className={b.wide ? "col-span-2 grid gap-1.5" : "grid gap-1.5"}>
-              <Label htmlFor={`cybs-${b.key}`}>{b.label}</Label>
-              <Input
-                id={`cybs-${b.key}`}
-                autoComplete={b.autoComplete}
-                maxLength={b.key === "country" ? 2 : 60}
-                value={values[b.key] ?? ""}
-                onChange={set(b.key)}
-                aria-invalid={b.key !== "administrativeArea" && invalid(b.key)}
+        {editBilling ? (
+          <fieldset className="grid grid-cols-2 gap-3">
+            <legend className="mb-2 text-sm font-medium">Billing address</legend>
+            {BILLING.map((b) => (
+              <div key={b.key} className={b.wide ? "col-span-2 grid gap-1.5" : "grid gap-1.5"}>
+                <Label htmlFor={`cybs-${b.key}`}>{b.label}</Label>
+                <Input
+                  id={`cybs-${b.key}`}
+                  autoComplete={b.autoComplete}
+                  maxLength={60}
+                  value={values[b.key] ?? ""}
+                  onChange={set(b.key)}
+                  aria-invalid={b.key !== "administrativeArea" && invalid(b.key)}
+                />
+              </div>
+            ))}
+            <div className="col-span-2 grid gap-1.5">
+              <Label htmlFor="cybs-country">Country</Label>
+              <Combobox
+                id="cybs-country"
+                options={countries.map((c) => ({ ...c, keywords: c.value }))}
+                value={values.country}
+                onValueChange={setValue("country")}
+                ariaLabel="Country"
+                placeholder="Select a country…"
+                searchPlaceholder="Search country or code…"
+                emptyMessage="No matching country."
+                aria-invalid={invalid("country")}
               />
             </div>
-          ))}
-        </div>
+          </fieldset>
+        ) : (
+          <div className="flex items-start justify-between gap-3 rounded-md bg-muted/50 px-3 py-2.5 text-sm">
+            <div className="min-w-0">
+              <div className="text-xs text-muted-foreground">Billing address</div>
+              <div className="mt-0.5">{billingLine}</div>
+            </div>
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto shrink-0 p-0"
+              onClick={() => setEditBilling(true)}
+            >
+              Change
+            </Button>
+          </div>
+        )}
+        <PaymentPrivacyNote business={context.businessName} />
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2">
+      <RefusalAlert message={error} />
+      <PaymentDialogFooter>
         <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={!ready || busy}>
-          {purpose === "setup" ? "Save card" : amountLabel ? `Pay ${amountLabel}` : "Pay"}
+          {confirmLabel ??
+            (purpose === "setup" ? "Save card" : amountLabel ? `Pay ${amountLabel}` : "Pay")}
         </Button>
-      </div>
+      </PaymentDialogFooter>
     </PaymentDialog>
   );
 }
@@ -265,12 +357,9 @@ export function openCybersourceMicroform(
   if (!captureContext || !FLEX_ORIGINS.has(origin))
     return Promise.resolve({
       status: "failed",
-      message: "We could not open the card form. Contact the business.",
+      message: `We could not open the card form. ${contactBusiness(context.businessName)}`,
     });
-  const amountLabel =
-    typeof params.amount === "string" && typeof params.currency === "string"
-      ? `${params.amount} ${params.currency}`
-      : null;
+  const amountLabel = sdkAmountLabel(params.amount, params.currency);
   const mfParams: Params = {
     captureContext,
     clientLibrary,
@@ -287,9 +376,8 @@ export function openCybersourceMicroform(
         <CybersourceMicroformDialog
           open={open}
           params={mfParams}
-          purpose={context.purpose}
+          context={context}
           amountLabel={amountLabel}
-          prefill={context.prefill}
           onSettle={settle}
         />,
       );

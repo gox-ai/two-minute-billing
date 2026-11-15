@@ -61,7 +61,7 @@ export function meterPriceFields(fd: FormData, mode: "create" | "edit"): MeterPr
         ok: false,
         field: "unit_amount_decimal",
         message:
-          "Enter the default rate as a number. Use no more than 12 decimal places in minor units.",
+          "Enter the default rate as a number with fewer than 12 decimal places, for example 0.05.",
       };
     const divisor = String(fd.get("quantity_divisor") ?? "1").trim();
     if (!/^[1-9]\d{0,14}$/.test(divisor))

@@ -3,10 +3,11 @@ import { RecordCard } from "@/components/patterns/record-page";
 import { cn } from "@/lib/utils";
 import type { Segment } from "@/lib/api/segments";
 
-// Below xl the rail is a wrapped row of pills, so it costs a few lines above the table.
+// Until the page column splits (59.5rem) the rail is a wrapped row of pills, so it costs a few lines above the table.
 const GROUP =
-  "self-center px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase xl:self-auto xl:px-3 xl:pt-2.5 xl:pb-1";
-const PILL = "rounded-full border px-3 py-1 xl:rounded-md xl:border-0 xl:py-1.5";
+  "self-center px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase @min-[59.5rem]/main:self-auto @min-[59.5rem]/main:px-3 @min-[59.5rem]/main:pt-2.5 @min-[59.5rem]/main:pb-1";
+const PILL =
+  "rounded-full border px-3 py-1 @min-[59.5rem]/main:rounded-md @min-[59.5rem]/main:border-0 @min-[59.5rem]/main:py-1.5";
 
 /**
  * The saved-segment rail.
@@ -66,7 +67,7 @@ export function SegmentRail({
     <RecordCard title="Segments" meta={meta} flush>
       <nav
         aria-label="Saved segments"
-        className="flex flex-wrap gap-1.5 p-3 xl:flex-col xl:flex-nowrap xl:gap-px xl:px-2 xl:pt-2 xl:pb-3"
+        className="flex flex-wrap gap-1.5 p-3 @min-[59.5rem]/main:flex-col @min-[59.5rem]/main:flex-nowrap @min-[59.5rem]/main:gap-px @min-[59.5rem]/main:px-2 @min-[59.5rem]/main:pt-2 @min-[59.5rem]/main:pb-3"
       >
         {entry(base, "All customers", current === null && !custom)}
         {starters.length > 0 ? <div className={GROUP}>Ships with the product</div> : null}
@@ -83,7 +84,7 @@ export function SegmentRail({
         */}
         {custom ? (
           <>
-            <div className="my-2 hidden h-px bg-border xl:block" />
+            <div className="my-2 hidden h-px bg-border @min-[59.5rem]/main:block" />
             <span
               aria-current="page"
               className={cn("block bg-muted text-sm font-semibold text-foreground", PILL)}

@@ -1,3 +1,5 @@
+import { isApiNotFound } from "@/lib/api";
+import { notFound } from "next/navigation";
 import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
 import { getDunningPolicy } from "@/lib/api/dunning-policies";
@@ -24,16 +26,17 @@ export default async function DunningPolicyPage({
   try {
     [b, policy] = await Promise.all([getBusiness(biz), getDunningPolicy(biz, dpol)]);
   } catch (e) {
+    if (isApiNotFound(e)) notFound();
     return (
-      <ErrorState description={<span className="font-mono text-xs">{(e as Error).message}</span>} />
+      <ErrorState
+        error={e}
+        thing="dunning policy"
+        back={{ label: "View dunning settings", href: `/businesses/${biz}/settings/dunning` }}
+        retry
+      />
     );
   }
-  if (!b)
-    return <ErrorState title="Not found" description={`We could not find the business ${biz}.`} />;
-  if (!policy)
-    return (
-      <ErrorState title="Not found" description={`We could not find the dunning policy ${dpol}.`} />
-    );
+  if (!b || !policy) notFound();
 
   const base = `/businesses/${biz}/settings`;
   return (

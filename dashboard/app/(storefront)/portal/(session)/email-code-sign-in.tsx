@@ -13,7 +13,14 @@ import { portalLoginRequestAction, portalLoginVerifyAction } from "./actions";
  * Sign-in by email code (Phase 4) on the signed-out portal cards. A code the customer
  * types, never a link: a mail scanner can open a link, but it cannot type a code.
  */
-export function EmailCodeSignIn({ business }: { business: string }) {
+export function EmailCodeSignIn({
+  business,
+  heading = true,
+}: {
+  business: string;
+  /** False when the card's own title already says "Sign in". */
+  heading?: boolean;
+}) {
   const router = useRouter();
   const [step, setStep] = React.useState<"email" | "code" | "choose">("email");
   const [email, setEmail] = React.useState("");
@@ -68,7 +75,9 @@ export function EmailCodeSignIn({ business }: { business: string }) {
       {step === "email" ? (
         <form onSubmit={sendCode} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
-            <span className="text-sm font-medium text-foreground">Sign in with your email</span>
+            {heading ? (
+              <span className="text-sm font-medium text-foreground">Sign in with your email</span>
+            ) : null}
             <span className="text-sm text-muted-foreground">
               Enter the email on your account. We send you a code to sign in.
             </span>

@@ -60,6 +60,22 @@ export async function resolveBusinessPlanProductIds(
 
 // Ordered by item id within a subscription: the oldest item is the one the subscription was
 // created with, which is the plan in every ordinary shape.
+const PLAN_ORDER = sql`(pr.kind = 'plan') desc, si.id`;
+
+/**
+ * The same rule as a lateral join for a report: `<alias>.id`, `<alias>.public_id` and
+ * `<alias>.name` of the plan product of the subscription in `subscriptionId`, null when none.
+ */
+export const planProductJoin = (subscriptionId: SQL, alias: string): SQL => sql`
+  left join lateral (
+    select pr.id, pr.public_id, pr.name
+    from subscription_items si
+    join prices p on p.id = si.price_id
+    join products pr on pr.id = p.product_id
+    where si.subscription_id = ${subscriptionId}
+    order by ${PLAN_ORDER}
+    limit 1) ${sql.raw(alias)} on true`;
+
 const planRows = async (tx: Tx, where: SQL) =>
   (await tx.execute(sql`
     select distinct on (si.subscription_id)
@@ -68,7 +84,7 @@ const planRows = async (tx: Tx, where: SQL) =>
     join prices p on p.id = si.price_id
     join products pr on pr.id = p.product_id
     where ${where}
-    order by si.subscription_id, (pr.kind = 'plan') desc, si.id`)) as unknown as Array<{
+    order by si.subscription_id, ${PLAN_ORDER}`)) as unknown as Array<{
     subscription_id: string;
     product_id: string;
   }>;

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import * as React from "react";
 import { Plus, Search } from "lucide-react";
 import {
@@ -147,12 +148,12 @@ export function CustomerPicker({
           </p>
         ) : null}
         <div className="border-t p-3 text-center">
-          <a
+          <Link
             href={`/businesses/${biz}/customers`}
             className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
           >
             <Plus className="size-4" /> Create customer
-          </a>
+          </Link>
         </div>
       </DialogContent>
     </Dialog>

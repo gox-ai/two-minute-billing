@@ -1061,18 +1061,24 @@ export async function createPaymentIntent(
   // the mapping exactly as a setup intent does.
   // A gateway that refuses the customer refuses the intent: booked exactly like a
   // `createIntent` rejection below. An unknown outcome is rethrown, never booked.
+  // The attempt's span opens here, so the customer lookup made for it shows in its logs.
+  const trace = attemptSpan();
   let rejectedBy: unknown = null;
   let providerCustomer: ProviderCustomerRef | null = null;
   try {
     providerCustomer = ctx.pm
       ? { providerKey: adapter.key, providerCustomerId: ctx.pm.providerCustomerId }
-      : await ensureProviderCustomer({
-          organizationId: input.organizationId,
-          businessId: input.businessId,
-          customer: ctx.customer!,
-          provider: adapter,
-          gatewayAccountId: ctx.account.id,
-        });
+      : await withTraceContext(
+          { ...trace, organizationId: input.organizationId, businessId: input.businessId },
+          () =>
+            ensureProviderCustomer({
+              organizationId: input.organizationId,
+              businessId: input.businessId,
+              customer: ctx.customer!,
+              provider: adapter,
+              gatewayAccountId: ctx.account.id,
+            }),
+        );
   } catch (err) {
     if (err instanceof ProviderIndeterminateError) throw err;
     rejectedBy = err;
@@ -1083,7 +1089,6 @@ export async function createPaymentIntent(
   // distinct intents for the same PM+amount must NOT collide at the gateway, and
   // neither must a retry against the same intent (see retryPaymentIntent).
   const piPublicId = publicId("pi");
-  const trace = attemptSpan();
   const maxAmountMinor =
     purpose === "setup" && input.maxAmountMinor != null ? BigInt(input.maxAmountMinor) : null;
   const firstOn = adapter.capabilities.setupCollectsFirstCharge ?? [];
@@ -1457,15 +1462,19 @@ export async function retryPaymentIntent(
   assertSupportsPurpose(adapter, ctx.acc, purpose);
   if (ctx.pm && pi.currency) assertMandateCurrency(ctx.pm, pi.currency);
 
+  // Opened before the customer lookup, which is made for this attempt.
+  const trace = attemptSpan();
   const providerCustomer = ctx.pm
     ? { providerKey: adapter.key, providerCustomerId: ctx.pm.providerCustomerId }
-    : await ensureProviderCustomer({
-        organizationId,
-        businessId,
-        customer: ctx.customer!,
-        provider: adapter,
-        gatewayAccountId: ctx.acc.id,
-      });
+    : await withTraceContext({ ...trace, organizationId, businessId }, () =>
+        ensureProviderCustomer({
+          organizationId,
+          businessId,
+          customer: ctx.customer!,
+          provider: adapter,
+          gatewayAccountId: ctx.acc.id,
+        }),
+      );
 
   const attemptNumber = ctx.last.attemptNumber + 1;
   const retryDescription = await intentDescription(
@@ -1494,7 +1503,6 @@ export async function retryPaymentIntent(
      */
     letBuyerChooseMethod: purpose === "payment" && !ctx.pm,
   });
-  const trace = attemptSpan();
   let intent;
   try {
     intent = await withTraceContext({ ...trace, organizationId, businessId }, () =>
@@ -2737,7 +2745,10 @@ export async function applyClientResult(
     );
   const attempt = await withTenant(organizationId, (tx) => currentAttempt(tx, pi.id));
   const intentId = attempt?.idAtGateway ?? pi.intentAtGateway;
-  if (!intentId) throw new PaymentIntentError("This payment did not reach the gateway.");
+  if (!intentId)
+    throw new PaymentIntentError(
+      `We could not send your ${pi.purpose === "setup" ? "payment method" : "payment"} to the payment provider. Try again.`,
+    );
   const fetched = await withTraceContext(
     { ...attemptSpan(attempt), organizationId, businessId },
     () =>
@@ -2776,7 +2787,9 @@ export async function applyClientResult(
   if (fetched.status === "failed") {
     const failure = {
       code: fetched.failure?.code ?? "authorization_failed",
-      message: fetched.failure?.message ?? "The gateway refused this payment method.",
+      message:
+        fetched.failure?.message ??
+        `The payment provider did not accept the ${pi.purpose === "setup" ? "payment method" : "payment"}.`,
     };
     await failPaymentIntentFromGateway(organizationId, businessId, pi.publicId, failure);
     return { outcome: "failed", failure };
@@ -2884,6 +2897,12 @@ export async function resumeVerdictFromGateway(
     await markPaymentIntentVoidedFromGateway(organizationId, businessId, pi.publicId);
     return "closed";
   }
+  // Refused, with nothing left for the buyer to do here (a declined browser result): the
+  // intent is dead, so close it and let Pay start a new one instead of a dead end.
+  if (fetched.status === "failed" && !pi.nextAction) {
+    await markPaymentIntentVoidedFromGateway(organizationId, businessId, pi.publicId);
+    return "closed";
+  }
   return "open";
 }
 
@@ -2927,11 +2946,21 @@ export async function consumePaymentIntent(
       piPublicId,
       opts.clientResult,
     );
-    if (applied?.outcome === "failed")
+    if (applied?.outcome === "failed") {
+      // Same lead as checkout's for the same decline; each surface adds its own next step.
+      const said = applied.failure!.message.trim();
+      const reason = /[.!?]$/.test(said) ? said : `${said}.`;
+      const setup =
+        (await getPaymentIntent(organizationId, businessId, piPublicId))?.purpose === "setup";
+      // A gateway text that opens "We could not" is the lead: never two openings.
+      const lead = (ours: string) => (/^We could not /.test(reason) ? reason : `${ours} ${reason}`);
       throw new PaymentIntentError(
-        `We could not complete the payment. ${applied.failure!.message}`,
+        setup
+          ? lead("We could not save your payment method.")
+          : `${lead("We could not take your payment.")} We did not charge you.`,
         applied.failure!.code,
       );
+    }
   }
   const loaded = await getPaymentIntent(organizationId, businessId, piPublicId);
   if (!loaded) return null;
@@ -3624,13 +3653,15 @@ async function finishSetupConsume(args: {
   const providerCustomerId =
     paymentMethodRef.providerCustomerId ??
     (
-      await ensureProviderCustomer({
-        organizationId,
-        businessId,
-        customer: ctx.customer,
-        provider: adapter,
-        gatewayAccountId: ctx.acc.id,
-      })
+      await withTraceContext({ ...args.trace, organizationId, businessId }, () =>
+        ensureProviderCustomer({
+          organizationId,
+          businessId,
+          customer: ctx.customer!,
+          provider: adapter,
+          gatewayAccountId: ctx.acc.id,
+        }),
+      )
     ).providerCustomerId;
 
   let pm: PaymentMethodRow;
@@ -4546,6 +4577,8 @@ export interface PaymentIntentListRow {
   gatewayAccountLabel: string | null;
   cardBrand: string | null;
   cardLast4: string | null;
+  /** The newest attempt's error when that attempt failed, else null. */
+  lastError: { code: string | null; message: string | null } | null;
 }
 
 /**
@@ -4579,7 +4612,10 @@ type IntentRowSelect = {
   [K in keyof typeof INTENT_ROW_SELECTION]: K extends "intent" ? PaymentIntent : string | null;
 };
 
-const toIntentRow = (r: IntentRowSelect): PaymentIntentListRow => ({
+const toIntentRow = (
+  r: IntentRowSelect,
+  lastError: PaymentIntentListRow["lastError"] = null,
+): PaymentIntentListRow => ({
   intent: r.intent,
   customerPublicId: r.cusPid ?? null,
   customerName: accountHolderName({
@@ -4597,7 +4633,36 @@ const toIntentRow = (r: IntentRowSelect): PaymentIntentListRow => ({
   gatewayAccountLabel: r.gatewayAccountLabel ?? null,
   cardBrand: r.cardBrand ?? null,
   cardLast4: r.cardLast4 ?? null,
+  lastError,
 });
+
+/**
+ * The newest attempt's error per intent, in ONE query for the whole page (the
+ * `(payment_intent_id, attempt_number)` unique index serves the DISTINCT ON).
+ * An intent whose newest attempt did not fail has no entry.
+ */
+async function lastErrorsFor(
+  tx: Tx,
+  intentIds: string[],
+): Promise<Map<string, NonNullable<PaymentIntentListRow["lastError"]>>> {
+  const out = new Map<string, NonNullable<PaymentIntentListRow["lastError"]>>();
+  if (intentIds.length === 0) return out;
+  const rows = await tx
+    .selectDistinctOn([paymentAttempts.paymentIntentId], {
+      intentId: paymentAttempts.paymentIntentId,
+      status: paymentAttempts.status,
+      errorCode: paymentAttempts.errorCode,
+      errorText: paymentAttempts.errorText,
+    })
+    .from(paymentAttempts)
+    .where(inArray(paymentAttempts.paymentIntentId, intentIds))
+    .orderBy(paymentAttempts.paymentIntentId, desc(paymentAttempts.attemptNumber));
+  for (const r of rows) {
+    if (r.status === "failed")
+      out.set(r.intentId, { code: r.errorCode ?? null, message: r.errorText ?? null });
+  }
+  return out;
+}
 
 /**
  * One intent WITH the same joined context as a list row — what
@@ -4623,7 +4688,9 @@ export async function getPaymentIntentRow(
         and(eq(paymentIntents.businessId, businessId), eq(paymentIntents.publicId, piPublicId)),
       )
       .limit(1);
-    return row ? toIntentRow(row) : null;
+    if (!row) return null;
+    const errors = await lastErrorsFor(tx, [row.intent.id]);
+    return toIntentRow(row, errors.get(row.intent.id) ?? null);
   });
 }
 
@@ -4727,7 +4794,11 @@ export async function listPaymentIntentsPage(
       keyOf: (r) => r.intent.publicId,
       total,
     });
-    return { ...page, data: page.data.map(toIntentRow) };
+    const errors = await lastErrorsFor(
+      tx,
+      page.data.map((r) => r.intent.id),
+    );
+    return { ...page, data: page.data.map((r) => toIntentRow(r, errors.get(r.intent.id) ?? null)) };
   });
 }
 
@@ -4757,6 +4828,8 @@ export function serializePaymentIntentRow(r: PaymentIntentListRow) {
     gateway_account_label: r.gatewayAccountLabel,
     payment_method_brand: r.cardBrand,
     payment_method_last4: r.cardLast4,
+    // From the newest attempt, and only when it failed: a retry that succeeds clears it.
+    last_error: r.lastError,
   };
 }
 

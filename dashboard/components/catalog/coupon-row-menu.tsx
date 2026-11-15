@@ -58,12 +58,9 @@ export function CouponRowMenu({
           <DropdownMenuItem onSelect={() => router.push(`${base}/new?clone=${id}`)}>
             <Copy className="size-4" /> Clone Coupon
           </DropdownMenuItem>
-          <DropdownMenuItem
-            variant={active ? "destructive" : "default"}
-            onSelect={() => setConfirmOpen(true)}
-          >
+          <DropdownMenuItem onSelect={() => setConfirmOpen(true)}>
             {active ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}
-            {active ? "Archive Coupon" : "Restore Coupon"}
+            {active ? "Archive coupon" : "Restore coupon"}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

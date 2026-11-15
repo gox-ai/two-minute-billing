@@ -1,4 +1,5 @@
-import { listBusinesses, listProducts } from "@/lib/api";
+import { listBusinesses, listPrices, listProductGroups, listProducts } from "@/lib/api";
+import type { Price, ProductGroup } from "@/lib/api";
 import { getCoupon } from "@/lib/api/coupons";
 import type { Product } from "@/lib/api/coupons";
 import { requirePermission } from "@/lib/session";
@@ -16,17 +17,20 @@ export default async function EditCouponPage({
   await requirePermission("coupons:manage", "manager");
   const { biz, cpn } = await params;
 
-  let businesses, products, coupon;
+  let businesses, products, coupon, prices, groups;
   try {
-    [businesses, products, coupon] = await Promise.all([
+    [businesses, products, coupon, prices, groups] = await Promise.all([
       listBusinesses(),
       listProducts(biz),
       getCoupon(biz, cpn),
+      // Optional context for the item picker: the form still works without it.
+      listPrices(biz).catch(() => ({ data: [] as Price[] })),
+      listProductGroups(biz).catch(() => ({ data: [] as ProductGroup[] })),
     ]);
   } catch (e) {
     return (
       <>
-        <PageHeader title="Edit Coupon" />
+        <PageHeader title="Edit coupon" />
         <ErrorState
           description={<span className="font-mono text-xs">{(e as Error).message}</span>}
         />
@@ -36,7 +40,7 @@ export default async function EditCouponPage({
   if (!coupon) {
     return (
       <>
-        <PageHeader title="Edit Coupon" />
+        <PageHeader title="Edit coupon" />
         <ErrorState description={`We could not find the coupon ${cpn}.`} />
       </>
     );
@@ -52,11 +56,13 @@ export default async function EditCouponPage({
       currencies={business?.currencies}
       defaultCurrency={business?.default_currency}
       products={products.data as Product[]}
+      prices={prices.data}
+      productGroups={groups.data}
       existing={coupon}
       backHref={detailHref}
       crumbs={[
         { label: name, href: `/businesses/${biz}` },
-        { label: "Product Catalog" },
+        { label: "Product catalog" },
         { label: "Coupons", href: listHref },
         { label: coupon.name ?? coupon.code, href: detailHref },
         { label: "Edit" },

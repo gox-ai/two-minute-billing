@@ -1,20 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { SelectField } from "@/components/ui/select-field";
-import { CheckboxField } from "@/components/ui/checkbox";
+import { SelectAnswer } from "@/components/patterns/settings-page";
 import { SettingRow } from "@/components/settings/settings-layout";
 
 const OPTIONS = [
-  { value: "exclusive", label: "Tax exclusive — tax added on top" },
-  { value: "inclusive", label: "Tax inclusive — price already includes tax" },
+  { value: "exclusive", label: "Tax exclusive" },
+  { value: "inclusive", label: "Tax inclusive" },
 ];
 
 /**
- * One currency's price type. A currency with no saved value posts `behavior_<CUR>_unset`
- * and stays unset on save, unless the operator changes the select or ticks "Save this
- * value": an unset currency follows the API's real fallback (exclusive), and writing the
- * preselected value would change it for every API-created price.
+ * One currency's price type. A currency with no saved value shows what it resolves to
+ * (tax exclusive) and posts `behavior_<CUR>_unset`, so Save leaves it unset until the
+ * operator changes the select: writing the shown value would also change where the
+ * dashboard's new-price form starts for this currency.
  */
 export function CurrencyPriceTypeRow({
   currency,
@@ -37,21 +36,18 @@ export function CurrencyPriceTypeRow({
         htmlFor={name}
         help={
           saved === null
-            ? `Not set. A new ${currency} price through the API is tax exclusive. In the dashboard, a new price starts as ${dashboardDefault === "inclusive" ? "tax inclusive" : "tax exclusive"}, the default price type.`
+            ? `A new ${currency} price through the API is tax exclusive. In the dashboard, a new price starts as ${dashboardDefault === "inclusive" ? "tax inclusive" : "tax exclusive"}, the default price type, until you change this value.`
             : `A new ${currency} price starts with this price type, in the dashboard and through the API. You can change it on each price. Existing prices keep their price type.`
         }
+        placement="end"
         control={
-          <div className="flex w-full flex-col gap-2 sm:w-96">
-            <SelectField
-              name={name}
-              defaultValue={saved ?? "exclusive"}
-              ariaLabel={`${currency} price type`}
-              className="w-full"
-              options={OPTIONS}
-              onValueChange={() => setTouched(true)}
-            />
-            {unset ? <CheckboxField name={`${name}_save`} label="Save this value" /> : null}
-          </div>
+          <SelectAnswer
+            name={name}
+            defaultValue={saved ?? "exclusive"}
+            ariaLabel={`${currency} price type`}
+            options={OPTIONS}
+            onValueChange={() => setTouched(true)}
+          />
         }
       />
     </>

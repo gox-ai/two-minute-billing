@@ -25,6 +25,7 @@ import {
   type PickInvoice,
 } from "@/components/credit-notes/invoice-choice";
 import { allocateAcrossLines, invoiceCreditableMinor } from "@/lib/credit-allocation";
+import { withoutInformationLines } from "@/lib/invoice-lines";
 
 // Server actions for the Credit Notes surface (own module — actions never live
 // in the app-wide actions.ts). Each re-checks the operator's permission because
@@ -70,6 +71,8 @@ export async function createCreditNoteAction(
   const kind = String(formData.get("kind") ?? "");
   const reasonCode = String(formData.get("reason_code") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
+  // A credit pack line credited whole, used credits too.
+  const packRefund = formData.get("pack_refund") === "on";
 
   const descriptions = formData.getAll("item_description").map((v) => String(v));
   const amounts = formData.getAll("item_amount_minor").map((v) => String(v));
@@ -128,6 +131,7 @@ export async function createCreditNoteAction(
     reason_code: parsed.data.reason_code,
     reason: reason || undefined,
     items: parsed.data.items,
+    ...(packRefund ? { pack_refund: "full" as const } : {}),
   });
 
   if (!res.ok) {
@@ -366,7 +370,7 @@ async function invoiceCreditItems(
 > {
   const inv = await getInvoice(biz, invoiceId).catch(() => null);
   if (!inv) return { error: actionError("We could not load the invoice.") };
-  const lines = (inv.lines ?? []).map((l) => ({
+  const lines = withoutInformationLines(inv.lines).map((l) => ({
     description: l.description,
     amount_minor: l.amount_minor,
   }));
@@ -623,12 +627,17 @@ function toPickInvoice(i: Awaited<ReturnType<typeof getInvoice>>): PickInvoice {
     grant_credits_minor:
       ((i as InvoiceExtras).grant_credits_pre_tax_minor ?? 0) +
       ((i as InvoiceExtras).grant_credits_post_tax_minor ?? 0),
-    lines: (i.lines ?? []).map((l) => ({
+    only_credit_usage: (i.lines?.length ?? 0) > 0 && withoutInformationLines(i.lines).length === 0,
+    // Usage that credits paid is information: a credit note cannot credit it.
+    lines: withoutInformationLines(i.lines).map((l) => ({
       id: l.id,
       description: l.description,
       amount_minor: l.amount_minor,
       // Older engines omit it; the line amount was the form's cap before.
       creditable_minor: l.creditable_minor ?? l.amount_minor,
+      ...(l.pack_full_creditable_minor != null
+        ? { pack_full_creditable_minor: l.pack_full_creditable_minor }
+        : {}),
     })),
   };
 }

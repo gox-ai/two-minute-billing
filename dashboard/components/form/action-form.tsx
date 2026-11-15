@@ -65,6 +65,12 @@ const FormErrorsContext = React.createContext<Record<string, string>>({});
 export const useFieldError = (name: string): string | undefined =>
   React.useContext(FormErrorsContext)[name];
 
+const NO_VALUES: Record<string, string> = {};
+const FormValuesContext = React.createContext<Record<string, string>>(NO_VALUES);
+/** The value a failed submit sent back for `name` (`ActionResult.values`). */
+export const useKeptValue = (name: string): string | undefined =>
+  React.useContext(FormValuesContext)[name];
+
 /**
  * Form wired to a server action returning ActionResult: toasts success/error
  * (a 409 conflict gets a Reload action — CP-0), exposes field errors to
@@ -118,9 +124,13 @@ export function ActionForm({
 
   return (
     <FormErrorsContext.Provider value={state?.ok === false ? (state.errors ?? {}) : {}}>
-      <form ref={formRef} action={formAction} className={cn(className)}>
-        {children}
-      </form>
+      <FormValuesContext.Provider
+        value={state?.ok === false ? (state.values ?? NO_VALUES) : NO_VALUES}
+      >
+        <form ref={formRef} action={formAction} className={cn(className)}>
+          {children}
+        </form>
+      </FormValuesContext.Provider>
     </FormErrorsContext.Provider>
   );
 }

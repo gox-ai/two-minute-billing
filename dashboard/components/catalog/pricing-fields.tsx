@@ -15,6 +15,7 @@ import {
   aggregationLabel,
 } from "@/lib/usage-aggregation";
 import { money } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { toMajorInput, toMinor } from "@/lib/money";
 import type { Price } from "@/lib/api";
 import {
@@ -537,22 +538,23 @@ function TierEditor({
   const error = useFieldError(name);
   const upd = (i: number, patch: Partial<TierRow>) =>
     onChange(tiers.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  // A stairstep band has one price and no per-unit rate: two columns, not three with a blank.
+  const cols = stairstep
+    ? "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem]"
+    : "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem]";
   return (
     <div className="flex flex-col gap-2">
       <span id={name} className="text-sm font-medium">
         Tiers <span className="text-destructive">*</span>
       </span>
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] gap-2 text-xs text-muted-foreground">
+      <div className={cn(cols, "gap-2 text-xs text-muted-foreground")}>
         <span>{rate ? "Up to (amount)" : "Up to (units)"}</span>
-        <span>{stairstep ? "—" : rate ? "Rate (%)" : "Price per unit"}</span>
+        {stairstep ? null : <span>{rate ? "Rate (%)" : "Price per unit"}</span>}
         <span>{stairstep ? "Price for the band" : "Flat fee"}</span>
         <span />
       </div>
       {tiers.map((t, i) => (
-        <div
-          key={i}
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] items-center gap-2"
-        >
+        <div key={i} className={cn(cols, "items-center gap-2")}>
           {rate ? (
             <MoneyField
               id={`${name}-upto-${i}`}
@@ -571,9 +573,7 @@ function TierEditor({
               className="tabular-nums"
             />
           )}
-          {stairstep ? (
-            <span className="text-sm text-muted-foreground">—</span>
-          ) : rate ? (
+          {stairstep ? null : rate ? (
             <Input
               aria-label={`Tier ${i + 1} rate in percent`}
               type="number"

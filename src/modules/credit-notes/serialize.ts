@@ -74,6 +74,11 @@ export interface CreditNoteView {
    * exclusive instant is then reported, which is the pre-existing behaviour.
    */
   biz?: PeriodConvention | null;
+  /**
+   * Detail read only: ids of the items the note states in its tax rows
+   * (`itemsStatedAsTax`). Absent elsewhere, and `stated_in_taxes` is then omitted.
+   */
+  taxItemIds?: ReadonlySet<string>;
 }
 
 export function serializeCreditNote(v: CreditNoteView) {
@@ -87,6 +92,8 @@ export function serializeCreditNote(v: CreditNoteView) {
     status: v.note.status,
     settled_by: creditNoteSettledBy(v.note),
     reason_code: v.note.reasonCode,
+    // `full`: a credit pack line credited whole, used credits too. Else the unused part only.
+    pack_refund: v.note.packRefund === "full" ? "full" : "unused",
     /**
      * `sub_total` (0186): the GROSS reversal this note documents, PRE-TAX and
      * before any slice was routed back to a credit bucket — so `total_minor =
@@ -143,6 +150,9 @@ export function serializeCreditNote(v: CreditNoteView) {
       // prorated credit gave no clue which period it reversed.
       period_start: it.periodStart,
       period_end: inclusivePeriodEnd(it.periodEnd, v.biz),
+      // The invoice line vocabulary; "tax" = the tax the note reverses. Null = not recorded.
+      kind: it.kind ?? null,
+      ...(v.taxItemIds ? { stated_in_taxes: v.taxItemIds.has(it.id) } : {}),
     })),
   };
 }

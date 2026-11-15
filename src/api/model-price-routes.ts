@@ -17,6 +17,12 @@ import {
   modelPriceSourceInfo,
 } from "@/modules/model-prices/service";
 import { DRIFT_DAYS, listDrift } from "@/modules/metering/list-drift";
+import {
+  MODEL_PRICE_UNITS,
+  TIER_RE,
+  normalizeTier,
+  type ModelPriceUnit,
+} from "@/modules/model-prices/units";
 import { badRequest, conflict, notFound, requirePerm } from "./helpers";
 import { parseRequest } from "./strict-params";
 
@@ -26,11 +32,31 @@ const instant = z
   .datetime({ offset: true })
   .transform((v) => new Date(v));
 const name = (max: number) => z.string().min(1).max(max);
+const unit = z.enum(MODEL_PRICE_UNITS as unknown as [ModelPriceUnit, ...ModelPriceUnit[]]);
+// Trimmed and lower-cased before the check, as a tier read from an event is.
+const tier = z
+  .string()
+  .transform(normalizeTier)
+  .pipe(z.string().regex(TIER_RE, 'Use at most 40 lower-case letters, digits, "_", "." or "-".'))
+  .nullable();
+// `price_kind` is `token_type` under its new name; either is accepted.
+const kind = { token_type: name(100).optional(), price_kind: name(100).optional() };
+
+/** `token_type` or `price_kind`; an error message when both are set and differ. */
+function kindOf(d: { token_type?: string; price_kind?: string }): {
+  value?: string;
+  error?: string;
+} {
+  if (d.token_type && d.price_kind && d.token_type !== d.price_kind)
+    return { error: "token_type and price_kind must be the same. Set one of them." };
+  return { value: d.token_type ?? d.price_kind };
+}
 
 const listQuery = z.object({
   provider: name(100).optional(),
   model: name(200).optional(),
-  token_type: name(100).optional(),
+  ...kind,
+  unit: unit.optional(),
   q: z.string().max(200).optional(),
   has_cost: bool.optional(),
   used: bool.optional(),
@@ -59,26 +85,38 @@ async function businessScope(
 const historyQuery = z.object({
   model: name(200),
   provider: name(100).optional(),
-  token_type: name(100).optional(),
+  ...kind,
+  unit: unit.optional(),
 });
 const costListQuery = z.object({
   model: name(200).optional(),
   provider: name(100).optional(),
-  token_type: name(100).optional(),
+  ...kind,
+  unit: unit.optional(),
+  q: z.string().max(200).optional(),
+  listed: bool.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
   starting_after: z.string().max(100).optional(),
 });
-const costBody = z.object({
-  provider: name(100).nullable().optional(),
-  model: name(200),
-  token_type: name(100),
-  currency: z.string().regex(/^[A-Za-z]{3}$/, "currency must be a 3-letter ISO code"),
-  unit_amount_decimal: z.string().max(40),
-  quantity_divisor: z.union([z.string().max(13), z.number().int().positive()]).transform(String),
-  effective_from: instant.optional(),
-  effective_to: instant.nullable().optional(),
-  note: z.string().max(500).nullable().optional(),
-});
+const costBody = z
+  .object({
+    provider: name(100).nullable().optional(),
+    model: name(200),
+    ...kind,
+    unit: unit.optional(),
+    quality: tier.optional(),
+    resolution: tier.optional(),
+    currency: z.string().regex(/^[A-Za-z]{3}$/, "currency must be a 3-letter ISO code"),
+    unit_amount_decimal: z.string().max(40),
+    quantity_divisor: z.union([z.string().max(13), z.number().int().positive()]).transform(String),
+    effective_from: instant.optional(),
+    effective_to: instant.nullable().optional(),
+    note: z.string().max(500).nullable().optional(),
+  })
+  .refine((d) => !!(d.token_type ?? d.price_kind), {
+    path: ["token_type"],
+    message: "Invalid input: expected string, received undefined",
+  });
 const endBody = z.object({ effective_to: instant.optional() });
 
 const costError = (reply: FastifyReply, e: unknown) => {
@@ -95,6 +133,8 @@ export async function registerModelPriceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const q = parseRequest(listQuery, req.query ?? {});
       if (!q.success) return badRequest(reply, q.error);
+      const k = kindOf(q.data);
+      if (k.error) return badRequest(reply, k.error);
       const limit = q.data.limit ?? 100;
       const scope = await businessScope(req.organization!.id, q.data.business, reply);
       if (!scope) return reply;
@@ -103,7 +143,8 @@ export async function registerModelPriceRoutes(app: FastifyInstance) {
         asOf: q.data.as_of,
         provider: q.data.provider,
         model: q.data.model,
-        tokenType: q.data.token_type,
+        tokenType: k.value,
+        unit: q.data.unit,
         q: q.data.q,
         hasCost: q.data.has_cost,
         used: q.data.used,
@@ -125,10 +166,13 @@ export async function registerModelPriceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const q = parseRequest(historyQuery, req.query ?? {});
       if (!q.success) return badRequest(reply, q.error);
+      const k = kindOf(q.data);
+      if (k.error) return badRequest(reply, k.error);
       return modelPriceHistory(req.organization!.id, {
         model: q.data.model,
         provider: q.data.provider,
-        tokenType: q.data.token_type,
+        tokenType: k.value,
+        unit: q.data.unit,
       });
     },
   );
@@ -183,11 +227,16 @@ export async function registerModelPriceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const q = parseRequest(costListQuery, req.query ?? {});
       if (!q.success) return badRequest(reply, q.error);
+      const k = kindOf(q.data);
+      if (k.error) return badRequest(reply, k.error);
       const limit = q.data.limit ?? 100;
       const page = await listCostOverrides(req.organization!.id, {
         model: q.data.model,
         provider: q.data.provider,
-        tokenType: q.data.token_type,
+        tokenType: k.value,
+        unit: q.data.unit,
+        q: q.data.q,
+        listed: q.data.listed,
         limit,
         startingAfter: q.data.starting_after,
       });
@@ -209,11 +258,17 @@ export async function registerModelPriceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const p = parseRequest(costBody, req.body ?? {});
       if (!p.success) return badRequest(reply, p.error);
+      const k = kindOf(p.data);
+      if (k.error) return badRequest(reply, k.error);
+      if (!k.value) return badRequest(reply, "token_type is required.");
       try {
         const row = await createCostOverride(req.organization!.id, {
           provider: p.data.provider,
           model: p.data.model,
-          tokenType: p.data.token_type,
+          tokenType: k.value,
+          unit: p.data.unit,
+          quality: p.data.quality,
+          resolution: p.data.resolution,
           currency: p.data.currency,
           unitAmountDecimal: p.data.unit_amount_decimal,
           quantityDivisor: p.data.quantity_divisor,

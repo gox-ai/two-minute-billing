@@ -15,6 +15,7 @@
 // invoices for a subscription period can be regenerated.
 
 import type { Invoice, InvoiceLine } from "@/lib/api";
+import { isInformationLine } from "@/lib/invoice-lines";
 
 export type InvoiceStatus = "pending" | "posted" | "payment_due" | "not_paid" | "paid" | "voided";
 /**
@@ -283,11 +284,16 @@ export interface InvoiceTotalsRow {
 export function splitInvoiceLines(lines: readonly InvoiceLine[] | undefined | null): {
   items: InvoiceLine[];
   adjustments: InvoiceTotalsRow[];
+  /** Usage that credits paid: sentences with no amount, outside the line table. */
+  information: InvoiceLine[];
   /** Any item row carries an ITEM-level discount → show the Discount column. */
   hasLineDiscounts: boolean;
 } {
   const all = lines ?? [];
-  const items = all.filter((l) => !(ADJUSTMENT_KINDS as readonly string[]).includes(l.kind));
+  const information = all.filter(isInformationLine);
+  const items = all.filter(
+    (l) => !isInformationLine(l) && !(ADJUSTMENT_KINDS as readonly string[]).includes(l.kind),
+  );
   const adjustments = ADJUSTMENT_KINDS.flatMap((kind) =>
     all
       .filter((l) => l.kind === kind)
@@ -299,6 +305,7 @@ export function splitInvoiceLines(lines: readonly InvoiceLine[] | undefined | nu
   return {
     items,
     adjustments,
+    information,
     hasLineDiscounts: items.some((l) => (l.item_level_discount_minor ?? 0) !== 0),
   };
 }

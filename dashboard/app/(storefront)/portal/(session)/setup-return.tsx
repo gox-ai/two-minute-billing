@@ -105,7 +105,7 @@ export function SetupReturn({ scope }: { scope: string }) {
 
   if (!busy) return null;
   return (
-    <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+    <div className="flex items-center gap-2 rounded-xl border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
       <Loader2 className="size-4 animate-spin" /> Finishing setup with your payment provider…
     </div>
   );

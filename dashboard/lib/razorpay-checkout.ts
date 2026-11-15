@@ -17,6 +17,7 @@
  * the adapter resolves one to the other server-side (see
  * `src/providers/razorpay.ts:tokenIdForMandatePayment`).
  */
+import { contactBusiness } from "./gateway-errors";
 
 /** `checkout` block of a vault_setup response (mode: 'checkout'). */
 export interface RazorpayCheckoutDescriptor {
@@ -31,6 +32,8 @@ export interface RazorpayCheckoutDescriptor {
 
 export type RazorpayResult =
   | { status: "authorized"; paymentId: string }
+  /** A payment RazorPay reported done without naming it: the engine reads it from the order. */
+  | { status: "unconfirmed" }
   | { status: "dismissed" }
   | { status: "failed"; message: string };
 
@@ -56,7 +59,7 @@ function loadCheckoutScript(): Promise<void> {
     el.onload = () => resolve();
     el.onerror = () => {
       loading = null; // let a later attempt retry the load
-      reject(new Error("We could not connect to RazorPay. Check your connection. Then try again."));
+      reject(new Error("We could not load the payment form. Reload the page. Then try again."));
     };
     document.head.appendChild(el);
   });
@@ -80,6 +83,8 @@ export async function openRazorpayCheckout(
   descriptor: RazorpayCheckoutDescriptor,
   context: {
     businessName: string;
+    /** A charge can be read back from its order; a setup cannot. */
+    purpose?: "payment" | "setup";
     /**
      * The line RazorPay prints under the business name, inside their sheet.
      *
@@ -93,9 +98,20 @@ export async function openRazorpayCheckout(
     prefill?: { name?: string | null; email?: string | null; contact?: string | null };
   },
 ): Promise<RazorpayResult> {
-  await loadCheckoutScript();
+  try {
+    await loadCheckoutScript();
+  } catch (e) {
+    return {
+      status: "failed",
+      message:
+        e instanceof Error
+          ? e.message
+          : "We could not load the payment form. Reload the page. Then try again.",
+    };
+  }
   const Razorpay = window.Razorpay;
-  if (!Razorpay) return { status: "failed", message: "We could not start RazorPay Checkout." };
+  if (!Razorpay)
+    return { status: "failed", message: "We could not open the payment form. Try again." };
 
   return new Promise<RazorpayResult>((resolve) => {
     let settled = false;
@@ -143,7 +159,14 @@ export async function openRazorpayCheckout(
       handler: (response: { razorpay_payment_id?: string }) =>
         response.razorpay_payment_id
           ? done({ status: "authorized", paymentId: response.razorpay_payment_id })
-          : done({ status: "failed", message: "RazorPay returned no payment reference" }),
+          : context.purpose === "payment"
+            ? done({ status: "unconfirmed" })
+            : done({
+                status: "failed",
+                // The provider reported a completed payment that we cannot read: a second
+                // try could pay twice, so the buyer is not sent to one.
+                message: `We could not confirm the result. It is possible that the payment is complete. Do not pay again. ${contactBusiness(context.businessName)}`,
+              }),
       // The sheet closed. That is the ONLY terminal signal short of a success, and it
       // carries the last refusal when there was one — otherwise the buyer simply left.
       modal: {
@@ -152,7 +175,7 @@ export async function openRazorpayCheckout(
       },
     });
     rzp.on("payment.failed", (e) => {
-      lastFailure = e?.error?.description ?? "We could not authorize the card.";
+      lastFailure = e?.error?.description ?? "The authorization did not finish.";
     });
     rzp.open();
   });

@@ -1179,7 +1179,7 @@ export async function createWebhookEndpoint(
     ...(description ? { description } : {}),
   });
   if (!res.ok) return actionError(res.error ?? "We could not add the endpoint.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   const secret = (res.data as { signing_secret?: string } | undefined)?.signing_secret;
   return withSecret(actionOk("Endpoint added"), "Webhook signing secret", secret);
 }
@@ -1210,7 +1210,7 @@ export async function createApiKeyAction(
     ...(expiresAt ? { expires_at: expiresAt } : {}),
   });
   if (!res.ok) return actionError(res.error ?? "We could not create the API key.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   const secret = (res.data as { secret?: string } | undefined)?.secret;
   return withSecret(actionOk("API key created"), "New API key", secret);
 }
@@ -1250,7 +1250,7 @@ export async function updateApiKeyAccessAction(
     ...(access.body.scope ? { scope: access.body.scope } : {}),
   });
   if (!res.ok) return actionError(res.error ?? "We could not change the access of the API key.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   return actionOk("Access changed");
 }
 
@@ -1271,7 +1271,7 @@ export async function rotateApiKeyAction(
     });
   const res = await apiPost(`/v1/api_keys/${id}/rotate`, { overlap_seconds: overlap });
   if (!res.ok) return actionError(res.error ?? "We could not rotate the API key.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   const secret = (res.data as { secret?: string } | undefined)?.secret;
   return withSecret(actionOk("API key rotated"), "New API key", secret);
 }
@@ -1285,7 +1285,7 @@ export async function revokeApiKeyAction(
   if (!id) return actionError("The API key ID is missing. Reload the page.");
   const res = await apiPost(`/v1/api_keys/${id}/revoke`, {});
   if (!res.ok) return actionError(res.error ?? "We could not revoke the API key.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   return actionOk(`API key ${id} revoked`);
 }
 
@@ -1299,7 +1299,7 @@ export async function toggleWebhookAction(
   if (!id) return actionError("The endpoint ID is missing. Reload the page.");
   const res = await apiWrite(`/v1/webhook_endpoints/${id}`, { enabled }, "PATCH");
   if (!res.ok) return actionError(res.error ?? "We could not update the endpoint.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   return actionOk(`Endpoint ${enabled ? "enabled" : "disabled"}`);
 }
 
@@ -1312,7 +1312,7 @@ export async function deleteWebhookAction(
   if (!id) return actionError("The endpoint ID is missing. Reload the page.");
   const res = await apiWrite(`/v1/webhook_endpoints/${id}`, {}, "DELETE");
   if (!res.ok) return actionError(res.error ?? "We could not delete the endpoint.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   return actionOk("Endpoint deleted");
 }
 
@@ -1325,7 +1325,7 @@ export async function rotateWebhookSecretAction(
   if (!id) return actionError("The endpoint ID is missing. Reload the page.");
   const res = await apiPost(`/v1/webhook_endpoints/${id}/rotate_secret`, {});
   if (!res.ok) return actionError(res.error ?? "We could not rotate the secret.");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   const secret = (res.data as { signing_secret?: string } | undefined)?.signing_secret;
   return withSecret(actionOk("Signing secret rotated"), "New signing secret", secret);
 }
@@ -1411,14 +1411,14 @@ export async function updateOrgAction(
     },
     "PATCH",
   );
-  revalidatePath("/settings");
+  revalidatePath("/settings", "layout");
   // The logo is drawn in the sidebar on every signed-in page.
   if (hasIcon) revalidatePath("/", "layout");
   // Every org-scoped screen formats with this value, and they are cached per route —
   // without these the operator saves a zone and /audit keeps rendering the old one until
   // something else happens to invalidate it.
   revalidatePath("/audit");
-  revalidatePath("/developer");
+  revalidatePath("/developer", "layout");
   if (!res.ok) return actionError(res.error ?? "We could not update the organization.");
   return actionOk("Organization updated");
 }
@@ -1963,6 +1963,21 @@ export async function removeDiscountAction(
   if (!res.ok) return actionError(res.error ?? "We could not remove the discount.");
   revalidatePath(subUrl(biz, sub));
   return actionOk("Discount removed");
+}
+
+/** `apply_when_paid`: cancel the change held for payment; its invoice is voided. */
+export async function cancelPendingChangeAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  await requirePermission("subscriptions:manage", "manager");
+  const biz = String(formData.get("biz") ?? "").trim();
+  const sub = String(formData.get("sub") ?? "").trim();
+  if (!biz || !sub) return actionError("The subscription ID is missing. Reload the page.");
+  const res = await apiDelete(`/v1/businesses/${biz}/subscriptions/${sub}/pending_change`);
+  revalidatePath(subUrl(biz, sub));
+  if (!res.ok) return actionError(res.error ?? "We could not cancel the pending change.");
+  return actionOk("Pending change cancelled.");
 }
 
 // --- FE-3: Manual invoice + lifecycle ops + offline payment ---

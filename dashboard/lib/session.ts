@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { forwardedFor } from "@/lib/forwarded-for";
 import type { PermissionKey } from "@/lib/permissions.generated";
+import { signInUrl } from "@/lib/sign-in-url";
 
 // The portal forwards the user's session cookie to the API. (The org API key in
 // lib/api.ts is the BFF's data credential; this is the human's login identity,
@@ -250,7 +251,7 @@ export interface TeamMember {
  */
 export async function listTeamMembers(): Promise<TeamMember[]> {
   const token = (await cookies()).get("tmb_session")?.value;
-  if (!token) redirect("/login");
+  if (!token) redirect(await signInUrl());
   const res = await fetch(`${BASE}/auth/members`, {
     headers: { cookie: `tmb_session=${token}`, ...(await forwardedFor()) },
     cache: "no-store",
@@ -291,7 +292,7 @@ export async function requireUser(): Promise<SessionUser> {
   // A blip is NOT a logout. Redirect only when the engine actually said "nobody"; otherwise
   // throw, so the error boundary offers a retry and the session survives.
   if (found.state === "unavailable") throw new SessionUnavailableError(found.detail);
-  if (found.state === "anonymous") redirect("/login");
+  if (found.state === "anonymous") redirect(await signInUrl());
   const user = found.user;
   /**
    * A mandated role that has not enrolled goes to the enrolment screen (audit M3.1).

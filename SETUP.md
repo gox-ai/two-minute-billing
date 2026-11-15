@@ -121,7 +121,7 @@ pnpm seed:capture          # regenerate the snapshot (runs --live in a throwaway
 
 | Business | Currency / tax | History | Customers |
 |---|---|---|---|
-| Acme Analytics | USD, US-CA sales tax | ~14 months | ~275 |
+| Halyard Analytics | USD, US-CA sales tax | ~14 months | ~275 |
 | Nimbus Cloud | INR, India GST (intra- and inter-state) | ~12 months | ~75 |
 | Fjord Tools | EUR, EU VAT | ~10 months | ~45 |
 
@@ -177,6 +177,28 @@ pnpm verify:catalog           # one end-to-end suite; needs the API + worker up
 Every `verify:*` suite writes test data to the database in `DATABASE_URL`; run them against a
 database you can throw away.
 
+
+---
+
+## Optional: Billy and the MCP server
+
+**Billy**, the assistant in the dashboard, is off until the engine has a model. Add to `.env`:
+
+```bash
+ASSISTANT_PROVIDER=openai             # openai | anthropic | google
+ASSISTANT_MODEL=gpt-6-luna            # any model your provider offers
+ASSISTANT_API_KEY=...                 # your provider's key
+# ASSISTANT_BASE_URL=http://127.0.0.1:11434/v1   # a local OpenAI-compatible server instead
+```
+
+Restart the API. Billy then shows in the dashboard for every member, with their own permissions.
+An owner can also add an organization's own key in **Settings → Billy**, and decide there whether
+Billy may prepare changes (off at first). Self-hosted installations have no monthly limit unless
+you set `ASSISTANT_ORG_MONTHLY_TOKENS`.
+
+The **MCP server** for AI tools is always on, at your API host followed by `/mcp`. To serve it
+from a host of its own, point that host at the API (forward only `/mcp`, `/oauth/` and
+`/.well-known/oauth-*`) and set `MCP_PUBLIC_URL=https://mcp.example.com`.
 
 ---
 

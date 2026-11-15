@@ -67,6 +67,11 @@ export const EVENT_TYPES = [
   "subscription_changed",
   "subscription_change_scheduled",
   "subscription_scheduled_change_removed",
+  // `apply_when_paid`: a change held until its invoice is paid, then applied, or ended
+  // (`reason`: expired, replaced, cancelled, voided, moved) with its invoice voided.
+  "subscription_pending_change_created",
+  "subscription_pending_change_applied",
+  "subscription_pending_change_expired",
   "subscription_renewed",
   "subscription_renewal_skipped",
   "subscription_skip_scheduled",
@@ -241,6 +246,10 @@ export const EVENT_TYPES = [
   "credit_hold_captured",
   "credit_hold_released",
   "credit_hold_expired",
+  // usage paid in credits (0526): an event stored and not billed because the customer has no
+  // credit left; a settlement (written only when an endpoint lists it)
+  "credit_usage_refused",
+  "credit_usage_settled",
   // usage controls (design G5 §5): limits, tiers, alerts, automatic top-up, threshold invoices
   "spend_limit_reached",
   "customer_limit_tier_reached",
@@ -249,6 +258,11 @@ export const EVENT_TYPES = [
   "credit_auto_topup_scheduled",
   "credit_auto_topup_succeeded",
   "credit_auto_topup_failed",
+  // a unit with no money rate (0527): a try failed and runs again; the top-up was turned off
+  // after a hard decline, or after the last try
+  "credit_auto_topup_retry_scheduled",
+  "credit_auto_topup_hard_declined",
+  "credit_auto_topup_retries_exhausted",
   "credit_auto_topup_skipped",
   "credit_auto_topup_threshold_low",
   "usage_threshold_reached",
@@ -302,6 +316,7 @@ const RESOURCE_TYPES = [
   "meter",
   "model_prices",
   "credit_hold",
+  "credit_usage",
   "credit_unit",
   "credit_grant",
   "spend_limit",
@@ -376,6 +391,7 @@ const SAMPLE_IDS: Record<string, string> = {
   manual_discount: "disc_sample0000000000000000",
   usage: "ur_sample00000000000000000",
   credit_hold: "chd_sample0000000000000000",
+  credit_usage: "cst_sample0000000000000000",
   usage_event: "sample-event-key",
   meter: "sample-meter",
   model_prices: "01960000-0000-7000-8000-000000000000",

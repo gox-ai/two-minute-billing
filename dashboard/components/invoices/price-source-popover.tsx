@@ -9,9 +9,11 @@ import {
   PRICE_SOURCE_LABEL,
   RATE_FROM_LABEL,
   formatListPrice,
+  listFeedName,
   percentLabel,
 } from "@/lib/model-prices";
-import { fmtDate, fmtDateTime, money } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format-date";
 
 const COST_BASIS: Record<string, string> = {
   event: "Cost on the events",
@@ -162,7 +164,7 @@ export function PriceSourcePopover({
                       </dd>
                       <dt className="text-muted-foreground">Source</dt>
                       <dd>
-                        {s.source ?? "—"}
+                        {s.source ? listFeedName(s.source) : "—"}
                         {s.source_version ? (
                           <span className="font-mono"> {s.source_version}</span>
                         ) : null}

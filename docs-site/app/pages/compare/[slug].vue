@@ -183,9 +183,7 @@ useMarketingSeo({
           </tbody>
         </table>
         <div class="mt-8 flex flex-wrap gap-3">
-          <UButton :to="signUp" size="xl" trailing-icon="i-lucide-arrow-up-right">
-            Start for free
-          </UButton>
+          <UButton :to="signUp" size="xl"> Start for free </UButton>
           <UButton to="/pricing" size="xl" color="neutral" variant="outline">See pricing</UButton>
         </div>
       </UContainer>

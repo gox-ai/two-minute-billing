@@ -1,6 +1,6 @@
 # subscriptions — the subscription engine + billing clock
 
-> Source: `src/modules/subscriptions/` · Routes: `src/api/subscription-routes.ts` · Schema: `db/schema/subscriptions.ts`, `scheduled-changes.ts`, `unbilled-charges.ts`
+> Source: `src/modules/subscriptions/` · Routes: `src/api/subscription-routes.ts` · Schema: `db/schema/subscriptions.ts`, `scheduled-changes.ts`, `unbilled-charges.ts`, `subscription-pending-changes.ts`
 > Layer: billing (see docs/architecture/architecture.json)
 
 ## Purpose
@@ -17,6 +17,9 @@ not any provider — owns period boundaries, proration, and lifecycle.
 - Scheduled changes (change/cancel/pause/resume) applied by the clock; remove scheduled cancellation.
 - `runBillingClockTick`: apply scheduled changes → renew due subs → dunning pass → deliver webhooks.
 - Dunning (retries + configurable final action); estimates for create/change; dues snapshot; `change_term_end`.
+- A declined change charge, per `billing_rules_config.failed_change_charge`: hold the change until
+  paid (`pending-change.ts`, `apply_when_paid`), undo it (`change-revert.ts`, `revert`), or keep it
+  and retry (`start_dunning`, `next_renewal`).
 - Ad-hoc charges, attached-item charges (`charge_on_event`), unbilled-charge invoicing.
 
 ## Data model
@@ -25,7 +28,9 @@ not any provider — owns period boundaries, proration, and lifecycle.
 `mrr`, period boundaries, `auto_collection`, `cancelAtPeriodEnd`, reason codes) · `subscription_items`
 (price + quantity + **`price_snapshot`** jsonb frozen at attach) · `scheduled_changes`
 (`change|cancel|pause|resume`, effective_at) · `unbilled_charges` · `renewal_skips` (one row per
-skipped renewal boundary, `scheduled|applied|cancelled|void`, source, the usage invoice it raised).
+skipped renewal boundary, `scheduled|applied|cancelled|void`, source, the usage invoice it raised) ·
+`subscription_pending_changes` (0531; a change held for payment, at most one `pending` row per
+subscription, with its invoice, `expires_at`, the composition to replay and its `fingerprint`).
 
 ## Public surface (service entry points)
 
@@ -61,7 +66,8 @@ scheduled_cancellation_removed/trial_ending/renewal_skipped/skip_scheduled/sched
 
 ## Invariants & gotchas
 
-- **Billing-clock tick order:** apply scheduled changes → renewals → dunning → deliver webhooks
+- **Billing-clock tick order:** apply scheduled changes → held changes (`pending_changes`) →
+  renewals → dunning → deliver webhooks
   (graphile-worker, ~every minute; each tick recorded via `ops`/`clock_ticks`).
 - Dunning is invoice-side — a subscription can survive `not_paid` when the final action is `retain`.
 - Item rating uses the **`price_snapshot`**, so live subs are immune to later catalog edits.
@@ -115,6 +121,105 @@ scheduled_cancellation_removed/trial_ending/renewal_skipped/skip_scheduled/sched
   removal candidate under either (a subscription with no plan bills nothing).
 
 ## Changelog
+- **2026-11-15 (0531)** — **`failed_change_charge: apply_when_paid`: a change applies only once
+  its invoice is paid.** The new-business default (`NEW_BUSINESS_BILLING_RULES`); existing
+  businesses keep their value, and `start_dunning` / `next_renewal` / `revert` are unchanged.
+  `pending-change.ts` + table `subscription_pending_changes` (RLS; one `pending` row per
+  subscription; `requested_at`, `expires_at`, `plan`, `fingerprint`, `credit_note_ids`, `restore`).
+  * Request: `applyChange({ hold })` prices the change at the request instant, issues the
+    unused-time credit notes, raises the invoice and records the row in the invoice's own
+    transaction (`recordPendingChange`, `dunning_status: stopped` so dunning never retries it),
+    then collects it. Items, term, commitment, coupons, MRR, plan credits, event and audit are
+    not written: they are `writeChangeComposition`, extracted from `applyChange` and replayed
+    later. `addSubscriptionItem` holds an add the same way (`kind: item_add`), and
+    `applyItemOperations` folds additions into the change leg so an edit is one held change.
+  * Paid (at once, or later by any path: `activatePaidCreditGrants` → `onInvoicePaid` →
+    after commit; the `pending_changes` clock pass catches a miss): `applyPaidPendingChange`
+    replays the composition as of `requested_at` in one transaction, only when the
+    subscription's items, term and coupons still match `fingerprint`. Otherwise (moved) nothing
+    applies and `keepPaidMoney` gives back the cash and the other credit the invoice drew as one
+    refundable credit note (`pending_change_not_applied`, refunded per `downgrade_credit`),
+    keeping the unused-time credit the change's own notes put on it.
+  * Not paid: 402 `payment_failed` / `requires_action` with `pending_change` (`PendingChangeError`);
+    `on_session` collects on session and returns the intent. A repeat of the same request
+    collects the same invoice again (`collectHeldAgain`); a different change replaces it.
+  * Expiry: earliest of the term end and `pending_change_expiry_hours` (23), or
+    `pending_change_expiry_hours_slow` (168) for a bank debit, a mandate, an offline invoice or a
+    payment still in progress. `endPendingChange` voids the invoice and the credit notes and puts
+    back a hosted change's coupons, card and PO number. A cancel or pause ends it
+    (`endPendingQuietly`), as does a void by hand (`onHeldInvoiceVoided`); another change, an item
+    removal, a term-end change and `DELETE …/pending_change` end it with 409 while its payment is
+    in progress. The paid-invoices gate and the past-due guard ignore its invoice
+    (`notHeldInvoice`). A shape a replay cannot carry exactly (discount edit, deferred or metered
+    settlement, one-time fee, term reset with a commitment; `holdBlocker`) applies and settles as
+    `revert`. Events `subscription_pending_change_created` / `_applied` / `_expired` (`reason`);
+    audit `subscription.pending_change_*`. `GET /subscriptions/{sub}` returns `pending_change`.
+    Gate: `verify:pending-change`.
+- **2026-11-14** — A `failed_change_charge: revert` voids the change invoice and its credit
+  notes in the revert's own transaction (`voidInvoiceInTx`; `voidCreditNote` takes `tx`). A
+  failed void now rolls the revert back and the dunning final action runs (reason
+  `revert_failed` / `item_add_failed`). Before, the void ran after the commit and a failure only
+  logged `change_revert_void_failed`, leaving a reverted change with a collectable invoice.
+  `setRevertVoidFaultForTests` drives the case in `verify:change-invoice-revert` §2b.
+- **2026-11-14** — `late_usage_invoices.wait_hours` (1–168, unset 24) and
+  `min_interval_hours` (1–720, unset 24) replace the fixed 24-hour wait and the one-a-day
+  limit. Below 24 hours the origin token adds the interval's slot, so two invoices on one
+  business day do not collide. Gate: `verify:late-usage-invoice` § 8.
+- **2026-11-13** — **Late usage after a cancellation** (`late-usage-invoices.ts`, opt-in
+  `billing_rules_config.late_usage_invoices: { enabled, minimum: { CUR: minor } }`, off by
+  default and not in `NEW_BUSINESS_BILLING_RULES`). Clock pass `late_usage_invoices` (after
+  `usage_alerts`, DB only): a `customer_meter_billing` row whose owner is cancelled or deleted,
+  with late events found as `lateLines` finds them, gets a `lateOnly` period invoice on that
+  subscription (`purpose: late_usage`, origin token `lui:<customer>:<business day>`), once the
+  oldest late event was received 24 hours ago (met under the business's clock pin: real receive
+  times mean nothing on a simulated clock) and at most one a day per customer. Several cancelled
+  subscriptions of a customer bill one a day, oldest first. Below `minimum[currency]` nothing is
+  raised and the pointer stays; `late_checked_at` (0521) holds the re-check until new events
+  arrive, and a judged row is rescanned at most hourly. Collection: `collect: false`, then
+  `collect_due_at` for the collect pump (auto-collection on); one attempt, never dunned.
+  `applyDunningFinalAction` returns early for a `late_usage` invoice.
+- **2026-11-13** — `billing_rules_config.plan_credits`: `on_downgrade` takes `prorated`; new
+  `grant_when` (`invoice_issued` | `invoice_paid`) and `on_unpaid_cancel` (`keep` |
+  `void_unused`), read in `credits/` and at the dunning cancel (`voidUnpaidPlanCredits`).
+  `NEW_BUSINESS_BILLING_RULES` sets `on_downgrade: prorated` and `on_unpaid_cancel: void_unused`.
+  `POST …/change` takes `plan_credits: prorated` on a downgrade. Create (API and the CRM app):
+  the card check runs after the first invoice is planned and only when an amount is due, so a
+  USD 0 plan is created without a card; with an amount due and no card the provisional
+  subscription is discarded as before. Gate: `verify:credits-follow-money`.
+- **2026-11-13** — `meterBillingConflict(tx, customer, meters)`: the read-only form of the
+  one-live-subscription-per-meter rule, for a check before a subscription exists (checkout create
+  with `customer_id`). `syncMeterBilling` is unchanged. `/estimate` without `change_option`
+  prices the timing `/change` would use (an end-of-term downgrade previews the term end;
+  `verify:settings-plan-change-rules`). An off-session 3DS refusal on create names
+  `on_session: true` (`verify:subscription-api-params`).
+- **2026-11-12 (0520)** — `mid_term_coupons` (`mid-term-coupons.ts`): term changes and
+  unbilled-charge invoices take the subscription's coupons under `unbilled_and_edits` or `all`;
+  item adds, activation, attached-item and ad-hoc charges under `all` only; estimates price the
+  same. The setting is serialized, takes a PATCH and has a dashboard screen. MRR merges customer
+  coupons (`mergeCustomerDiscounts`). `recurringChargeMinor` returns `{ amountMinor, discounted }`:
+  a deferred period (signup, resume, reactivate) booked net of the coupons is stored with
+  `unbilled_charges.discounted`, so the renewal that bills it does not discount it again. Gates:
+  `verify:coupons-midterm`, `verify:coupons-customer`.
+- **2026-11-11** — **`netSubscriptionMrr` is the one per-item MRR rule.** `recomputeSubscriptionMrr`
+  stores it and the back-office `stored_mrr_matches_recomputed` check calls it, so the two cannot
+  disagree. The check had kept netting item-scoped coupons off the whole total and flagged a correct
+  row. `loadActiveDiscounts` now carries `couponId` and `applyOn`.
+- **2026-11-10** — **MRR nets an item-scoped coupon only against its items.** `recomputeSubscriptionMrr`
+  and `recurringAmountsForSubs` resolve `itemIndexes` for `each_specified_item` coupons
+  (`couponItemIndexes`) and net through `netPerItemDiscounts`: item fixed → item % → whole fixed →
+  whole %. A coupon that matches no item takes nothing off (it used to come off the whole gross).
+  `/change` applies its coupon with `skipItemMatch` and checks it against the post-change items in
+  the same transaction, so a refused coupon rolls the change back.
+- **2026-11-10** — `reactivateSubscriptionWithOptions` and `estimateReactivate` apply CAT-7
+  differentials (`applyExplicitDifferentials`, as `createSubscription` does) to an add-on line with
+  no custom price. A restart that listed a catalog-0 add-on as a new line froze it at 0, so it
+  billed 0 at every renewal while the page's per-period total showed the differential. Covered by
+  `verify:portal-restart` (add-on case fails without the fix). Production had no affected lines.
+- **2026-11-10** — `reactivateAndBill`: a pay-first reactivation that keeps the lines priced its
+  up-front charge at today's catalogue price while the invoice billed the frozen snapshot, so
+  every such reactivation of a subscription whose catalogue price had moved refunded and refused
+  ("The amount due changed while we took the payment"). `currentItems` now quotes flat and
+  per-unit lines at their snapshot amount. Covered by `verify:portal-restart` (keep price).
 - **2026-11-04** — Credit and allowance reset settings (design-G3b § 6) in `billing_rules_config`
   (no migration): `plan_credits.{on_upgrade, on_downgrade, first_window, on_pause,
   on_cancel_at_period_end}` and `allowances.on_upgrade`, read through
@@ -3833,3 +3938,83 @@ prorate(base, now)`, so a later cancel can only reach zero). A remainder clamp s
 - **2026-11-05** — `POST …/change` takes per-call rules; each omitted one is the business rule. `on_charge_failure` (`start_dunning` | `next_renewal`) → `changeSubscription({ failedChangeCharge })`; `coupons` (`keep` | `drop` | `keep_if_valid`) → `planChangeCoupons` (`couponsLeftBehind({ rule })`); `downgrade_credit` (`credit_balance` | `refund`) → `downgradeCredit` (`refundChangeCredit({ override })`, wins over `customer_chooses`); `plan_credits` / `allowances` → `resetOverrides` (`applyPlanChangeCredits`). `plan_credits` replaces `on_upgrade`, and `on_downgrade` too unless `prorated`; on a downgrade `prorated` and any `allowances` are 400. A change at the end of the term refuses all five (400, the `nowOnly` list): the scheduled change follows the rules when it lands. `/estimate` takes `coupons` and `downgrade_credit` (`estimateChange`'s `planChangeCoupons` / `downgradeCredit`) and reports `change_policy.coupons`, `on_charge_failure`, `plan_credits` and `allowances` (null when nothing applies, `planChangeResetScope`). Gates: `verify:settings-billing-rules` 2.40, `verify:settings-lifecycle` 2.65 / 2.72, `verify:plan-credit-resets` §9b.
 - **2026-11-05** — Per-call plan credit rules. `pauseSubscriptionWithOptions` / `pauseSubscription` take `planCreditsOnPause` (route `plan_credits.on_pause`; not a `pause_config` lock key): stored as `reset_state.pause_rule` with the pause, dropped at resume, carried by a deferred pause in `ScheduledPauseOptions`. `cancelSubscriptionWithOptions` takes `planCreditsOnCancelAtPeriodEnd` (route `plan_credits.on_cancel_at_period_end`, end_of_term and specific_date): stored as `reset_state.cancel_rule` tied to `cancel_booked_at`, so a later cancel does not inherit it. The credit clock reads both before the business rule (`pauseRuleOf`, `cancelRuleOf`). Gate: `verify:plan-credit-resets` §12.
 - **2026-11-05** — `final_period` on `…/cancel` and `…/cancel_estimate` (specific_date only, not with `credit_option_for_current_term_charges`; 400 otherwise, `cancelOverrideProblem`) maps to the credit option as the business rule does. The cancel estimate now resolves an omitted specific_date credit from `specific_date_cancel_final_period`, as the cancel does (it read `default_credit_option_for_cancel`). `…/schedule` takes no cancel or pause options, so neither field. Gate: `verify:settings-billing-rules` 2.8.
+- **2026-11-11** — `creditOneInvoice` writes the tax-reversal item with `kind: "tax"`
+  (`TAX_REVERSAL_DESCRIPTION`, `credit-notes/tax-items.ts`), so the note's document states that tax
+  in its tax rows only. Amounts, totals and ledger postings are unchanged. Gate: `verify:proration` §K.
+
+- **2026-11-13** — **Usage grace window that holds only the invoice (0523).**
+  `usage_close_delay_minutes` is 0–43200 (integer column). A term boundary of a metered
+  subscription is due at +6 min only (`usageCloseReached`); a monthly usage boundary still waits
+  6 min + least(grace, half the sub-period); the old 30-min cap is gone. With an effective grace
+  (`usage-close.ts`: min(configured, half the plan interval, half the new term, half the first
+  sub-period)), an active metered renewal, a skipped renewal and a cancel at term end write a held
+  `pending` draft in the claim transaction: `hold_until`, `metadata.held` {kind, commitment,
+  no_card}, `metadata.usage_window` = the CLOSED period, number taken now, no meter cutoff.
+  `finalizeHeldInvoice` re-plans the row with a cutoff taken at the close and the stored
+  commitment, then applies the no-card case and the collection rules and sets `collect_due_at`
+  for the collect pump (inline under a test clock). `runCloseHeldInvoices` runs inside the
+  `auto_close_pending` pass; a renewal with a due boundary closes the subscription's held
+  invoices first; `closeHeldInvoiceFirst` runs before change, cancel, pause, resume, reactivate,
+  add/remove item, change term end, edit trial end and delete. `usageWindowForNextInvoice`
+  skips held rows; `heldUsageWindow` reads them. The held close dates the invoice for its due
+  date at the close instant (`heldClose.at`, business clock): due on issue → due then, net N →
+  then + N days; `created_at` (the printed invoice date), number and period stay. The dunning end
+  action's own cancel also closes the held invoice first. Grace 0 is unchanged. Cover:
+  `verify:usage-grace`, `verify:usage-late`.
+- **2026-11-13 (review fixes)** — A held renewal's `subscription_renewed` event carries
+  `invoice_hold_until` (top level, the instant the draft finalizes). The event fires in the period
+  claim, before the renewal invoice is written, so its email read the previous invoice's total; with
+  the key the email leaves the amount out. Grace 0 is unchanged. Cover: `verify:usage-grace`
+  (held mail, refused send, late event on the next invoice, declined charge → dunning, no reminder
+  while held, yearly cap).
+- **2026-11-13** — **A net credit can raise a credit note AND an invoice**
+  (`billing_rules_config.net_credit_documents`, `lifecycle-config.ts`; per call on `/change` and
+  `/estimate`). `credit_note_and_invoice`: a credit note for the old lines' unused time, at their
+  invoice's tax and discount, plus a tax invoice for the new lines at their own rate and place of
+  supply, raised now whatever `invoice_immediately` says (`applyChange` skips the unbilled branch
+  when `net < 0`). Paid term: the invoice draws the refundable note at once. Unpaid term: the note
+  is an adjustment on the term invoice and the new invoice is due. Partly paid: both. The rest
+  follows `downgrade_credit`. `one_credit_note`: one netted note. **Rollout:** unset (`null` on the
+  read) keeps the rule before this key, so every existing business is unchanged: two documents when
+  `invoice_immediately` resolves true and `termInvoiceCanAbsorb` says the credit fits, else one note.
+  A business a person creates stores `credit_note_and_invoice` (`NEW_BUSINESS_LIFECYCLE`). Under
+  `credit_note_and_invoice` a term whose invoices cannot take the whole gross credit does not net:
+  each invoice is credited up to what it can still take (a never-billed term still nets to nothing).
+  `estimateChange` prices one note for `one_credit_note`, or for unset when `legacyInvoiceImmediately`
+  is false (the route passes the resolved `invoice_immediately`), and lists every document it books
+  (`documents`, from the same per-invoice routing). New `block_downgrade_when_past_due` (default
+  false): a change applied now that nets to a credit is refused (`PAST_DUE_DOWNGRADE_MESSAGE`,
+  400) while the customer has a past-due invoice; end-of-term and scheduled changes
+  (`skipPastDueGuard`) are not. A net debit is unchanged. Gate: `verify:settings-plan-change-rules`.
+- **2026-11-13 (credit usage so far)** — `current_usage.credit_usage`: per credit-cost meter, the
+  quantity credits paid, the parts a money price bills (in the totals, taxed as the invoice
+  taxes them, not projected) and the open overshoot; only on the customer's oldest live
+  subscription. `estimateRenewal` passes `creditOverage` (`preview` with `includeUsageSoFar`,
+  else `omit`) and writes nothing; the renewal's collectability probe previews too. Gate:
+  `verify:credit-overage` § 10.
+- **2026-11-14** — **`failed_change_charge` decides what a hard-declined change invoice does.**
+  The change applies before it is charged; a hard decline exhausts its invoice at once
+  (`not_paid` / `exhausted`), and nothing acted on that: the subscription stayed on the new plan,
+  unpaid, with its credits. Now `changeSubscription` and `addSubscriptionItem` read the rule
+  (per call: `/change` `on_charge_failure`):
+  * `start_dunning` (unset): the dunning final action runs at once (`finalActionIfExhausted`), as
+    for a renewal; the reply stays 200.
+  * `revert` (the default for new businesses, `NEW_BUSINESS_BILLING_RULES`): `change-revert.ts`
+    undoes the change. `applyChange` captures the row, its items and the open plan-credit grants
+    inside its own transaction (`undoSink`); the revert puts back the items and the columns the
+    change wrote (term and cadence of a term reset, commitment, `reset_state`, metadata),
+    re-syncs meter billing and MRR, voids the grants the change opened and gives the old ones
+    back (`revertPlanChangeCredits`), then voids the invoice (`void_reason_code:
+    change_reverted`) and the change's credit notes, and throws `ChangeRevertedError`: 402
+    `payment_failed` with `invoice` and `decline_code` on `/change`, `update_for_items` and
+    `POST /items`; a payer refusal in hosted checkout and the portal; `unapplicable` for a
+    scheduled change. An added item (`POST /items`) is deleted unless credit or usage is booked
+    on it. A change that added or removed items, touched discounts, re-cut deferred charges,
+    settled metered usage, or whose credit note's credit went to another invoice cannot be
+    undone exactly and gets the final action (logged `change_final_action` with the reason).
+    Emits `subscription_changed`; audits `subscription.change_reverted`.
+  * `next_renewal`: unchanged. The invoice stays `not_paid` / `exhausted`: the retry hold only
+    delays retries, and a hard decline has none, so nothing collects it at the term end.
+  Under `plan_credits.grant_when: invoice_paid` a mid-term change's grant is held for the change
+  invoice (`settleHeldChangeGrants`), whatever the rule. Soft declines are unchanged. Gate:
+  `verify:change-invoice-revert` (62 checks).

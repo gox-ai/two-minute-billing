@@ -1,7 +1,9 @@
 /** Rebuild reporting for a seeded business, quiet its historical outbox, and summarise it. */
 import { sql } from "drizzle-orm";
-import { systemDb } from "@/platform/db";
+import { systemDb, withTenant } from "@/platform/db";
 import { bulkFillMetricDays, bulkFillCoarseGrains } from "@/modules/metrics/daily/bulk-fill";
+import { computeMetricPeriod } from "@/modules/metrics/daily/compute";
+import { writeMetricDay } from "@/modules/metrics/daily/write";
 import { invalidateSeriesCache } from "@/modules/metrics/daily/series-cache";
 import { refreshMovementSummary } from "@/modules/metrics/reports/movement-matview";
 import { zonedDayString } from "@/platform/timezones";
@@ -47,8 +49,35 @@ export async function rebuildReporting(input: {
     now,
     timezone: input.timezone,
   });
+  const today = await writeTodayMetrics(input);
   invalidateSeriesCache(input.businessId);
-  return { days: days.length, metricRows: fill.rows + coarse.rows };
+  return { days: days.length, metricRows: fill.rows + coarse.rows + today };
+}
+
+/**
+ * Today's row, as the worker's `metric_daily_current` pass writes it (same compute, same
+ * write). The fills stop at yesterday, and live-book measures such as receivables exist
+ * only on today's row, so without this they read null until a worker runs.
+ */
+export async function writeTodayMetrics(input: {
+  organizationId: string;
+  businessId: string;
+  timezone: string | null;
+}): Promise<number> {
+  const day = zonedDayString(new Date(), input.timezone);
+  const rows = await withTenant(input.organizationId, (tx) =>
+    computeMetricPeriod(tx, input.businessId, "day", day, new Date(), {
+      timezone: input.timezone,
+    }),
+  );
+  await writeMetricDay({
+    organizationId: input.organizationId,
+    businessId: input.businessId,
+    grain: "day",
+    periodEnd: day,
+    rows,
+  });
+  return rows.length;
 }
 
 export async function refreshMovements(): Promise<void> {

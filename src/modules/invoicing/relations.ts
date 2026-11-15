@@ -10,6 +10,7 @@ import {
   creditNoteAllocations,
   creditNotes,
   invoices,
+  payments,
   transactions,
 } from "@db/schema";
 import { lineCreditableAmounts } from "@/modules/credit-notes/line-cap";
@@ -21,6 +22,8 @@ export interface InvoiceRelations {
   lineTaxes: Map<string, { amountMinor: bigint; reasons: string[] }>;
   /** Per line public id: what a credit note may still credit against it. */
   lineCreditable: Map<string, bigint>;
+  /** Credit pack lines only: what a note can credit with `pack_refund: full`. */
+  lineFullCreditable: Map<string, bigint>;
   creditNotes: Array<typeof creditNotes.$inferSelect>;
   /** Refundable credit drawn from OTHER notes onto this invoice. */
   appliedCredits: Array<{
@@ -28,8 +31,11 @@ export interface InvoiceRelations {
     amountMinor: bigint;
     appliedAt: Date;
   }>;
-  /** Every attempt, success, failure and refund — the full money log, oldest first. */
-  transactions: Array<typeof transactions.$inferSelect>;
+  /**
+   * Every attempt, success, failure and refund — the full money log, oldest first.
+   * `paymentPublicId` is the `pay_…` a refund call takes (for a refund, the one it reverses).
+   */
+  transactions: Array<typeof transactions.$inferSelect & { paymentPublicId: string | null }>;
   /** First non-voided invoice of its subscription, or of its customer when not recurring. */
   firstInvoice: boolean;
 }
@@ -73,8 +79,9 @@ export async function loadInvoiceRelations(
     .where(and(eq(creditNoteAllocations.invoiceId, inv.id), ne(creditNotes.invoiceId, inv.id)))
     .orderBy(asc(creditNoteAllocations.createdAt));
   const txns = await tx
-    .select()
+    .select({ txn: transactions, paymentPublicId: payments.publicId })
     .from(transactions)
+    .leftJoin(payments, eq(payments.id, transactions.paymentId))
     .where(eq(transactions.invoiceId, inv.id))
     .orderBy(asc(transactions.createdAt));
   const [earlier] = await tx
@@ -104,15 +111,34 @@ export async function loadInvoiceRelations(
           { amountMinor: BigInt(r.amountMinor), reasons: r.reasons.filter(Boolean) },
         ]),
     ),
-    lineCreditable: new Map(
-      [...(await lineCreditableAmounts(tx, inv)).values()].map((l) => [
-        l.publicId,
-        l.remainingMinor,
-      ]),
-    ),
+    ...(await creditableMaps(tx, inv)),
     creditNotes: notes,
     appliedCredits: applied,
-    transactions: txns,
+    transactions: txns.map((r) => ({ ...r.txn, paymentPublicId: r.paymentPublicId })),
     firstInvoice: !earlier && inv.status !== "voided" && inv.status !== "pending",
+  };
+}
+
+/** What each line can still take; for a credit pack line also the full-refund maximum. */
+async function creditableMaps(
+  tx: Parameters<typeof lineCreditableAmounts>[0],
+  inv: Parameters<typeof lineCreditableAmounts>[1],
+) {
+  const caps = [...(await lineCreditableAmounts(tx, inv)).values()];
+  const packs = caps.filter((l) => l.pack);
+  const full = packs.length
+    ? await lineCreditableAmounts(
+        tx,
+        inv,
+        packs.map((l) => l.publicId),
+        undefined,
+        { packRefund: "full" },
+      )
+    : new Map();
+  return {
+    lineCreditable: new Map(caps.map((l) => [l.publicId, l.remainingMinor])),
+    lineFullCreditable: new Map(
+      [...full.values()].map((l) => [l.publicId, l.remainingMinor] as [string, bigint]),
+    ),
   };
 }

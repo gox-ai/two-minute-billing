@@ -6,7 +6,8 @@
 import { RefreshButton } from "@/components/refresh-button";
 import { StatusChip, Chip } from "@/components/patterns/chip";
 import { Alert } from "@/components/ui/alert";
-import { money, fmtDate, fmtDateTime } from "@/lib/format";
+import { money } from "@/lib/format";
+import { fmtDate, fmtDateTime, fmtRange } from "@/lib/format-date";
 import { useSubscriptionRefresh } from "@/components/subscriptions/subscription-refresh-context";
 import * as React from "react";
 import { CalendarClock, CalendarX2, CircleDollarSign, FileText, TrendingUp } from "lucide-react";
@@ -14,6 +15,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { CollectInvoiceDialog } from "@/components/invoices/collect-invoice-dialog";
 import type { PaymentMethod } from "@/lib/api";
+import type { PendingChange } from "@/lib/api/subscriptions";
 import {
   AttentionCard,
   FigureTile,
@@ -57,9 +59,7 @@ export function SubscriptionDuesBanner({ currency, tz }: { currency: string; tz:
         {state.due_invoices_count} unpaid invoice{state.due_invoices_count > 1 ? "s" : ""}
       </strong>
       {". "}Total due:{" "}
-      <strong className="tabular-nums">
-        {money(state.total_dues_minor, currency)} {currency}
-      </strong>
+      <strong className="tabular-nums">{money(state.total_dues_minor, currency)}</strong>
       {state.due_since ? (
         <>
           , since <strong>{fmtDate(state.due_since, tz)}</strong>
@@ -86,15 +86,13 @@ export function SubscriptionSummaryFigures({
     <div className="space-y-1 text-xs text-foreground/80">
       <div>
         Total MRR{" "}
-        <strong className="font-bold text-foreground">
-          {money(state.mrr, currency)} {currency}
-        </strong>
+        <strong className="font-bold text-foreground">{money(state.mrr, currency)}</strong>
       </div>
       {renews && state.next_billing_amount_minor != null ? (
         <div>
           We will raise the next invoice of{" "}
           <strong className="font-semibold text-foreground">
-            {money(state.next_billing_amount_minor, currency)} {currency}
+            {money(state.next_billing_amount_minor, currency)}
           </strong>{" "}
           on <strong>{fmtDateTime(state.next_billing_at, tz)}</strong>.
         </div>
@@ -144,6 +142,7 @@ export function SubscriptionAttention({
   autoCollection,
   pms,
   firstTried,
+  pending,
 }: {
   biz: string;
   sub: string;
@@ -166,9 +165,59 @@ export function SubscriptionAttention({
   pms: PaymentMethod[];
   /** The card collection tries first (the subscription's own, else the primary). */
   firstTried: PaymentMethod | null;
+  /** A change held until its invoice is paid (`apply_when_paid`); its invoice is not a due. */
+  pending?: {
+    change: PendingChange;
+    number: string | null;
+    /** A payment was tried and did not complete. */
+    attempted: boolean;
+    collectable: boolean;
+    cancel: React.ReactNode;
+  } | null;
 }) {
   const { state } = useSubscriptionRefresh();
   const items: AttentionItem[] = [];
+  if (pending?.change.invoice) {
+    const p = pending.change;
+    const invoice = p.invoice!;
+    const amount =
+      p.amount_due_minor != null ? money(p.amount_due_minor, p.currency ?? currency) : null;
+    items.push({
+      key: "pending-change",
+      tone: "warning",
+      title: amount ? `A change waits for payment · ${amount}` : "A change waits for payment",
+      detail: [
+        heldChangeSummary(p),
+        `Invoice ${pending.number ?? invoice}`,
+        pending.attempted ? "The payment was not completed" : null,
+        `If it is not paid by ${fmtDateTime(p.expires_at, tz)}, we void the invoice and the subscription stays as it is`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      actions: (
+        <>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/businesses/${biz}/invoices/${invoice}`}>View invoice</Link>
+          </Button>
+          {pending.collectable && p.amount_due_minor ? (
+            <CollectInvoiceDialog
+              biz={biz}
+              invoice={{
+                id: invoice,
+                number: pending.number,
+                dueMinor: p.amount_due_minor,
+                currency: p.currency ?? currency,
+              }}
+              pms={pms}
+              firstTried={firstTried}
+              back={`/businesses/${biz}/subscriptions/${sub}`}
+            />
+          ) : null}
+          {pending.cancel}
+        </>
+      ),
+    });
+  }
   const unpaid = state.due_invoices_count > 0;
 
   const single = state.due_invoices_count === 1;
@@ -316,9 +365,14 @@ export function SubscriptionFigures({
           note={
             state.current_period_start &&
             state.current_period_end &&
-            Date.parse(state.current_period_start) <= Date.parse(state.current_period_end)
-              ? `Last term ${fmtDate(state.current_period_start, tz)} – ${fmtDate(state.current_period_end, tz)}`
-              : undefined
+            Date.parse(state.current_period_start) <= Date.parse(state.current_period_end) ? (
+              <>
+                Last term{" "}
+                <span className="whitespace-nowrap">
+                  {fmtRange(state.current_period_start, state.current_period_end, tz)}
+                </span>
+              </>
+            ) : undefined
           }
         />
       ) : renews && state.next_billing_at ? (
@@ -349,14 +403,33 @@ export function SubscriptionFigures({
       <FigureTile
         label="Revenue to date"
         icon={TrendingUp}
-        featured
+        featured={state.revenue_to_date_minor > 0}
         value={money(state.revenue_to_date_minor, currency)}
         note={
-          paid && state.revenue_since
-            ? `${paid} invoice${paid === 1 ? "" : "s"} paid · since ${fmtDate(state.revenue_since, tz)}`
-            : "Nothing collected yet"
+          paid && state.revenue_since ? (
+            <>
+              {paid} invoice{paid === 1 ? "" : "s"} paid · since{" "}
+              <span className="whitespace-nowrap">{fmtDate(state.revenue_since, tz)}</span>
+            </>
+          ) : (
+            "Nothing collected yet"
+          )
         }
       />
     </FigureTiles>
   );
+}
+
+/** What a held change does, by product name: "Starter → Growth", "Add Seats ×2". */
+function heldChangeSummary(p: PendingChange): string {
+  const parts = (p.items ?? []).map((i) => {
+    const name = i.product_name ?? "an item";
+    if (i.action === "add")
+      return `Add ${name}${i.quantity && i.quantity > 1 ? ` ×${i.quantity}` : ""}`;
+    if (i.action === "remove") return `Remove ${name}`;
+    if (i.from_product_name && i.from_product_name !== name)
+      return `${i.from_product_name} → ${name}`;
+    return `${name} quantity ${i.from_quantity ?? "—"} → ${i.quantity ?? "—"}`;
+  });
+  return parts.length ? parts.join(", ") : "Change";
 }

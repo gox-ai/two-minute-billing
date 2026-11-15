@@ -7,20 +7,46 @@
  */
 import { and, eq, inArray } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
-import { appliedCoupons, businesses, couponItemConstraints, coupons, products } from "@db/schema";
+import {
+  appliedCoupons,
+  businesses,
+  couponItemConstraints,
+  coupons,
+  prices,
+  products,
+} from "@db/schema";
 import { resolveLifecycleConfig, type PlanChangeCoupons } from "./lifecycle-config";
 
 /**
- * Whether a coupon that names plans still covers `plan`. A coupon that names no plans
- * (`all`, `none`, or one on the invoice total) is not about the plan and stays.
+ * Whether a coupon that names plans or billing periods still covers `plan`. A coupon that
+ * names neither (`all` with any period, `none`, or one on the invoice total) stays.
  */
 export function couponCoversPlan(
   coupon: { applyOn: string | null },
-  planConstraint: { constraintType: string; productIds: unknown; priceIds: unknown } | null,
-  plan: { productPublicId: string; pricePublicId: string },
+  planConstraint: {
+    constraintType: string;
+    productIds: unknown;
+    priceIds: unknown;
+    billingPeriods?: unknown;
+  } | null,
+  plan: {
+    productPublicId: string;
+    pricePublicId: string;
+    interval?: string | null;
+    intervalCount?: number | null;
+  },
 ): boolean {
   if (coupon.applyOn !== "each_specified_item") return true;
-  if (!planConstraint || planConstraint.constraintType !== "specific") return true;
+  if (!planConstraint || planConstraint.constraintType === "none") return true;
+  const periods = Array.isArray(planConstraint.billingPeriods)
+    ? (planConstraint.billingPeriods as Array<{ interval: string; interval_count: number }>)
+    : [];
+  if (
+    periods.length &&
+    !periods.some((p) => p.interval === plan.interval && p.interval_count === plan.intervalCount)
+  )
+    return false;
+  if (planConstraint.constraintType !== "specific") return true;
   const ids = Array.isArray(planConstraint.productIds) ? planConstraint.productIds : [];
   const priceIds = Array.isArray(planConstraint.priceIds) ? planConstraint.priceIds : [];
   return ids.includes(plan.productPublicId) || priceIds.includes(plan.pricePublicId);
@@ -59,9 +85,21 @@ export async function couponsLeftBehind(
     .from(products)
     .where(eq(products.id, input.newPlan.productId))
     .limit(1);
+  const [price] = await tx
+    .select({ interval: prices.interval, intervalCount: prices.intervalCount })
+    .from(prices)
+    .where(
+      and(
+        eq(prices.businessId, input.businessId),
+        eq(prices.publicId, input.newPlan.pricePublicId),
+      ),
+    )
+    .limit(1);
   const plan = {
     productPublicId: prod?.publicId ?? "",
     pricePublicId: input.newPlan.pricePublicId,
+    interval: price?.interval ?? null,
+    intervalCount: price?.intervalCount ?? null,
   };
   const cons = await tx
     .select()

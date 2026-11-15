@@ -94,7 +94,6 @@ const parts = computed(() => {
               color="neutral"
               variant="outline"
               class="bg-default"
-              trailing-icon="i-lucide-arrow-up-right"
             >
               {{ l.label }}
             </UButton>

@@ -1,5 +1,7 @@
 "use client";
 
+import { fmtAxisDate } from "@/lib/format-date";
+
 import * as React from "react";
 import * as echarts from "echarts/core";
 import { BarChart } from "echarts/charts";
@@ -92,7 +94,13 @@ export function UsageDailyChart({
         data: labels,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: t.grid } },
-        axisLabel: { color: t.label, fontSize: 12, hideOverlap: true },
+        axisLabel: {
+          color: t.label,
+          fontSize: 12,
+          hideOverlap: true,
+          // "Nov 13", not the ISO key: the day is already the business's own date.
+          formatter: (d: string) => fmtAxisDate(`${d}T00:00:00Z`, "UTC"),
+        },
       },
       yAxis: {
         type: "value",

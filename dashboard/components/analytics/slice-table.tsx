@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { AreaChart } from "@/components/charts/area-chart";
 import { EmptyState } from "@/components/states";
-import { measureValue, chartKindFor } from "@/components/analytics/format";
+import { measureValue, measureValueTight, chartKindFor } from "@/components/analytics/format";
+import { dimensionLabel } from "@/components/reports/report-format";
 import type { AnalyticsResult } from "@/lib/analytics-api";
 
 /**
@@ -18,6 +19,12 @@ function drillHref(dimension: string, key: string, biz: string): string | null {
   if (dimension === "business") return `/businesses/${key}/reports/explore`;
   return null;
 }
+
+/**
+ * A figure column: real gutters and a floor width, so two figures side by side never touch
+ * (a 12-month matrix squeezed its cells to 79px with no padding, and the values ran together).
+ */
+const NUM = "min-w-16 px-2.5 text-right whitespace-nowrap tabular-nums last:pr-0";
 
 /**
  * A dimension breakdown, rendered as rows (role `rows`) or as a dimension × period
@@ -55,16 +62,16 @@ export function SliceTable({
             <tr className="border-b">
               <th
                 scope="col"
-                className="h-8 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                className="h-8 pr-4 text-left text-xs font-medium whitespace-nowrap text-muted-foreground"
               >
-                {split.dimension}
+                {dimensionLabel(split.dimension)}
               </th>
               {isMatrix ? (
                 periods.map((label) => (
                   <th
                     key={label}
                     scope="col"
-                    className="h-8 w-30 text-right text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                    className={`${NUM} h-8 text-xs font-medium text-muted-foreground`}
                   >
                     {label}
                   </th>
@@ -73,13 +80,13 @@ export function SliceTable({
                 <>
                   <th
                     scope="col"
-                    className="h-8 w-30 text-right text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                    className={`${NUM} h-8 text-xs font-medium text-muted-foreground`}
                   >
                     Total
                   </th>
                   <th
                     scope="col"
-                    className="h-8 w-18 text-right text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                    className={`${NUM} h-8 text-xs font-medium text-muted-foreground`}
                   >
                     Share
                   </th>
@@ -112,21 +119,27 @@ export function SliceTable({
               );
               return (
                 <tr key={row.key} className="border-b last:border-0">
-                  <th scope="row" className="h-11 truncate text-left font-normal">
+                  <th scope="row" className="h-11 pr-4 text-left font-normal">
                     {label}
                   </th>
                   {isMatrix ? (
+                    // Three significant figures in the matrix (₹27.3K): twelve months fit a
+                    // full-width tile without scrolling. The exact figure is on hover.
                     row.points.map((p, i) => (
-                      <td key={i} className="h-11 w-30 text-right tabular-nums">
-                        {measureValue(p.value, result.unit, result.currency)}
+                      <td
+                        key={i}
+                        className={`${NUM} h-11`}
+                        title={measureValue(p.value, result.unit, result.currency)}
+                      >
+                        {measureValueTight(p.value, result.unit, result.currency)}
                       </td>
                     ))
                   ) : (
                     <>
-                      <td className="h-11 w-30 text-right tabular-nums">
+                      <td className={`${NUM} h-11`}>
                         {measureValue(row.total, result.unit, result.currency)}
                       </td>
-                      <td className="h-11 w-18 text-right text-muted-foreground tabular-nums">
+                      <td className={`${NUM} h-11 text-muted-foreground`}>
                         {shareBps == null ? "—" : `${(shareBps / 100).toFixed(1)}%`}
                       </td>
                     </>

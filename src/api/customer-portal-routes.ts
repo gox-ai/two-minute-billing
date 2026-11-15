@@ -44,7 +44,15 @@ import {
 } from "@/modules/customers/service";
 import { getBusinessById } from "@/modules/tenancy/service";
 import { resolveStorefrontConfig } from "@/modules/checkout/storefront-config";
-import { listCustomerPurchases } from "@/modules/checkout/service";
+import { CheckoutError, listCustomerPurchases } from "@/modules/checkout/service";
+import {
+  mintPortalRestartCheckout,
+  RESTART_MESSAGES,
+  RestartError,
+  restartEligibility,
+  restartTerm,
+} from "@/modules/customer-portal/restart";
+import { resolvePauseConfig } from "@/modules/subscriptions/pause-config";
 import { resolveOfferedReasons } from "@/modules/reason-codes/service";
 import { applyCouponToSubscription, removeDiscount, CouponError } from "@/modules/coupons/service";
 import {
@@ -55,6 +63,7 @@ import {
   exchangePortalAccessToken,
   peekPortalAccessToken,
   businessOfDeadPortalLink,
+  businessHasPricingPage,
   getPortalLinkNotice,
   logoutPortalSession,
   getPortalSession,
@@ -142,7 +151,7 @@ import {
 import type { AddressMatrixField } from "@/modules/checkout/field-config";
 import { liveTaxRegimes } from "@/modules/tax/service";
 import { hasBillingName, holderName } from "@/modules/customers/names";
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import {
   customerCouponCapMessage,
   liveDiscountCounts,
@@ -158,6 +167,8 @@ import {
   appliedCoupons,
   coupons,
   portalSessions,
+  transactions,
+  paymentMethods,
 } from "@db/schema";
 import { estimateRenewal } from "@/modules/subscriptions/estimate";
 import { apiSubscriptionStatus } from "@/modules/subscriptions/serialize";
@@ -178,7 +189,7 @@ import {
   unskipRenewal,
 } from "@/modules/subscriptions/renewal-skips";
 import { SubscriptionError } from "@/modules/subscriptions/service";
-import { ProrationError } from "@/modules/subscriptions/proration";
+import { PAST_DUE_DOWNGRADE_MESSAGE, ProrationError } from "@/modules/subscriptions/proration";
 import { listScheduledChanges } from "@/modules/subscriptions/scheduled-changes";
 import { BUYER_METHOD_TYPES } from "@/providers/method-types";
 import {
@@ -478,6 +489,40 @@ const portalShipToBody = z.object({
  * The customer is always resolved from the token — never from a URL param —
  * so a portal session can only ever see and mutate its own customer's cards.
  */
+/**
+ * Per invoice: the most recent payment transaction, when it FAILED. A later success, or a
+ * charge still in progress, means there is nothing to report.
+ */
+async function lastFailedPayments(
+  organizationId: string,
+  invoiceIds: string[],
+): Promise<Map<string, { payment_method: string | null; code: string | null; at: string }>> {
+  const out = new Map<string, { payment_method: string | null; code: string | null; at: string }>();
+  if (invoiceIds.length === 0) return out;
+  const rows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({
+        invoiceId: transactions.invoiceId,
+        status: transactions.status,
+        code: transactions.errorCode,
+        at: transactions.createdAt,
+        pm: paymentMethods.publicId,
+      })
+      .from(transactions)
+      .leftJoin(paymentMethods, eq(paymentMethods.id, transactions.paymentMethodId))
+      .where(and(inArray(transactions.invoiceId, invoiceIds), eq(transactions.type, "payment")))
+      .orderBy(desc(transactions.createdAt)),
+  );
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!r.invoiceId || seen.has(r.invoiceId)) continue;
+    seen.add(r.invoiceId);
+    if (r.status === "failed" || r.status === "late_failed")
+      out.set(r.invoiceId, { payment_method: r.pm, code: r.code, at: r.at.toISOString() });
+  }
+  return out;
+}
+
 export async function registerCustomerPortalRoutes(app: FastifyInstance) {
   /**
    * How long the minted LINK stays openable — not how long the session lasts.
@@ -730,10 +775,15 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     )
       return;
     const link = accessToken ? await peekPortalAccessToken(accessToken) : null;
-    if (!link)
+    if (!link) {
+      // Whose dead link it was, as the exchange already says: the page can then brand the
+      // card and name who to ask. It says nothing about why the link died.
+      const business = accessToken ? await businessOfDeadPortalLink(accessToken) : null;
       return reply.code(401).send({
         error: { type: "authentication_error", message: "This link is not valid or is expired" },
+        ...(business ? { business } : {}),
       });
+    }
     const notice = await getPortalLinkNotice(link.businessPublicId);
     const f = link.forwardUrl ?? "";
     const task = f.includes("pay_invoice=")
@@ -926,7 +976,11 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         icon_url: notice.iconUrl,
         favicon_url: notice.faviconUrl,
         brand_color: notice.brandColor,
+        support_email: notice.supportEmail,
+        website: notice.website,
       },
+      /** The business shows a public pricing page (`/pricing/<biz>`). */
+      pricing_page: notice.hasPricingPage,
       message_html: notice.html,
       email_code: notice.emailCode,
     };
@@ -1016,9 +1070,14 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     // business NAME, which is why it drew an initials monogram. Falls back
     // logo → icon → monogram on the client; `null` is a normal, common state.
     business: {
+      /** Public id: the pricing page and the signed-out card are keyed on it. */
+      id: business.publicId,
       name: business.name,
       // So the buyer sees a test-mode portal is not real billing.
       livemode: business.livemode,
+      /** Where the buyer asks for help. Null when the business set none. */
+      support_email: business.supportEmail,
+      website: business.website,
       logo_url: business.logoUrl,
       icon_url: business.iconUrl,
       favicon_url: business.faviconUrl,
@@ -1055,8 +1114,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         .limit(1),
     );
     const sf = resolveStorefrontConfig(business);
+    const me = serializePortalMe(customer, business, await portalLocks(business));
     return {
-      ...serializePortalMe(customer, business, await portalLocks(business)),
+      ...me,
+      business: { ...me.business, has_pricing_page: await businessHasPricingPage(business.id) },
       return_url: sessionRow?.redirectUrl ?? sf.portalReturnUrl ?? sf.defaultReturnUrl,
     };
   });
@@ -1754,9 +1815,19 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       return reply
         .code(e.status)
         .send({ error: { type: "invalid_request_error", message: e.message } });
-    // Engine refusals (a mandatory add-on, a cancelled subscription) are buyer-safe text.
-    if (e instanceof ProrationError || e instanceof SubscriptionError)
-      return badRequest(reply, e.message);
+    // Engine refusals are operator text ("Billing period mismatch: price seats-yearly-usd…"):
+    // logged as they are, and the buyer reads one plain sentence.
+    if (e instanceof ProrationError || e instanceof SubscriptionError) {
+      log.info("portal change refused by the engine", {
+        event: "portal_change_refused",
+        error: e.message,
+      });
+      // The one refusal the buyer can clear alone: say how.
+      return badRequest(
+        reply,
+        e.message === PAST_DUE_DOWNGRADE_MESSAGE ? PORTAL_CHANGE_PAST_DUE : PORTAL_CHANGE_REFUSED,
+      );
+    }
     throw e;
   };
 
@@ -1946,15 +2017,20 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         "This account does not offer this here. Contact us to keep your subscription.",
       );
       if (!row) return;
-      if (row.status === "cancelled")
+      if (row.status === "cancelled") {
+        const offersRestart = resolveStorefrontConfig(
+          await getBusinessById(ctx.organizationId, ctx.businessId),
+        ).allowRestart;
         return reply.code(409).send({
           error: {
             type: "invalid_request_error",
-            message:
-              "This subscription already ended. Contact us to start it again. A restart bills the " +
-              "new period, so we will do it with you.",
+            message: offersRestart
+              ? "This subscription already ended. Use Restart subscription to start it again."
+              : "This subscription already ended. Contact us to start it again. A restart bills the " +
+                "new period, so we will do it with you.",
           },
         });
+      }
 
       const { reactivateSubscription } = await import("@/modules/subscriptions/service");
       const r = await reactivateSubscription({
@@ -1979,6 +2055,52 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         status: r.subscription.status,
         cancel_at_period_end: r.subscription.cancelAtPeriodEnd,
       });
+    },
+  );
+
+  /**
+   * Restart an ENDED subscription (`allow_restart`): mint a reactivating checkout and hand
+   * back its URL. Nothing changes here; the buyer pays the new term on the hosted page.
+   */
+  app.post(
+    "/portal/v1/subscriptions/:sub/restart",
+    { preHandler: [authenticatePortal, idempotency], onSend: idempotencyOnSend },
+    async (req, reply) => {
+      const ctx = req.portalSession!;
+      const { sub } = req.params as { sub: string };
+      const parsed = parseRequest(
+        z.object({ return_url: redirectUrl(), cancel_url: redirectUrl().optional() }),
+        req.body ?? {},
+      );
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const biz = await getBusinessById(ctx.organizationId, ctx.businessId);
+      try {
+        const r = await mintPortalRestartCheckout({
+          organizationId: ctx.organizationId,
+          businessId: ctx.businessId,
+          customerId: ctx.customerId,
+          subscriptionPublicId: sub,
+          config: resolveStorefrontConfig(biz),
+          now: await businessWallClock(ctx.businessId),
+          returnUrl: parsed.data.return_url,
+          cancelUrl: parsed.data.cancel_url ?? parsed.data.return_url,
+        });
+        return reply.code(201).send({
+          object: "portal_subscription_restart",
+          id: sub,
+          url: r.url,
+          expires_at: r.expiresAt,
+        });
+      } catch (e) {
+        if (e instanceof RestartError) {
+          if (e.status === 404) return notFound(reply, e.message);
+          return reply
+            .code(e.status)
+            .send({ error: { type: "invalid_request_error", message: e.message } });
+        }
+        if (e instanceof CheckoutError) return badRequest(reply, e.message);
+        throw e;
+      }
     },
   );
 
@@ -2286,6 +2408,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         ).reasons
       : [];
 
+    const { creditUsageSubscriptionId } = await import("@/modules/credits/overage");
+    const creditSub = await withTenant(ctx.organizationId, (tx) =>
+      creditUsageSubscriptionId(tx, ctx.customerId),
+    );
     const data = [];
     for (const sub of shown) {
       const items = await withTenant(ctx.organizationId, (tx) =>
@@ -2318,6 +2444,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           amount_minor: amountMinor != null ? amountMinor * item.quantity : null,
           interval: snap?.interval ?? price.interval,
           interval_count: snap?.intervalCount ?? price.intervalCount,
+          /** Billed per unit used: `unit_amount_minor` is a per-unit rate, not a period charge. */
+          metered: isMeteredPrice(snap ?? snapshotPrice(price)),
         };
       });
 
@@ -2337,6 +2465,34 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         },
       });
       const pending = unpriced as { type: string; effective_at: string } | null;
+      const metered = itemViews.some((i) => i.metered);
+      /**
+       * A metered subscription's renewal figure is the fixed charge only. Say whether the
+       * usage rides on that payment and, when it does, the same renewal with the usage
+       * recorded so far: the portal must not print a total the engine knows is too low.
+       */
+      const usageSoFar =
+        metered && renewal
+          ? await (async () => {
+              const w = await withTenant(ctx.organizationId, (tx) =>
+                usageWindowForNextInvoice(tx, sub),
+              );
+              if (w?.billedBy !== "renewal") return { billed: "separately" as const };
+              const withUsage = await estimateRenewal({
+                organizationId: ctx.organizationId,
+                businessId: ctx.businessId,
+                subscriptionId: sub.id,
+                includeUsageSoFar: true,
+              });
+              return {
+                billed: "with_this_payment" as const,
+                total_minor: withUsage?.total_minor ?? null,
+                amount_due_minor: withUsage
+                  ? (withUsage.amount_due_minor ?? withUsage.total_minor)
+                  : null,
+              };
+            })()
+          : null;
 
       // Zero-amount lines dropped from what's SHOWN only — the subtotal below still sums
       // the full set (a real 0 contributes nothing to it either way, so the total cannot
@@ -2356,9 +2512,13 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         has_metered_items: items.some(({ item, price }) =>
           isMeteredPrice((item.priceSnapshot as PriceSnapshot | null) ?? snapshotPrice(price)),
         ),
+        /** Usage paid with credits or billed past them is on this subscription. */
+        has_credit_usage: sub.id === creditSub,
         /** Σ line amounts, PRE-tax — "your plan", not "what we will charge". */
         recurring_subtotal_minor: itemViews.reduce((t, i) => t + (i.amount_minor ?? 0), 0),
         current_period_end: sub.currentPeriodEnd,
+        /** When it ended; set only on a cancelled subscription. */
+        ended_at: sub.status === "cancelled" ? sub.canceledAt : null,
         /** The oldest live discount, or null. `discounts` below has all of them. */
         discount: await portalSubscriptionDiscount(ctx.organizationId, sub.id),
         // Every live discount, and how many more codes the buyer can enter here (0495).
@@ -2393,6 +2553,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
               discount_lines: renewal.discount_lines ?? [],
               /** True when this figure is priced after a scheduled plan change. */
               after_scheduled_change: !!renewal.scheduled_change,
+              /** Metered only: how usage is billed, and this payment with usage so far. */
+              usage_so_far: usageSoFar,
             }
           : null,
         // No figure because a scheduled change or pause comes first and cannot be priced:
@@ -2434,12 +2596,20 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
               : null,
           };
         })(),
-        actions: portalSubscriptionActions(
-          storefront,
-          sub,
-          cancelReasons,
-          sub.status === "paused" && (await pausedByOffer(ctx.organizationId, sub.id)),
-        ),
+        actions: await (async () => {
+          const a = portalSubscriptionActions(
+            storefront,
+            sub,
+            cancelReasons,
+            sub.status === "paused" && (await pausedByOffer(ctx.organizationId, sub.id)),
+          );
+          // The portal pauses and resumes with no options, so the business's `pause_config`
+          // decides both: say which, where pause or resume is offered.
+          return {
+            ...a,
+            pause_terms: a.pause || a.resume ? portalPauseTerms(biz) : null,
+          };
+        })(),
         // A paused subscription and when it resumes (a scheduled resume), for the plan card.
         paused:
           sub.status === "paused"
@@ -2460,6 +2630,33 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
               })),
             }
           : null,
+        // Ended subscriptions only, and only when the business offers restarts: whether the
+        // Restart button shows, or the reason it does not.
+        restart:
+          sub.status === "cancelled" && storefront.allowRestart
+            ? await restartEligibility({
+                organizationId: ctx.organizationId,
+                subscription: sub,
+                config: storefront,
+                now,
+              }).then(async (e) => ({
+                allowed: e.allowed,
+                reason: e.reason,
+                message: e.reason ? RESTART_MESSAGES[e.reason] : null,
+                open_invoices: e.openInvoices,
+                closes_at: e.closesAt,
+                // What the restart checkout bills for the new term, before tax and discounts.
+                term: e.allowed
+                  ? await restartTerm({
+                      organizationId: ctx.organizationId,
+                      businessId: ctx.businessId,
+                      subscriptionId: sub.id,
+                      price: storefront.restartPrice,
+                      now,
+                    })
+                  : null,
+              }))
+            : null,
       });
     }
     return { object: "list", data };
@@ -2906,6 +3103,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       ctx.organizationId,
       rows.map((r) => r.invoice.id),
     );
+    const lastFailure = await lastFailedPayments(
+      ctx.organizationId,
+      rows.map((r) => r.invoice.id),
+    );
     return {
       object: "list",
       data: rows.map((r) => ({
@@ -2926,6 +3127,9 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         // promises the buyer one or the other. Null = unknown; the UI takes the cautious
         // wording rather than guessing.
         in_flight_gateway: inFlight.get(r.invoice.id)?.gatewayKey ?? null,
+        // The latest charge on an invoice that is still owed, when it failed: which saved
+        // method was refused, so the portal can name it and stop offering it again.
+        last_payment_error: lastFailure.get(r.invoice.id) ?? null,
       })),
       has_more: hasMore,
     };
@@ -4072,6 +4276,26 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
  * a state the matching route accepts. The routes check both again; this only decides which
  * buttons the page draws.
  */
+/** The buyer's sentence for a plan change the engine refuses. */
+export const PORTAL_CHANGE_REFUSED =
+  "We could not make this change. Select a different option, or contact us to change your plan.";
+
+/** The same refusal when a past-due invoice blocks the change (`block_downgrade_when_past_due`). */
+export const PORTAL_CHANGE_PAST_DUE =
+  "We could not change your plan because you have an invoice that is past due. Pay the invoice in Invoices. Then try again.";
+
+/** What a portal pause and resume do, from the business `pause_config` (both run with no options). */
+export function portalPauseTerms(biz: { pauseConfig?: unknown } | null | undefined): {
+  starts: "now" | "end_of_term";
+  resume_charge: "now" | "next_invoice";
+} {
+  const cfg = resolvePauseConfig(biz);
+  return {
+    starts: cfg.pauseOption === "end_of_term" ? "end_of_term" : "now",
+    resume_charge: cfg.chargesOnResume === "invoice_immediately" ? "now" : "next_invoice",
+  };
+}
+
 export function portalSubscriptionActions(
   cfg: ReturnType<typeof resolveStorefrontConfig>,
   sub: { status: string; cancelAtPeriodEnd: boolean },

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { usePageRefresh } from "@/lib/page-refresh";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,6 +13,8 @@ import { cn } from "@/lib/utils";
  *
  * `pending` drives both the spinner and the disabled state. Without it the button looks dead
  * on exactly the slow pages that need it most, which is a control that does nothing.
+ *
+ * It also registers itself as the page's refresh, so pull to refresh runs the same work.
  */
 export function RefreshButton({
   onRefresh,
@@ -26,8 +29,10 @@ export function RefreshButton({
   variant?: "ghost" | "outline";
   className?: string;
 }) {
+  const id = usePageRefresh(onRefresh, pending);
   return (
     <Button
+      data-page-refresh={id}
       type="button"
       variant={variant}
       size="sm"

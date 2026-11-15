@@ -40,24 +40,31 @@ export function RemovePaymentMethod({
     const data = new FormData();
     data.set("pm", pm);
     const res = await portalRemoveAction(null, data);
-    if (!res.ok) return void toast.error(res.message ?? "We could not remove that payment method.");
-    toast.success(res.message ?? "Payment method removed");
+    if (!res.ok) return void toast.error(res.message ?? "We could not delete the payment method.");
+    toast.success(res.message ?? "Payment method deleted.");
     // The action revalidates the route; refresh so the list re-renders without it.
     router.refresh();
   };
 
   return (
     <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        Remove
+      {/* "Delete", not "Remove": it destroys the saved method here and at the gateway.
+          "Remove backup" beside it only takes a role off. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-destructive hover:text-destructive"
+        onClick={() => setOpen(true)}
+      >
+        Delete
       </Button>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
         brand
         destructive
-        title={`Remove ${label}?`}
-        confirmLabel="Remove"
+        title={`Delete ${label}?`}
+        confirmLabel="Delete"
         description={
           <span className="flex flex-col gap-2">
             <span>
@@ -70,7 +77,7 @@ export function RemovePaymentMethod({
             {mandateRail ? (
               <span>
                 The auto-debit authorization ({mandateRail}) stays active at your bank. If you
-                remove it here, the authorization does not stop. To cancel the mandate, revoke it in
+                delete it here, the authorization does not stop. To cancel the mandate, revoke it in
                 your UPI app or bank portal.
               </span>
             ) : null}

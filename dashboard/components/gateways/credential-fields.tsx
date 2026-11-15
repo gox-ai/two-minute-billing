@@ -13,11 +13,17 @@ import type { CredentialFieldMeta } from "@/components/gateways/gateway-meta";
 export function CredentialFields({
   fields,
   requiredFields = false,
+  values,
+  onValueChange,
 }: {
   fields: CredentialFieldMeta[];
   /** Mark fields required (create flow). Rotation leaves them optional. */
   requiredFields?: boolean;
+  /** Controlled mode: the inputs carry no `name`, so an enclosing form never posts them. */
+  values?: Record<string, string>;
+  onValueChange?: (key: string, value: string) => void;
 }) {
+  const controlled = !!onValueChange;
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">This gateway requires no credentials.</p>;
   }
@@ -32,7 +38,14 @@ export function CredentialFields({
           required={requiredFields && !f.optional}
         >
           <Input
-            name={`cred_${f.key}`}
+            id={`cred_${f.key}`}
+            {...(controlled
+              ? {
+                  value: values?.[f.key] ?? "",
+                  onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
+                    onValueChange(f.key, e.target.value),
+                }
+              : { name: `cred_${f.key}` })}
             type="password"
             autoComplete="off"
             placeholder={f.placeholder ?? undefined}

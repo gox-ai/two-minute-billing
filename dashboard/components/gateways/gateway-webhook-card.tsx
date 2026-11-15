@@ -92,8 +92,7 @@ export function GatewayWebhookCard({
     });
   }
 
-  function handleSave(e: React.FormEvent) {
-    e.preventDefault();
+  function handleSave() {
     startSave(async () => {
       const res = await saveSecret(pasted);
       if (!res.ok) {
@@ -210,7 +209,7 @@ export function GatewayWebhookCard({
       ) : null}
 
       {ep.mode === "secret_in" ? (
-        <form onSubmit={handleSave}>
+        <div>
           <Field
             name="webhook_secret"
             label="Webhook secret"
@@ -224,13 +223,20 @@ export function GatewayWebhookCard({
                 autoComplete="off"
                 value={pasted}
                 onChange={(e) => setPasted(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (!saving && pasted.trim()) handleSave();
+                  }
+                }}
                 placeholder={ep.configured ? "Paste a new secret to replace the saved one" : ""}
                 className="font-mono text-xs"
               />
               <Button
-                type="submit"
+                type="button"
                 size="sm"
                 className="shrink-0"
+                onClick={handleSave}
                 disabled={saving || !pasted.trim()}
               >
                 {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
@@ -238,11 +244,12 @@ export function GatewayWebhookCard({
               </Button>
             </div>
           </Field>
-        </form>
+        </div>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button
+          type="button"
           variant="outline"
           onClick={() => handleProvision(false)}
           disabled={busy || urlMissingBase}
@@ -260,6 +267,7 @@ export function GatewayWebhookCard({
         </Button>
         {ep.configured && !noOwnSecret ? (
           <Button
+            type="button"
             variant="outline"
             onClick={() => handleProvision(true)}
             disabled={busy || urlMissingBase}

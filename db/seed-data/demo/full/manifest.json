@@ -42,14 +42,14 @@
       "key": "acme",
       "id": "ffafac6e-1ee5-4f66-92cf-4e222a7187b8",
       "publicId": "biz_08IOV6P0aiyaaH9xXsHjkRNQ",
-      "name": "Acme Analytics",
+      "name": "Halyard Analytics",
       "currency": "USD",
       "timezone": "America/New_York",
       "row": {
         "id": "ffafac6e-1ee5-4f66-92cf-4e222a7187b8",
         "organization_id": "d9893541-73de-43b5-846e-92d89654fabe",
         "public_id": "biz_08IOV6P0aiyaaH9xXsHjkRNQ",
-        "name": "Acme Analytics",
+        "name": "Halyard Analytics",
         "default_currency": "USD",
         "status": "active",
         "created_at": "2025-07-31T21:01:18.202+00:00",
@@ -125,7 +125,7 @@
         }
       ],
       "summary": {
-        "name": "Acme Analytics",
+        "name": "Halyard Analytics",
         "publicId": "biz_08IOV6P0aiyaaH9xXsHjkRNQ",
         "summary": {
           "customers": 253,

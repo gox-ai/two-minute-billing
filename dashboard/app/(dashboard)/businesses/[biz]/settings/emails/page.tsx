@@ -5,7 +5,6 @@ import { getBusiness } from "@/lib/api/business-settings";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
 import { buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import {
   SettingRow,
   SettingsCard,
@@ -14,7 +13,7 @@ import {
   SettingsSummary,
   type AttentionItem,
 } from "@/components/settings/settings-layout";
-import { SettingSwitch } from "@/components/settings/setting-switch";
+import { ToggleAnswer } from "@/components/patterns/settings-page";
 import {
   getSmtpSettings,
   getSesSettings,
@@ -90,7 +89,9 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
   // Mirrors isEmailTypeEnabled: Invoice to pay follows Invoice issued until set on its own.
   // …and Checkout reminder is opt-in: off until switched on.
   const isOn = (key: string) =>
-    key === "checkout_reminder" || key === "spend_limit_reached"
+    key === "checkout_reminder" ||
+    key === "spend_limit_reached" ||
+    key === "subscription_reactivated"
       ? types[key] === true
       : key === "invoice_to_pay" && types[key] === undefined
         ? types.invoice_issued !== false
@@ -195,7 +196,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
       attention={attention}
     >
       <SettingsCard title="Setup" meta="Who email comes from, what sends it, and what happened">
-        <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-px bg-border sm:grid-cols-2 @min-[56.875rem]/main:grid-cols-4">
           {setup.map(({ icon: Icon, title, href, hint, note }) => (
             <Link
               key={title}
@@ -250,7 +251,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
               help="Starts or stops every automatic billing email at once. The per-email choices below stay as they are."
               placement="end"
               control={
-                <SettingSwitch
+                <ToggleAnswer
                   name="emails_enabled"
                   label="Send billing emails to customers"
                   defaultChecked={enabled}
@@ -281,10 +282,12 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
                   </>
                 }
               >
-                <p className="m-0 px-5 py-3 text-sm text-muted-foreground">
+                <p className="m-0 px-5 py-3 text-xs text-muted-foreground">
                   {EMAIL_GROUP_DESCRIPTIONS[group]}
                 </p>
-                <div className={cn("divide-y", !enabled && !isAdhoc && "opacity-60")}>
+                {/* Not dimmed: the switches stay editable while sending is off. The assistant's
+                    map lists each email type from the catalogue (`OPTION_SOURCES`). */}
+                <div className="divide-y" data-map-options="email-types">
                   {rows.map((t) => (
                     <SettingRow
                       key={t.key}
@@ -294,7 +297,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
                           {t.label}
                           {customizedTypes.has(t.key) ? (
                             <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
-                              Customised
+                              Customized
                             </span>
                           ) : null}
                         </span>
@@ -331,7 +334,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
                           <>
                             {/* Tells the action this type rendered, so unchecked = muted. */}
                             <input type="hidden" name="email_type_present" value={t.key} />
-                            <SettingSwitch
+                            <ToggleAnswer
                               name={`email_type_${t.key}`}
                               label={t.label}
                               defaultChecked={isOn(t.key)}
@@ -374,7 +377,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
                 <>
                   {/* Tells the action the switch rendered, so unchecked = off. */}
                   <input type="hidden" name="attach_receipt_pdf_present" value="1" />
-                  <SettingSwitch
+                  <ToggleAnswer
                     name="attach_receipt_pdf"
                     label="Attach the receipt PDF to the payment confirmation email"
                     defaultChecked={cfg?.attachReceiptPdf === true}

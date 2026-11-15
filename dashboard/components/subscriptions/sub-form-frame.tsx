@@ -48,20 +48,29 @@ export function SubFormFrame({
       <RecordCrumbs items={crumbs} />
       <div className="flex min-w-0 flex-col gap-1">
         {lead ? <div className="mb-1">{lead}</div> : null}
-        <h1 className="text-2xl font-bold tracking-[-0.02em] wrap-break-word">{title}</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.02em] wrap-break-word">{title}</h1>
         {description ? (
           <div className="text-sm wrap-anywhere text-muted-foreground">{description}</div>
         ) : null}
         {status ? <div className="mt-2">{status}</div> : null}
       </div>
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 @min-[56.875rem]/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">{children}</div>
-        <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4">{aside}</aside>
+        <aside className="flex min-w-0 flex-col gap-4 @min-[56.875rem]/main:sticky @min-[56.875rem]/main:top-[calc(var(--compact-h,0px)+1rem)]">
+          {aside}
+        </aside>
       </div>
-      <div className="sticky bottom-0 z-10 -mx-5 -mb-8 flex flex-wrap items-center gap-x-4 gap-y-2 border-t bg-card px-5 py-3 md:-mx-10 md:-mb-10 md:px-10">
-        {footerFigure ? <div className="min-w-0 xl:hidden">{footerFigure}</div> : null}
+      <div
+        data-action-bar
+        className="sticky bottom-0 z-10 -mx-5 -mb-(--main-pb) flex flex-wrap items-center gap-x-4 gap-y-2 border-t bg-card px-5 py-3 md:-mx-10 md:px-10"
+      >
+        {footerFigure ? (
+          <div className="min-w-0 @min-[56.875rem]/main:hidden">{footerFigure}</div>
+        ) : null}
         {footerNote ? (
-          <p className="hidden text-xs text-muted-foreground xl:block">{footerNote}</p>
+          <p className="hidden text-xs text-muted-foreground @min-[56.875rem]/main:block">
+            {footerNote}
+          </p>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
           <Button asChild variant="outline">
