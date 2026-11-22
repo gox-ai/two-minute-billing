@@ -5,6 +5,7 @@ import { Info, Layers } from "lucide-react";
 
 import type { SubscriptionItem } from "@/lib/api";
 import { money } from "@/lib/format";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 import { Chip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
 
@@ -28,10 +29,15 @@ const GROUPS = [
 
 const KNOWN = new Set(GROUPS.map((g) => g.kind as string));
 
-/** Name column flexes; the three numeric columns are fixed so they stay aligned. */
-// On a phone: the name with its amount opposite, then units and unit price, each labelled.
+/**
+ * ONE grid, each row a subgrid: the numeric columns size to the widest amount in ANY row,
+ * so they stay aligned and a long amount widens its column instead of spilling into the
+ * next. The name keeps 10rem; past that the card scrolls. On a phone: the name with its
+ * amount opposite, then units and unit price, each labelled.
+ */
+const GRID = "grid grid-cols-[minmax(10rem,1fr)_auto_auto_auto] gap-x-4 max-sm:block";
 const COLS =
-  "grid grid-cols-[minmax(0,1fr)_4.5rem_7rem_8rem] items-start gap-x-4 max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-y-1";
+  "col-span-full grid grid-cols-subgrid items-start max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-x-4 max-sm:gap-y-1";
 
 /**
  * The subscription's line items.
@@ -164,7 +170,7 @@ export function SubscriptionItems({
         // The numeric columns must not squash the name column on a narrow
         // viewport, so the card scrolls inside itself rather than the page body.
         <div className="overflow-x-auto">
-          <div className="sm:min-w-[34rem]">
+          <div className={`${GRID} sm:min-w-min`}>
             <div
               className={`${COLS} border-b py-2 text-xs font-medium text-muted-foreground max-sm:hidden`}
             >
@@ -177,8 +183,10 @@ export function SubscriptionItems({
             </div>
 
             {grouped.map((g) => (
-              <div key={g.key}>
-                <div className="pt-4 pb-1 text-xs text-muted-foreground">{g.label}</div>
+              <div key={g.key} className="contents">
+                <div className="col-span-full pt-4 pb-1 text-xs text-muted-foreground">
+                  {g.label}
+                </div>
                 {g.rows.map((it) => {
                   const kind = it.product_kind ?? "plan";
                   const unit = it.unit_price_minor ?? null;
@@ -268,8 +276,8 @@ export function SubscriptionItems({
               is filled, and only when the discount IS a fixed amount.
             */}
             {discount ? (
-              <div>
-                <div className="pt-4 pb-1 text-xs text-muted-foreground">
+              <div className="contents">
+                <div className="col-span-full pt-4 pb-1 text-xs text-muted-foreground">
                   {discount.source === "coupon" ? "Coupons" : "Discounts"}
                 </div>
                 <div className={`${COLS} border-b border-border/40 py-3 last:border-0`}>
@@ -363,7 +371,7 @@ export function SubscriptionItems({
                 <span className="tabular-nums">−{money(discountMinor, currency)}</span>
               </div>
             ) : null}
-            {taxLines != null && taxLines.length > 0 ? (
+            {taxLines != null ? (
               taxLines.map((t, i) => (
                 <div
                   key={`${t.label}-${i}`}
@@ -379,6 +387,14 @@ export function SubscriptionItems({
                 <span className="tabular-nums">{money(taxMinor, currency)}</span>
               </div>
             )}
+            {splitTax(taxMinor, taxLines).includedMinor > 0 ? (
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{INCLUDED_TAX_LABEL}</span>
+                <span className="tabular-nums">
+                  {money(splitTax(taxMinor, taxLines).includedMinor, currency)}
+                </span>
+              </div>
+            ) : null}
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
             We charge this tax at invoicing, on the discounted base of the renewal. The amounts

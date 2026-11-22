@@ -1,7 +1,9 @@
 import "@/app/globals.css";
 import type { ReactNode } from "react";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { Providers } from "@/components/providers";
+import { SwRegister } from "@/components/app-install/sw-register";
 
 /**
  * Root layout for the four PUBLIC operator pages — sign in, forgot password, reset
@@ -39,6 +41,18 @@ export const metadata = {
     ],
     apple: "/apple-touch-icon.png",
   },
+  // The installable app (app/manifest.webmanifest). Never on the storefront layout: checkout and the
+  // portal are not part of the app.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Billing", statusBarStyle: "default" },
+} satisfies Metadata;
+
+/** The installed app's title bar follows the colour scheme. */
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1621" },
+  ],
 };
 
 /**
@@ -56,6 +70,8 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
             `forcedTheme` — unlike the storefront, this is our own surface and an operator's
             light/dark choice should survive being signed out. */}
         <Providers>
+          {/* An installed app whose session ended opens here; the worker gives it the offline page. */}
+          <SwRegister />
           <main className="flex min-h-screen items-center justify-center px-4 py-10">
             <div className="w-full max-w-md">{children}</div>
           </main>

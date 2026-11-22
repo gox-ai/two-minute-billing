@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/states";
 import { Pager, useLocalPages } from "@/components/patterns/pager";
 import { cn } from "@/lib/utils";
 import { sentenceCase } from "@/lib/labels";
+import { ABSENT_MODELS_LABEL, type ModelGroupId } from "@/lib/billing-models";
 
 /**
  * The widget library: everything this business can place or open, in one list.
@@ -34,8 +35,16 @@ export interface LibraryWidget {
   name: string;
   description: string;
   source: "measure" | "report";
-  /** The section heading. Derived from unit × basis, so both kinds sort into the same shelves. */
+  /** Unit × basis, so both kinds sort into the same shelves inside a section. */
   family: string;
+  /** The billing model the widget belongs to. */
+  group: ModelGroupId;
+  /** The model's label, shown on a widget under "Not used by this business". */
+  modelLabel: string;
+  /** True when the business does not use the widget's model. */
+  absent: boolean;
+  /** The section heading: the model's label, or the one fold for absent models. */
+  section: string;
   /** "Money", "Count", "Rate" — what the figure IS. */
   unitLabel: string;
   /** "At an instant", "Over a period", "Cohort grid", … — how to read it. */
@@ -104,7 +113,15 @@ export function WidgetLibrary({ widgets }: { widgets: LibraryWidget[] }) {
     return widgets.filter((w) => {
       if (!pick(w)) return false;
       if (!needle) return true;
-      const hay = [w.name, w.description, w.family, w.unitLabel, w.basisLabel, ...w.dimensions]
+      const hay = [
+        w.name,
+        w.description,
+        w.section,
+        w.family,
+        w.unitLabel,
+        w.basisLabel,
+        ...w.dimensions,
+      ]
         .join(" ")
         .toLowerCase();
       return hay.includes(needle);
@@ -114,8 +131,8 @@ export function WidgetLibrary({ widgets }: { widgets: LibraryWidget[] }) {
   const sections = React.useMemo(() => {
     const by = new Map<string, LibraryWidget[]>();
     for (const w of matches) {
-      if (!by.has(w.family)) by.set(w.family, []);
-      by.get(w.family)!.push(w);
+      if (!by.has(w.section)) by.set(w.section, []);
+      by.get(w.section)!.push(w);
     }
     return [...by.entries()];
   }, [matches]);
@@ -200,7 +217,9 @@ export function WidgetLibrary({ widgets }: { widgets: LibraryWidget[] }) {
         </div>
       ) : (
         sections.map(([family, rows], i) => {
-          const open = narrowed || (toggled[family] ?? i < OPEN_BY_DEFAULT);
+          const open =
+            narrowed ||
+            (toggled[family] ?? (family !== ABSENT_MODELS_LABEL && i < OPEN_BY_DEFAULT));
           return (
             <FamilyCard
               // A new search or filter starts each family on its first page.
@@ -243,7 +262,8 @@ function FamilyCard({
           <ChevronDown aria-hidden className="size-4 shrink-0 -rotate-90 text-muted-foreground" />
           <span className="min-w-0 truncate text-sm font-semibold">{sentenceCase(family)}</span>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{rows.length}</span>
-          <span className="hidden min-w-0 flex-1 text-sm text-muted-foreground md:block">
+          {/* A preview of the names: one line, cut with an ellipsis; the list opens below. */}
+          <span className="hidden min-w-0 flex-1 truncate text-sm text-muted-foreground md:block">
             {rows
               .slice(0, 3)
               .map((w) => w.name)
@@ -295,6 +315,7 @@ function FamilyCard({
         <TableBody>
           {page.map((w) => {
             const facts = [
+              w.absent ? w.modelLabel : null,
               w.unitLabel,
               w.basisLabel,
               w.grains.length > 1 ? `By ${w.grains.join(", ")}` : null,

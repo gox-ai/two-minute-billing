@@ -255,6 +255,46 @@ useMarketingSeo({
 
     <MkPageFlow kicker="How it works" title="How self-hosting works" :steps="steps" />
 
+    <section id="data-sources" class="py-6 lg:py-10">
+      <div class="mx-auto max-w-(--ui-container) px-4 sm:px-6 lg:px-8">
+        <div class="mk-surface mx-auto max-w-3xl overflow-hidden">
+          <div class="border-b border-default px-5 py-3.5 text-sm font-semibold text-highlighted">
+            Data sources
+          </div>
+          <ul class="divide-y divide-default text-sm">
+            <li class="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+              <span class="text-muted">
+                Countries, states and address formats:
+                <ULink
+                  to="https://github.com/dr5hn/countries-states-cities-database"
+                  target="_blank"
+                  class="text-highlighted underline"
+                  >countries-states-cities-database</ULink
+                >
+              </span>
+              <ULink to="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank">
+                <UBadge color="neutral" variant="outline">ODbL-1.0</UBadge>
+              </ULink>
+            </li>
+            <li class="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+              <span class="text-muted">
+                Postal codes, cities and states:
+                <ULink
+                  to="https://www.geonames.org/"
+                  target="_blank"
+                  class="text-highlighted underline"
+                  >GeoNames</ULink
+                >
+              </span>
+              <ULink to="https://creativecommons.org/licenses/by/4.0/" target="_blank">
+                <UBadge color="neutral" variant="outline">CC BY 4.0</UBadge>
+              </ULink>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <MkPageTrust />
 
     <MkFaq :items="faq" title="Open-source billing questions" />

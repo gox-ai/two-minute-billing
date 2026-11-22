@@ -10,7 +10,12 @@ import { publicId } from "@/platform/ids";
 import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { encryptCredentials, decryptCredentials } from "@/platform/secrets";
-import { resolveAdapter, ADVERTISED_METHODS, GatewayResolveError } from "@/providers/registry";
+import {
+  resolveAdapter,
+  assertCredentialsBuild,
+  ADVERTISED_METHODS,
+  GatewayResolveError,
+} from "@/providers/registry";
 import {
   GATEWAY_KEYS,
   GATEWAYS,
@@ -137,6 +142,8 @@ const PLATFORM_OWNED_CREDENTIAL_KEYS = [
   "webhook_secret_next",
   "webhook_id",
   "webhook_endpoint_id",
+  // The URL the endpoint is registered under (`accountNotificationUrl`).
+  "webhook_url",
   // The second secret that still verifies (`WEBHOOK_SECRET_FALLBACK` in webhook-endpoint.ts).
   "webhook_secret_fallback",
   "webhook_secret_fallback_until",
@@ -302,6 +309,23 @@ export function assertGatewayOffered(gatewayKey: string, src: AvailabilitySource
   throw new GatewayError(`We could not connect ${name}. It is not available yet.`);
 }
 
+/** Refuse credentials the adapter cannot be built from: the account could never take a payment. */
+function assertCredentialsUsable(
+  gatewayKey: string,
+  creds: Record<string, unknown>,
+  businessId: string,
+  livemode: boolean,
+): void {
+  try {
+    assertCredentialsBuild(gatewayKey, creds, { businessId, livemode });
+  } catch (e) {
+    const name = gatewayDefinition(gatewayKey)?.displayName ?? gatewayKey;
+    throw new GatewayError(
+      `We could not connect ${name}. The credentials are not complete or not correct: ${(e as Error).message}`,
+    );
+  }
+}
+
 export async function createGatewayAccount(input: {
   organizationId: string;
   businessId: string;
@@ -312,6 +336,8 @@ export async function createGatewayAccount(input: {
   methodTypes?: string[] | null;
   /** "International payments" (`internationalSwitch` gateways only). Absent = off. */
   internationalEnabled?: boolean;
+  /** Refuse credentials the adapter cannot be built from (operator input: the API). */
+  checkCredentials?: boolean;
   /**
    * Explicit public id. Used only where the id must be REPRODUCIBLE — the inbound
    * webhook URL embeds it and is registered in the provider's own dashboard, so an
@@ -353,6 +379,8 @@ export async function createGatewayAccount(input: {
       // dependency one-directional: webhook-endpoint imports from service, not back.
       creds.webhook_secret = randomBytes(32).toString("base64url");
     }
+    if (input.checkCredentials)
+      assertCredentialsUsable(input.gatewayKey, creds, input.businessId, livemode);
     const [row] = await tx
       .insert(gatewayAccounts)
       .values({
@@ -426,6 +454,8 @@ export async function updateGatewayAccount(input: {
   methodTypes?: string[] | null;
   status?: "active" | "disabled";
   internationalEnabled?: boolean;
+  /** Refuse credentials the adapter cannot be built from (operator input: the API). */
+  checkCredentials?: boolean;
 }): Promise<GatewayAccount | null> {
   return withTenant(input.organizationId, async (tx) => {
     const [existing] = await tx
@@ -444,8 +474,12 @@ export async function updateGatewayAccount(input: {
     // Replaces the operator's keys, preserves the platform's webhook material — see
     // `PLATFORM_OWNED_CREDENTIAL_KEYS` for why a wholesale overwrite here was the live
     // path to an account that collects money it can never mark paid.
-    if (input.credentials !== undefined)
-      set.credentialsEnc = encryptCredentials(credentialsForUpdate(existing, input.credentials));
+    if (input.credentials !== undefined) {
+      const next = credentialsForUpdate(existing, input.credentials);
+      if (input.checkCredentials)
+        assertCredentialsUsable(existing.gatewayKey, next, input.businessId, existing.livemode);
+      set.credentialsEnc = encryptCredentials(next);
+    }
     if (input.currencies !== undefined) {
       if (input.currencies?.length) {
         assertBusinessCurrencies(

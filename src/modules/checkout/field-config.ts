@@ -26,17 +26,13 @@
  * fourth state from a rolled-back build) resolves to that field's own default rather than
  * silently becoming permissive.
  *
- * ── Why the defaults are NOT uniform ───────────────────────────────────────────
- * Every default here is today's `checkoutCustomerBody` zod contract (`checkout-routes.ts`),
- * field by field — a business that never touches this screen must see the exact
- * requiredness it has always had:
- *   - `billing.line1`   → today `z.string().min(1)`      → **mandatory**
- *   - `billing.country` → today `z.string().length(2)`   → **mandatory**
- *   - `billing.city` / `billing.state_code` / `billing.postal_code` → **mandatory** (0334):
- *     the old completeness check required them unconditionally, so `show` was never
- *     honoured. Region and postal code apply only where the country has them
- *     (`addressRequirementIssues` in `./address-field-rules.ts`).
- *   - every other field → today `.optional()`            → **show**
+ * ── Defaults ───────────────────────────────────────────────────────────────────
+ * Only the country, the postal code and the state are required by default (tax needs
+ * them). Line 1 and city are optional; city and state fill in from the postal code, and
+ * the state stays required because tax under GST needs it. Region and postal code apply
+ * only where the country has them (`addressRequirementIssues` in `./address-field-rules.ts`).
+ * A business that has stored a state for a key keeps it; only an unset key follows this.
+ *   - every other field → **show**
  *
  * `billing.country` can never be `hide` (0334): it decides the region list and postal
  * format. A stored `hide` resolves to the default.
@@ -103,10 +99,11 @@ export const DEFAULT_CHECKOUT_FIELD_CONFIG: CheckoutFieldConfig = {
   "customer.phone": "show",
   "customer.company": "show",
   "customer.tax_registration_number": "show",
-  "billing.line1": "mandatory",
+  // Line 1 and city are optional; state and city fill in from the postal code.
+  "billing.line1": "show",
   "billing.line2": "show",
   "billing.line3": "show",
-  "billing.city": "mandatory",
+  "billing.city": "show",
   "billing.state": "show",
   "billing.state_code": "mandatory",
   "billing.postal_code": "mandatory",

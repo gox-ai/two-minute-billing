@@ -1,12 +1,11 @@
 import "@/app/globals.css";
 import "@/app/motion/billy-push.css";
 import type { ReactNode } from "react";
+import type { Metadata, Viewport } from "next";
 import { createHash } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import Link from "next/link";
 import { Wordmark } from "@/components/wordmark";
-import { listRetries } from "@/lib/api/retries";
-import { listDisputes } from "@/lib/api/disputes";
 import { Inter } from "next/font/google";
 import {
   requireUser,
@@ -26,6 +25,7 @@ import {
 } from "@/components/nav-collapse";
 import { MobileNavBar, MobileNavClose } from "@/components/mobile-nav";
 import { listBusinesses } from "@/lib/api";
+import { getBillingModels } from "@/lib/api/billing-models";
 import { Providers } from "@/components/providers";
 import { AppShellPalette, GoToRow } from "@/components/app-shell-extras";
 import { ModeProvider } from "@/components/mode-provider";
@@ -44,6 +44,7 @@ import { ProductTour } from "@/components/product-tour";
 import { ModeToggle } from "@/components/mode-toggle";
 import { RailHeader } from "@/components/rail-header";
 import { AccountMenu, WhatsNewRow } from "@/components/rail-footer";
+import { MobileBell, NotificationsRow, type BellBusiness } from "@/components/notifications/bell";
 import { assistantStatus } from "@/lib/assistant-proxy";
 import { AssistantDock } from "@/components/assistant/assistant-dock";
 import { BILLY_OPEN_SCRIPT } from "@/components/assistant/billy-open";
@@ -54,6 +55,7 @@ import { AssistantAvailability } from "@/components/assistant/assistant-context"
 import { ThemeCookie, ThemeSync } from "@/components/account/theme-sync";
 import { THEME_CHOICE_SCRIPT, THEME_COOKIE, isThemeChoice, themeChoice } from "@/lib/theme-cookie";
 import { SkipLink } from "@/components/skip-link";
+import { LastBusiness, SwRegister } from "@/components/app-install/sw-register";
 
 export const metadata = {
   title: "Two Minute Billing",
@@ -65,6 +67,18 @@ export const metadata = {
     ],
     apple: "/apple-touch-icon.png",
   },
+  // The installable app (app/manifest.webmanifest). Never on the storefront layout: checkout and the
+  // portal are not part of the app.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Billing", statusBarStyle: "default" },
+} satisfies Metadata;
+
+/** The installed app's title bar follows the colour scheme. */
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1621" },
+  ],
 };
 
 /**
@@ -168,6 +182,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   } catch {
     businesses = [];
   }
+  // The bell's row times (every business) and its filter (live businesses only).
+  const bellBusinesses: BellBusiness[] = businesses.map((b) => ({
+    id: b.id,
+    name: b.name,
+    timezone: bizTimezones[b.id] ?? null,
+    live: b.livemode === "live",
+  }));
   // The assistant shows only where it can answer: switched on, a model configured, the role allowed.
   const assistantState = allows(user, "assistant:use") ? await assistantStatus() : null;
   const assistantOn = assistantState?.available ?? false;
@@ -179,47 +200,16 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     keys: user.role === "custom" ? (user.permissions ?? []) : null,
   };
 
-  /**
-   * Badge count for the viewed business's work surfaces.
-   *
-   * Retries is revenue actively at risk in dunning, and it used to be discoverable only by
-   * opening a collapsed group called "Logs" — so the count belongs on the rail, where it is
-   * visible from every page. The business id comes from the path header `proxy.ts` already
-   * sets for `requireUser()`; a server component cannot otherwise see its own route.
-   *
-   * `total` is a real `count(*)`, taken from a `limit: 1` probe — never a page length. Soft
-   * failed and only for roles that may read it: a missing count renders NO badge, because
-   * "we could not count" must not display as zero, and one extra probe must not be able to
-   * take down the shell on every page.
-   */
-  const viewedBiz = ((await headers()).get("x-tmb-path") ?? "").match(
-    /^\/businesses\/([^/]+)/,
-  )?.[1];
-  const may = (perm: string) => (perms.keys ? perms.keys.includes(perm) : perms.ops);
-  let bizCounts: { retries?: number; disputes?: number } | undefined;
-  if (viewedBiz) {
-    // Each count soft-fails on its own: one failed probe drops one badge, not both.
-    const [retries, disputes] = await Promise.all([
-      // `activeOnly`: a badge is a call to action, so it counts retries still MOVING —
-      // in-progress and parked, plus a failure dunning has not reached yet. Exhausted and
-      // stopped rows stay on the SCREEN (they need a human) but must not sit in a number
-      // nobody can drive to zero, which is how a badge stops being read.
-      may("invoices:view")
-        ? listRetries(viewedBiz, { limit: 1, activeOnly: true }).then(
-            (r) => r.total ?? undefined,
-            () => undefined,
-          )
-        : undefined,
-      // `needs_response` only: under review waits on the gateway, not on the operator.
-      may("payments:view")
-        ? listDisputes(viewedBiz, { limit: 1, status: "needs_response" }).then(
-            (r) => r.total ?? undefined,
-            () => undefined,
-          )
-        : undefined,
-    ]);
-    bizCounts = { retries, disputes };
-  }
+  // The business rail's badge counts are read by the rail itself (`navCountsAction`): this
+  // layout does not re-render when the page below it changes.
+  // The billing models are also read here for the business in the URL, so a first paint (a
+  // reload, a shared link) already hides the reports of a model the business lacks. The rail
+  // refreshes them on each navigation.
+  const railBiz = ((await headers()).get("x-tmb-path") ?? "").match(/^\/businesses\/([^/]+)/)?.[1];
+  const railModels =
+    railBiz && allows(user, "reports:view", "ops")
+      ? { biz: railBiz, models: await getBillingModels(railBiz) }
+      : null;
   return (
     // The shell below is a fixed-height frame that owns scrolling in <main>, so the
     // document must NOT scroll as well or the browser paints a SECOND scrollbar right
@@ -248,6 +238,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <body className="h-full overflow-hidden bg-background font-sans text-foreground antialiased">
         <Providers>
           <SkipLink />
+          {/* The service worker, the install prompt and the shortcuts' last business. */}
+          <SwRegister />
+          <LastBusiness />
           <ThemeSync saved={user.theme} cookie={isThemeChoice(themeCookie) ? themeCookie : null} />
           <ThemeCookie />
           {/* The signed-in shell is a fixed-height frame with exactly ONE scroll
@@ -259,8 +252,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <NavCollapseProvider>
               {/* `h-dvh`, not `h-screen`: on a phone 100vh is the height with the address bar
                   HIDDEN, so while it shows the frame overflows and the browser slides it — top
-                  bar included — out of view. The dynamic unit follows what is visible. */}
-              <div className="flex h-dvh flex-col overflow-hidden">
+                  bar included — out of view. The dynamic unit follows what is visible.
+                  `overflow-clip`, not `hidden`: a hidden box is still a scroll container, so a
+                  `scrollIntoView` (Billy's "Show me", the tour) scrolled the whole frame up and
+                  left a blank band under it. A clipped box cannot be scrolled. */}
+              <div className="flex h-dvh flex-col overflow-clip">
                 <ModeBanner />
                 {isCloud() ? (
                   <AccountBanner
@@ -278,7 +274,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 {/* Below 768px the rail is an off-canvas drawer, so something has to
                     open it. Above 768px this bar is display:none and the rail is
                     simply the rail. */}
-                <MobileNavBar />
+                <MobileNavBar>
+                  <MobileBell businesses={bellBusinesses} />
+                </MobileNavBar>
                 <AssistantAvailability available={assistantOn}>
                   {/* `overflow-x-clip`: Billy's panel slides in from past the right edge, and
                   a clipped (not hidden) box cannot be scrolled sideways by scrollIntoView. */}
@@ -321,7 +319,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                           orgItems={navItems.filter((i) => i.href !== "/whats-new")}
                           businesses={businesses}
                           perms={perms}
-                          bizCounts={bizCounts}
+                          initialModels={railModels}
                         />
                       </div>
                       <div className="mt-auto flex flex-col gap-1 border-t border-sidebar-border pt-3">
@@ -329,6 +327,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                         totals. A business states its own mode on the header's pill. */}
                         <ModeToggle />
                         <WhatsNewRow unread={unread.length} />
+                        <NotificationsRow businesses={bellBusinesses} />
                         <AccountMenu
                           email={user.email}
                           name={user.name ?? null}

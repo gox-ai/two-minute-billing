@@ -155,8 +155,8 @@ export class CreditNoteError extends Error {
    * "Refund amount must be positive") would turn a 400 into a 404 and destroy the error
    * contract while leaving every gate green.
    */
-  readonly code?: "not_found";
-  constructor(message: string, code?: "not_found") {
+  readonly code?: "not_found" | "possible_duplicate";
+  constructor(message: string, code?: "not_found" | "possible_duplicate") {
     super(message);
     this.name = "CreditNoteError";
     this.code = code;
@@ -1905,6 +1905,8 @@ export async function refundCreditNote(input: {
   reason?: string;
   /** Refund only through card or bank payments, never an offline one. */
   gatewayOnly?: boolean;
+  /** Refuse a same-amount repeat on the funding payment within 10 minutes (`possible_duplicate`). */
+  guardRepeat?: boolean;
 }): Promise<CreditNote> {
   const { organizationId, businessId } = input;
 
@@ -2105,7 +2107,7 @@ export async function refundCreditNote(input: {
   //    remainder is un-earmarked (compensating ledger entry) so `available` re-inflates
   //    and the operator can retry explicitly. Only amounts actually accepted by the
   //    gateway stay booked as refunded.
-  const { paidOut, lastError, legsAttempted } = await payOutRefundsPayable({
+  const { paidOut, lastError, legsAttempted, duplicate } = await payOutRefundsPayable({
     organizationId,
     businessId,
     invoiceId: cn.invoiceId,
@@ -2114,6 +2116,7 @@ export async function refundCreditNote(input: {
     reason: input.reason,
     creditNoteId: cn.id,
     gatewayOnly: input.gatewayOnly,
+    guardRepeat: input.guardRepeat,
   });
   // SETTLE BEFORE REVERSING. `reverseCnRefundEarmark` caps itself at
   // `refundedMinor − paidOutMinor` — "only the earmarked-but-unpaid slice". Reversing
@@ -2148,6 +2151,10 @@ export async function refundCreditNote(input: {
       const [fresh] = await tx.select().from(creditNotes).where(eq(creditNotes.id, cn.id)).limit(1);
       return fresh ?? settled;
     });
+  }
+  if (paidOut === 0n && duplicate) {
+    // The repeat guard refused before any gateway call; the earmark is already reversed.
+    throw new CreditNoteError(duplicate, "possible_duplicate");
   }
   if (paidOut === 0n) {
     // Nothing cleared — the CN is back where it started; surface the reason to
@@ -3158,9 +3165,18 @@ async function payOutRefundsPayable(input: {
   /** Internal id of the CN being paid out — stamps refund transactions for the CN timeline. */
   creditNoteId?: string;
   gatewayOnly?: boolean;
-}): Promise<{ paidOut: bigint; lastError: string | null; legsAttempted: number }> {
+  guardRepeat?: boolean;
+}): Promise<{
+  paidOut: bigint;
+  lastError: string | null;
+  legsAttempted: number;
+  /** Message of a `possible_duplicate` refusal, if the repeat guard stopped the payout. */
+  duplicate: string | null;
+}> {
   const { organizationId, businessId } = input;
-  if (input.amountMinor <= 0n) return { paidOut: 0n, lastError: null, legsAttempted: 0 };
+  if (input.amountMinor <= 0n)
+    return { paidOut: 0n, lastError: null, legsAttempted: 0, duplicate: null };
+  let duplicate: string | null = null;
   const funding = await gatewayFundingLegs(organizationId, input.invoiceId, {
     gatewayOnly: input.gatewayOnly,
   });
@@ -3205,10 +3221,17 @@ async function payOutRefundsPayable(input: {
           `refundable credit note payout${funding.invoicePublicId ? ` (invoice ${funding.invoicePublicId})` : ""}`,
         contraAccount: "refunds_payable",
         creditNoteId: input.creditNoteId,
+        guardRepeat: input.guardRepeat,
       });
       attributed += amt;
       remaining -= amt;
     } catch (e) {
+      // Refused before any gateway call: not a failed refund, so no event, no transaction.
+      if (e instanceof RefundError && e.code === "possible_duplicate") {
+        duplicate = e.message;
+        lastError = e.message;
+        continue;
+      }
       // Gateway declined / unavailable — leave the payable outstanding (retriable
       // by sweepOutstandingCnPayouts). Loud: a silent catch made stranded payables
       // operationally invisible.
@@ -3296,7 +3319,7 @@ async function payOutRefundsPayable(input: {
       },
     );
   }
-  return { paidOut: paidOut > 0n ? paidOut : 0n, lastError, legsAttempted };
+  return { paidOut: paidOut > 0n ? paidOut : 0n, lastError, legsAttempted, duplicate };
 }
 
 /**

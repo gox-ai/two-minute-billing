@@ -64,3 +64,21 @@ export const getSubdivisions = cache(async (code: string): Promise<SubdivisionLi
     `/v1/countries/${encodeURIComponent(code.toUpperCase())}/subdivisions`,
   );
 });
+
+export interface PostalLookup {
+  /** Our subdivision code, or null when the region matched none of ours. */
+  state_code: string | null;
+  state_name: string | null;
+  cities: string[];
+}
+
+/** City and state for a postal code; null when the code is unknown or the data is not loaded. */
+export async function getPostalLookup(code: string, postal: string): Promise<PostalLookup | null> {
+  try {
+    return await apiGet<PostalLookup>(
+      `/v1/countries/${encodeURIComponent(code.toUpperCase())}/postal-codes/${encodeURIComponent(postal)}`,
+    );
+  } catch {
+    return null;
+  }
+}

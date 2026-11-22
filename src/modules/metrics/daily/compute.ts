@@ -78,14 +78,23 @@ import {
   CREDIT_FLOWS,
   CREDIT_MEASURE_DIMS,
   CREDIT_MEASURES,
+  CREDIT_NO_CURRENCY,
+  CREDIT_RATIOS,
 } from "./credit-measures";
 import {
   computeUsageMeasures,
   USAGE_MEASURE_DIMS,
   USAGE_MEASURES,
   USAGE_NO_CURRENCY,
+  USAGE_READINGS,
   USAGE_SUMS,
 } from "./usage-measures";
+import {
+  computeRevenueMeasures,
+  REVENUE_MEASURE_DIMS,
+  REVENUE_MEASURES,
+  REVENUE_RATIOS,
+} from "./revenue-measures";
 import {
   computeOrderMeasures,
   ORDER_MEASURE_DIMS,
@@ -210,6 +219,7 @@ interface GroupImpl {
     | "credits"
     | "usage"
     | "orders"
+    | "revenue"
     | "scheduled"
     | "derived"
     | "customer_grain";
@@ -442,8 +452,13 @@ const IMPL: Record<string, MeasureImpl> = {
       id,
       {
         source: "credits",
-        aggregate: (CREDIT_FLOWS as readonly string[]).includes(id) ? "sum" : "last",
+        aggregate: (CREDIT_FLOWS as readonly string[]).includes(id)
+          ? "sum"
+          : (CREDIT_RATIOS as readonly string[]).includes(id)
+            ? "ratio"
+            : "last",
         dims: CREDIT_MEASURE_DIMS[id] ?? [],
+        ...(CREDIT_NO_CURRENCY.has(id) ? { noCurrency: true } : {}),
       },
     ]),
   ),
@@ -452,7 +467,11 @@ const IMPL: Record<string, MeasureImpl> = {
       id,
       {
         source: "usage",
-        aggregate: (USAGE_SUMS as readonly string[]).includes(id) ? "sum" : "none",
+        aggregate: (USAGE_SUMS as readonly string[]).includes(id)
+          ? "sum"
+          : (USAGE_READINGS as readonly string[]).includes(id)
+            ? "last"
+            : "none",
         dims: USAGE_MEASURE_DIMS[id] ?? [],
         ...(USAGE_NO_CURRENCY.has(id) ? { noCurrency: true } : {}),
       },
@@ -469,6 +488,16 @@ const IMPL: Record<string, MeasureImpl> = {
             ? "ratio"
             : "none",
         dims: ORDER_MEASURE_DIMS[id] ?? [],
+      },
+    ]),
+  ),
+  ...Object.fromEntries(
+    REVENUE_MEASURES.map((id): [string, GroupImpl] => [
+      id,
+      {
+        source: "revenue",
+        aggregate: (REVENUE_RATIOS as readonly string[]).includes(id) ? "ratio" : "none",
+        dims: REVENUE_MEASURE_DIMS[id] ?? [],
       },
     ]),
   ),
@@ -735,6 +764,7 @@ export async function computeMetricPeriod(
   let creditMeasures = false;
   let usageMeasures = false;
   let orderMeasures = false;
+  let revenueMeasures = false;
   let ratioMeasures = false;
   let customerMeasures = false;
   for (const m of MEASURES) {
@@ -748,6 +778,7 @@ export async function computeMetricPeriod(
       else if (impl.source === "credits") creditMeasures = true;
       else if (impl.source === "usage") usageMeasures = true;
       else if (impl.source === "orders") orderMeasures = true;
+      else if (impl.source === "revenue") revenueMeasures = true;
       else if (impl.source === "scheduled") {
         if ((EXPECTED_CASH_MEASURES as readonly string[]).includes(m.id))
           expectedCashMeasures = true;
@@ -1167,10 +1198,13 @@ export async function computeMetricPeriod(
     rows.push(...(await computeCreditMeasures({ tx, businessId, from, toExclusive, now })));
   }
   if (usageMeasures) {
-    rows.push(...(await computeUsageMeasures({ tx, businessId, from, toExclusive })));
+    rows.push(...(await computeUsageMeasures({ tx, businessId, from, toExclusive, now })));
   }
   if (orderMeasures) {
     rows.push(...(await computeOrderMeasures({ tx, businessId, from, toExclusive })));
+  }
+  if (revenueMeasures) {
+    rows.push(...(await computeRevenueMeasures({ tx, businessId, from, toExclusive })));
   }
   // ── The derived ratios ────────────────────────────────────────────────────────────────
   // Last, because they divide what the groups above measure — and they store BOTH halves.

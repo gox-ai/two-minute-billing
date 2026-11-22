@@ -96,6 +96,7 @@ import {
 } from "@/providers/types";
 import { businesses, type customers, type paymentMethods } from "@db/schema";
 import { eq } from "drizzle-orm";
+import { payerFailureText, PAYER_REASON_WITHHELD } from "@/providers/decline-codes";
 
 const log = createLogger("vault-setup");
 
@@ -407,6 +408,12 @@ function setupRefusedMessage(reason: string): string {
     : `${opening} Try again, or use a different payment method.`;
 }
 
+/** A setup the payer's page cannot finish: missing, stale, or not an add-card. */
+const SETUP_NOT_FOUND =
+  "We could not find this payment method setup. Start again to add your payment method.";
+/** Same words as a missing one, with no id: a payer page must not tell which ids are real. */
+const SETUP_NOT_YOURS = SETUP_NOT_FOUND;
+
 export class VaultSetupIntentError extends Error {
   readonly status: 400 | 404;
   /** The provider/engine's own words, for the log rather than the buyer. */
@@ -467,17 +474,22 @@ export async function completeVaultFromIntent(input: {
       )
     : undefined;
   const intent = await getPaymentIntent(input.organizationId, input.businessId, piId);
-  if (!intent) throw new VaultSetupIntentError(`No such payment intent: ${piId}`, 404);
+  if (!intent) throw new VaultSetupIntentError(SETUP_NOT_FOUND, 404);
   // An intent that belongs to someone else must never mint an instrument on this
   // customer — the same guard the collect route makes, and it matters more on a buyer
   // surface because the caller IS the buyer.
   if (intent.customerId && intent.customerId !== input.customerId) {
-    throw new VaultSetupIntentError(`Payment intent ${piId} belongs to a different customer`, 400);
+    throw new VaultSetupIntentError(
+      SETUP_NOT_YOURS,
+      400,
+      `${piId} belongs to a different customer`,
+    );
   }
   if (intent.purpose !== "setup") {
     throw new VaultSetupIntentError(
-      `Payment intent ${piId} is not an add-card (purpose=${intent.purpose})`,
+      SETUP_NOT_FOUND,
       400,
+      `${piId} is not an add-card (purpose=${intent.purpose})`,
     );
   }
 
@@ -492,7 +504,7 @@ export async function completeVaultFromIntent(input: {
     if (applied?.outcome === "failed" || applied?.outcome === "pending")
       throw new VaultSetupIntentError(
         applied.outcome === "failed"
-          ? setupRefusedMessage(applied.failure!.message)
+          ? setupRefusedMessage(payerFailureText(applied.failure, PAYER_REASON_WITHHELD))
           : "The payment provider did not confirm this payment method yet. Try again in a few minutes.",
         400,
         applied.failure?.code ?? null,

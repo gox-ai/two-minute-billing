@@ -253,7 +253,7 @@ await call("/checkout/v1/viewed", sSteps.token, "POST", {
 const conversion = await resolveReport(orgId, biz.id, "checkout_conversion", { range: "12m" });
 const byGroup = Object.fromEntries((conversion.rows ?? []).map((x) => [x.group, x.value]));
 console.log("  conversion:", JSON.stringify(byGroup), "headline", conversion.headline);
-ok("one page on a phone converted 100%", byGroup["One page · Phone"] === 10000);
+ok("one page on mobile converted 100%", byGroup["One page · Mobile"] === 10000);
 ok("steps on desktop converted 0%", byGroup["Steps · Desktop"] === 0);
 ok("the headline is 1 of 2 viewed = 50%", conversion.headline === 5000);
 ok(
@@ -262,7 +262,7 @@ ok(
 );
 const failures = await resolveReport(orgId, biz.id, "checkout_payment_failures", { range: "12m" });
 const failGroups = Object.fromEntries((failures.rows ?? []).map((x) => [x.group, x.value]));
-ok("one page on a phone: 1 of 2 attempts failed = 50%", failGroups["One page · Phone"] === 5000);
+ok("one page on mobile: 1 of 2 attempts failed = 50%", failGroups["One page · Mobile"] === 5000);
 ok("a segment with no attempts is left out", !("Steps · Desktop" in failGroups));
 
 console.log(`\n${pass} passed, ${fail} failed`);

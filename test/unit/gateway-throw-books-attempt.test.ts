@@ -99,17 +99,17 @@ describe("an unknown gateway fault retries — it is not a hard failure", () => 
   });
 });
 
-describe("gateway_request_rejected still parks — it means we sent a bad request", () => {
-  it("classifies as park", () => {
-    expect(classifyDecline("gateway_request_rejected")).toBe("park");
+describe("gateway_request_rejected retries — the ops alert names it (2026-11-17)", () => {
+  it("classifies as retry", () => {
+    expect(classifyDecline("gateway_request_rejected")).toBe("retry");
   });
 
-  it("is merchant-side, so no payer action can clear it", () => {
-    expect(MERCHANT_SIDE_PARK.has("gateway_request_rejected")).toBe(true);
+  it("is no longer a park, so it is not in the merchant-side park set", () => {
+    expect(MERCHANT_SIDE_PARK.has("gateway_request_rejected")).toBe(false);
   });
 
-  it("parks even in fixed mode — a fixed-schedule business must not cancel over our fault", () => {
-    expect(PARK_EVEN_IN_FIXED_MODE.has("gateway_request_rejected")).toBe(true);
+  it("does not park in fixed mode either", () => {
+    expect(PARK_EVEN_IN_FIXED_MODE.has("gateway_request_rejected")).toBe(false);
   });
 
   it("is hidden from the payer, so our own gateway complaint never reaches their inbox", () => {

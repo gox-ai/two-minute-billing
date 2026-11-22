@@ -21,6 +21,7 @@ import { methodTypeFor } from "./method-type";
 import {
   loadEffectiveDunningConfig,
   priorFailedMethods,
+  refusedLastCycleToo,
 } from "@/modules/dunning-policies/effective";
 import { stampNow } from "@/platform/clock";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -32,6 +33,8 @@ import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import {
   planFailureRearm,
+  retryRailOf,
+  gatewayRunsRetries,
   heldRetry,
   nextParkedReminderAt,
   retryDaysForMethod,
@@ -62,6 +65,7 @@ import {
 
 import { createLogger } from "@/platform/logger";
 import { storedPayerDeclineMessage } from "@/modules/subscriptions/decline-overrides";
+import { isOurRequestFault } from "@/providers/decline-codes";
 import { UNAPPLIED_CAPTURE_KEY } from "./unapplied-capture-key";
 
 /**
@@ -1390,34 +1394,44 @@ export async function settlePaymentFailed(
     invoiceId: pay.invoiceId,
     customerId: pay.customerId,
   });
-  await emitEvent(tx, {
-    organizationId: input.organizationId,
-    businessId: input.businessId,
-    type: "payment_failed",
-    // Same amount/status contract as the synchronous failure in invoicing/service.ts:
-    // a consumer must be able to read how much failed straight off the webhook.
-    data: buildEventData(
-      "payment_failed",
-      {
-        id: pay.publicId,
-        status: "failed",
-        amount_minor: Number(pay.amountMinor),
-        currency: pay.currency,
-        code: pay.failureCode,
-        // Payer-facing (`declineMessage`); the raw text stays on the payment row.
-        message: await storedPayerDeclineMessage(
-          tx,
-          { businessId: input.businessId, code: pay.failureCode, message: pay.failureMessage },
-          "We could not complete the payment.",
-        ),
-        retriable,
-        invoice: failedRefs.invoice,
-        customer: failedRefs.customer,
-      },
-      null,
-      { settled_async: true },
-    ),
-  });
+  /**
+   * Emitted once, AFTER the invoice's dunning state is written (still the first event of
+   * the settlement), as the synchronous path does: the email outbox reads the stored park,
+   * so a park on our own refused request sends the payer nothing on either path.
+   */
+  let paymentFailedEmitted = false;
+  const emitPaymentFailed = async () => {
+    if (paymentFailedEmitted) return;
+    paymentFailedEmitted = true;
+    await emitEvent(tx, {
+      organizationId: input.organizationId,
+      businessId: input.businessId,
+      type: "payment_failed",
+      // Same amount/status contract as the synchronous failure in invoicing/service.ts:
+      // a consumer must be able to read how much failed straight off the webhook.
+      data: buildEventData(
+        "payment_failed",
+        {
+          id: pay.publicId,
+          status: "failed",
+          amount_minor: Number(pay.amountMinor),
+          currency: pay.currency,
+          code: pay.failureCode,
+          // Payer-facing (`declineMessage`); the raw text stays on the payment row.
+          message: await storedPayerDeclineMessage(
+            tx,
+            { businessId: input.businessId, code: pay.failureCode, message: pay.failureMessage },
+            "We could not complete the payment.",
+          ),
+          retriable,
+          invoice: failedRefs.invoice,
+          customer: failedRefs.customer,
+        },
+        null,
+        { settled_async: true },
+      ),
+    });
+  };
 
   let failedInvoice: string | null = null;
   if (pay.invoiceId && input.rearmDunning !== false) {
@@ -1476,6 +1490,7 @@ export async function settlePaymentFailed(
             .select({
               rail: paymentMethods.mandateRail,
               type: paymentMethods.type,
+              issuerCountry: paymentMethods.issuerCountry,
               issuerZones: countries.timezones,
             })
             .from(paymentMethods)
@@ -1483,7 +1498,9 @@ export async function settlePaymentFailed(
             .where(eq(paymentMethods.id, pay.paymentMethodId))
             .limit(1)
         : [];
-      const mandateRailForPayment = railRow?.rail ?? null;
+      const mandateRailForPayment = retryRailOf(
+        railRow ? { ...railRow, mandateRail: railRow.rail } : null,
+      );
       const plan = planFailureRearm({
         dunningStatus: inv.dunningStatus,
         currentNextAttemptAt: inv.nextAttemptAt,
@@ -1497,6 +1514,8 @@ export async function settlePaymentFailed(
         parkHardDeclines: dunningCfg.parkHardDeclines,
         // Normalized decline code from the async-settled charge failure.
         declineCode: input.errorCode,
+        // Our own refused request parks for ops at the end, never a final action.
+        requestFault: isOurRequestFault({ code: input.errorCode, message: input.errorText }),
         // Master switch + the trial/future and one-time-invoice scope toggles.
         dunningApplies:
           !startHeld &&
@@ -1512,6 +1531,9 @@ export async function settlePaymentFailed(
         // of that schedule can actually run. Null for a card or a non-mandate
         // instrument, which are uncapped.
         mandateRail: mandateRailForPayment,
+        issuerCountry: railRow?.issuerCountry ?? null,
+        // Settled late, after the gateway's own retries on a rail where it runs them.
+        gatewayRetriedCycle: gatewayRunsRetries(pay.providerKey, mandateRailForPayment),
         adaptiveTiming: dunningCfg.adaptiveTiming,
         timezone: biz?.timezone ?? null,
         mandateRevoked: resolveBillingRulesConfig(biz).mandateRevoked,
@@ -1520,6 +1542,11 @@ export async function settlePaymentFailed(
         retriesByMethod: dunningCfg.retriesByMethod,
         adaptiveCadence: dunningCfg.adaptiveCadence,
         priorMethods: await priorFailedMethods(tx, inv.id, pay.id),
+        repeatedAcrossCycles: await refusedLastCycleToo(tx, {
+          paymentMethodId: pay.paymentMethodId,
+          invoiceId: inv.id,
+          message: input.errorText,
+        }),
       });
       // The instant actually written, a change-charge hold included.
       const nextAttempt =
@@ -1595,6 +1622,7 @@ export async function settlePaymentFailed(
           .where(eq(invoices.id, inv.id));
       }
       // 'stopped' / 'paused' → leave the invoice's dunning schedule untouched.
+      await emitPaymentFailed();
       if (terminal) {
         await emitEvent(tx, {
           organizationId: input.organizationId,
@@ -1654,6 +1682,8 @@ export async function settlePaymentFailed(
       // 'stopped' / 'paused' emit no dunning event — the schedule is preserved.
     }
   }
+  // No invoice to dun (none, closed, or a person stopped the debit): emit it now.
+  await emitPaymentFailed();
   if (input.rearmDunning !== false)
     log.warn("in-flight payment settled as FAILED — the invoice re-enters dunning", {
       event: "payment_settled_failed",

@@ -147,11 +147,9 @@ export function CreateEndpointDialog({
   businesses,
   action,
 }: {
-  businesses: Array<{ id: string; name: string }>;
+  businesses: EndpointBusiness[];
   action: SecretAction;
 }) {
-  // The mode applies only to an endpoint for all businesses; one business sets its own.
-  const [scope, setScope] = React.useState("");
   return (
     <CreateWithSecret
       trigger="Create endpoint"
@@ -173,40 +171,59 @@ export function CreateEndpointDialog({
       <Field name="description" label="Name" help="Optional.">
         <Input name="description" type="text" placeholder="Analytics sync" />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field name="business" label="Scope">
-          <SelectField
-            name="business"
-            ariaLabel="Business scope"
-            className="w-full"
-            onValueChange={setScope}
-            options={[
-              { value: "", label: "All businesses" },
-              ...businesses.map((b) => ({ value: b.id, label: `${b.name} only` })),
-            ]}
-          />
-        </Field>
-        {/* Required for an all-businesses endpoint made with this dashboard's credential.
-            For one business it is derived (a contradicting value is a 400), and the action
-            forwards it only when the scope is "All businesses". */}
-        <Field
-          name="livemode"
-          label="Mode"
-          help={scope ? "The business sets the mode." : undefined}
-        >
-          <SelectField
-            name="livemode"
-            ariaLabel="Mode"
-            className="w-full"
-            defaultValue="test"
-            disabled={scope !== ""}
-            options={[
-              { value: "test", label: "Test" },
-              { value: "live", label: "Live" },
-            ]}
-          />
-        </Field>
-      </div>
+      <EndpointScopeFields businesses={businesses} />
     </CreateWithSecret>
+  );
+}
+
+type EndpointBusiness = { id: string; name: string; livemode: "live" | "test" };
+
+/**
+ * Mode, then scope. A live business and its test mode share a name, so the scope lists only
+ * the selected mode's businesses, and changing the mode clears a business that is not in it.
+ * The state lives here, inside the dialog content, so closing the dialog resets it.
+ */
+function EndpointScopeFields({ businesses }: { businesses: EndpointBusiness[] }) {
+  const [mode, setMode] = React.useState<"test" | "live">("test");
+  const [scope, setScope] = React.useState("");
+  const inMode = businesses.filter((b) => b.livemode === mode);
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {/* Required for an all-businesses endpoint made with this dashboard's credential.
+          For one business it is derived (a contradicting value is a 400), and the action
+          forwards it only when the scope is all businesses. */}
+      <Field name="livemode" label="Mode">
+        <SelectField
+          name="livemode"
+          ariaLabel="Mode"
+          className="w-full"
+          value={mode}
+          onValueChange={(v) => {
+            const next = v === "live" ? "live" : "test";
+            setMode(next);
+            if (scope && !businesses.some((b) => b.id === scope && b.livemode === next)) {
+              setScope("");
+            }
+          }}
+          options={[
+            { value: "test", label: "Test" },
+            { value: "live", label: "Live" },
+          ]}
+        />
+      </Field>
+      <Field name="business" label="Scope">
+        <SelectField
+          name="business"
+          ariaLabel="Business scope"
+          className="w-full"
+          value={scope}
+          onValueChange={setScope}
+          options={[
+            { value: "", label: mode === "live" ? "All live businesses" : "All test businesses" },
+            ...inMode.map((b) => ({ value: b.id, label: `${b.name} only` })),
+          ]}
+        />
+      </Field>
+    </div>
   );
 }

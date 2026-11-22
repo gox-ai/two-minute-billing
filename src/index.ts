@@ -12,6 +12,7 @@ import { pingDb, closeDb, writeTrackingHook, writeTrackingCleanupHook } from "./
 import { requestClockHook } from "./platform/clock";
 import { strictParamsRouteHook } from "./api/strict-params";
 import { requestShapeHook } from "./api/request-shape";
+import { buyerErrorTextHook } from "./api/buyer-error-text";
 import { readiness } from "./platform/health";
 import { registerRoutes } from "./api/routes";
 import { declareRoutePermission } from "./api/permission-registry";
@@ -38,6 +39,8 @@ import "./modules/emails/outbox";
 import "./modules/integrations/sink";
 import "./modules/receipts/sink";
 import "./modules/usage-controls/sink";
+// Operator notifications: queues a fan-out row for catalogue event types.
+import "./modules/notifications/sink";
 
 /** Every unhandled API failure is logged here — see `setErrorHandler` below. */
 const apiLog = createLogger("api");
@@ -202,6 +205,8 @@ export async function buildApp(opts?: {
   app.addHook("onRequest", strictParamsRouteHook);
   // Repeated query keys, NUL bytes and control characters in ids: a 400, never a 500.
   app.addHook("onRequest", requestShapeHook);
+  // A 4xx to a buyer session never carries operator text (api/buyer-error-text.ts).
+  app.addHook("preSerialization", buyerErrorTextHook);
   // API request log: mints the `Request-Id` header, buffers one row per logged request
   // (modules/request-log). Read-only hooks; a logging failure never changes a reply.
   registerRequestLog(app, { kindOf: requestKind });

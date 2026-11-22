@@ -50,6 +50,7 @@ None — this module *defines* the taxonomy; `webhooks.emitEvent` writes the row
 - Keep the dashboard's `dashboard/lib/api/event-types.ts` copy in sync with this registry.
 
 ## Changelog
+- **2026-11-22** — `provenance.ts`: `createdThrough` / `creationEvents` read a record's earliest creation event (`source`, `actor`) for the `created_through` field on detail routes.
 - **2026-11-13** — `credit_usage_refused` carries `policy` (`block` or `bill`): `bill` also refuses until usage that credits do not cover has a money price.
 - **2026-11-13 (0526)** — Event types `credit_usage_refused` (a usage event stored and not billed: the customer has no credit left) and `credit_usage_settled` (one per settlement; written only when an endpoint lists it); resource family `credit_usage`. `credit_grant_applied` for a settlement carries `invoice: null` and `settlement`.
 - **2026-11-01** — Event type `model_prices_changed` (resource family `model_prices`): one per business per price sync that changed a model it uses (Tier 3 PR 1b, `modules/model-prices/notices.ts`).
@@ -138,3 +139,4 @@ None — this module *defines* the taxonomy; `webhooks.emitEvent` writes the row
   (`failed_change_charge: apply_when_paid`). `data.pending_change` = `{ id, kind, invoice,
   requested_at, expires_at, reason? }`; `reason` is `expired`, `replaced`, `cancelled`, `voided`
   or `moved`.
+- **2026-11-21** — Event `source` gains `portal` (every `/portal/v1` route, not only subscription actions), `checkout` (every `/checkout/v1` route), `webhook` (inbound gateway and SES notifications, inline and queued; actor = the gateway key) and `mcp` (OAuth access token). Set once in `eventContextHook` (`initialContextFor`, by route family), not per route. `currentChannel()` still returns `api` for all four, so stored invoice and credit-note channels do not change. Existing rows keep `api`; no backfill.

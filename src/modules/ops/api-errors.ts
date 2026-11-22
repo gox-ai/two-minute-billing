@@ -1,5 +1,6 @@
+import { notPlatformOrg } from "@/modules/tenancy/platform-org";
 import type { FastifyRequest } from "fastify";
-import { lt } from "drizzle-orm";
+import { lt, and } from "drizzle-orm";
 import { systemDb } from "@/platform/db";
 import { apiServerErrors } from "@db/schema";
 import { createLogger, redactSensitive } from "@/platform/logger";
@@ -73,7 +74,12 @@ export function recordApiServerError(req: FastifyRequest, err: Error, status: nu
 export async function sweepApiServerErrors(now: Date): Promise<{ deleted: number }> {
   const deleted = await systemDb
     .delete(apiServerErrors)
-    .where(lt(apiServerErrors.createdAt, new Date(now.getTime() - API_ERROR_RETENTION_MS)))
+    .where(
+      and(
+        lt(apiServerErrors.createdAt, new Date(now.getTime() - API_ERROR_RETENTION_MS)),
+        notPlatformOrg(apiServerErrors.organizationRef),
+      ),
+    )
     .returning({ id: apiServerErrors.id });
   return { deleted: deleted.length };
 }

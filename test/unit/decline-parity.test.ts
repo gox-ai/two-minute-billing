@@ -58,9 +58,8 @@ describe("decline normalization parity across gateways", () => {
     for (const [gateway, fn] of Object.entries(NORMALIZERS)) {
       const n = fn("some_code_no_gateway_has_ever_sent");
       expect(n.retriable, `${gateway}: unknown must stay retriable`).toBe(true);
-      expect(n.code, `${gateway}: unknown keeps its raw name`).toBe(
-        "some_code_no_gateway_has_ever_sent",
-      );
+      // Never the raw value: a gateway sentence once landed in `error_code` that way.
+      expect(n.code, `${gateway}: unknown is charge_failed`).toBe("charge_failed");
     }
   });
 

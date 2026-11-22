@@ -196,6 +196,18 @@ export function EmptyFigure() {
   return <span className="text-lg font-normal text-muted-foreground">{EMPTY_FIGURE}</span>;
 }
 
+/*
+ * Tracks no narrower than the widest figure, so a long amount takes a wider tile instead of
+ * spilling out of it: four, two or one per row, never three. The clamp is a step: it holds a
+ * quarter while the figure fits one, and jumps to a half the moment it does not.
+ */
+const QUARTER = "calc(25% - 1.2rem)";
+const HALF = "calc(50% - 0.8rem)";
+const FIT_COLUMNS = {
+  "--fig-2": `repeat(auto-fit, minmax(min(100%, max(var(--fig-min), ${HALF})), 1fr))`,
+  "--fig-4": `repeat(auto-fit, minmax(min(100%, max(var(--fig-min), clamp(${QUARTER}, (var(--fig-min) - ${QUARTER}) * 1000 + ${QUARTER}, ${HALF}))), 1fr))`,
+};
+
 /** The figure row: four header-row cards, the business Home's KPI shape. */
 export function FigureTiles({
   children,
@@ -207,7 +219,7 @@ export function FigureTiles({
 }) {
   // Columns follow the page's own width (the window's md and xl, less the rail and padding:
   // 440px and 952px), so a docked panel gives the same layout as a narrower window.
-  // On a phone, two tiles share a row only where every figure fits whole (lib/figure-fit.ts).
+  // At any width, tiles share a row only where every figure fits whole (lib/figure-fit.ts).
   const min = figureTileMin(
     React.Children.toArray(children).map((c) =>
       React.isValidElement<{ value?: unknown }>(c) && c.type === FigureTile ? c.props.value : null,
@@ -216,12 +228,13 @@ export function FigureTiles({
   return (
     <div className="@container">
       <div
-        style={min ? ({ "--fig-min": min } as React.CSSProperties) : undefined}
+        style={min ? ({ "--fig-min": min, ...FIT_COLUMNS } as React.CSSProperties) : undefined}
         className={cn(
-          "grid grid-cols-1 gap-6 max-sm:gap-3 @[27.5rem]:grid-cols-2",
+          "grid grid-cols-1 gap-6 max-sm:gap-3",
+          min ? "@[27.5rem]:grid-cols-(--fig-2)" : "@[27.5rem]:grid-cols-2",
           min &&
             "max-sm:grid-cols-[repeat(auto-fit,minmax(max(var(--fig-min),calc(50%-0.375rem)),1fr))]",
-          cols === 4 && "@[59.5rem]:grid-cols-4",
+          cols === 4 && (min ? "@[59.5rem]:grid-cols-(--fig-4)" : "@[59.5rem]:grid-cols-4"),
         )}
       >
         {children}
@@ -237,7 +250,6 @@ export function FigureTile({
   tone,
   href,
   title,
-  icon: Icon,
   featured = false,
 }: {
   label: string;
@@ -247,9 +259,7 @@ export function FigureTile({
   href?: string;
   /** Full figure on hover, when `value` is shortened. */
   title?: string;
-  /** Leads the header row. */
-  icon?: React.ComponentType<{ className?: string }>;
-  /** The row's one ink card with a brand glow. Pass false while the figure is zero. */
+  /** The row's one ink card. Pass false while the figure is zero. */
   featured?: boolean;
 }) {
   const empty = value === EMPTY_FIGURE;
@@ -264,13 +274,8 @@ export function FigureTile({
         href && "hoverable group-hover:border-primary/40",
       )}
     >
+      {/* Words only: an icon repeated what the label says (decided 2026-11-17). */}
       <div className="flex items-center gap-2 border-b px-4 py-3 text-sm font-medium">
-        {Icon ? (
-          <Icon
-            aria-hidden
-            className={cn("size-4 shrink-0", feature ? "text-primary" : "text-foreground/70")}
-          />
-        ) : null}
         {/* Two tiles share a phone's row, so a long label wraps there instead of clipping. */}
         <span className="min-w-0 sm:truncate">{label}</span>
       </div>

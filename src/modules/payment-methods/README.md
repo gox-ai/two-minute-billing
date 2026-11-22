@@ -64,6 +64,10 @@ sweep. Collection falls back primary → backup on hard decline.
   `serializePaymentMethodWithGateway` so `gateway_account*` is populated too.
 
 ## Changelog
+- **2026-11-19** — `on-file-consent.ts`: the consent to keep a method for later charges
+  (version `on-file-2026-11-19`), stored in `payment_method_authorizations` through
+  `persistVaultedPaymentMethod({ onFileConsent })`.
+- **2026-11-17** — `PaymentMethodVaultError` names the gateway by its display name, never its key.
 - **2026-11-05** — The add-card call's `collect_open_invoices` is stored on the row
   (`payment_methods.collect_open_invoices`, 0502; null = the business rule; a re-vault that
   passes it overwrites it). `applyMandateStatus` reads it when a mandate goes live (webhook,
@@ -640,3 +644,10 @@ sweep. Collection falls back primary → backup on hard decline.
   A `us_bank_account` on such a gateway without it is refused (`AchAuthorizationRequiredError`)
   and removed at the gateway. The table is append-only by grant (SELECT, INSERT) and has no
   foreign key to the method or customer, so deleting them keeps the proof.
+- **2026-11-17** — `syncProviderCustomerBeforeCharge`: every charge (`chargeWithMethod`) pushes
+  the customer's name, email, phone and address to the gateway first when they changed after the
+  last push (`provider_customers.updated_at` is now the last-synced time). Best-effort; no call
+  when nothing changed. Cover: `verify:charge-customer-sync`.
+- **2026-11-17** — `payment_methods.mandate_failure_code` / `mandate_failure_text` (0538): why a
+  mandate died, from the gateway's event (GoCardless `details.cause`). Written by the webhook,
+  cleared when the mandate is live again; not in the API yet.

@@ -75,6 +75,7 @@ function CheckboxField({
   onCheckedChange,
   disabled,
   className,
+  ariaLabel,
 }: {
   name?: string;
   /** Submitted value while checked. Actions compare against 'on'. */
@@ -87,6 +88,8 @@ function CheckboxField({
   onCheckedChange?: (checked: boolean) => void;
   disabled?: boolean;
   className?: string;
+  /** Accessible name for a box with no visible label (a table cell: "Push for Payment failed"). */
+  ariaLabel?: string;
 }) {
   const id = React.useId();
   const [internal, setInternal] = useDefaultState(!!defaultChecked);
@@ -114,6 +117,7 @@ function CheckboxField({
         checked={on}
         onCheckedChange={handle}
         disabled={disabled}
+        aria-label={ariaLabel}
         className="mt-0.5"
       />
       {label || hint ? (

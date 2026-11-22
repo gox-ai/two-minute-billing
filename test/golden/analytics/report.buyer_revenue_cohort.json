@@ -1,0 +1,81 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "sales",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Buyers grouped by the month of their first order. Each cell is the order revenue of the group up to that month, divided by the number of buyers in it.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "headline": 1,
+  "key": "<id:1>",
+  "kind": "money",
+  "matrix": {
+    "base_kind": "count",
+    "columns": [
+      "M0",
+      "M1",
+      "M2",
+      "M3",
+      "M4",
+      "M5",
+      "M6",
+      "M7",
+      "M8",
+      "M9",
+      "M10",
+      "M11"
+    ],
+    "rows": [
+      {
+        "base": 1,
+        "group": "May 2026",
+        "values": [
+          12500,
+          12500,
+          12500,
+          12500,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      {
+        "base": 1,
+        "group": "Jun 2026",
+        "values": [
+          5000,
+          12500,
+          12500,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    ],
+    "value_kind": "money"
+  },
+  "name": "Revenue per Buyer Cohort",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "shape": "cohort",
+  "tags": [
+    "cohorts",
+    "customers"
+  ]
+}

@@ -8,8 +8,10 @@ import type {
 } from "@/lib/api";
 import type { Transaction } from "@/lib/api/payments";
 import { money } from "@/lib/format";
+import { paymentTriggerLabel } from "@/lib/payment-trigger";
 import { fmtDateTime } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { JourneyMarker, type MarkKind } from "@/components/patterns/journey-marker";
 
 /**
@@ -92,22 +94,7 @@ function inFlight(a: DunningJourneyAttempt): boolean {
 }
 
 function triggerLabel(a: DunningJourneyAttempt, retryNumber: number | null): string | null {
-  switch (a.trigger) {
-    case "billing_clock":
-      return retryNumber ? `Automatic retry ${retryNumber}` : "First charge";
-    case "dashboard":
-      return person(a.actor) ? `Manual collection by ${person(a.actor)}` : "Manual collection";
-    case "portal":
-      return "Paid by the customer in the portal";
-    case "new_payment_method":
-      return "Charged when the customer added a payment method";
-    case "offline":
-      return person(a.actor) ? `Recorded by ${person(a.actor)}` : "Recorded offline";
-    case "api":
-      return "Collected through the API";
-    default:
-      return null;
-  }
+  return paymentTriggerLabel(a, retryNumber);
 }
 
 function methodLabel(pm: DunningJourneyAttempt["payment_method"]): string | null {
@@ -157,9 +144,9 @@ function TxnLink({ biz, id }: { biz: string; id: string }) {
   return (
     <Link
       href={`/businesses/${biz}/transactions/${id}`}
-      className="font-mono text-xs text-primary hover:underline"
+      className="flex max-w-full min-w-0 text-primary hover:underline"
     >
-      {id}
+      <MiddleEllipsis value={id} className="text-xs" />
     </Link>
   );
 }
@@ -333,6 +320,13 @@ function StepRow({ s, tz }: { s: DunningJourneyStep; tz: string | null }) {
         <Row mark="next" title="Last attempt, at the end of the dunning period" when={when} muted />
       );
     case "hold":
+      if (s.reason === "parked_for_ops")
+        return (
+          <Row mark="next" title="Held for our team: no automatic charges" when={when} muted>
+            The payment gateway refused our request. We correct the problem, then collect the
+            payment. The final action does not run, and we send no reminders to the customer.
+          </Row>
+        );
       return (
         <Row
           mark="next"
@@ -373,6 +367,8 @@ function nextLines(projection: DunningJourneyStep[], tz: string | null): string[
       case "deadline_attempt":
         return `Last attempt: ${when}, at the end of the dunning period.`;
       case "hold":
+        if (s.reason === "parked_for_ops")
+          return "Held for our team: the payment gateway refused our request. The final action does not run.";
         return s.reason === "network_limit"
           ? `No more debits until ${fmtDateTime(s.until, tz)}: the payment network's retry limit is reached.`
           : `Held for the customer until ${fmtDateTime(s.until, tz)}. No automatic charges.`;

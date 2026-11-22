@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { buildApp } from "@/index";
-import { withTenant, closeDb } from "@/platform/db";
+import { withTenant, closeDb, systemDb } from "@/platform/db";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createGatewayAccount } from "@/modules/gateway/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
@@ -130,9 +130,10 @@ const plain = await newBusiness("Plain");
   const g = json(await getBiz(plain.biz.publicId));
   ok(
     "GET business: resolved portal_field_config with every key, defaults",
-    g.portal_field_config?.["billing.line1"] === "mandatory" &&
+    g.portal_field_config?.["billing.line1"] === "show" &&
+      g.portal_field_config?.["billing.postal_code"] === "mandatory" &&
       g.portal_field_config?.["customer.first_name"] === "mandatory" &&
-      g.portal_field_config?.["customer.phone"] === "mandatory" &&
+      g.portal_field_config?.["customer.phone"] === "show" &&
       g.portal_field_config?.["billing.line2"] === "show" &&
       Object.keys(g.portal_field_config ?? {}).length === 13,
     JSON.stringify(g.portal_field_config),
@@ -144,17 +145,15 @@ const plain = await newBusiness("Plain");
   );
 
   const tok = await checkoutToken(plain.biz.id, plain.price.publicId);
-  const noCity = await postCheckoutCustomer(tok, { line1: "1 Main St", country: "US" });
-  const det = JSON.stringify(json(noCity).error?.details ?? {});
+  const noZip = await postCheckoutCustomer(tok, { line1: "1 Main St", country: "US" });
+  const det = JSON.stringify(json(noZip).error?.details ?? {});
   ok(
-    "checkout defaults: city, state and ZIP still required for a US address",
-    noCity.statusCode === 400 &&
-      /City is required/.test(det) &&
-      /required for United States/.test(det),
-    show(noCity),
+    "checkout defaults: state and ZIP still required for a US address",
+    noZip.statusCode === 400 && /required for United States/.test(det),
+    show(noZip),
   );
-  const noLine1 = await postCheckoutCustomer(tok, { ...US, line1: "" });
-  ok("checkout defaults: line1 still required", noLine1.statusCode === 400, show(noLine1));
+  const noLine1 = await postCheckoutCustomer(tok, { ...US, line1: "", city: "" });
+  ok("checkout defaults: line1 and city are optional", noLine1.statusCode === 200, show(noLine1));
   const full = await postCheckoutCustomer(tok, { ...US, first_name: "Pat" });
   ok("checkout defaults: a complete address is accepted", full.statusCode === 200, show(full));
   ok(
@@ -164,16 +163,20 @@ const plain = await newBusiness("Plain");
   );
 }
 
-// ── B. `show` makes city optional on checkout ────────────────────────────────
+// ── B. `mandatory` makes city required on checkout ───────────────────────────
 {
   const r = await patchBiz(plain.biz.publicId, {
-    checkout_field_config: { "billing.city": "show" },
+    checkout_field_config: { "billing.city": "mandatory" },
   });
-  ok("PATCH: checkout billing.city → show accepted", r.statusCode === 200, show(r));
+  ok("PATCH: checkout billing.city → mandatory accepted", r.statusCode === 200, show(r));
   const tok = await checkoutToken(plain.biz.id, plain.price.publicId);
   const { city: _c, ...noCity } = US;
   const res = await postCheckoutCustomer(tok, noCity);
-  ok("checkout: optional city may be blank", res.statusCode === 200, show(res));
+  ok(
+    "checkout: a mandatory city cannot be blank",
+    res.statusCode === 400 && /City is required/.test(JSON.stringify(json(res).error ?? {})),
+    show(res),
+  );
   await setStored(plain.biz.id, { checkoutFieldConfig: null });
 }
 
@@ -216,6 +219,7 @@ const plain = await newBusiness("Plain");
   const base = {
     ...US,
     line1: "1 Old St",
+    line2: "Suite 9",
     first_name: "Pat",
     last_name: "Stored",
     phone: "+15125550100",
@@ -224,16 +228,22 @@ const plain = await newBusiness("Plain");
     req("PATCH", "/portal/v1/me", tok, { address });
 
   const noPhone = await patchMe({ ...base, phone: null });
-  ok("portal defaults: phone required", noPhone.statusCode === 400, show(noPhone));
+  ok("portal defaults: phone optional", noPhone.statusCode === 200, show(noPhone));
+  await setStored(plain.biz.id, {
+    portalFieldConfig: { "customer.phone": "mandatory", "billing.city": "mandatory" },
+  });
+  const phoneReq = await patchMe({ ...base, phone: null });
+  ok("portal: a mandatory phone is required", phoneReq.statusCode === 400, show(phoneReq));
   const noFirst = await patchMe({ ...base, first_name: null, company: "Acme" });
   ok("portal defaults: first name required", noFirst.statusCode === 400, show(noFirst));
   const noCity = await patchMe({ ...base, city: null });
-  ok("portal defaults: city required", noCity.statusCode === 400, show(noCity));
+  ok("portal: a mandatory city is required", noCity.statusCode === 400, show(noCity));
+  await setStored(plain.biz.id, { portalFieldConfig: null });
 
   const me = json(await req("GET", "/portal/v1/me", tok));
   ok(
     "portal payload carries field_config and address_field_locks",
-    me.field_config?.["billing.line1"] === "mandatory" && me.address_field_locks?.country === false,
+    me.field_config?.["billing.line1"] === "show" && me.address_field_locks?.country === false,
     JSON.stringify({ f: me.field_config, l: me.address_field_locks }),
   );
 
@@ -248,7 +258,7 @@ const plain = await newBusiness("Plain");
   ok(
     "PATCH response: resolved portal_field_config",
     json(r).portal_field_config?.["billing.line1"] === "read_only" &&
-      json(r).portal_field_config?.["billing.city"] === "mandatory",
+      json(r).portal_field_config?.["billing.city"] === "show",
     show(r),
   );
 
@@ -294,12 +304,119 @@ const plain = await newBusiness("Plain");
     me2.customer?.billing_details_complete === true,
     JSON.stringify(me2.customer),
   );
-  await setStored(plain.biz.id, { portalFieldConfig: null });
+  await setStored(plain.biz.id, { portalFieldConfig: { "billing.line1": "mandatory" } });
   const me3 = json(await req("GET", "/portal/v1/me", tok));
   ok(
     "portal: a required, empty line1 still blocks it",
-    me3.customer?.billing_details_complete === false,
+    me3.customer?.billing_details_complete === false &&
+      me3.customer?.billing_details_missing?.includes("line1"),
     JSON.stringify(me3.customer),
+  );
+  await setStored(plain.biz.id, { portalFieldConfig: null });
+  await withTenant(orgId, (tx) =>
+    tx.update(customers).set({ postalCode: null }).where(eq(customers.id, cus.id)),
+  );
+  const me4 = json(await req("GET", "/portal/v1/me", tok));
+  ok(
+    "portal defaults: a missing postal code blocks and is named",
+    me4.customer?.billing_details_complete === false &&
+      me4.customer?.billing_details_missing?.join() === "postal_code",
+    JSON.stringify(me4.customer),
+  );
+}
+
+// ── D2. A hidden city and state fill in from the postal code on save ─────────
+{
+  await systemDb.execute(sql`
+    INSERT INTO postal_codes (country, postal_code, place_name, admin1_name, state_code) VALUES
+      ('IN', '600001', 'Chennai', 'Tamil Nadu', 'TN'),
+      ('IN', '600002', 'Alpha', 'Tamil Nadu', 'TN'),
+      ('IN', '600002', 'Beta', 'Tamil Nadu', 'TN')
+    ON CONFLICT DO NOTHING`);
+  const hid = await newBusiness("Hidden place");
+  await setStored(hid.biz.id, {
+    portalFieldConfig: {
+      "billing.city": "hide",
+      "billing.state": "hide",
+      "billing.state_code": "hide",
+    },
+  });
+  const cus = await createCustomer({
+    organizationId: orgId,
+    businessId: hid.biz.id,
+    email: "hidden-place@example.com",
+    firstName: "Pat",
+  });
+  const tok = await portalToken(hid.biz.id, cus.id);
+  const r = await req("PATCH", "/portal/v1/me", tok, {
+    address: { country: "IN", postal_code: "600001", first_name: "Pat" },
+  });
+  ok("portal: save with hidden city and state succeeds", r.statusCode === 200, show(r));
+  const [row] = await withTenant(orgId, (tx) =>
+    tx.select().from(customers).where(eq(customers.id, cus.id)).limit(1),
+  );
+  ok(
+    "portal: hidden city and state fill from PIN 600001",
+    row?.city === "Chennai" && row?.stateCode === "TN" && row?.state === "Tamil Nadu",
+    `${row?.city}/${row?.stateCode}/${row?.state}`,
+  );
+  const keep = await createCustomer({
+    organizationId: orgId,
+    businessId: hid.biz.id,
+    email: "explicit-city@example.com",
+    address: { city: "Elsewhere", postalCode: "600001", country: "IN" },
+  });
+  ok(
+    "an explicit city is never overwritten; the empty state still fills",
+    keep.city === "Elsewhere" && keep.stateCode === "TN",
+    `${keep.city}/${keep.stateCode}`,
+  );
+  const many = await createCustomer({
+    organizationId: orgId,
+    businessId: hid.biz.id,
+    email: "two-places@example.com",
+    address: { postalCode: "600002", country: "IN" },
+  });
+  ok(
+    "several places for a code: the city stays empty, the state fills",
+    many.city === null && many.stateCode === "TN",
+    `${many.city}/${many.stateCode}`,
+  );
+  const typed = await createCustomer({
+    organizationId: orgId,
+    businessId: hid.biz.id,
+    email: "typed-state@example.com",
+    address: { postalCode: "600001", country: "IN", stateCode: "KA" },
+  });
+  ok("an explicit state is never overwritten", typed.stateCode === "KA", String(typed.stateCode));
+
+  // The PIN changes: the hidden city and state belong to the old code, so they follow the new one.
+  await systemDb.execute(sql`
+    INSERT INTO postal_codes (country, postal_code, place_name, admin1_name, state_code) VALUES
+      ('IN', '560001', 'Bengaluru', 'Karnataka', 'KA')
+    ON CONFLICT DO NOTHING`);
+  const moved = await req("PATCH", "/portal/v1/me", tok, {
+    address: { country: "IN", postal_code: "560001", first_name: "Pat", city: "Chennai" },
+  });
+  ok("portal: new PIN with hidden city and state saves", moved.statusCode === 200, show(moved));
+  const [after] = await withTenant(orgId, (tx) =>
+    tx.select().from(customers).where(eq(customers.id, cus.id)).limit(1),
+  );
+  ok(
+    "portal: hidden city and state follow a new PIN (560001 → Bengaluru, KA)",
+    after?.city === "Bengaluru" && after?.stateCode === "KA",
+    `${after?.city}/${after?.stateCode}`,
+  );
+  const same = await req("PATCH", "/portal/v1/me", tok, {
+    address: { country: "IN", postal_code: "560001", first_name: "Pat", line2: "Floor 2" },
+  });
+  const [kept] = await withTenant(orgId, (tx) =>
+    tx.select().from(customers).where(eq(customers.id, cus.id)).limit(1),
+  );
+  ok(
+    "portal: same PIN keeps the hidden city",
+    same.statusCode === 200 && kept?.city === "Bengaluru" && kept?.stateCode === "KA",
+    `${kept?.city}/${kept?.stateCode}`,
   );
 }
 

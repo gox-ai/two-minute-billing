@@ -4,6 +4,7 @@ import { listBusinesses, listProducts } from "@/lib/api";
 import { listOfferedReasons } from "@/lib/api/reason-codes";
 import { getCancellationAnalytics } from "@/lib/api/cancellation-analytics";
 import { requirePermission } from "@/lib/session";
+import { modelEmptyState } from "@/components/reports/model-empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Block, Grid, Stack } from "@/components/analytics/layout";
 import { RecordCard, Row } from "@/components/patterns/record-page";
@@ -60,6 +61,8 @@ export default async function CancellationsPage({
 }) {
   await requirePermission("reports:view", "ops");
   const [{ biz }, search] = await Promise.all([params, searchParams]);
+  const empty = await modelEmptyState(biz, "subscriptions", "Cancellations");
+  if (empty) return empty;
 
   const range = one(search.range) || DEFAULT_RANGE;
   const planParam = one(search.plan);

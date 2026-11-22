@@ -32,8 +32,93 @@ import { pauseCopy } from "./portal-change-view";
 
 type Actions = NonNullable<PortalSubscription["actions"]>;
 
+/** What Keep commits the buyer to: the renewal date, its amount, and how it is collected. */
+function keepDescription(
+  renewsOn: string | null,
+  payment: { amount_due_minor: number; currency: string } | null,
+  canCharge: boolean,
+): string {
+  const amount = payment ? money(payment.amount_due_minor, payment.currency) : null;
+  if (!renewsOn)
+    return canCharge
+      ? "Your subscription continues and renews as usual."
+      : "Your subscription continues and renews as usual. Add a payment method so that we can collect your payments.";
+  if (canCharge)
+    return amount
+      ? `Your subscription continues. It renews on ${renewsOn}, and we charge you ${amount} on that date.`
+      : `Your subscription continues. It renews on ${renewsOn}, and we charge you on that date.`;
+  return amount
+    ? `Your subscription continues. It renews on ${renewsOn} for ${amount}. Add a payment method before that date so that we can collect it.`
+    : `Your subscription continues. It renews on ${renewsOn}. Add a payment method before that date so that we can collect the payment.`;
+}
+
 /**
- * Cancel, pause, resume and keep (undo a scheduled cancel) on the buyer's own subscription.
+ * Keep (undo a scheduled cancel): the "will not renew" sentence with a filled button beside it.
+ * PlanCard renders it in place of the bare sentence when the engine offers `reactivate`.
+ */
+export function PortalKeepSubscription({
+  subscription,
+  sentence,
+  periodEndLabel,
+  payment,
+  canCharge,
+}: {
+  subscription: string;
+  sentence: React.ReactNode;
+  /** The date the subscription ends, in the business timezone, or null. */
+  periodEndLabel: string | null;
+  /** The renewal Keep restores, priced by the engine; null when it cannot be priced. */
+  payment: { amount_due_minor: number; currency: string } | null;
+  /** A saved payment method we can charge. Without one, the dialog cannot promise a charge. */
+  canCharge: boolean;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="flex-[1_1_14rem] text-sm text-muted-foreground">{sentence}</p>
+        <Button
+          size="sm"
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+        >
+          Keep subscription
+        </Button>
+      </div>
+      {error && !open ? <Alert tone="error">{error}</Alert> : null}
+      {open ? (
+        <ConfirmDialog
+          brand
+          open
+          onOpenChange={(o) => {
+            if (!o) setOpen(false);
+          }}
+          title="Keep your subscription?"
+          description={keepDescription(periodEndLabel, payment, canCharge)}
+          confirmLabel="Keep subscription"
+          cancelLabel="Go back"
+          onConfirm={async () => {
+            const res = await portalSubscriptionLifecycleAction(subscription, "reactivate");
+            if (!res.ok) setError(res.error ?? null);
+            else {
+              toast.success("Subscription kept.");
+              router.refresh();
+            }
+            setOpen(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Cancel, pause and resume on the buyer's own subscription. Keep is `PortalKeepSubscription`.
  * Each link renders only when the engine says the business offers it AND the subscription's
  * state allows it. Refreshes after each action: status and dates are the server's.
  */
@@ -53,7 +138,7 @@ export function PortalLifecycle({
   const router = useRouter();
   const [confirming, setConfirming] = React.useState<Exclude<
     PortalLifecycleAction,
-    "cancel"
+    "cancel" | "reactivate"
   > | null>(null);
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -64,7 +149,7 @@ export function PortalLifecycle({
   }, [actions.cancel, params, subscription]);
 
   const cancel = actions.cancel;
-  if (!cancel && !actions.pause && !actions.resume && !actions.reactivate) return null;
+  if (!cancel && !actions.pause && !actions.resume) return null;
 
   async function run(action: PortalLifecycleAction, reasonCode?: string) {
     setError(null);
@@ -73,28 +158,20 @@ export function PortalLifecycle({
       setError(res.error ?? null);
       return false;
     }
+    if (action === "pause") toast.success("Subscription paused.");
+    else if (action === "resume") toast.success("Subscription resumed.");
     router.refresh();
     return true;
   }
 
   const until = periodEndLabel ? ` until ${periodEndLabel}` : " until the end of this period";
-  const confirmCopy: Record<
-    "resume" | "reactivate",
-    { title: string; description: string; label: string }
-  > = {
+  const confirmCopy: Record<"resume", { title: string; description: string; label: string }> = {
     resume: {
       title: "Resume your subscription?",
       description: resumeStartsNewPeriod
         ? "Charges for your plan start again. We charge you today for the new period."
         : "Charges for your plan start again at your next renewal.",
       label: "Resume subscription",
-    },
-    reactivate: {
-      title: "Keep your subscription?",
-      description: periodEndLabel
-        ? `Your subscription continues. It renews on ${periodEndLabel} and we charge you on that date.`
-        : "Your subscription continues and renews as usual.",
-      label: "Keep subscription",
     },
   };
 
@@ -103,11 +180,6 @@ export function PortalLifecycle({
   return (
     <div className="border-t px-5 py-3">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {actions.reactivate ? (
-          <button type="button" className={link} onClick={() => setConfirming("reactivate")}>
-            Keep my subscription
-          </button>
-        ) : null}
         {actions.resume ? (
           <button type="button" className={link} onClick={() => setConfirming("resume")}>
             Resume subscription
@@ -342,7 +414,7 @@ function CancelFlowDialog({
             </div>
           ) : null}
           {step === "offers" && flow ? (
-            <div className="flex flex-col divide-y rounded-xl border bg-card">
+            <div className="sf-offers flex flex-col divide-y rounded-xl border bg-card">
               {flow.offers.map((o) => (
                 <div
                   key={o.offer}

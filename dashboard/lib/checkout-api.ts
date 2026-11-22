@@ -7,6 +7,7 @@
 import type { RazorpayCheckoutDescriptor } from "./razorpay-checkout";
 import type { FormPostDescriptor, GatewaySdkDescriptor } from "./gateway-sdk";
 import { forwardedFor } from "./forwarded-for";
+import { storefrontErrorText } from "./storefront-error";
 
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
@@ -127,6 +128,10 @@ export interface CheckoutChangePreview {
    *  priced by a DIFFERENT calculator (`estimateNewSubscription`); `verify:checkout` asserts
    *  the two agree rather than merging them — see the field's note in checkout/service.ts. */
   nextRenewalTotalMinor?: number;
+  /** Reactivation only: coupon discount on the fresh term's invoice (its lines are gross). */
+  couponDiscountMinor?: number;
+  /** The same discount, one row per coupon, named as the invoice names it. */
+  couponDiscountLines?: Array<{ label: string; amountMinor: number }>;
   /** When that renewal is raised (ISO), and what it collects after this change's credit. */
   nextRenewalAt?: string;
   nextRenewalAmountDueMinor?: number;
@@ -230,6 +235,7 @@ export interface CheckoutView {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    button_text_color?: string | null;
     /** The merchant's contact details, for the footer. Null when unset. */
     support_email?: string | null;
     website?: string | null;
@@ -410,6 +416,7 @@ export interface CheckoutCustomer {
   email: string | null;
   name: string | null;
   billing_details_complete: boolean;
+  billing_details_missing?: string[];
 }
 
 export const checkoutListPaymentMethods = (token: string) =>
@@ -649,27 +656,10 @@ async function checkoutFetch<T>(
     /* no body */
   }
   if (res.ok) return { ok: true, status: res.status, data: json as T };
-  /**
-   * Fold `details` into the message.
-   *
-   * A zod rejection puts the field-level reasons in `error.details` (see `badRequest` in
-   * src/api/helpers.ts). Its `message` carries them too now, but this predates that and
-   * reads `details` so each reason keeps its field name. On a PUBLIC checkout there is no
-   * operator to ask, so the page has to say which field it means.
-   *
-   * Field name included, because "is not a valid state code for India" is only
-   * actionable if you know it is talking about the state and not the country.
-   */
-  const payload = (
-    json as
-      | { error?: { message?: string; details?: Record<string, string[] | undefined> } }
-      | undefined
-  )?.error;
-  const fieldErrors = Object.entries(payload?.details ?? {}).flatMap(([field, msgs]) =>
-    (msgs ?? []).map((m) => `${field}: ${m}`),
-  );
-  const error = fieldErrors.length ? fieldErrors.join("; ") : (payload?.message ?? res.statusText);
-  return { ok: false, status: res.status, error, payload: json };
+  // Each field reason under its form label ("Shipping address: …"), never the request key:
+  // on a public checkout there is no operator to ask which field a reason means.
+  const error = storefrontErrorText(res.status, json, true);
+  return { ok: false, status: res.status, ...(error ? { error } : {}), payload: json };
 }
 
 export const checkoutSession = (token: string) =>
@@ -975,6 +965,7 @@ export interface PricingPage {
     icon_url?: string | null;
     favicon_url?: string | null;
     brand_color: string | null;
+    button_text_color?: string | null;
     support_email?: string | null;
     website?: string | null;
   };

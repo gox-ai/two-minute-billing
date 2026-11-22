@@ -1,107 +1,14 @@
 import type { LineRating } from "@/modules/metering/rating";
 import { divHalfUp, FIXED12_SCALE, parseFixed12 } from "@/platform/fixed";
-import path from "node:path";
-import PDFDocument from "pdfkit";
 import type { InvoiceDocument } from "./document";
 import { formatMoney, formatDateInTz, formatDateTimeInTz, lineFigures } from "./document";
-import { createLogger } from "@/platform/logger";
-import { guardedFetch } from "@/platform/egress";
-
-const log = createLogger("invoicing.pdf");
-
-// pdfkit's built-in Helvetica is WinAnsi-only and can't render currency glyphs like ₹
-// (U+20B9), so a face has to be bundled and embedded as 'Body'/'Bold'.
-//
-// NOTO SANS, not DejaVu. DejaVu is ~11% wider and heavier in bold, which made a dense
-// invoice read as shouty and pushed long public ids onto a second line; a narrower
-// humanist face suits the document. '₹1,234.00' at 10pt measures 45.4pt here against
-// DejaVu's 50.9pt.
-//
-// ⚠️ THE FACE MUST CARRY U+20B9. Liberation Sans was tried first — it is Arial-metric and
-// looked right — and it renders the rupee sign as an EMPTY BOX. `widthOfString` does not
-// catch that: a missing glyph still advances, so the string measured fine and only a
-// rendered page showed the tofu. Check the charset (`fc-query --format='%{charset}'`)
-// before swapping this, never the metrics. Bundled under SIL OFL 1.1.
-const FONT_DIR = path.join(import.meta.dirname, "assets");
-const FONT_REGULAR = path.join(FONT_DIR, "NotoSans-Regular.ttf");
-const FONT_BOLD = path.join(FONT_DIR, "NotoSans-Bold.ttf");
-
-/**
- * The logo box the masthead draws into, in points. Rasterisation targets 3× this so the
- * mark stays crisp when the PDF is zoomed or printed.
- */
-const LOGO_BOX = { width: 170, height: 48 } as const;
-
-/**
- * One refusal, one log line, one remedy. Returns null so the renderer falls back.
- *
- * The message names the FIX and not just the fact: a merchant reading a support ticket
- * about a missing letterhead needs to know the logo must be re-uploaded as a PNG, which is
- * a different action from "the URL is broken".
- */
-function unembeddable(url: string, contentType: string): null {
-  log.warn("invoice image is not a format the PDF can embed — no letterhead on this document", {
-    url: url.slice(0, 200),
-    contentType,
-    embeddable: "PNG or JPEG",
-    remedy: "upload a PNG or JPEG on Settings → Brand styles",
-  });
-  return null;
-}
-
-/**
- * Best-effort logo loader. pdfkit embeds **PNG and JPEG only**, and that is now the whole
- * list — an SVG is refused rather than converted.
- *
- * ── Why SVG is refused, when it used to be rasterised ───────────────────────
- * It was rasterised through `sharp` precisely because SVG is what merchants uploaded and a
- * dropped logo was silent. That reason is gone: as of 2026-09-09 there is an upload path
- * (`platform/object-store.ts`) that only ever stores PNG/JPEG for a logo or signature, so
- * a merchant has a supported way in. Accepting SVG on the READ side kept a format the org
- * standard rejects (SR-2026-015 — an XML document that can carry script) alive in the one
- * place it was still reachable, and kept `sharp`, a native module, on the invoice path.
- *
- * The cost is named rather than hidden: a business whose `logo_url` still points at an SVG
- * gets **no letterhead** until it uploads a PNG or JPEG, and the warning below says exactly
- * that so the fix is legible from the log alone.
- *
- * Still accepts a `data:` URI as well as an http(s) URL (short timeout), because rows
- * written before the fields were scheme-restricted may hold one. Returns null on anything
- * it cannot draw, so the renderer falls back to the icon and then to the seller name.
- * Never throws.
- */
-async function loadLogo(url: string | null): Promise<Buffer | null> {
-  if (!url) return null;
-  try {
-    if (url.startsWith("data:")) {
-      if (/image\/svg/i.test(url.slice(0, 40))) return unembeddable(url, "image/svg+xml");
-      const b64 = url.split(",")[1];
-      if (!b64) return null;
-      return Buffer.from(b64, "base64");
-    }
-    // Operator-typed URL: no private targets, no redirects (platform/egress.ts).
-    const res = await guardedFetch(url, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) {
-      await res.body?.cancel().catch(() => {});
-      return null;
-    }
-    const ct = res.headers.get("content-type") ?? "";
-    if (!/png|jpe?g/i.test(ct)) {
-      await res.body?.cancel().catch(() => {});
-      return unembeddable(url, ct);
-    }
-    return Buffer.from(await res.arrayBuffer());
-  } catch (e) {
-    // A missing logo prints the seller's name instead — the invoice is still valid,
-    // so this is never fatal, but a business whose logo silently stopped rendering
-    // deserves a line explaining why.
-    log.warn("invoice image could not be loaded", {
-      url: url.slice(0, 200),
-      error: (e as Error)?.message,
-    });
-    return null;
-  }
-}
+import {
+  contactLine,
+  drawFooterBand,
+  drawMasthead,
+  loadMasthead,
+  openDocumentPdf,
+} from "./pdf-branding";
 
 /**
  * Status → (label, colour) for the coloured status line under the meta block.
@@ -174,21 +81,8 @@ export async function renderInvoicePdf(
   doc: InvoiceDocument,
   labels: DocumentLabels = INVOICE_LABELS,
 ): Promise<Buffer> {
-  // The wordmark first, then the square icon: a mark the customer recognises beats no
-  // mark. Both go through the same PNG/JPEG gate, so an SVG icon falls through to the
-  // seller's name exactly as before.
-  const logo = (await loadLogo(doc.seller.logoUrl)) ?? (await loadLogo(doc.seller.iconUrl));
-
-  // compress:false keeps content streams human-inspectable (support/debugging).
-  const pdf = new PDFDocument({ size: "A4", margin: 40, compress: false });
-  pdf.registerFont("Body", FONT_REGULAR);
-  pdf.registerFont("Bold", FONT_BOLD);
-  const chunks: Buffer[] = [];
-  pdf.on("data", (c: Buffer) => chunks.push(c));
-  const done = new Promise<Buffer>((resolve, reject) => {
-    pdf.on("end", () => resolve(Buffer.concat(chunks)));
-    pdf.on("error", reject);
-  });
+  const logo = await loadMasthead(doc.seller.logoUrl, doc.seller.iconUrl);
+  const { pdf, done } = openDocumentPdf();
 
   const cur = doc.totals.currency;
   const tz = doc.seller.timezone;
@@ -205,23 +99,7 @@ export async function renderInvoicePdf(
 
   // ── Header: logo (or seller name) left · INVOICE right ────────────────────
   const top = pdf.y;
-  // The masthead is the logo, or the seller's name set like one. A NULL logoUrl used to
-  // draw nothing at all here, so the page opened with a lone right-aligned "INVOICE" and
-  // the seller first appeared halfway down. The document opens with the merchant.
-  let drewMasthead = false;
-  if (logo) {
-    try {
-      pdf.image(logo, left, top, { fit: [LOGO_BOX.width, LOGO_BOX.height] });
-      drewMasthead = true;
-    } catch (e) {
-      log.warn("invoice logo could not be rendered — falling back to the seller name", {
-        error: (e as Error)?.message,
-      });
-    }
-  }
-  // No 16pt fallback heading: the masthead is the LOGO alone, with the seller's name set
-  // at body size in the block beneath. A big name here wrapped onto two lines and shouted
-  // over the document.
+  drawMasthead(pdf, logo, left, top);
   pdf
     .font("Bold")
     .fontSize(20)
@@ -422,13 +300,42 @@ export async function renderInvoicePdf(
    * ⚠️ This DOES change the layout of every existing invoice, deliberately: the data was
    * in `chargeLines` all along (`quantity`, `unitAmountMinor`) and simply never printed.
    */
-  const amountColW = contentW * 0.2;
+  // A figure column is at least as wide as its widest figure: pdfkit breaks an
+  // over-wide run mid-number. The description column gives up the room.
+  const fitCol = (base: number, font: "Body" | "Bold", size: number, values: string[]) => {
+    pdf.font(font).fontSize(size);
+    return Math.max(base, ...values.map((v) => pdf.widthOfString(v) + 10));
+  };
+  const figures = doc.chargeLines.map((l) => lineFigures(l, cur));
+  const amountColW = fitCol(
+    contentW * 0.2,
+    "Bold",
+    9.5,
+    doc.chargeLines.map((l) => money(l.amountMinor - l.itemLevelDiscountMinor)),
+  );
   const amountX = right - amountColW;
-  const discColW = anyLineDiscount ? contentW * 0.17 : 0;
+  const discColW = anyLineDiscount
+    ? fitCol(
+        contentW * 0.17,
+        "Body",
+        10,
+        doc.chargeLines.map((l) => money(-l.discountMinor)),
+      )
+    : 0;
   const discX = amountX - discColW;
-  const unitPriceColW = contentW * 0.17;
+  const unitPriceColW = fitCol(
+    contentW * 0.17,
+    "Body",
+    9.5,
+    figures.map((f) => f.unitPrice),
+  );
   const unitPriceX = discX - unitPriceColW;
-  const unitsColW = contentW * 0.08;
+  const unitsColW = fitCol(
+    contentW * 0.08,
+    "Body",
+    9.5,
+    figures.map((f) => f.quantity),
+  );
   const unitsX = unitPriceX - unitsColW;
   const sacColW = anyTaxCode ? contentW * 0.12 : 0;
   const sacX = unitsX - sacColW;
@@ -608,7 +515,16 @@ export async function renderInvoicePdf(
    *  · "(CUR)" set smaller than the words beside it
    */
   const amountColRight = right;
-  const labelRight = amountX - 12;
+  // Sized for the widest figure at its own size (Amount Due is set at 13pt).
+  const sumColW = Math.max(
+    amountColW,
+    ...sumRows.map((r) => {
+      pdf.font(r.bold || r.big ? "Bold" : "Body").fontSize(r.big ? 13 : r.bold ? 10 : 9);
+      return pdf.widthOfString(money(r.value)) + 4;
+    }),
+  );
+  const sumX = right - sumColW;
+  const labelRight = sumX - 12;
   const labelLeft = left + contentW * 0.3;
   if (y + sumRows.length * 17 + 26 > bottomLimit()) {
     pdf.addPage();
@@ -666,7 +582,7 @@ export async function renderInvoicePdf(
       .font(r.bold || r.big ? "Bold" : "Body")
       .fontSize(size)
       .fillColor(ink);
-    pdf.text(money(r.value), amountX, y, { width: amountColW, align: "right" });
+    pdf.text(money(r.value), sumX, y, { width: sumColW, align: "right" });
     y += (r.big ? 20 : 16) + Math.max(0, extraLines);
     if (r.big) {
       pdf
@@ -846,7 +762,7 @@ export async function renderInvoicePdf(
     }
   }
 
-  const contact = [doc.seller.supportEmail, doc.seller.website].filter(Boolean).join("   ·   ");
+  const contact = contactLine(doc.seller.supportEmail, doc.seller.website);
   if (doc.meta.notes) {
     pdf
       .font("Body")
@@ -897,78 +813,8 @@ export async function renderInvoicePdf(
     }
   }
 
-  /**
-   * ── Footer band: signature in a bottom CORNER, contact centred beneath it ──
-   *
-   * Both are PINNED to the foot of the page rather than following the content flow. A
-   * signature that trails the last line signs itself halfway up a short invoice, which is
-   * not where a signature belongs on a printed document — and it is what the merchant
-   * asked for: "extreme bottom right".
-   *
-   * The band is measured first, then the flow is checked against it: if the line items
-   * already reach into the band, the whole band moves to a fresh page rather than being
-   * drawn over them. That check is why the signature is drawn LAST — it needs to know
-   * where the content actually ended.
-   */
-  const pageFloor = () => pdf.page.height - pdf.page.margins.bottom;
-  const contactH = contact ? 14 : 0;
-
-  let sigImage: Buffer | null = null;
-  if (doc.signature?.imageUrl) sigImage = await loadLogo(doc.signature.imageUrl);
-
-  const sigW = contentW * 0.34;
-  const sigImageH = sigImage ? 38 : 0;
-  const capH = doc.signature?.caption
-    ? pdf.font("Body").fontSize(8.5).heightOfString(doc.signature.caption, { width: sigW })
-    : 0;
-  const sigBlockH = doc.signature ? sigImageH + (sigImageH && capH ? 4 : 0) + capH : 0;
-  // 10pt of air between the last content line and the band, and between band and footer.
-  const bandH = sigBlockH + (sigBlockH ? 10 : 0) + contactH;
-
-  if (bandH > 0 && pdf.y + 10 > pageFloor() - bandH) {
-    pdf.addPage();
-  }
-
-  if (doc.signature) {
-    // The corner. `bottom_left` and `bottom_right` differ only in this x and the text
-    // alignment, which is the whole reason the setting is one enum rather than a layout.
-    const sigX = doc.signature.position === "bottom_left" ? left : right - sigW;
-    const align = doc.signature.position === "bottom_left" ? "left" : "right";
-    // The same 10pt gap `bandH` reserved above, applied here: without it the caption sat
-    // 2pt off the contact line and the two read as one smudged block.
-    let sigY = pageFloor() - contactH - 10 - sigBlockH;
-    if (sigImage) {
-      try {
-        // pdfkit's image `align` takes only 'center' | 'right'; left IS the default, so
-        // it is expressed by omitting the option rather than by naming it.
-        pdf.image(sigImage, sigX, sigY, {
-          fit: [sigW, sigImageH],
-          ...(align === "right" ? { align: "right" as const } : {}),
-        });
-        sigY += sigImageH + 4;
-      } catch (e) {
-        // A signature image that will not embed must not take the caption down with it.
-        log.warn("invoice signature image could not be rendered — printing the caption only", {
-          error: (e as Error)?.message,
-        });
-      }
-    }
-    if (doc.signature.caption) {
-      pdf
-        .font("Body")
-        .fontSize(8.5)
-        .fillColor("#444444")
-        .text(doc.signature.caption, sigX, sigY, { width: sigW, align });
-    }
-  }
-
-  if (contact) {
-    pdf
-      .font("Body")
-      .fontSize(8.5)
-      .fillColor("#999999")
-      .text(contact, left, pageFloor() - contactH + 2, { width: contentW, align: "center" });
-  }
+  // Signature + contact, pinned to the foot of the last page (pdf-branding.ts).
+  await drawFooterBand(pdf, { signature: doc.signature, contact });
 
   pdf.end();
   return done;

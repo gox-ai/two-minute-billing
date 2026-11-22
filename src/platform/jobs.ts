@@ -26,6 +26,9 @@ import { sweepRateLimitCounters } from "@/platform/rate-limit";
 import { sweepLoginAttempts, sweepPasswordResetTokens } from "@/modules/auth/service";
 import { sweepHttpStats } from "@/modules/ops/http-stats";
 import { sweepBuyerRejections } from "@/modules/ops/buyer-rejections";
+import { sweepBuyerClientErrors } from "@/modules/ops/buyer-client-errors";
+import { sweepStorefrontVisits } from "@/modules/storefront-analytics/retention";
+import { sweepEmailEngagement } from "@/modules/emails/engagement-retention";
 import { sweepApiServerErrors } from "@/modules/ops/api-errors";
 import { runRemindersPass } from "@/modules/subscriptions/reminders";
 import { sendCheckoutReminders } from "@/modules/checkout/reminders";
@@ -37,6 +40,8 @@ import { deliverPendingIntegrations } from "@/modules/integrations/outbox";
 // Side-effect: registers the receipt sink in the worker process.
 import "@/modules/receipts/sink";
 import "@/modules/usage-controls/sink";
+// Side-effect: registers the operator-notifications sink in the worker process.
+import "@/modules/notifications/sink";
 import { sweepStalePendingCharges } from "@/modules/payments/stale-pending";
 import { sweepOrphanedIntents } from "@/modules/payments/orphaned-intents";
 import { recheckPausedMandates } from "@/modules/payment-methods/paused-mandates";
@@ -766,7 +771,18 @@ export async function runBillingClockTickOnce(
         );
         await runPass(
           "sweep_buyer_rejections",
-          () => sweepBuyerRejections(now),
+          // The buyer-surface tables: refused requests, reported errors, analytics visits.
+          async () => {
+            const [refused, shown, visits, engagement] = await Promise.all([
+              sweepBuyerRejections(now),
+              sweepBuyerClientErrors(now),
+              sweepStorefrontVisits(now),
+              sweepEmailEngagement(now),
+            ]);
+            return {
+              deleted: refused.deleted + shown.deleted + visits.deleted + engagement.deleted,
+            };
+          },
           (r) => ({ deleted: r.deleted }),
         );
         await runPass(
@@ -1021,7 +1037,9 @@ const tasks: Record<string, Task> = {
   process_gateway_webhook: async (payload, helpers) => {
     const { processStoredGatewayWebhook } = await import("@/modules/gateway/inbound");
     // graphile counts this run in `attempts` before it starts; the last run marks the rows.
-    await runWithEventContext({ source: "system", actor: null }, () =>
+    // Same provenance as the inline path: a gateway notification, actor = the gateway key.
+    const gateway = (payload as StoredDeliveryJob).gatewayKey;
+    await runWithEventContext({ source: "webhook", actor: gateway ?? null }, () =>
       processStoredGatewayWebhook(payload as StoredDeliveryJob, {
         attempts: helpers.job.attempts,
         maxAttempts: helpers.job.max_attempts,
@@ -1228,6 +1246,82 @@ const tasks: Record<string, Task> = {
         });
       }
     });
+  },
+
+  /**
+   * Operator notifications (`modules/notifications`). The fan-out turns queued facts into bell
+   * rows and deliveries; the delivery drain is egress, on its own queue. Each wakes the drain
+   * when it made something to send.
+   */
+  notification_queue_nudge: async () => {
+    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
+    const excludeBusinessIds = await timeTravelledBusinessIds();
+    const { runWithClockScope } = await import("@/platform/clock");
+    const { fanOutPending } = await import("@/modules/notifications/fanout");
+    const r = await runWithClockScope({ excludeBusinessIds }, () => fanOutPending(new Date()));
+    if (r.claimed > 0)
+      log.info("notification queue nudged", { event: "notification_fanout", ...r });
+    if (r.deliveries > 0) await nudgeNotificationDeliveries();
+  },
+
+  notification_delivery_nudge: async () => {
+    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
+    const excludeBusinessIds = await timeTravelledBusinessIds();
+    const { runWithClockScope } = await import("@/platform/clock");
+    const { deliverPendingNotifications } = await import("@/modules/notifications/deliver");
+    const r = await runWithClockScope({ excludeBusinessIds }, () =>
+      deliverPendingNotifications(new Date()),
+    );
+    if (r.attempted > 0 || r.released > 0)
+      log.info("notification deliveries nudged", { event: "notification_delivery", ...r });
+  },
+
+  /** Close 5-minute burst windows; each closed group with more than one event sends "N more". */
+  notification_groups_close: async () => {
+    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
+    const excludeBusinessIds = await timeTravelledBusinessIds();
+    const { runWithClockScope } = await import("@/platform/clock");
+    const { closeDueGroups } = await import("@/modules/notifications/groups");
+    const r = await runWithClockScope({ excludeBusinessIds }, () => closeDueGroups(new Date()));
+    if (r.deliveries > 0) await nudgeNotificationDeliveries();
+  },
+
+  /** Hourly: evidence due, overdue, large renewal, webhook failing. The cron's hour, so `fill` works. */
+  notification_clock: async (payload) => {
+    const ts = (payload as { _cron?: { ts?: string } } | null)?._cron?.ts;
+    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
+    const { runNotificationClocks } = await import("@/modules/notifications/clocks");
+    const r = await runNotificationClocks(ts ? new Date(ts) : new Date(), {
+      excludeBusinessIds: await timeTravelledBusinessIds(),
+    });
+    if (r.enqueued > 0) log.info("notification clock ran", { event: "notification_clock", ...r });
+  },
+
+  /** Hourly: build summaries for ended local days, then send to whoever's summary hour it is. */
+  notification_digest: async (payload) => {
+    const ts = (payload as { _cron?: { ts?: string } } | null)?._cron?.ts;
+    const at = ts ? new Date(ts) : new Date();
+    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
+    const { runDigestBuilder, runDigestSender } = await import("@/modules/notifications/digest");
+    const scope = { excludeBusinessIds: await timeTravelledBusinessIds() };
+    const built = await runDigestBuilder(at, scope);
+    const sent = await runDigestSender(at, scope);
+    if (built.built > 0 || sent.deliveries > 0)
+      log.info("notification summaries", { event: "notification_digest", ...built, ...sent });
+    if (sent.deliveries > 0) await nudgeNotificationDeliveries();
+  },
+
+  /** Once, from migration 0534: tell owners and admins that team alerts became notifications. */
+  notifications_team_alerts_notice: async () => {
+    const { runTeamAlertsNotice } = await import("@/modules/notifications/notice");
+    const r = await runTeamAlertsNotice(new Date());
+    log.info("team alerts notice ran", { event: "notifications_team_alerts_notice", ...r });
+  },
+
+  notification_retention: async () => {
+    const { sweepNotifications } = await import("@/modules/notifications/retention");
+    const r = await sweepNotifications(new Date());
+    log.info("notification retention swept", { event: "notification_retention", ...r });
   },
 
   webhook_outbox_nudge: async () => {
@@ -1487,21 +1581,6 @@ const tasks: Record<string, Task> = {
     else log.info("model price sync ran", { event: "model_prices_sync", ...r });
   },
 
-  /**
-   * Team alerts (team-alerts/fanout.ts): one `team_alert_send` per opted-in business and kind.
-   * The hour comes from the cron's own timestamp, so a backfilled run covers its own hour.
-   */
-  team_alerts_hourly: async (payload) => {
-    const ts = (payload as { _cron?: { ts?: string } } | null)?._cron?.ts;
-    const { timeTravelledBusinessIds } = await import("@/modules/time-travel/service");
-    const { runTeamAlertsFanout } = await import("@/modules/team-alerts/fanout");
-    const r = await runTeamAlertsFanout(ts ? new Date(ts) : new Date(), enqueue, {
-      excludeBusinessIds: await timeTravelledBusinessIds(),
-    });
-    if (r.enqueued > 0) log.info("team alerts queued", { event: "team_alerts_queued", ...r });
-  },
-
-  /** One team alert mail. Retried by the queue when the mailer refuses (max 6). */
   /** The portal sign-in code email, queued so the request's timing reveals nothing. */
   portal_sign_in_code_send: async (payload) => {
     const p = payload as import("@/modules/customer-portal/login-code").SignInCodeJob | null;
@@ -1543,24 +1622,6 @@ const tasks: Record<string, Task> = {
     await sendAccessRequestNotice(p, {
       attempts: helpers.job.attempts,
       maxAttempts: helpers.job.max_attempts,
-    });
-  },
-
-  team_alert_send: async (payload) => {
-    const p = payload as {
-      organizationId?: string;
-      businessId?: string;
-      kind?: "overdue" | "webhook_failures" | "daily_digest";
-      hour?: string;
-    } | null;
-    if (!p?.organizationId || !p.businessId || !p.kind || !p.hour)
-      throw new Error("team_alert_send: payload needs organizationId, businessId, kind, hour");
-    const { sendTeamAlert } = await import("@/modules/team-alerts/service");
-    await sendTeamAlert({
-      organizationId: p.organizationId,
-      businessId: p.businessId,
-      kind: p.kind,
-      hour: new Date(p.hour),
     });
   },
 
@@ -1676,6 +1737,7 @@ const REPORT_TASKS = new Set([
   "metric_daily_drift_scan",
   "metric_daily_recompute",
   "retention_sweep",
+  "notification_retention",
   "fx_refresh_rates",
   "geo_upstream_check",
   "model_prices_sync",
@@ -1727,6 +1789,15 @@ const BILLING_CRONTAB: string[] = [
   "* * * * * email_outbox_nudge ?max=1&queue=egress_email&jobKey=email_outbox_nudge",
   "* * * * * webhook_outbox_nudge ?max=1&queue=egress_webhook&jobKey=webhook_outbox_nudge",
   "* * * * * integration_outbox_nudge ?max=1&queue=egress_integration&jobKey=integration_outbox_nudge",
+  // Notifications: the fan-out and the group closer share `notifications` (also the queue the
+  // in-transaction nudge uses), so they never race on a group; sends are egress on their own lane.
+  "* * * * * notification_queue_nudge ?max=1&queue=notifications&jobKey=notification_queue_nudge",
+  "* * * * * notification_groups_close ?max=1&queue=notifications&jobKey=notification_groups_close",
+  "* * * * * notification_delivery_nudge ?max=1&queue=egress_notifications&jobKey=notification_delivery_nudge",
+  // Hourly, each run covering its own hour: no jobKey, and `fill` re-runs hours missed while down.
+  "2 * * * * notification_clock ?max=1&queue=notification_clock&fill=6h",
+  "4 * * * * notification_digest ?max=1&queue=notification_digest&fill=6h",
+  "50 3 * * * notification_retention ?max=1&queue=retention&jobKey=notification_retention",
   // One minute before each quarter hour, so a reconciler reading on the quarter hour grades a
   // fresh index: on the same edge it once graded an EMPTY table and reported 20 violations
   // when the true drift was zero. Own queue, and a jobKey because a refresh is a repeatable
@@ -1814,9 +1885,6 @@ const BILLING_CRONTAB: string[] = [
   // shared only with the notice mail: the billing tick never makes a network call.
   "10 * * * * model_prices_sync ?max=1&queue=model_prices&jobKey=model_prices_sync",
   "*/10 * * * * model_price_notices ?max=1&queue=model_prices&jobKey=model_price_notices",
-  // Team alerts on the hour. No jobKey: a pending run for the previous hour must not be
-  // replaced, because each run covers its own hour. `fill` re-runs hours missed while down.
-  "0 * * * * team_alerts_hourly ?max=1&queue=team_alerts&fill=6h",
   /**
    * The stranded-queue-lock sweep, every five minutes.
    *
@@ -2062,6 +2130,19 @@ export async function enqueue(
   utilsPromise ??= makeWorkerUtils({ connectionString: config.DATABASE_URL });
   const utils = await utilsPromise;
   await utils.addJob(task, stampTracePayload(payload) as object | undefined, spec);
+}
+
+/** Wake the notification delivery drain now instead of at the next minute. */
+async function nudgeNotificationDeliveries(): Promise<void> {
+  await enqueue(
+    "notification_delivery_nudge",
+    {},
+    {
+      jobKey: "notification_delivery_nudge",
+      queueName: "egress_notifications",
+      maxAttempts: 1,
+    },
+  );
 }
 
 /**

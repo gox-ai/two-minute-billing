@@ -1291,8 +1291,8 @@ function MethodRetryRow({
   const error = useFieldError(id);
   const { label, hint } = METHOD_RETRY_LABEL[method];
   return (
-    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-      <div className="flex min-w-0 flex-col gap-0.5">
+    <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-1.5">
+      <div className="flex min-w-0 flex-[1_1_14rem] flex-col gap-0.5">
         <label
           htmlFor={id}
           className={cn("text-sm font-medium", disabled && "text-muted-foreground")}
@@ -1301,7 +1301,7 @@ function MethodRetryRow({
         </label>
         <span className="text-xs text-muted-foreground">{hint}</span>
       </div>
-      <div className="flex shrink-0 flex-col gap-1">
+      <div className="flex max-w-full min-w-0 flex-col gap-1">
         <div className="flex items-center gap-2.5">
           <Input
             id={id}

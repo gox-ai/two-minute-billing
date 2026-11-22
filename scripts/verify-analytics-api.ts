@@ -26,7 +26,7 @@ import { closeDb, withTenant } from "@/platform/db";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { MEASURES } from "@/modules/metrics/daily/measures";
 import { todayIn } from "@/modules/metrics/daily/public-query";
-import { businesses, metricDaily } from "@db/schema";
+import { businesses, metricDaily, metricWindows } from "@db/schema";
 import { eq } from "drizzle-orm";
 
 const checks: Array<[string, boolean]> = [];
@@ -118,6 +118,29 @@ await withTenant(orgId, async (tx) => {
     await tx.insert(metricDaily).values(rows.slice(i, i + 200));
   }
 });
+
+// A shop that only sells one-time: its `orders` day rows are all the detector has.
+const bizShop = await createBusiness({
+  organizationId: orgId,
+  name: "Analytics API Shop",
+  defaultCurrency: "USD",
+  livemode: "test",
+  timezone: TZ,
+});
+await withTenant(orgId, (tx) =>
+  tx.insert(metricDaily).values({
+    organizationId: orgId,
+    businessId: bizShop.id,
+    grain: "day",
+    periodEnd: addDays(todayIn(TZ), -1),
+    computedAt,
+    measure: "orders",
+    dim: "",
+    dimValue: "",
+    currency: "USD",
+    value: 3n,
+  }),
+);
 
 // ── drive the real server, in process ─────────────────────────────────────────────────────
 const app = await buildApp({ logger: false });
@@ -433,18 +456,16 @@ ok(
   // ask); a window ending today must still find it, or every current month reads null.
   const monthEnd = addDays(`${addDays(monthStart, 32).slice(0, 7)}-01`, -1);
   await withTenant(orgId, (tx) =>
-    tx
-      .insert(metricDaily)
-      .values([
-        {
-          ...at,
-          periodEnd: monthEnd,
-          measure: "gross_revenue_retention",
-          currency: "USD",
-          value: 9500n,
-          denominator: 10000n,
-        },
-      ]),
+    tx.insert(metricDaily).values([
+      {
+        ...at,
+        periodEnd: monthEnd,
+        measure: "gross_revenue_retention",
+        currency: "USD",
+        value: 9500n,
+        denominator: 10000n,
+      },
+    ]),
   );
   const running = (
     await get(
@@ -460,6 +481,32 @@ ok(
     "a rate of customers combines across currencies unconverted: 4 of 20",
     churn.currency_basis === "across_currencies" && churn.series?.[0]?.value === 2000,
   );
+  // A count ignores an asked currency. Filtering it by one read the XXX rows as no data.
+  const churnUsd = (
+    await get(`/v1/analytics?measure=customer_churn_rate&${q}&currency=USD`)
+  ).json();
+  ok(
+    "a rate of counts with currency=USD answers as without: 4 of 20, across currencies",
+    churnUsd.series?.[0]?.value === 2000 &&
+      churnUsd.currency === null &&
+      churnUsd.currency_basis === "across_currencies",
+  );
+  await withTenant(orgId, (tx) =>
+    tx
+      .insert(metricDaily)
+      .values([{ ...at, grain: "day", measure: "usage_events", currency: "XXX", value: 42n }]),
+  );
+  const dq = `business=${bizC.publicId}&grain=day&start=${lastMonthEnd}&end=${lastMonthEnd}`;
+  const evPlain = (await get(`/v1/analytics?measure=usage_events&${dq}`)).json();
+  const evUsd = (await get(`/v1/analytics?measure=usage_events&${dq}&currency=USD`)).json();
+  ok(
+    `a count with currency=USD returns the same total as without (${evUsd.total} = ${evPlain.total} = 42)`,
+    evPlain.total === 42 && evUsd.total === 42 && evUsd.currency_basis === "across_currencies",
+  );
+  ok(
+    "…a money measure still honours the asked currency (90% in USD, 70% converted)",
+    usd.currency === "USD" && usd.currency_basis === "per_currency" && point?.value === 7000,
+  );
 }
 
 // Every rate without a RatioFold must say what it divides, or the currency rule cannot know.
@@ -473,7 +520,119 @@ ok(
   );
 }
 
+// ── a distinct count of customers sums across businesses ──────────────────────────────────
+{
+  const org2 = await createOrganization({ name: "Analytics API Sum Org" });
+  const o2 = org2.organization.id;
+  const mk = (name: string) =>
+    createBusiness({
+      organizationId: o2,
+      name,
+      defaultCurrency: "USD",
+      livemode: "test",
+      timezone: TZ,
+    });
+  const [sa, sb] = [await mk("Sum Biz A"), await mk("Sum Biz B")];
+  await withTenant(o2, async (tx) => {
+    for (const [biz, n] of [
+      [sa, 3n],
+      [sb, 2n],
+    ] as const) {
+      await tx.insert(metricWindows).values({
+        organizationId: o2,
+        businessId: biz.id,
+        windowName: "30d",
+        periodStart: firstDay,
+        periodEnd: today,
+        measure: "paying_customers_all",
+        currency: "USD",
+        value: n,
+      });
+      await tx.insert(metricDaily).values(
+        [
+          { measure: "paying_customers_all", value: n },
+          { measure: "revenue_retention_all", value: 100n },
+        ].map((r) => ({
+          organizationId: o2,
+          businessId: biz.id,
+          grain: "day",
+          periodEnd: today,
+          computedAt,
+          dim: "",
+          dimValue: "",
+          currency: "USD",
+          ...r,
+        })),
+      );
+    }
+  });
+  const h = { authorization: `Bearer ${org2.secret}` };
+  const q = (measure: string) =>
+    app.inject({
+      method: "GET",
+      url: `/v1/analytics?measure=${measure}&range=30d&grain=day&currency=USD`,
+      headers: h,
+    });
+  const sum = await q("paying_customers_all");
+  ok("customers who paid across two businesses is answered, not refused", sum.statusCode === 200);
+  ok("the organization's window total is 3 + 2 = 5", j(sum).total === 5);
+  // The Home card asks with a comparison window; it must not turn the answer into an error.
+  const cmp = await app.inject({
+    method: "GET",
+    url: "/v1/analytics?measure=paying_customers_all&range=30d&grain=day&compare=previous",
+    headers: h,
+  });
+  ok("the Home card's comparison read is answered too", cmp.statusCode === 200);
+  const week = await app.inject({
+    method: "GET",
+    url: "/v1/analytics?measure=paying_customers_all&range=30d&grain=week&currency=USD",
+    headers: h,
+  });
+  ok(
+    "the sum is day and month only: a week is still refused org-wide",
+    week.statusCode >= 400 && /cannot be combined across businesses/.test(week.body),
+  );
+  const refused = await app.inject({
+    method: "GET",
+    url: "/v1/analytics?measure=customer_churn_rate&range=30d&grain=week",
+    headers: h,
+  });
+  ok(
+    "a non-additive measure without the property is still refused org-wide",
+    refused.statusCode >= 400 && /cannot be combined across businesses/.test(refused.body),
+  );
+}
+
 // ── verdict ───────────────────────────────────────────────────────────────────────────────
+// ── billing models ────────────────────────────────────────────────────────────────────────
+{
+  const shop = await get(`/v1/businesses/${bizShop.publicId}/billing_models`);
+  const sb = j(shop) as { object?: string; business?: string; models?: string[] };
+  ok(
+    "billing_models answers 200 with its shape",
+    shop.statusCode === 200 &&
+      sb.object === "billing_models" &&
+      sb.business === bizShop.publicId &&
+      Array.isArray(sb.models),
+  );
+  ok(
+    "a shop with only one-time orders has exactly one_time",
+    JSON.stringify(sb.models) === '["one_time"]',
+  );
+  const none = j(await get(`/v1/businesses/${bizB.publicId}/billing_models`)) as {
+    models?: string[];
+  };
+  ok(
+    "a business with MRR rows only and no model rows has no model",
+    JSON.stringify(none.models) === "[]",
+  );
+  const anon = await app.inject({
+    method: "GET",
+    url: `/v1/businesses/${bizShop.publicId}/billing_models`,
+  });
+  ok("billing_models refuses a request with no key", anon.statusCode === 401);
+}
+
 await app.close();
 
 const failed = checks.filter(([, pass]) => !pass);

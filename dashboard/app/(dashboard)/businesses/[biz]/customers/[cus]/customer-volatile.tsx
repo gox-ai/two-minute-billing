@@ -3,14 +3,7 @@
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
 import Link from "next/link";
-import {
-  CreditCard,
-  Layers,
-  CalendarClock,
-  CircleDollarSign,
-  FileText,
-  TrendingUp,
-} from "lucide-react";
+import { CreditCard, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -312,16 +305,19 @@ export function CustomerFigures({
   const nextCredit = nextEstimate?.credits_applied_minor ?? 0;
   const refundable =
     customer.balances?.find((b) => b.currency_code === txnCurrency)?.refundable_credits ?? 0;
-  const revenue = customer.lifetime_revenue ?? [];
-  const mainRevenue = revenue.find((r) => r.currency === txnCurrency) ?? revenue[0];
-  const otherRevenue = revenue.filter((r) => r !== mainRevenue);
+  const billed = customer.revenue_billed ?? [];
+  const mainBilled = billed.find((r) => r.currency === txnCurrency) ?? billed[0];
+  const otherBilled = billed.filter((r) => r !== mainBilled);
+  const cash = customer.lifetime_revenue ?? [];
+  const cashTotal = cash.length
+    ? joinMoney(cash.map((r): [string, number] => [r.currency, r.amount_minor]))
+    : money(0, txnCurrency);
   const credit = refundable > 0 ? `${money(refundable, txnCurrency)} refundable credit` : null;
 
   return (
     <FigureTiles>
       <FigureTile
         label="Total due"
-        icon={FileText}
         value={due.size ? joinMoney(due) : money(0, txnCurrency)}
         note={[
           open ? `${open} open invoice${open === 1 ? "" : "s"}` : "Nothing outstanding",
@@ -333,13 +329,11 @@ export function CustomerFigures({
       />
       <FigureTile
         label="MRR"
-        icon={CircleDollarSign}
         value={mrr.length ? money(mrr[0][1], mrr[0][0]) : "—"}
         note={mrr.length > 1 ? `+ ${joinMoney(mrr.slice(1))}` : undefined}
       />
       <FigureTile
         label="Upcoming payment"
-        icon={CalendarClock}
         value={next && nextAmount != null ? money(nextAmount, next.currency) : "—"}
         note={
           next?.next_billing_at
@@ -354,22 +348,20 @@ export function CustomerFigures({
         href={next ? `/businesses/${biz}/subscriptions/${next.id}?from=customer` : undefined}
       />
       <FigureTile
-        label="Lifetime revenue"
-        icon={TrendingUp}
-        featured={(mainRevenue?.amount_minor ?? 0) > 0 || otherRevenue.length > 0}
-        value={money(mainRevenue?.amount_minor ?? 0, mainRevenue?.currency ?? txnCurrency)}
+        label="Revenue"
+        featured={(mainBilled?.amount_minor ?? 0) > 0 || otherBilled.length > 0}
+        value={money(mainBilled?.amount_minor ?? 0, mainBilled?.currency ?? txnCurrency)}
         note={
-          otherRevenue.length ? (
-            `+ ${joinMoney(otherRevenue.map((r): [string, number] => [r.currency, r.amount_minor]))}`
-          ) : mainRevenue?.first_paid_at ? (
-            <>
-              Paid since{" "}
-              <span className="whitespace-nowrap">{fmtDate(mainRevenue.first_paid_at, tz)}</span> ·
-              net of refunds
-            </>
-          ) : (
-            "Nothing collected yet"
-          )
+          <>
+            {otherBilled.length ? (
+              <span className="block">
+                +{" "}
+                {joinMoney(otherBilled.map((r): [string, number] => [r.currency, r.amount_minor]))}
+              </span>
+            ) : null}
+            <span className="block">Net billed revenue · before tax · credit notes deducted</span>
+            <span className="block">Cash collected {cashTotal} · net of refunds</span>
+          </>
         }
       />
     </FigureTiles>
@@ -413,31 +405,51 @@ export function CustomerSubscriptionsCard({
     return (
       <TableRow key={s.id}>
         {/* Wraps rather than widening the table: catalogue names and add-on lists are
-            long, and a detail table must never scroll sideways. */}
+            long. 11rem keeps it readable when long amounts take the other columns. */}
         <TableCell className="py-2.5 pl-5 whitespace-normal">
-          <Link
-            href={`/businesses/${biz}/subscriptions/${s.id}?from=customer`}
-            className="font-medium wrap-anywhere text-primary hover:underline"
-          >
-            {plan?.product_name ?? plan?.price ?? s.id}
-          </Link>
-          {extra.length ? (
-            <div className="text-xs wrap-anywhere text-muted-foreground">{extra.join(" · ")}</div>
-          ) : null}
-          <div className="flex min-w-0 text-muted-foreground">
-            <MiddleEllipsis value={s.id} className="text-xs" />
+          <div className="unstacked:min-w-44">
+            <Link
+              href={`/businesses/${biz}/subscriptions/${s.id}?from=customer`}
+              className="font-medium wrap-anywhere text-primary hover:underline"
+            >
+              {plan?.product_name ?? plan?.price ?? s.id}
+            </Link>
+            {extra.length ? (
+              <div className="text-xs wrap-anywhere text-muted-foreground">{extra.join(" · ")}</div>
+            ) : null}
+            {/* w-0 min-w-full: fills the column without widening it to the whole id. */}
+            <div className="flex w-0 min-w-full text-muted-foreground">
+              <MiddleEllipsis value={s.id} className="text-xs" />
+            </div>
           </div>
         </TableCell>
         <TableCell>
           <StatusChip status={s.status} />
         </TableCell>
-        <TableCell className="whitespace-nowrap">
+        {/* The amount never breaks; the quantity and the period wrap under it. */}
+        <TableCell className="whitespace-normal">
           {plan ? (
             <>
-              <span>{money(plan.unit_price_minor ?? 0, s.currency)}</span>
-              {(plan.quantity ?? 1) > 1 ? ` × ${plan.quantity}` : ""}
+              <span className="whitespace-nowrap">
+                {money(plan.unit_price_minor ?? 0, s.currency)}
+              </span>
+              {(plan.quantity ?? 1) > 1 ? (
+                <>
+                  {" "}
+                  <span className="whitespace-nowrap">× {plan.quantity}</span>
+                </>
+              ) : null}
               {plan.interval ? (
-                <span className="text-muted-foreground"> / {plan.interval}</span>
+                <>
+                  {" "}
+                  <span className="whitespace-nowrap text-muted-foreground">
+                    /{" "}
+                    {periodText(
+                      plan.interval,
+                      s.billing_period_unit === plan.interval ? s.billing_period : 1,
+                    )}
+                  </span>
+                </>
               ) : null}
             </>
           ) : (
@@ -521,18 +533,9 @@ export function CustomerSubscriptionsCard({
         </div>
       ) : (
         <>
-          {/* ONE fixed-layout table: widths come from the colgroup, never from the rows,
-              so showing cancelled rows adds height without moving a column. */}
-          <Table phone="stack" className="table-fixed max-lg:min-w-3xl">
-            <colgroup>
-              {/* At the 684px card (1024 viewport) a date and "non renewing" still fit whole. */}
-              <col className="w-[19.5%]" />
-              <col className="w-[19%]" />
-              <col className="w-[14%]" />
-              <col className="w-[14%]" />
-              <col className="w-[18.5%]" />
-              <col className="w-[15%]" />
-            </colgroup>
+          {/* Auto layout: an amount wider than its column widens it instead of drawing over
+              the next one. Where the grid would not fit the card, the rows stack. */}
+          <Table phone="stack" fit>
             {head}
             <TableBody>{page.rows.map(row)}</TableBody>
           </Table>
@@ -553,6 +556,11 @@ export function CustomerSubscriptionsCard({
   );
 }
 
+/** `month`, or `3 months` when the plan bills every few periods. */
+function periodText(interval: string, count: number | null | undefined): string {
+  return count && count > 1 ? `${count} ${interval}s` : interval;
+}
+
 // --- Payment methods --------------------------------------------------------------
 
 const rank = (role: PaymentMethod["role"]) => (role === "primary" ? 0 : role === "backup" ? 1 : 2);
@@ -566,10 +574,13 @@ export function CustomerPaymentMethodsCard({
   biz,
   cus,
   tz,
+  newMethodGateway,
 }: {
   biz: string;
   cus: string;
   tz: string | null;
+  /** Where the customer's next new payment method goes (a form), under the list. */
+  newMethodGateway?: React.ReactNode;
 }) {
   const { customer, pms } = useVolatile();
   const ordered = [...pms].sort(
@@ -621,6 +632,7 @@ export function CustomerPaymentMethodsCard({
           <Pager pager={page.pager} className="-mx-5 mt-2 -mb-4" />
         </>
       )}
+      {newMethodGateway ? <div className="mt-4 border-t pt-4">{newMethodGateway}</div> : null}
     </RecordCard>
   );
 }

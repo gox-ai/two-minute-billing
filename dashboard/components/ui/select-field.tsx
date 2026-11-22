@@ -136,6 +136,9 @@ export function SelectField({
   // so an empty `real` must reach Radix as '' (unclaimed by any item), which
   // is exactly what makes SelectValue fall back to the placeholder.
   const hasEmptyOption = options.some((o) => o.value === "");
+  // The chosen label is rendered by us, so the first paint (server HTML, before Radix mounts
+  // its items) already shows the value instead of an empty trigger.
+  const chosen = options.find((o) => o.value === real);
 
   return (
     <div ref={rootRef} className={cn("relative", !name && "contents")}>
@@ -190,7 +193,7 @@ export function SelectField({
           aria-describedby={ariaDescribedBy}
           className={cn("w-full", className)}
         >
-          <SelectValue placeholder={placeholder} />
+          <SelectValue placeholder={placeholder}>{chosen?.label}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {groups.map((g, gi) =>

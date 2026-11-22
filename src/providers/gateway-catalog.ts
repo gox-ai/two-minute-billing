@@ -197,6 +197,11 @@ export interface GatewayDefinition {
    */
   disputeFinalState?: false;
   /**
+   * `true`: chargebacks arrive a day late from a report the settlement poll reads, never by
+   * event. A person may still record one by hand first; the poll then skips the same case.
+   */
+  disputeReport?: true;
+  /**
    * Days the gateway keeps retrying a webhook, signed with the key it was first sent with. A
    * replaced webhook secret stays valid that long (default 24 h).
    */
@@ -541,6 +546,9 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
     `),
     currencyConditions:
       "INR is on by default. The other currencies need Razorpay to enable international payments on your account. UPI Autopay and eMandate are INR only. Razorpay settles in INR.",
+    // Domestic rails: Razorpay refuses them on any other currency ("The currency should be
+    // INR when method is upi"). International payments are cards.
+    currencyBoundMethods: { upi: "INR", wallet: "INR", bank_transfer: "INR" },
     internationalSwitch: { domesticCurrency: "INR" },
     webhook: {
       secret: "shared",
@@ -1360,8 +1368,11 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
     methodOptions: [{ value: "card", label: "Cards" }],
     // An eCheck pays once; CyberSource saves the bank account only with that payment.
     payNowOnlyMethods: ["us_bank_account"],
-    // No dispute webhook or API.
+    // No dispute webhook. The daily chargeback report is polled; a person may record first.
     disputeFeed: false,
+    disputeReport: true,
+    // The report shows a chargeback and a reversal, never a lost case.
+    disputeFinalState: false,
     webhook: {
       secret: "provider_minted",
       instructions: (url) => [
@@ -1407,6 +1418,11 @@ export function isGatewayKey(key: string | null | undefined): key is ProviderKey
  */
 export function operatorRecordsDisputes(key: string | null | undefined): boolean {
   return gatewayDefinition(key)?.disputeFeed === false;
+}
+
+/** True when this gateway's chargebacks arrive from a polled daily report. */
+export function disputesArriveByReport(key: string | null | undefined): boolean {
+  return gatewayDefinition(key)?.disputeReport === true;
 }
 
 /**

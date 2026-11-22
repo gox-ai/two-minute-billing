@@ -151,3 +151,22 @@ export const referenceDataSources = pgTable("reference_data_sources", {
   /** 0455 (`model_prices`): a suspicious batch held for staff release. NULL = none held. */
   heldBatch: jsonb("held_batch"),
 });
+
+/**
+ * Postal code → place, from the GeoNames postal dump (CC BY 4.0, https://www.geonames.org).
+ * One row per place that shares a code, so a code may have several. `state_code` is OUR
+ * subdivision code (the `country_subdivisions` suffix) when GeoNames' admin1 name matched
+ * one, else null. Reference data like `countries`: no tenant, no RLS. Loaded by
+ * `pnpm postal:seed`, never by the default seed; the lookup returns nothing while it is empty.
+ */
+export const postalCodes = pgTable(
+  "postal_codes",
+  {
+    country: text("country").notNull(),
+    postalCode: text("postal_code").notNull(),
+    placeName: text("place_name").notNull(),
+    admin1Name: text("admin1_name"),
+    stateCode: text("state_code"),
+  },
+  (t) => [primaryKey({ columns: [t.country, t.postalCode, t.placeName] })],
+);

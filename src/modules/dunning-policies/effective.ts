@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 import { businesses, dunningPolicies, paymentMethods, payments } from "@db/schema";
 import type { Tx } from "@/platform/db";
 import { resolveDunningConfig, type DunningConfig } from "@/modules/subscriptions/dunning-schedule";
+import { parksWhenRepeated } from "@/providers/decline-codes";
 
 /**
  * The config of the policy assigned to a subscription's PLAN (2.48), or SQL null.
@@ -70,6 +71,30 @@ export async function priorFailedMethods(
       ),
     )
     .orderBy(asc(payments.createdAt));
+}
+
+/**
+ * Did this refusal (`parksWhenRepeated`) also end the method's last attempt on an EARLIER
+ * invoice? Then it is the second cycle in a row, and `planFailureRearm` parks.
+ */
+export async function refusedLastCycleToo(
+  tx: Tx,
+  input: { paymentMethodId: string | null; invoiceId: string; message: string | null | undefined },
+): Promise<boolean> {
+  if (!input.paymentMethodId || !parksWhenRepeated(input.message)) return false;
+  const [last] = await tx
+    .select({ status: payments.status, failureMessage: payments.failureMessage })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.paymentMethodId, input.paymentMethodId),
+        ne(payments.invoiceId, input.invoiceId),
+        inArray(payments.status, ["succeeded", "failed"]),
+      ),
+    )
+    .orderBy(desc(payments.createdAt))
+    .limit(1);
+  return last?.status === "failed" && parksWhenRepeated(last.failureMessage);
 }
 
 /** Internal policy ids → public ids, for customer reads. */

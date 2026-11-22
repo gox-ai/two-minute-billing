@@ -1,3 +1,4 @@
+import { createdThroughLabel } from "@/lib/created-through";
 import { isApiNotFound, businessLabel } from "@/lib/api";
 import { notFound } from "next/navigation";
 import { billingRules } from "@/lib/billing-rules";
@@ -32,9 +33,12 @@ import {
 import type { RenewalEstimate, UnbilledCharge } from "@/lib/api";
 import { accountHolderName } from "@/lib/names";
 import { billingDateModeLabel } from "@/lib/billing-date-mode";
-import { listTransactions } from "@/lib/api/payments";
+import { listPaymentIntents, listTransactions } from "@/lib/api/payments";
 import { getDunningPolicy } from "@/lib/api/dunning-policies";
 import { listReceipts } from "@/lib/api/receipts";
+import { getGatewayCatalogOrEmpty, listGatewayAccounts } from "@/lib/api/gateways";
+import { accountsForCurrency, buildRoutingGroups, routingSummary } from "@/lib/payment-routing";
+import { NewMethodGatewayForm } from "./new-method-gateway";
 import { listPaymentRequests } from "@/lib/api/payment-requests";
 import { ReceiptsCard } from "@/components/receipts/receipts-card";
 import { PaymentRequestsCard } from "@/components/payment-requests/payment-requests-card";
@@ -207,6 +211,9 @@ export default async function CustomerDetail({
     receiptsPage,
     requestsPage,
     shippingBook,
+    intentsPage,
+    gatewayAccounts,
+    gatewayCatalog,
   ] = await Promise.all([
     // History's first page per tab; the tab pages on from there.
     listInvoices(biz, cus, { limit: HISTORY_PAGE }).catch(() => null),
@@ -234,6 +241,11 @@ export default async function CustomerDetail({
     listPaymentRequests(biz, { limit: 5, scope: { customer: cus } }).catch(() => null),
     // null = the read failed; the card says so rather than "no addresses".
     listShippingAddresses(biz, cus, { includeArchived: true }).catch(() => null),
+    // Payment intents tab in History: open ones write no transaction, so only here.
+    listPaymentIntents(biz, { customer: cus, limit: HISTORY_PAGE }).catch(() => null),
+    // Gateway for new payment methods; null = the read failed and the row is left out.
+    listGatewayAccounts(biz).catch(() => null),
+    getGatewayCatalogOrEmpty(),
   ]);
   const cfDefs = cfDefsRes.data;
   // Non-critical: on a failed read the row shows the policy id.
@@ -315,6 +327,47 @@ export default async function CustomerDetail({
   const tz = businesses.data.find((b) => b.id === biz)?.timezone ?? null;
   const name = business?.name ?? "Business";
   const bizCurrencies = business?.currencies ?? null;
+
+  // Gateway for new payment methods: the accounts that take this customer's currency.
+  const nmgCurrency = (
+    customer.effective_currency ??
+    business?.default_currency ??
+    ""
+  ).toUpperCase();
+  const nmgAccounts = gatewayAccounts?.data ?? [];
+  const nmgDefault = nmgAccounts.find((a) => a.default)?.id ?? null;
+  const nmgStored = customer.new_method_gateway_account ?? "";
+  const nmgOptions = (
+    nmgCurrency
+      ? accountsForCurrency(nmgAccounts, nmgCurrency, nmgDefault)
+      : nmgAccounts.filter((a) => a.status === "active")
+  ).map((a) => ({ id: a.id, label: a.label }));
+  // A stored account outside that list still shows as itself.
+  const nmgSaved = nmgAccounts.find((a) => a.id === nmgStored);
+  if (nmgSaved && !nmgOptions.some((o) => o.id === nmgSaved.id))
+    nmgOptions.push({ id: nmgSaved.id, label: nmgSaved.label });
+  const nmgBusinessLabel = nmgCurrency
+    ? routingSummary(
+        buildRoutingGroups({
+          accounts: nmgAccounts,
+          catalog: gatewayCatalog,
+          currencies: [nmgCurrency],
+          defaultId: nmgDefault,
+          stored: business?.storefront_config?.payment_routing,
+        })[0],
+      )
+    : null;
+  const newMethodGatewayRow =
+    gatewayAccounts && nmgOptions.length > 0 ? (
+      <NewMethodGatewayForm
+        biz={biz}
+        cus={cus}
+        value={nmgStored}
+        businessLabel={nmgBusinessLabel}
+        options={nmgOptions}
+        canManage={allows(me, "customers:manage", "manager")}
+      />
+    ) : null;
   const addr = customer.address;
   const addrLine = addr
     ? [addr.line1, addr.line2, addr.city, addr.state, addr.postal_code, addr.country]
@@ -399,6 +452,7 @@ export default async function CustomerDetail({
     // there can be a dozen) — a single summary row rendered them as a cramped stack
     // of raw `cf_` api_names with no labels.
     { label: "Created", value: fmtDate(customer.created_at, tz) },
+    { label: "Created through", value: createdThroughLabel(customer.created_through) },
   ];
 
   // The role rows used to print the raw `pm_…` token, which names the same card the
@@ -502,7 +556,7 @@ export default async function CustomerDetail({
     {
       label: "VAT number",
       value: customer.vat_number ? (
-        <span className="inline-flex items-center gap-2">
+        <span className="inline-flex max-w-full flex-wrap items-center gap-2">
           <span className="font-mono text-xs">{customer.vat_number}</span>
           {customer.vat_number_status ? <StatusChip status={customer.vat_number_status} /> : null}
           <ValidateVatButton biz={biz} cus={cus} />
@@ -624,9 +678,9 @@ export default async function CustomerDetail({
           rows={summary.map((r) => ({
             label: r.label,
             value: r.copy ? (
-              <span className="inline-flex items-center gap-1">
+              <span className="inline-flex max-w-full min-w-0 items-center gap-1">
                 {r.value}
-                <CopyButton value={r.copy} />
+                <CopyButton value={r.copy} className="shrink-0" />
               </span>
             ) : (
               r.value
@@ -751,22 +805,23 @@ export default async function CustomerDetail({
             <Table phone="stack" className="[--phone-row-x:0]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
+                  <TableHead>Contact</TableHead>
                   <TableHead>Label</TableHead>
-                  <TableHead>Billing email</TableHead>
-                  <TableHead>Account email</TableHead>
+                  <TableHead className="whitespace-normal">Billing email</TableHead>
+                  <TableHead className="whitespace-normal">Account email</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {contacts.data.map((c) => (
                   <TableRow key={c.id}>
-                    <TableCell>
-                      {[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}
+                    {/* The email sits under the name and both wrap: the folded section is
+                        narrow beside its title column. */}
+                    <TableCell className="py-2.5 wrap-anywhere whitespace-normal">
+                      <div>{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</div>
+                      <div className="text-xs text-muted-foreground">{c.email}</div>
                     </TableCell>
-                    <TableCell>{c.email}</TableCell>
-                    <TableCell>{c.label || "—"}</TableCell>
+                    <TableCell className="whitespace-normal">{c.label || "—"}</TableCell>
                     <TableCell>{c.send_billing_email ? "Yes" : "No"}</TableCell>
                     <TableCell>{c.send_account_email ? "Yes" : "No"}</TableCell>
                     <TableCell className="text-right">
@@ -1066,7 +1121,12 @@ export default async function CustomerDetail({
               priceToProduct={Object.fromEntries(priceToProduct)}
               productInfo={Object.fromEntries(productInfo)}
             />
-            <CustomerPaymentMethodsCard biz={biz} cus={cus} tz={tz} />
+            <CustomerPaymentMethodsCard
+              biz={biz}
+              cus={cus}
+              tz={tz}
+              newMethodGateway={newMethodGatewayRow}
+            />
           </Row>
           <Row span="6/6">
             {/* A customer-level rollup of each subscription's unbilled charges — what will
@@ -1096,7 +1156,7 @@ export default async function CustomerDetail({
                       <TableCell>
                         <Link
                           href={`/businesses/${biz}/subscriptions/${c.subscription}?from=customer#unbilled`}
-                          className="flex min-w-0 text-primary hover:underline"
+                          className="flex max-w-56 min-w-0 text-primary hover:underline"
                         >
                           <MiddleEllipsis value={c.subscription} className="text-xs" />
                         </Link>
@@ -1110,7 +1170,7 @@ export default async function CustomerDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table phone="stack">
+                  <Table phone="stack" fit>
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Description</TableHead>
@@ -1228,9 +1288,11 @@ export default async function CustomerDetail({
                 biz={biz}
                 invoices={cursorSource(historyInvoices, "invoices", { customer: cus })}
                 transactions={cursorSource(transactions, "transactions", { customer: cus })}
+                paymentIntents={cursorSource(intentsPage, "payment_intents", { customer: cus })}
                 creditNotes={cursorSource(creditNotesAll, "credit_notes", { customer: cus })}
                 emails={cursorSource(emailsPage, "emails", { customer: cus })}
                 events={cursorSource(events, "events", { customer: cus })}
+                viewAll={historyViewAll(biz, cus)}
               />
             </RecordCard>
           </Row>
@@ -1293,4 +1355,19 @@ export default async function CustomerDetail({
       </div>
     </CustomerRefreshProvider>
   );
+}
+
+/** Each History tab's full list, narrowed to this customer. */
+function historyViewAll(biz: string, cus: string) {
+  const base = `/businesses/${biz}`;
+  const id = encodeURIComponent(cus);
+  const is = (field: string) => `filter=${encodeURIComponent(`${field}:is:${cus}`)}`;
+  return {
+    invoices: `${base}/invoices?customer=${id}`,
+    transactions: `${base}/transactions?${is("customer")}`,
+    "payment-intents": `${base}/payment_intents?tab=list&${is("customer")}`,
+    "credit-notes": `${base}/credit_notes?customer=${id}`,
+    emails: `${base}/emails?${is("customer")}`,
+    events: `${base}/events?${is("customer")}`,
+  };
 }

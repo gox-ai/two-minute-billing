@@ -21,6 +21,7 @@ export const SCENARIOS = {
   S12: "a forged signature is refused and nothing is recorded",
   S13: "an old or alternate event version / payload shape",
   S14: "field and currency limits on the request we send",
+  S15: "a failure webhook for an open intent keeps its reason on the attempt and links to it",
 } as const;
 export type ScenarioId = keyof typeof SCENARIOS;
 export const SCENARIO_IDS = Object.keys(SCENARIOS) as ScenarioId[];

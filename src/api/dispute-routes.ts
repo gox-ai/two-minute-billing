@@ -24,6 +24,8 @@ const recordBody = z.object({
   processor_reference: z.string().max(200).optional(),
   // Unix seconds: when the processor opened the case. Default now.
   opened_at: z.number().int().positive().optional(),
+  // Unix seconds: the processor's deadline for evidence.
+  evidence_due_by: z.number().int().positive().optional(),
 });
 const outcomeBody = z.object({ outcome: z.enum(["won", "lost"]) });
 
@@ -125,6 +127,9 @@ export async function registerDisputeRoutes(app: FastifyInstance) {
           reason: parsed.data.reason,
           processorReference: parsed.data.processor_reference ?? null,
           openedAt: parsed.data.opened_at ? new Date(parsed.data.opened_at * 1000) : undefined,
+          evidenceDueBy: parsed.data.evidence_due_by
+            ? new Date(parsed.data.evidence_due_by * 1000)
+            : null,
         });
         return reply.code(201).send(await serializeWithRefs(req.organization!.id, row));
       } catch (e) {

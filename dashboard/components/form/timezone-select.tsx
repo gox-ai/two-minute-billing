@@ -95,6 +95,7 @@ export function TimezoneSelect({
   id,
   description = "Sets the time zone for this business's billing days, invoice dates and every date in the dashboard.",
   clearable = false,
+  onValueChange,
 }: {
   name?: string;
   defaultValue?: string | null;
@@ -113,6 +114,8 @@ export function TimezoneSelect({
    * organization's); a business always has one.
    */
   clearable?: boolean;
+  /** Told of each pick, for a form that tracks its own unsaved changes. */
+  onValueChange?: (zone: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const [value, setValue] = useDefaultState(defaultValue ?? "");
@@ -214,6 +217,7 @@ export function TimezoneSelect({
                     value={NOT_SET}
                     onSelect={() => {
                       setValue("");
+                      onValueChange?.("");
                       setOpen(false);
                     }}
                   >
@@ -230,6 +234,7 @@ export function TimezoneSelect({
                     value={z.id}
                     onSelect={() => {
                       setValue(z.id);
+                      onValueChange?.(z.id);
                       setOpen(false);
                     }}
                   >

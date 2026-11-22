@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { resolveAdapter } from "@/providers/registry";
 import { z } from "zod";
 import { CARD_LIMIT_CODE, CARD_LIMIT_MESSAGE, overCardLimit } from "@/modules/invoicing/card-limit";
 import {
@@ -19,7 +20,7 @@ import {
   RETENTION_COUPON_REFUSAL,
 } from "@/modules/customer-portal/retention-coupon";
 import { LIMITS, achAuthorizationField, clientResultField, httpUrl, redirectUrl } from "./limits";
-import { clientIp } from "@/platform/event-context";
+import { clientIp, updateEventContext } from "@/platform/event-context";
 import { AchAuthorizationError } from "@/modules/payment-methods/ach-authorization";
 import { authenticate, authenticatePortal } from "@/platform/auth";
 import { idempotency, idempotencyOnSend, idempotentNoStore } from "@/platform/idempotency";
@@ -37,6 +38,11 @@ import {
   verifyPortalLoginCode,
 } from "@/modules/customer-portal/login-code";
 import { businessWallClock } from "@/platform/clock";
+import { scheduledDebitsForInvoices } from "@/modules/invoicing/pre-debit";
+import {
+  OnFileConsentError,
+  onFileConsentEvidence,
+} from "@/modules/payment-methods/on-file-consent";
 import {
   getCustomerByPublicId,
   updateCustomer,
@@ -96,18 +102,29 @@ import {
   pendingPaymentForInvoice,
   pendingPaymentsForInvoices,
   collectOutstandingForNewPaymentMethod,
+  type CollectedOnNewMethod,
   PaymentActionRequiredError,
   CollectionInFlightError,
 } from "@/modules/invoicing/service";
-import { InvoiceOpsError } from "@/modules/invoicing/ops";
+import {
+  InvoiceCollectionScheduledError,
+  InvoiceOpsError,
+  collectInvoiceNow,
+} from "@/modules/invoicing/ops";
+import { payOptionsFor, savedPayOption } from "@/modules/customer-portal/pay-options";
 import {
   captureRefused,
   consumePaymentIntent,
+  type ConsumePaymentIntentResult,
   getPaymentIntent,
+  listAttemptsForIntent,
   createPaymentIntent,
   hostedWalletMismatch,
   liveIntentForInvoice,
   resumeVerdictFromGateway,
+  releaseRefusedCapture,
+  markPaymentIntentVoidedFromGateway,
+  PaymentIntentVoidUnsupportedError,
   voidPaymentIntent,
   serializePaymentIntent,
   PaymentIntentError,
@@ -126,7 +143,11 @@ import {
   achAuthorizationTextFor,
 } from "./vault-setup";
 import { GatewayRouterError } from "@/modules/gateway/router";
-import { effectiveMethodTypes, hostedApplePayOffered } from "@/modules/gateway/service";
+import {
+  effectiveMethodTypes,
+  hostedApplePayOffered,
+  listGatewayAccounts,
+} from "@/modules/gateway/service";
 import { ProviderIndeterminateError, ProviderRefusalError } from "@/providers/types";
 import {
   resolveBusiness,
@@ -141,7 +162,7 @@ import { addressRefinement, requirementIssuesError } from "./address-validation"
 import {
   addressFieldLocksFor,
   addressRequirementIssues,
-  billingDetailsComplete,
+  billingDetailsMissing,
   isPortalKeyLocked,
   mergePortalAddress,
   resolvePortalFieldConfig,
@@ -169,6 +190,8 @@ import {
   portalSessions,
   transactions,
   paymentMethods,
+  gatewayAccounts,
+  customers,
 } from "@db/schema";
 import { estimateRenewal } from "@/modules/subscriptions/estimate";
 import { apiSubscriptionStatus } from "@/modules/subscriptions/serialize";
@@ -205,6 +228,15 @@ import {
   type ShippingAddressFields,
 } from "@/modules/customers/addresses";
 import { resolveCheckoutFieldConfig } from "@/modules/checkout/field-config";
+import {
+  PAYER_REASON_WITHHELD,
+  payerDeclineMessage,
+  payerFailureText,
+  payerNeedsNewMethod,
+} from "@/providers/decline-codes";
+
+/** A payment the payer's page cannot finish: missing, or not theirs (same words, no id). */
+const PORTAL_INTENT_NOT_FOUND = "We could not find this payment. Start the payment again.";
 
 /**
  * `over_card_limit` (0482): the amount due is above the business's card limit, so Pay now is
@@ -489,6 +521,16 @@ const portalShipToBody = z.object({
  * The customer is always resolved from the token — never from a URL param —
  * so a portal session can only ever see and mutate its own customer's cards.
  */
+interface PortalPaymentError {
+  payment_method: string | null;
+  code: string | null;
+  at: string;
+  /** The payer sentence the failure email uses; null when we have no reason to give. */
+  message: string | null;
+  /** Retrying the same method cannot succeed: the payer needs another one. */
+  new_method_needed: boolean;
+}
+
 /**
  * Per invoice: the most recent payment transaction, when it FAILED. A later success, or a
  * charge still in progress, means there is nothing to report.
@@ -496,8 +538,8 @@ const portalShipToBody = z.object({
 async function lastFailedPayments(
   organizationId: string,
   invoiceIds: string[],
-): Promise<Map<string, { payment_method: string | null; code: string | null; at: string }>> {
-  const out = new Map<string, { payment_method: string | null; code: string | null; at: string }>();
+): Promise<Map<string, PortalPaymentError>> {
+  const out = new Map<string, PortalPaymentError>();
   if (invoiceIds.length === 0) return out;
   const rows = await withTenant(organizationId, (tx) =>
     tx
@@ -505,6 +547,7 @@ async function lastFailedPayments(
         invoiceId: transactions.invoiceId,
         status: transactions.status,
         code: transactions.errorCode,
+        text: transactions.errorText,
         at: transactions.createdAt,
         pm: paymentMethods.publicId,
       })
@@ -517,10 +560,32 @@ async function lastFailedPayments(
   for (const r of rows) {
     if (!r.invoiceId || seen.has(r.invoiceId)) continue;
     seen.add(r.invoiceId);
-    if (r.status === "failed" || r.status === "late_failed")
-      out.set(r.invoiceId, { payment_method: r.pm, code: r.code, at: r.at.toISOString() });
+    if (r.status !== "failed" && r.status !== "late_failed") continue;
+    // Never the gateway's raw text: only our payer sentence for the code, as in the email.
+    const message = payerDeclineMessage({ code: r.code, message: r.text }, PAYER_REASON_WITHHELD);
+    out.set(r.invoiceId, {
+      payment_method: r.pm,
+      code: r.code,
+      at: r.at.toISOString(),
+      message: message === PAYER_REASON_WITHHELD ? null : message,
+      new_method_needed: payerNeedsNewMethod(r.code),
+    });
   }
   return out;
+}
+
+/** Pay and save: what the payment kept, or that it could not keep the method. */
+function saveReport(c: ConsumePaymentIntentResult): Record<string, unknown> {
+  if (c.savedPaymentMethod)
+    return {
+      saved_payment_method: {
+        id: c.savedPaymentMethod.publicId,
+        type: c.savedPaymentMethod.type,
+        brand: c.savedPaymentMethod.brand,
+        last4: c.savedPaymentMethod.last4,
+      },
+    };
+  return c.saveFailed ? { save_failed: true } : {};
 }
 
 export async function registerCustomerPortalRoutes(app: FastifyInstance) {
@@ -806,6 +871,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
             icon_url: notice.iconUrl,
             favicon_url: notice.faviconUrl,
             brand_color: notice.brandColor,
+            button_text_color: notice.buttonTextColor,
           }
         : null,
     };
@@ -976,6 +1042,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         icon_url: notice.iconUrl,
         favicon_url: notice.faviconUrl,
         brand_color: notice.brandColor,
+        button_text_color: notice.buttonTextColor,
         support_email: notice.supportEmail,
         website: notice.website,
       },
@@ -1007,6 +1074,20 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     addressFieldLocksFor(
       (await liveTaxRegimes(business.organizationId, [business.id])).get(business.id) ?? [],
     );
+  const portalBillingMissing = (
+    customer: NonNullable<Awaited<ReturnType<typeof getPortalCustomer>>>,
+    fieldConfig: ReturnType<typeof resolvePortalFieldConfig>,
+  ) =>
+    billingDetailsMissing(fieldConfig, hasBillingName(customer), {
+      line1: customer.addressLine1,
+      city: customer.city,
+      state: customer.state,
+      state_code: customer.stateCode,
+      postal_code: customer.postalCode,
+      country: customer.country,
+      first_name: customer.billingFirstName,
+      phone: customer.billingPhone ?? customer.phone,
+    });
   const serializePortalMe = (
     customer: NonNullable<Awaited<ReturnType<typeof getPortalCustomer>>>,
     business: PortalBusinessRow,
@@ -1053,18 +1134,12 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         company: customer.billingCompany,
         phone: customer.billingPhone,
       },
-      // Indian-gateway export rule: card setup needs a name + address up front.
-      //
-      // ANY usable billing name satisfies it — the address contact, then the account
-      // holder (`hasBillingName`). This used to test the legacy `customer.name` column
-      // alone, which made our own invention a hard requirement for vaulting a card: a
-      // buyer who filled in First/Last was told their billing details were incomplete
-      // and had no field left to fix it with, because no form asks for `name`.
-      // Line1 and country count only where this portal requires them (0334).
-      billing_details_complete: billingDetailsComplete(fieldConfig, hasBillingName(customer), {
-        line1: customer.addressLine1,
-        country: customer.country,
-      }),
+      // Card setup needs a billing name and the address fields this portal requires
+      // (country and postal code by default). `billing_details_missing` names the ones still
+      // empty, so the add-card row can ask for exactly those. Any usable billing name counts
+      // (`hasBillingName`), not the legacy `customer.name` column.
+      billing_details_complete: portalBillingMissing(customer, fieldConfig).length === 0,
+      billing_details_missing: portalBillingMissing(customer, fieldConfig),
     },
     // Brand Styles (0185) — without these the hosted portal has no identity but the
     // business NAME, which is why it drew an initials monogram. Falls back
@@ -1082,8 +1157,11 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       icon_url: business.iconUrl,
       favicon_url: business.faviconUrl,
       brand_color: business.brandColor,
+      button_text_color: business.buttonTextColor,
       /** 0238 — may this customer type a coupon code here? Off by default. */
       allow_customer_coupons: business.allowCustomerCoupons,
+      // Ask why when the buyer deletes their last payment method (Settings → Customer portal).
+      ask_delete_reason: resolveStorefrontConfig(business).portalAskDeleteReason,
       /**
        * The business timezone, so the buyer surface can render a date the way the
        * business's own dashboard does. Without it the portal fell back to UTC and
@@ -1159,6 +1237,14 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       if (parsed.data.address !== undefined) {
         const merged = mergePortalAddress(fieldConfig, stored, parsed.data.address);
         address = merged.address;
+        // A hidden city or region belongs to the old postal code: clear it so the save fills it
+        // from the new one (`fillAddressFromPostal`).
+        const norm = (v: string | null | undefined) => (v ?? "").replace(/\s+/g, "").toUpperCase();
+        if (norm(address.postal_code) !== norm(stored.postal_code)) {
+          for (const k of ["city", "state", "state_code"] as const) {
+            if (fieldConfig[`billing.${k}`] === "hide") address[k] = null;
+          }
+        }
         const keptAny = merged.keptAny;
         const missing = addressRequirementIssues(fieldConfig, address);
         if (missing.length > 0) return badRequest(reply, requirementIssuesError(missing));
@@ -1277,7 +1363,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         });
         return reply.code(201).send(serializeShippingAddress(row));
       } catch (e) {
-        if (e instanceof ShippingAddressError) return badRequest(reply, e.message);
+        if (e instanceof ShippingAddressError) return badRequest(reply, e.payerMessage);
         throw e;
       }
     },
@@ -1319,7 +1405,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         if (!row) return notFound(reply, `No such shipping address: ${addr}`);
         return serializeShippingAddress(row);
       } catch (e) {
-        if (e instanceof ShippingAddressError) return badRequest(reply, e.message);
+        if (e instanceof ShippingAddressError) return badRequest(reply, e.payerMessage);
         throw e;
       }
     },
@@ -1341,8 +1427,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         if (!row) return notFound(reply, `No such shipping address: ${addr}`);
         return serializeShippingAddress(row);
       } catch (e) {
-        // 409 while a live subscription ships to it; the message says which one.
-        if (e instanceof ShippingAddressError) return refuse(reply, e.status, e.message);
+        // 409 while a live subscription ships to it. The payer's words carry no id.
+        if (e instanceof ShippingAddressError) return refuse(reply, e.status, e.payerMessage);
         throw e;
       }
     },
@@ -1388,11 +1474,22 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         (customer ? await resolveCustomerCurrency(ctx.organizationId, customer) : null) ??
         biz?.defaultCurrency ??
         undefined;
-      const gws = await listVaultGatewaysForBusiness(
+      const listed = await listVaultGatewaysForBusiness(
         ctx.organizationId,
         ctx.businessId,
         currency,
         purpose,
+      );
+      // The business default first: the portal shows one "Card" row and takes the first
+      // card account, so the default wins over setup order.
+      // Then setup order, oldest first, so both portal screens pick the same account.
+      const accounts = await listGatewayAccounts(ctx.organizationId, ctx.businessId);
+      const defaultPublic = accounts.find((a) => a.id === biz?.defaultGatewayAccountId)?.publicId;
+      const created = new Map(accounts.map((a) => [a.publicId, a.createdAt.getTime()]));
+      const gws = [...listed].sort(
+        (a, b) =>
+          Number(b.id === defaultPublic) - Number(a.id === defaultPublic) ||
+          (created.get(a.id) ?? 0) - (created.get(b.id) ?? 0),
       );
       /**
        * What this buyer will actually be debited, and the amount above which the RAIL
@@ -1414,6 +1511,23 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           : 0n;
       const parties = () =>
         achAuthorizationParties(ctx.organizationId, ctx.businessId, ctx.customerId);
+      // What an account has turned on at its gateway, where the adapter can say (Stripe ACH
+      // and SEPA need activating): the same filter as Pay now's options.
+      const accByPublic = new Map(accounts.map((a) => [a.publicId, a]));
+      const activeOn = async (gwa: string): Promise<string[] | null> => {
+        const acc = accByPublic.get(gwa);
+        if (!acc) return null;
+        try {
+          return (await resolveAdapter(acc).activeMethodTypes?.()) ?? null;
+        } catch {
+          return null;
+        }
+      };
+      const railsFor = async (g: (typeof gws)[number]) => {
+        const eff = effectiveMethodTypes(g, currency, purpose);
+        const active = eff ? await activeOn(g.id) : null;
+        return eff && active ? eff.filter((m) => active.includes(m)) : eff;
+      };
       const data = await Promise.all(
         gws.map(async (g) => ({
           id: g.id,
@@ -1434,23 +1548,45 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           // The rails this account can really offer for THIS currency — the operator's
           // list when set, the adapter's capabilities when not, minus the rails the
           // currency rules out. See `effectiveMethodTypes`.
-          method_types: effectiveMethodTypes(g, currency, purpose),
+          method_types: await railsFor(g),
           // Shown before a bank account is saved, where the gateway shows no text of its own.
           ach_authorization:
             purpose === "setup"
-              ? await achAuthorizationTextFor(
-                  g.gatewayKey,
-                  effectiveMethodTypes(g, currency, purpose),
-                  parties,
-                )
+              ? await achAuthorizationTextFor(g.gatewayKey, await railsFor(g), parties)
               : null,
           // Pay now can send the buyer to this gateway's own page for Apple Pay.
           apple_pay_hosted: hostedApplePayOffered(g.gatewayKey),
         })),
       );
+      /**
+       * Option C: one row per rail across accounts, in the business's order, each on the
+       * account that takes it — the customer's override, then the business routing for this
+       * currency, then the list order (the business default first).
+       */
+      const cfg = resolveStorefrontConfig(biz);
+      const route = currency ? cfg.paymentRouting[currency] : undefined;
+      const railsOf = (g: (typeof data)[number]) =>
+        g.gateway_key === "paypal" ? ["paypal"] : (g.method_types ?? ["card"]);
+      const rails: string[] = [];
+      for (const g of data) for (const m of railsOf(g)) if (!rails.includes(m)) rails.push(m);
+      const order = route?.order ?? [];
+      const rank = (m: string) => {
+        const i = order.indexOf(m);
+        return i >= 0 ? i : order.length + (m === "card" ? 0 : 1);
+      };
+      rails.sort((a, b) => rank(a) - rank(b));
+      const method_routes = rails.flatMap((m) => {
+        const offering = data.filter((g) => railsOf(g).includes(m));
+        const g =
+          offering.find((x) => x.id === customer?.newMethodGatewayAccount) ??
+          offering.find((x) => x.id === route?.gateways[m]) ??
+          offering[0];
+        return g ? [{ method: m, gateway_account: g.id }] : [];
+      });
       return {
         object: "list",
         data,
+        method_routes,
         expected_debit_minor: Number(expectedDebitMinor),
         unattended_debit_limit_minor:
           currency && currency.toUpperCase() === "INR" ? Number(INR_AFA_FREE_CEILING_MINOR) : null,
@@ -1576,7 +1712,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
          * Best-effort, exactly like the operator route: a recovery charge that errors
          * must never fail the vault the buyer just completed.
          */
-        let collected: Array<{ invoice: string; status: string }> = [];
+        let collected: CollectedOnNewMethod[] = [];
+        let collectionEnabled = false;
         try {
           const res = await collectOutstandingForNewPaymentMethod({
             organizationId: ctx.organizationId,
@@ -1585,6 +1722,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
             paymentMethodPublicId: pm.publicId,
           });
           collected = res.collected;
+          collectionEnabled = res.enabled;
         } catch (e) {
           log.warn("collect-on-payment-method-update failed after a portal vault", {
             event: "portal_collect_after_vault_failed",
@@ -1594,6 +1732,9 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         return reply.code(201).send({
           ...(await serializePaymentMethodWithGateway(ctx.organizationId, pm)),
           collected,
+          // False: the business does not charge open invoices on a new method, so the
+          // portal says they are still due instead of staying silent.
+          collection_enabled: collectionEnabled,
         });
       } catch (e) {
         // A gateway that refuses the token isn't a server fault: tell the buyer
@@ -1674,6 +1815,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     },
   );
 
+  const deleteReasonBody = z.object({
+    reason: z.enum(["different_method", "card_replaced", "cancelling", "other"]).optional(),
+    reason_text: z.string().max(500).optional(),
+  });
   app.delete(
     "/portal/v1/payment_methods/:pm",
     { preHandler: [authenticatePortal, idempotency], onSend: idempotencyOnSend },
@@ -1696,7 +1841,16 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           });
       }
       const pm = (req.params as { pm: string }).pm;
-      const ok = await detachPaymentMethod(ctx.organizationId, ctx.customerId, pm);
+      // Why the buyer deleted their last method, when the business asks (optional; stored on
+      // the payment_source_deleted event).
+      const why = deleteReasonBody.safeParse(req.body ?? {});
+      const reason =
+        why.success && why.data.reason
+          ? { code: why.data.reason, text: why.data.reason_text ?? null }
+          : null;
+      const ok = await detachPaymentMethod(ctx.organizationId, ctx.customerId, pm, {
+        ...(reason ? { reason } : {}),
+      });
       if (!ok) return notFound(reply, `No such payment method: ${pm}`);
       return { object: "payment_method", id: pm, deleted: true };
     },
@@ -2025,8 +2179,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           error: {
             type: "invalid_request_error",
             message: offersRestart
-              ? "This subscription already ended. Use Restart subscription to start it again."
-              : "This subscription already ended. Contact us to start it again. A restart bills the " +
+              ? "This subscription already ended. Use Reactivate subscription to start it again."
+              : "This subscription already ended. Contact us to start it again. A reactivation bills the " +
                 "new period, so we will do it with you.",
           },
         });
@@ -2605,9 +2759,25 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           );
           // The portal pauses and resumes with no options, so the business's `pause_config`
           // decides both: say which, where pause or resume is offered.
+          // Keep confirms a renewal the pending cancellation would stop: price that renewal,
+          // so the dialog states the amount with the date.
+          const kept = a.reactivate
+            ? await estimateRenewal({
+                organizationId: ctx.organizationId,
+                businessId: ctx.businessId,
+                subscriptionId: sub.id,
+                ignoreScheduledCancellation: true,
+              }).catch(() => null)
+            : null;
           return {
             ...a,
             pause_terms: a.pause || a.resume ? portalPauseTerms(biz) : null,
+            keep_payment: kept
+              ? {
+                  amount_due_minor: kept.amount_due_minor ?? kept.total_minor,
+                  currency: kept.currency,
+                }
+              : null,
           };
         })(),
         // A paused subscription and when it resumes (a scheduled resume), for the plan card.
@@ -2702,7 +2872,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           shippingAddressPublicId: parsed.data.address_id,
         });
       } catch (e) {
-        if (e instanceof ShippingAddressError) return badRequest(reply, e.message);
+        if (e instanceof ShippingAddressError) return badRequest(reply, e.payerMessage);
         throw e;
       }
       if (!updated) return notFound(reply, `No such subscription: ${sub}`);
@@ -3107,6 +3277,12 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       ctx.organizationId,
       rows.map((r) => r.invoice.id),
     );
+    // A debit announced to the bank (pre-debit notice) and not yet made: not overdue.
+    const scheduled = await scheduledDebitsForInvoices(
+      ctx.organizationId,
+      rows.map((r) => r.invoice.id),
+      await businessWallClock(ctx.businessId),
+    );
     return {
       object: "list",
       data: rows.map((r) => ({
@@ -3130,6 +3306,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         // The latest charge on an invoice that is still owed, when it failed: which saved
         // method was refused, so the portal can name it and stop offering it again.
         last_payment_error: lastFailure.get(r.invoice.id) ?? null,
+        collection_scheduled_at: scheduled.get(r.invoice.id)?.toISOString() ?? null,
       })),
       has_more: hasMore,
     };
@@ -3245,6 +3422,24 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
      * list). The buyer leaves for that page and returns to `return_url`.
      */
     wallet: z.enum(["apple_pay"]).optional(),
+    /**
+     * pm_… — pay with a method the buyer already holds (Phase B). Checked against the
+     * session's customer and `savedPayOption`, the same rule the pay options list uses.
+     */
+    payment_method: z.string().max(LIMITS.id).min(1).optional(),
+    /**
+     * Phase C: keep the new method for later invoices. `save_text_version` is the consent
+     * text the buyer saw (`pay_options.new_methods[].save`); `portal_save_new_method: always`
+     * saves without a box but still needs the version shown.
+     */
+    save_method: z.boolean().optional(),
+    save_text_version: z.string().max(64).min(1).optional(),
+    /**
+     * The rail of the new-method row the buyer selected (`pay_options.new_methods[].method`):
+     * the gateway's form is pinned to it, and a save keeps that rail. Absent: the gateway's
+     * own form offers its rails (an older client).
+     */
+    method_type: z.enum(BUYER_METHOD_TYPES).optional(),
   });
   /**
    * #28a — `GatewayRouterError`, `ProviderRefusalError` and `PaymentMethodConfigError`
@@ -3277,6 +3472,93 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         "continues, contact the business.",
     );
   };
+  /**
+   * Pay now's step 1 for one invoice: the saved methods that can pay it (or why not), and
+   * the new methods to start, with the gateway already picked. See `payOptionsFor`.
+   */
+  app.get(
+    "/portal/v1/invoices/:inv/pay_options",
+    { preHandler: authenticatePortal },
+    async (req, reply) => {
+      const ctx = req.portalSession!;
+      const invId = (req.params as { inv: string }).inv;
+      const found = await getInvoiceWithLines(ctx.organizationId, ctx.businessId, invId);
+      if (!found || found.invoice.customerId !== ctx.customerId)
+        return notFound(reply, `No such invoice: ${invId}`);
+      const biz = await getBusinessById(ctx.organizationId, ctx.businessId);
+      const due = await withTenant(ctx.organizationId, (tx) =>
+        invoiceOutstanding(tx, found.invoice),
+      ).then((o) => o.remainingMinor);
+      const options = await payOptionsFor({
+        organizationId: ctx.organizationId,
+        businessId: ctx.businessId,
+        customerId: ctx.customerId,
+        defaultGatewayAccountId: biz?.defaultGatewayAccountId ?? null,
+        amountMinor: due,
+        currency: found.invoice.currency,
+        saveNewMethod: resolveStorefrontConfig(biz).portalSaveNewMethod,
+        businessName: biz?.name ?? "",
+        routing:
+          resolveStorefrontConfig(biz).paymentRouting[found.invoice.currency.toUpperCase()] ?? null,
+        customerGateway:
+          (
+            await withTenant(ctx.organizationId, (tx) =>
+              tx
+                .select({ g: customers.newMethodGatewayAccount })
+                .from(customers)
+                .where(eq(customers.id, ctx.customerId))
+                .limit(1),
+            )
+          )[0]?.g ?? null,
+        // Try again after a gateway-side failure: gwa_… to route around where possible.
+        avoidGatewayAccount: (req.query as { avoid?: string }).avoid?.slice(0, LIMITS.id) ?? null,
+      });
+      return { object: "pay_options", invoice: invId, amount_due_minor: Number(due), ...options };
+    },
+  );
+
+  /**
+   * Did the buyer select a different way to pay than the open intent's? A named saved method
+   * other than its own, or a new method (none named) after a saved-method attempt. A second
+   * click on the same choice is not a change: it resumes.
+   */
+  const openIntentMethodDiffers = async (
+    intent: PaymentIntent,
+    requested: string | undefined,
+  ): Promise<boolean> => {
+    if (!requested) return intent.savedMethodChosen === true;
+    const [row] = await withTenant(intent.organizationId, (tx) =>
+      tx
+        .select({ id: paymentMethods.id })
+        .from(paymentMethods)
+        .where(eq(paymentMethods.publicId, requested))
+        .limit(1),
+    );
+    return (intent.paymentMethodId ?? null) !== (row?.id ?? null);
+  };
+
+  /**
+   * A new-method request that is not the open intent's: another gateway, another rail, or the
+   * save box changed (option C mounts the gateway's form as the buyer moves between rows).
+   * Resuming would show the old form for the wrong choice.
+   */
+  const newChoiceDiffers = async (
+    intent: PaymentIntent,
+    asked: { gatewayAccount?: string; methodType?: string; save: boolean },
+  ): Promise<boolean> => {
+    if ((intent.methodType ?? null) !== (asked.methodType ?? null)) return true;
+    if ((intent.saveMethod === true) !== asked.save) return true;
+    if (!asked.gatewayAccount) return false;
+    const [acc] = await withTenant(intent.organizationId, (tx) =>
+      tx
+        .select({ id: gatewayAccounts.id })
+        .from(gatewayAccounts)
+        .where(eq(gatewayAccounts.publicId, asked.gatewayAccount!))
+        .limit(1),
+    );
+    return (intent.gatewayAccountId ?? null) !== (acc?.id ?? null);
+  };
+
   app.post(
     "/portal/v1/invoices/:inv/collect",
     { preHandler: [authenticatePortal, idempotency], onSend: idempotencyOnSend },
@@ -3370,9 +3652,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
                      * not be completed" would be a guess: on a part-paid invoice some
                      * of this money may well have arrived. Say what is certainly true.
                      */
-                    message:
-                      charge?.failure?.message ??
+                    message: payerFailureText(
+                      charge?.failure,
                       "This payment did not settle the invoice. An amount is still due.",
+                    ),
                   },
                 }
               : {}),
@@ -3422,7 +3705,31 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
            * succeeded payment each), and both times the buyer was told their payment had
            * not settled the invoice.
            */
-          return reportInvoice(undefined, true);
+          return { ...(await reportInvoice(undefined, true)), ...(await savedByIntent()) };
+        };
+        /**
+         * Pay and save, when the gateway's webhook consumed the intent first: the method it
+         * saved is the intent's, created after the intent. Otherwise say nothing was saved.
+         */
+        const savedByIntent = async (): Promise<Record<string, unknown>> => {
+          // The other consume saves AFTER its claim: give it a few seconds to finish.
+          for (let tries = 0; ; tries++) {
+            const fresh = await getPaymentIntent(ctx.organizationId, ctx.businessId, piId);
+            if (!fresh?.saveMethod) return {};
+            const [pm] = fresh.paymentMethodId
+              ? await withTenant(ctx.organizationId, (tx) =>
+                  tx
+                    .select()
+                    .from(paymentMethods)
+                    .where(eq(paymentMethods.id, fresh.paymentMethodId!))
+                    .limit(1),
+                )
+              : [];
+            if (pm && pm.createdAt >= fresh.createdAt)
+              return saveReport({ intent: fresh, attempt: null, savedPaymentMethod: pm });
+            if (tries >= 5) return { save_failed: true };
+            await new Promise((r) => setTimeout(r, 1000));
+          }
         };
         if (intent.status === "consumed") return settledElsewhere();
 
@@ -3443,20 +3750,20 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
             return settledElsewhere();
           throw e;
         }
-        if (!consumed) return notFound(reply, `No such payment intent: ${piId}`);
-        return reportInvoice(consumed.charge ?? undefined);
+        if (!consumed) return notFound(reply, PORTAL_INTENT_NOT_FOUND);
+        return { ...(await reportInvoice(consumed.charge ?? undefined)), ...saveReport(consumed) };
       };
 
       try {
         if (parsed.data.payment_intent) {
           const piId = parsed.data.payment_intent;
           const intent = await getPaymentIntent(ctx.organizationId, ctx.businessId, piId);
-          if (!intent) return notFound(reply, `No such payment intent: ${piId}`);
+          if (!intent) return notFound(reply, PORTAL_INTENT_NOT_FOUND);
           // An intent authorized by another buyer must never settle this invoice —
           // the same guard the operator route makes, which matters more here because
           // the caller is the buyer.
           if (intent.customerId && intent.customerId !== ctx.customerId) {
-            return badRequest(reply, `Payment intent ${piId} belongs to a different customer`);
+            return badRequest(reply, PORTAL_INTENT_NOT_FOUND);
           }
           return await settleIntent(intent);
         }
@@ -3629,7 +3936,12 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
             ctx.businessId,
             openIntent,
           );
-          if (verdict === "settle") return await settleIntent(openIntent);
+          // A hold whose capture was already refused: release it and mint a fresh payment
+          // below, on whatever the buyer selected (the same card gets a new answer).
+          const released =
+            verdict === "settle" &&
+            (await releaseRefusedCapture(ctx.organizationId, ctx.businessId, openIntent));
+          if (verdict === "settle" && !released) return await settleIntent(openIntent);
           // The buyer switched between Apple Pay on the gateway's page and its own form. Close
           // the open one and mint the one asked for; money that still lands books as late money.
           const switched =
@@ -3640,9 +3952,37 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
               openIntent,
               !!parsed.data.wallet,
             ));
-          if (switched)
-            await voidPaymentIntent(ctx.organizationId, ctx.businessId, openIntent.publicId);
-          if (verdict === "open" && !switched) {
+          /**
+           * The buyer picked a different method in step 1 (a saved card after a new-card
+           * attempt they closed, or another saved card). Resuming would re-open the old
+           * attempt and never charge the method they chose. Nothing is held yet (`open`),
+           * so close it and mint the one asked for, as for the wallet switch above.
+           */
+          const methodSwitched =
+            verdict === "open" &&
+            !switched &&
+            ((await openIntentMethodDiffers(openIntent, parsed.data.payment_method)) ||
+              (!parsed.data.payment_method &&
+                (await newChoiceDiffers(openIntent, {
+                  gatewayAccount: parsed.data.gateway_account,
+                  methodType: parsed.data.method_type,
+                  save: parsed.data.save_method === true,
+                }))));
+          if (switched || methodSwitched) {
+            try {
+              await voidPaymentIntent(ctx.organizationId, ctx.businessId, openIntent.publicId);
+            } catch (e) {
+              // Nothing is held yet (`open`), and this gateway has no void: close our row
+              // only. Money paid later in the old window books as late money.
+              if (!(e instanceof PaymentIntentVoidUnsupportedError)) throw e;
+              await markPaymentIntentVoidedFromGateway(
+                ctx.organizationId,
+                ctx.businessId,
+                openIntent.publicId,
+              );
+            }
+          }
+          if (verdict === "open" && !switched && !methodSwitched) {
             const openView = serializePaymentIntent(openIntent);
             /**
              * Replayable only while the stored `next_action` is still there. It is, for a
@@ -3700,6 +4040,93 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         //
         // Renewals are untouched: an off-session debit charges the stored token, and only
         // the gateway holding it can — see `resolveAccountForPm`.
+        // A saved method: charge it with the buyer present, or debit its mandate.
+        let savedPm: typeof paymentMethods.$inferSelect | null = null;
+        if (parsed.data.payment_method) {
+          const [pm] = await withTenant(ctx.organizationId, (tx) =>
+            tx
+              .select()
+              .from(paymentMethods)
+              .where(
+                and(
+                  eq(paymentMethods.customerId, ctx.customerId),
+                  eq(paymentMethods.publicId, parsed.data.payment_method!),
+                ),
+              )
+              .limit(1),
+          );
+          // Same answer for "unknown" and "someone else's".
+          if (!pm)
+            return badRequest(
+              reply,
+              "We could not find that payment method. Select a different one, or add one.",
+            );
+          const option = savedPayOption(pm, due, found.invoice.currency);
+          if (!option || !option.available)
+            return badRequest(
+              reply,
+              option?.reason ??
+                "You cannot pay this invoice with that payment method. Select a different one.",
+            );
+          if (option.kind === "debit") {
+            // Off-session by nature: the gateway debits the mandate and settles later.
+            let debited: Awaited<ReturnType<typeof collectInvoiceNow>>;
+            try {
+              debited = await collectInvoiceNow(ctx.organizationId, ctx.businessId, invId, {
+                paymentMethodOverrideId: pm.publicId,
+              });
+            } catch (e) {
+              // A pre-debit notice went out and the debit follows: scheduled, not refused.
+              if (e instanceof InvoiceCollectionScheduledError) {
+                const fresh = await getInvoiceWithLines(ctx.organizationId, ctx.businessId, invId);
+                return {
+                  ...serializeInvoice(fresh?.invoice ?? found.invoice, {
+                    biz,
+                    paidMinor: fresh?.paidMinor ?? found.paidMinor,
+                  }),
+                  collection_scheduled: {
+                    at: e.until.toISOString(),
+                    message:
+                      "We sent your bank a notice. We will take the payment in about 1 day. " +
+                      "You do not have to do anything. Do not pay again.",
+                  },
+                };
+              }
+              if (!(e instanceof InvoiceOpsError)) throw e;
+              log.warn("portal saved-method debit refused", {
+                event: "portal_saved_debit_refused",
+                invoice: invId,
+                detail: e.message,
+              });
+              return badRequest(
+                reply,
+                "We could not take the payment. Reload the page. Then try again.",
+              );
+            }
+            const { invoice: after, payment } = debited;
+            const fresh = await getInvoiceWithLines(ctx.organizationId, ctx.businessId, invId);
+            const view = serializeInvoice(fresh?.invoice ?? after, {
+              biz,
+              paidMinor: fresh?.paidMinor ?? found.paidMinor,
+            });
+            return {
+              ...view,
+              ...(payment && payment.status === "failed"
+                ? {
+                    payment_error: {
+                      code: payment.failureCode ?? "card_declined",
+                      message: payerFailureText(
+                        { code: payment.failureCode, message: payment.failureMessage },
+                        "We could not take the payment.",
+                      ),
+                    },
+                  }
+                : {}),
+            };
+          }
+          savedPm = pm;
+        }
+
         // Card limit (0482): the gateway's sheet offers cards, so above it there is no
         // checkout to open. A live intent above resumes; only a NEW checkout is refused.
         if (overCardLimit(biz, found.invoice.currency, due))
@@ -3772,6 +4199,34 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
          * setup intent already does; not done here, because it also touches the intent
          * row and the consume path.
          */
+        // Pay and save (Phase C): a NEW method only, with the consent text the buyer saw.
+        const saveCfg = resolveStorefrontConfig(biz).portalSaveNewMethod;
+        let saveAsk: ReturnType<typeof onFileConsentEvidence> | null = null;
+        if (
+          !savedPm &&
+          saveCfg !== "never" &&
+          (parsed.data.save_method === true || saveCfg === "always") &&
+          parsed.data.save_text_version
+        ) {
+          try {
+            saveAsk = onFileConsentEvidence(
+              {
+                textVersion: parsed.data.save_text_version,
+                ipAddress: clientIp(req),
+                userAgent: req.headers["user-agent"] ?? null,
+              },
+              {
+                businessName: biz?.name ?? "",
+                payerName:
+                  [payCustomer.firstName, payCustomer.lastName].filter(Boolean).join(" ") || null,
+                payerEmail: payCustomer.email ?? null,
+              },
+            );
+          } catch (e) {
+            if (e instanceof OnFileConsentError) return badRequest(reply, e.message);
+            throw e;
+          }
+        }
         const { intent } = await createPaymentIntent({
           organizationId: ctx.organizationId,
           businessId: ctx.businessId,
@@ -3801,7 +4256,9 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
            * ⚠️ The hardcode itself is still there and still wrong for any other caller
            * that relies on the fallback. Tracked in PROGRESS.
            */
-          letBuyerChooseMethod: true,
+          ...(savedPm
+            ? { paymentMethodPublicId: savedPm.publicId }
+            : { letBuyerChooseMethod: true as const }),
           // Required now that no payment method is passed: it is what the intent routes
           // and charges against. The session's own customer is the backstop, since a
           // portal invoice always belongs to the buyer holding the session.
@@ -3809,7 +4266,10 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           // The buyer's pick PINS the account. `resolvePinnedAccount` still makes it
           // prove it handles this currency and is active, so a stale pick fails by name
           // rather than quietly charging somewhere else.
-          ...(parsed.data.gateway_account ? { gatewayAccountId: parsed.data.gateway_account } : {}),
+          // A saved method routes to the account that holds it.
+          ...(parsed.data.gateway_account && !savedPm
+            ? { gatewayAccountId: parsed.data.gateway_account }
+            : {}),
           amountMinor: Number(due),
           currency: found.invoice.currency,
           invoicePublicId: invId,
@@ -3817,8 +4277,29 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           ...(parsed.data.return_url ? { returnUrl: parsed.data.return_url } : {}),
           ...(parsed.data.cancel_url ? { cancelUrl: parsed.data.cancel_url } : {}),
           ...(parsed.data.wallet ? { hostedWallet: parsed.data.wallet } : {}),
+          ...(saveAsk ? { saveForFuture: true, saveConsent: saveAsk } : {}),
+          ...(parsed.data.method_type && !savedPm && !parsed.data.wallet
+            ? { methodTypes: [parsed.data.method_type] }
+            : {}),
         });
         const view = serializePaymentIntent(intent);
+        // Refused when created (a saved card the bank declined): say so. Consuming it
+        // would only report "not confirmed yet, do not pay again" for money never taken.
+        if (intent.lastAttemptStatus === "failed" && intent.status !== "authorized") {
+          const last = (
+            await listAttemptsForIntent(ctx.organizationId, ctx.businessId, intent.publicId)
+          ).at(-1);
+          return {
+            ...serializeInvoice(found.invoice, { biz, paidMinor: found.paidMinor }),
+            payment_error: {
+              code: last?.errorCode ?? "card_declined",
+              message: payerFailureText(
+                last?.errorCode ? { code: last.errorCode, message: last.errorText } : null,
+                "We could not take the payment. Use a different payment method.",
+              ),
+            },
+          };
+        }
         // Already authorized without a challenge (a gateway that needed none): consume
         // it straight away rather than handing the client a no-op action.
         if (!view.next_action) {
@@ -3838,11 +4319,14 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
               ? {
                   payment_error: {
                     code: consumed.charge.failure?.code ?? "capture_failed",
-                    message:
-                      consumed.charge.failure?.message ?? "We could not complete the payment",
+                    message: payerFailureText(
+                      consumed.charge.failure,
+                      "We could not complete the payment.",
+                    ),
                   },
                 }
               : {}),
+            ...(consumed ? saveReport(consumed) : {}),
           };
         }
         return reply.code(200).send({

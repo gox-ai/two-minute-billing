@@ -60,6 +60,8 @@ export const customers = pgTable(
     // Auto-collection (CP-1): 'on' = charge the vaulted PM when an invoice is created
     // (default, today's behavior); 'off' = leave the invoice open (send-invoice).
     autoCollection: text("auto_collection").notNull().default("on"), // on | off
+    /** gwa_… a new payment method of this customer goes to, ahead of the business routing (0546). */
+    newMethodGatewayAccount: text("new_method_gateway_account"),
     netTermDays: integer("net_term_days").notNull().default(0), // Net-D for send-invoice
     invoiceNotes: text("invoice_notes"), // default note stamped on this customer's invoices
     // Billing address — needed for tax, invoicing, and some providers' compliance

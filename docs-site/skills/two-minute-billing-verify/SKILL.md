@@ -1,6 +1,6 @@
 ---
 name: two-minute-billing-verify
-description: Prove a Two Minute Billing integration works before go-live, on real test-mode invoices — check the app's webhook route rejects forged events (no tunnel needed), run subscriptions and one-time purchases with test cards that succeed, decline, need 3-D Secure or fail later, move the business clock forward by API to run renewals, trial ends and dunning, and compare each invoice with the expected figures field by field. Use after integrating, after a pricing change, or when asked whether billing is correct.
+description: Prove a Two Minute Billing integration works before go-live, on real test-mode invoices — check the app's webhook route rejects forged events (no tunnel needed), run subscriptions and one-time purchases with test cards that succeed, decline, need 3-D Secure or fail later, move the business clock forward by API to run renewals, trial ends and dunning, prove usage billing, credit refusals and automatic top-up, test a cancel in the customer portal, and compare each invoice with the expected figures field by field, with the tmb command line or its bundled scripts. Use after integrating, after a pricing change, or when asked whether billing is correct.
 license: MIT
 metadata:
   homepage: https://twominutebilling.com
@@ -10,18 +10,26 @@ metadata:
 # Prove it works
 
 A 2xx answer is not proof that the money is right. This skill checks real invoices on a real test
-business, with scripts that fetch the evidence themselves. Every script runs with the project's
-env file and refuses anything but a test key:
+business, with commands that fetch the evidence themselves. Run them with `tmb` (start-here skill,
+"The `tmb` command line"). Each one refuses anything but a test key:
 
 ```bash
-node --env-file=<env file> <this skill>/scripts/<script>.mjs …
+tmb <command> … --env-file <env file>
 ```
 
-| Script | Checks |
-|---|---|
-| `webhook-check.mjs --url http://localhost:<port>/<path>` | The app's route refuses a forged event (401), accepts a signed one (2xx) and accepts a repeat (2xx). Loopback only. |
-| `clock.mjs start / advance --by 1m / status / stop` | Moves the test business's clock: renewals, trial ends, invoices, charges and retries due in between run now. `--by` takes `h` (hours), `d`, `w`, `m` (**months**, not minutes) and `y`; the smallest step is `1h`, and `--to <ISO time>` goes to an exact instant. `stop` keeps test data unless `--wipe`. |
-| `money-check.mjs --expected e.json --subscription sub_…` (or `--invoice inv_…`, or `--session cosess_…` for a purchase) | Fetches the invoice and compares each expected field, the tax lines and the metadata; writes evidence with `--report`. |
+If an install or `npx` is blocked, run the bundled script instead, with the same flags:
+`node --env-file=<env file> <this skill>/scripts/<script>.mjs …`. `tmb` passes every flag to
+that script unchanged, so the checks and exit codes are the same. Only the env file differs:
+`tmb` takes `--env-file <path>` (and loads `./.env` without it), `node` takes `--env-file=<path>`.
+
+| Command (`tmb`) | Script fallback | Checks |
+|---|---|---|
+| `tmb webhooks test --url http://localhost:<port>/<path>` | `webhook-check.mjs --url …` | The app's route refuses a forged event (401), accepts a signed one (2xx) and accepts a repeat (2xx). Loopback only. |
+| `tmb clock start / advance --by 1m / status / stop` | `clock.mjs start / advance … / status / stop` | Moves the test business's clock: renewals, trial ends, invoices, charges and retries due in between run now. `--by` takes `h` (hours), `d`, `w`, `m` (**months**, not minutes) and `y`; the smallest step is `1h`, and `--to <ISO time>` goes to an exact instant. `start --at <ISO time>` starts at another instant. `stop` keeps test data unless `--wipe`. |
+| `tmb check --expected e.json --subscription sub_…` (or `--invoice inv_…`, or `--session cosess_…` for a purchase) | `money-check.mjs --expected … --subscription …` | Fetches the invoice and compares each expected field, the tax lines and the metadata; writes evidence with `--report`. |
+
+`tmb clock` and `tmb check` also take `--business biz_…` (default `TMBILLING_BUSINESS_ID`);
+`tmb webhooks test` also takes `--type <event type>` (default `customer_updated`).
 
 The expected file holds integers in minor units. Every field is optional except `total_minor`:
 
@@ -53,18 +61,24 @@ that bills no tax (no tax region for the buyer's country) still carries one line
 Show this plan, adjusted to the user's catalog, and wait for a yes. Each scenario uses its own test
 customer, so the user's other test data is not touched.
 
-1. **Webhook route.** Start the app, then run `webhook-check.mjs`. Fix the route until it passes.
-   Then start `tmb listen` ("Webhooks from the engine"), so the scenarios' real events reach it.
-2. **Start the clock** at now: `clock.mjs start`. Create the scenarios after this, so they run on the
+1. **Webhook route.** Start the app, then run `tmb webhooks test --url …`. Fix the route until it
+   passes. Then start `tmb listen` ("Webhooks from the engine"), so the scenarios' real events
+   reach it.
+2. **Start the clock** at now: `tmb clock start`. Create the scenarios after this, so they run on the
    simulated clock. The started clock **does not move** by itself: it stays at `simulated_now`
    until you advance it. Usage events, holds and the access check all read that one instant, so
    usage sent now shows as "this period" only after the clock moves past it. Advance by `1h` (or
    `--to` a later instant) before you check a balance or usage, and expect the earlier figures
    until then.
-3. **First invoice.** A customer with test card `4242424242424242` (`tmb.paymentMethods.create` with
-   that number as `token`) subscribes to the main plan. Money check: status `paid`, the plan's total.
-4. **Renewal.** `clock.mjs advance --by 1m` (or the plan's interval). Money check on the newest
-   invoice. With usage: send events before advancing and expect them on the renewal.
+3. **First invoice.** `tmb trigger subscription --price <main plan's price id>`: a new test
+   customer with test card `4242424242424242` subscribes, and the command prints the `sub_…`.
+   Without `--price` it takes the first active recurring price that is not metered, so name the
+   plan, and pick a price with no trial (trials are step 5). Money check: status `paid`, the plan's
+   total. The trigger's customer has an email and no address. To check tax, create the customer
+   by API with the buyer's address, add the card (`tmb.paymentMethods.create` with that number as
+   `token`) and subscribe it.
+4. **Renewal.** `tmb clock advance --by 1m` (or the plan's interval). Money check on the newest
+   invoice. With usage, see "Usage and credits" below.
 5. **Trial end**, if a plan has a trial: subscribe, advance past `trial_end`, check the first charge
    (or the cancellation, if the trial ends without a card).
 6. **Failed payment:** card `4000000000009995` (insufficient funds, retried). While retries run the
@@ -111,7 +125,56 @@ customer, so the user's other test data is not touched.
      action runs (default: cancel the subscription).
    - `next_renewal`: `200`, and the change applies at once. The invoice's first retry waits
      until the term ends.
-9. **Stop the clock:** `clock.mjs stop` (keeps the scenario data for the user to look at).
+9. **Stop the clock:** `tmb clock stop` (keeps the scenario data for the user to look at).
+
+**Usage and credits**, if the app meters usage or sells credits (usage skill). Run these on the
+clock, before step 9, each with its own customer. The engine checks an event's `timestamp`
+against the clock's `simulated_now`: more than 5 minutes after it is `timestamp_in_future`, more
+than 35 days before it `timestamp_too_old`. An event with no `timestamp` takes `simulated_now`.
+Read balances and usage only after `tmb clock advance --by 1h` (step 2).
+
+- **Events bill.** Subscribe a customer to the plan with the meter's price and do the app's real
+  actions. `tmb.usageEvents.list` with the meter shows each event `matched` (`unmatched`: the usage
+  key is not on the customer); a repeat of a key answers `duplicate`. Advance across the renewal
+  and money check the usage line on the renewal invoice.
+- **Access check.** `GET /v1/businesses/{biz}/access?customer_key=<key>&meter=<meter>` with
+  `estimate=<minor units>` (credit with a money value) or `estimate_units=<credits>` (a meter with
+  a credit cost). With credit: `allowed: true`. Spend the credit, advance `1h`, check again:
+  `allowed: false`, `code: "insufficient_credit"`, and the app refuses the action. For a money
+  value, the check refuses only under a block policy, so `credit_config.blocking_enabled` must be
+  `true`; with blocking off it answers `allowed: true` and the usage is billed. `on_exhausted`
+  in the answer shows the policy and its `source`.
+- **Refused at ingest** (a meter with a credit cost). With the balance spent, the next event
+  answers `402` `insufficient_credit`: it is stored and not billed, and `credit_usage_refused` is
+  sent. Check that the app treats the 402 as "not enough credit" and sends a new key after the
+  customer buys credit (a replay of the key answers 402 again). Under `bill` with an overage price,
+  or inside an overdraft limit, the event is accepted instead.
+- **Free trial** (a meter with a credit cost, a plan with a trial). A trial gets no plan credits.
+  With the default `credit_config.trial_usage: "refuse"`, an event the balance does not cover
+  answers 402, and the access check shows `on_exhausted.source: "trial"`.
+- **Automatic top-up**, if the app turns it on: the customer has card `4242424242424242` and a
+  `PUT …/customers/{cus}/auto_topup` config (usage skill). Send events until the balance is at or
+  below `threshold_units`, then advance `1h`: the clock runs the top-up. The pack's invoice is
+  paid, `credit_auto_topup_succeeded` is sent, and the access check shows the pack's credits.
+
+**Customer portal**, if the app links to it. A buyer cancel needs
+`storefront_config.allow_cancel_subscription: true` (off by default; dashboard: **Settings →
+Hosted pages**). The business PATCH replaces `storefront_config` whole: send the stored object
+with the key changed. With a subscribed test customer on the clock:
+
+1. `POST /v1/businesses/{biz}/customers/{cus}/portal_sessions` with `{}`, or
+   `{ "action": "cancel_subscription", "object": "sub_…" }` to open the cancel dialog. Give the
+   user the `url`: it works once, until `access_expires_at`.
+2. The user cancels in the portal (the dialog can ask a reason and show offers first; **Cancel
+   subscription** goes on). With `cancel_timing: "end_of_term"` (the default),
+   `subscription_cancel_scheduled` is sent: the subscription is `non_renewing`,
+   `cancel_at_period_end: true`, and `canceled_at` is the term end. The app must keep access.
+3. Advance past the term end: `subscription_canceled` is sent, the subscription is `cancelled`,
+   and the app must remove access. Under `cancel_timing: "immediately"` the portal cancel sends
+   `subscription_canceled` at once.
+
+With `storefront_config.allow_plan_changes: true`, test a plan change the same way: the app must
+follow `subscription_changed` (applied now) or `subscription_change_scheduled` (at the term end).
 
 **A one-time store** needs no clock. Run these instead of steps 2–9:
 
@@ -129,13 +192,13 @@ customer, so the user's other test data is not touched.
    buyer can select Pay again and Approve. On a subscription checkout whose card step shows a
    **Test card number** field, type `4000000000000002`: the payment is declined, no subscription
    is created, and the buyer can try again with `4242424242424242`. To prove the app's
-   `payment_failed` handling by API:
-   create a **new** test customer (one with no other card: a second card is a backup that pays),
-   add the payment method `{ "token": "4000000000000002" }`, make it the
-   default, raise an invoice with the price's amount as a line (`POST /v1/businesses/{biz}/invoices`
-   takes `lines: [{ description, amount_minor, quantity }]`, not a price id) and collect it
-   (`POST /v1/businesses/{biz}/invoices/{inv}/collect`). The invoice stays unpaid and
-   `payment_failed` is sent. A declined checkout raises no invoice, so it sends no
+   `payment_failed` handling, run `tmb trigger payment-failed --price <one-time price id>`: a
+   **new** test customer whose only card is `4000000000000002` (a second card is a backup that
+   pays) gets an invoice for that price, collected at once. The invoice stays unpaid and
+   `payment_failed` is sent; the command exits 2 if the invoice was paid. By API: the same
+   customer and card, then `POST /v1/businesses/{biz}/invoices` with `{ "customer": "cus_…",
+   "lines": [{ "price": "<price id>" }], "collect": true }` (a line takes a `price`, or a
+   `description` and `amount_minor`). A declined checkout raises no invoice, so it sends no
    `payment_failed`.
 
    A one-time invoice is not retried by default: a soft decline (`4000000000009995`) leaves it
@@ -162,18 +225,26 @@ https://twominutebilling.com/help/developers/getting-started/test-and-live.md
 
 ## Webhooks from the engine
 
-`webhook-check.mjs` proves the handler on a sample event. To run it on the real events of the
+`tmb webhooks test` proves the handler on a sample event. To run it on the real events of the
 scenarios, with no tunnel, run `tmb listen` while the app runs, in the background or in the user's
-own terminal (it does not stop by itself):
+own terminal (it does not stop by itself). It has no script fallback:
 
 ```bash
-npx @two-minute-billing/cli listen --forward http://localhost:<port>/<path> --env-file <env file>
+tmb listen --forward http://localhost:<port>/<path> --env-file <env file>
 ```
 
 It refuses a key that is not a test key, and posts each new event of the test business to the
 loopback URL with the body and `Tmbilling-Signature` an endpoint gets, signed with
 `TMBILLING_WEBHOOK_SECRET`. It prints one line for each event with the app's HTTP status: every
-line must show a 2xx. The events that `clock.mjs advance` causes are sent too.
+line must show a 2xx. The events that `tmb clock advance` causes are sent too. `--events a,b`
+sends only those types. It sends every event the engine writes for the business, but the engine
+writes `credit_usage_settled` only while an enabled webhook endpoint of the organization lists it
+by name.
+
+For a first real event without a scenario, run `tmb trigger purchase` (a one-time price:
+`invoice_paid`, `payment_succeeded`) or `tmb trigger subscription` (`subscription_created`)
+while `tmb listen` runs. The trigger's invoice belongs to no order in the app, so this proves
+that real events reach the route, not the order flow.
 
 `listen` sends each event once, and its sends are not in `/deliveries`. To prove the engine's own
 delivery and retries, the engine must reach the app: a public URL (the user's tunnel, or a deployed
@@ -206,17 +277,27 @@ reset. It deletes every customer, invoice and payment, the catalog, coupons, tax
 endpoints and gateways of the test business. Then it copies every setting of the live business
 onto it: name, address, tax registration number, coupon and billing rules. A setting made only on
 the test business (for example the seller's address or tax number, `allow_customer_coupons`,
-`zero_invoice_paid_event`) goes back to the live business's value, which can be empty. Run
-`catalog.mjs --apply` (pricing skill) again after the reset: `billing.catalog.json` puts back the
-catalog, coupons, tax regions and settings it lists. The business id and the keys stay. It cannot be undone, so say what it deletes and wait for the
-user's own yes:
+`zero_invoice_paid_event`) goes back to the live business's value, which can be empty. A running
+clock stops. Run `tmb push --apply` (pricing skill; script fallback `catalog.mjs --apply`) again
+after the reset: `billing.catalog.json` puts back the catalog, coupons, tax regions and settings
+it lists. The business id, the keys and the audit log stay. It cannot be undone, so say what it
+deletes and wait for the user's own yes. Then run:
+
+```bash
+tmb reset --confirm biz_… --env-file <env file>
+```
+
+`--confirm` takes the business id; without it `tmb` asks for the id in a terminal and stops when
+there is none. It refuses a live business and a key that is not a test key. It calls the same
+endpoint as this request, the fallback with no `tmb`:
 
 ```bash
 curl -X POST "$TMBILLING_URL/v1/businesses/$TMBILLING_BUSINESS_ID/test_data/reset" \
   -H "Authorization: Bearer $TMBILLING_API_KEY" -H "Idempotency-Key: $(uuidgen)"
 ```
 
-To delete only the customers and keep the catalog, send `DELETE …/test_data` instead.
+To delete only the customers and keep the catalog, send `DELETE …/test_data` instead (`tmb`
+has no command for it).
 
 ## Report
 

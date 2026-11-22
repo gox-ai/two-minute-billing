@@ -52,6 +52,19 @@ reconciliation), and payment-intents.
   ride the same transaction as the ledger entries.
 
 ## Changelog
+- **2026-11-20** — `attribution.ts`: billed revenue is net per line. `billedRevenueByInvoice`
+  returns gross, deductions (`coupon`, `promotional_credit`, `plan_credit`, `prepaid_credit`)
+  and net (`amountMinor`) per line, from the pure `revenuePartsOf` (promo columns + grant draw
+  movements, read in the same 5,000-id chunks). Cash weights (`lineWeightsFor`) subtract the same
+  credits and the tax a taxed-at-use draw paid, so cash on a promo invoice splits as net revenue +
+  tax. `invoice_total_consistent` is untouched (it reads the stored columns). Gates:
+  `test/unit/revenue-net.test.ts`, `verify:metric-revenue-net`.
+  `revenue.ts` (`collectedRevenue`) stays CASH. Customer and subscription tiles show net billed
+  revenue as Revenue, with Cash collected beneath it. Cash and record-revenue checks P/K/O/S are
+  in the same suite.
+- **2026-11-17** — Orphaned intents: an id with a booked `payments` row (same business,
+  `provider_charge_id`) is recorded, in both populations. A capture the webhook booked with no
+  transaction no longer counts as an orphan. Gate: `verify:stale-pending` § P2.
 - **2026-11-03** — Stale-pending, AFA recheck and abandon: the gateway status poll joins the
   charge's own span (`joinSpan(txn.spanId)`), so the charge's gateway-log link shows the checks
   that settled it.
@@ -485,6 +498,13 @@ Three things are worth carrying forward:
 Gated by `verify:settlement-poll` (35 checks). The refunds sweep
 (`refunds/stale-pending.ts`) has the same shape and is deliberately **not** converted: it did not
 appear in the measured cost, and the table is keyed so it can adopt this without a migration.
+- **2026-11-17** — `settlePaymentFailed` emits `payment_failed` after it writes the invoice's
+  dunning state (still the first event of the settlement), as the synchronous path does, so the
+  email outbox sees a park on our own refused request and sends the payer nothing. It passes
+  `requestFault` to `planFailureRearm`. Cover: `verify:dunning` Case R2.
+- **2026-11-17** — The async failure writer passes the retry rail (`retryRailOf`), the issuer
+  country and `gatewayRetriedCycle` to `planFailureRearm`, so a Razorpay UPI failure after the
+  gateway's own retries parks, and a NACH return other than insufficient funds parks.
 
 ## Orphaned gateway intents — 2026-09-05
 

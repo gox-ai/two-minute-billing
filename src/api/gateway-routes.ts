@@ -194,6 +194,7 @@ export async function registerGatewayRoutes(app: FastifyInstance) {
           ...(parsed.data.international_enabled !== undefined
             ? { internationalEnabled: parsed.data.international_enabled }
             : {}),
+          checkCredentials: true,
         });
         await registerWebhookEndpointOnCreate({
           organizationId: req.organization!.id,
@@ -277,6 +278,7 @@ export async function registerGatewayRoutes(app: FastifyInstance) {
           methodTypes: parsed.data.method_types,
           status: parsed.data.status,
           internationalEnabled: parsed.data.international_enabled,
+          checkCredentials: true,
         });
         if (!row) return notFound(reply, "Gateway account not found");
         if (parsed.data.default === true)

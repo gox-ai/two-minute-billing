@@ -1,3 +1,4 @@
+import type { PaymentInitiator } from "@/lib/payment-trigger";
 // Typed fetchers for receipts (read-only). Server-only.
 // Shapes mirror src/modules/receipts/service.ts `serializeReceipt`.
 import { apiGet, apiGetOrNull, listQuery } from "@/lib/api";
@@ -12,6 +13,8 @@ export interface ReceiptAllocation {
 
 export interface Receipt {
   object: "receipt";
+  /** What started the charge behind it. Null when not recorded. */
+  initiated_by?: PaymentInitiator | null;
   id: string;
   /** Null until the numbering job runs (seconds after the payment). */
   number: string | null;

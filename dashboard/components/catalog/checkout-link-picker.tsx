@@ -15,15 +15,16 @@ export function CheckoutLinkPicker({
 }) {
   const [price, setPrice] = React.useState(options[0]?.value ?? "");
   return (
-    // Stacked on a phone: side by side, the button left the picker too narrow to read.
-    <div className="flex w-full flex-col items-start gap-2 sm:w-auto sm:flex-row sm:items-center">
+    // Stacked on a phone: side by side, the button left the picker too narrow to read. In a
+    // narrow card the button wraps under the picker.
+    <div className="flex w-full max-w-full flex-col items-start gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
       <SelectField
         size="sm"
         ariaLabel="Price"
         options={options}
         value={price}
         onValueChange={setPrice}
-        className="sm:w-72"
+        className="max-w-full sm:w-72"
       />
       <SecretLinkButton mint={() => mint(price)}>Create checkout link</SecretLinkButton>
     </div>

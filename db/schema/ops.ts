@@ -51,6 +51,13 @@ export const opsInvariantResults = pgTable(
      */
     violations: bigint("violations", { mode: "number" }),
     /**
+     * Violating rows an operator acknowledged as handled (0536). Not in `violations`, so a
+     * fully acknowledged check reads clean. Null where the check produced no answer.
+     */
+    acknowledged: bigint("acknowledged", { mode: "number" }),
+    /** `[{ acknowledgement, row_key }]` for each acknowledged row this run matched. */
+    acknowledgedRows: jsonb("acknowledged_rows"),
+    /**
      * A capped array of offending rows: identifying ids plus the values that make each
      * one a violation, plus the organization/business public ids so a reader can
      * navigate to the tenant it belongs to. Capped because a systemic break produces
@@ -357,6 +364,49 @@ export const buyerRequestRejections = pgTable(
   (t) => [
     index("buyer_request_rejections_created_idx").on(t.createdAt),
     index("buyer_request_rejections_session_idx").on(t.sessionPublicId, t.createdAt),
+  ],
+);
+
+/**
+ * One row per payment or setup error the storefront SHOWED a buyer, reported by the browser
+ * (0539). `leak` is computed on write: the text is not made only of our payer wording, so a
+ * gateway's own words reached the screen. The back-office posts each new leaked text and a
+ * decline code that spikes. Written by `systemDb` only; `sweepBuyerClientErrors` keeps 30 days.
+ */
+export const buyerClientErrors = pgTable(
+  "buyer_client_errors",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    /** `portal` or `checkout`. */
+    surface: text("surface").notNull(),
+    sessionPublicId: text("session_public_id").notNull(),
+    organizationId: uuid("organization_id").notNull(),
+    businessId: uuid("business_id").notNull(),
+    customerId: uuid("customer_id"),
+    /** Where on the page, as the storefront names it. */
+    step: text("step"),
+    /** The storefront path. */
+    page: text("page"),
+    /** Gateway key (`stripe`, `razorpay`, …), when the form that failed was a gateway's. */
+    gateway: text("gateway"),
+    gatewayType: text("gateway_type"),
+    gatewayCode: text("gateway_code"),
+    declineCode: text("decline_code"),
+    /** The gateway's own words, capped and redacted. For ops, never shown to anyone else. */
+    gatewayMessage: text("gateway_message"),
+    /** The exact text the buyer read, capped and redacted. */
+    text: text("text").notNull(),
+    /** The text keeps a gateway form's field instruction on purpose: never a leak. */
+    fieldError: boolean("field_error").notNull().default(false),
+    leak: boolean("leak").notNull(),
+  },
+  (t) => [
+    index("buyer_client_errors_created_idx").on(t.createdAt),
+    index("buyer_client_errors_session_idx").on(t.sessionPublicId, t.createdAt),
+    index("buyer_client_errors_business_idx").on(t.businessId, t.createdAt),
   ],
 );
 

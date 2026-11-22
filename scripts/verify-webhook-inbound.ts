@@ -51,6 +51,7 @@ import {
   transactions,
   invoices,
   ledgerEntries,
+  events,
 } from "@db/schema";
 
 /**
@@ -346,6 +347,22 @@ async function main() {
       ok(
         `razorpay: pending payment settled (status=${settledPay[0]?.status})`,
         settledPay[0]?.status === "succeeded",
+      );
+      // Provenance: the gateway settled it, so the event says so — not `api`.
+      const settledEvents = await systemDb
+        .select({ source: events.source, actor: events.actor })
+        .from(events)
+        .where(
+          and(
+            eq(events.organizationId, orgId),
+            eq(events.resourceId, settledPay[0]!.publicId),
+            eq(events.type, "payment_succeeded"),
+          ),
+        );
+      ok(
+        "razorpay: payment_succeeded from the webhook carries source=webhook, actor=razorpay",
+        settledEvents.length > 0 &&
+          settledEvents.every((e) => e.source === "webhook" && e.actor === "razorpay"),
       );
       const settledTxn = await withTenant(orgId, (tx) =>
         tx.select().from(transactions).where(eq(transactions.idAtGateway, asyncChargeId)).limit(1),

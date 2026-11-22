@@ -45,11 +45,25 @@ function markFigures(text: string, unverified: string[], key: string): React.Rea
 
 let badLinks: ReadonlySet<string> = new Set();
 
-function inline(text: string, biz: string, unverified: string[], key: string): React.ReactNode[] {
+/** The business, and the answer's ids with no prefix by dashboard folder (`record_links`). */
+interface Where {
+  biz: string;
+  records: Readonly<Record<string, string>>;
+}
+
+/** INLINE, plus the answer's own unprefixed record ids as whole words. */
+function inlinePattern(records: Readonly<Record<string, string>>): RegExp {
+  const ids = Object.keys(records).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
+  if (!ids.length) return INLINE;
+  return new RegExp(`${INLINE.source}|(?<![\\w-])(${ids.join("|")})(?![\\w-])`, "g");
+}
+
+function inline(text: string, at: Where, unverified: string[], key: string): React.ReactNode[] {
+  const { biz, records } = at;
   const out: React.ReactNode[] = [];
   let last = 0;
   let i = 0;
-  for (const m of text.matchAll(INLINE)) {
+  for (const m of text.matchAll(inlinePattern(records))) {
     const k = `${key}-${i++}`;
     if (m.index > last) out.push(...markFigures(text.slice(last, m.index), unverified, k));
     const [tok] = m;
@@ -85,7 +99,7 @@ function inline(text: string, biz: string, unverified: string[], key: string): R
         ),
       );
     } else {
-      const href = recordHref(biz, tok);
+      const href = recordHref(biz, tok, records[tok]);
       // An id is one word: it never breaks across lines.
       out.push(
         href ? (
@@ -149,7 +163,7 @@ function AnswerTable({
   k,
 }: {
   b: Extract<Block, { kind: "table" }>;
-  biz: string;
+  biz: Where;
   unverified: string[];
   k: string;
 }) {
@@ -228,14 +242,21 @@ function CodeBlock({ b }: { b: Extract<Block, { kind: "code" }> }) {
 
 export function AnswerMarkdown({
   text,
-  biz,
+  biz: business,
   unverified = [],
+  records,
 }: {
   text: string;
   biz: string;
   unverified?: string[];
+  /** `figures.record_links`: ids in the answer with no prefix, by dashboard folder. */
+  records?: Record<string, string>;
 }) {
   const blocks = React.useMemo(() => parseAnswer(text), [text]);
+  const biz = React.useMemo<Where>(
+    () => ({ biz: business, records: records ?? {} }),
+    [business, records],
+  );
   return (
     <div className="flex min-w-0 flex-col gap-2.5 text-sm leading-relaxed wrap-break-word">
       {blocks.map((b, n) => {

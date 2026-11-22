@@ -51,12 +51,10 @@ export function useItemPages({
   const queryRef = React.useRef(query);
   const req = React.useRef(0);
   const loaded = React.useRef(seeded ? `${key}|${token}` : "");
-  // Declared before the fetch effect, so it reads this render's values.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     stateRef.current = state;
     queryRef.current = query;
   });
-
   React.useEffect(() => {
     if (!enabled) {
       loaded.current = "";

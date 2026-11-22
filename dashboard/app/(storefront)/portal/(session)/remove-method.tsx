@@ -1,11 +1,22 @@
 "use client";
 
+import { mandateRailLabel, mandateRevokeWhere } from "@/lib/mandate-rail";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalRemoveAction } from "./actions";
+import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
+
+/** The four answers to "Why are you deleting it?" — the engine's `reason` codes. */
+const REASONS = [
+  { value: "different_method", label: "I want to use a different payment method" },
+  { value: "card_replaced", label: "My card expired or was replaced" },
+  { value: "cancelling", label: "I plan to cancel my subscription" },
+  { value: "other", label: "Other" },
+] as const;
 
 /**
  * "Remove" on a saved payment method, behind a confirmation.
@@ -23,6 +34,7 @@ export function RemovePaymentMethod({
   label,
   isPrimary,
   mandateRail,
+  askReason = false,
 }: {
   /** `pm_…` public id. */
   pm: string;
@@ -32,13 +44,22 @@ export function RemovePaymentMethod({
   isPrimary: boolean;
   /** Set when this is a mandate the payer authorized at their bank (UPI / e-mandate / card). */
   mandateRail?: string | null;
+  /** The buyer's last method and the business asks why (Settings → Customer portal). */
+  askReason?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [reason, setReason] = React.useState("");
+  const [reasonText, setReasonText] = React.useState("");
   const router = useRouter();
 
   const remove = async () => {
     const data = new FormData();
     data.set("pm", pm);
+    // Optional: Delete works with nothing selected.
+    if (askReason && reason) {
+      data.set("reason", reason);
+      if (reasonText.trim()) data.set("reason_text", reasonText.trim());
+    }
     const res = await portalRemoveAction(null, data);
     if (!res.ok) return void toast.error(res.message ?? "We could not delete the payment method.");
     toast.success(res.message ?? "Payment method deleted.");
@@ -48,8 +69,7 @@ export function RemovePaymentMethod({
 
   return (
     <>
-      {/* "Delete", not "Remove": it destroys the saved method here and at the gateway.
-          "Remove backup" beside it only takes a role off. */}
+      {/* "Delete", not "Remove": it destroys the saved method here and at the gateway. */}
       <Button
         variant="ghost"
         size="sm"
@@ -63,28 +83,51 @@ export function RemovePaymentMethod({
         onOpenChange={setOpen}
         brand
         destructive
-        title={`Delete ${label}?`}
+        title={askReason ? "Delete your last payment method?" : `Delete ${label}?`}
         confirmLabel="Delete"
         description={
           <span className="flex flex-col gap-2">
             <span>
-              This business can no longer charge it. You cannot undo this. To use the card again,
-              you must add it again.
+              This business can no longer charge it. You cannot undo this. To use it again, you must
+              add it again.
             </span>
             {/* Same fact as the note under the row, repeated HERE because this is the
                 moment it matters: removing a mandate stops us charging it, but the
                 authorization survives at the bank and only the payer can revoke it. */}
             {mandateRail ? (
               <span>
-                The auto-debit authorization ({mandateRail}) stays active at your bank. If you
-                delete it here, the authorization does not stop. To cancel the mandate, revoke it in
-                your UPI app or bank portal.
+                The auto-debit authorization ({mandateRailLabel(mandateRail)}) stays active at your
+                bank. If you delete it here, the authorization does not stop. To cancel the mandate,
+                revoke it {mandateRevokeWhere(mandateRail)}.
               </span>
             ) : null}
             {isPrimary ? (
               <span>
                 This is your primary payment method. Until you add another one, we cannot take
                 automatic payments.
+              </span>
+            ) : null}
+            {askReason ? (
+              <span className="flex flex-col gap-3 pt-1 text-foreground">
+                <span className="text-sm font-medium">Why are you deleting it? (optional)</span>
+                <RadioGroup
+                  value={reason}
+                  onValueChange={setReason}
+                  aria-label="Why are you deleting it?"
+                  className="flex flex-col gap-2"
+                >
+                  {REASONS.map((r) => (
+                    <RadioOption key={r.value} value={r.value} label={r.label} />
+                  ))}
+                </RadioGroup>
+                <Textarea
+                  value={reasonText}
+                  onChange={(e) => setReasonText(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                  aria-label="Tell us more (optional)"
+                  placeholder="Tell us more (optional)"
+                />
               </span>
             ) : null}
           </span>

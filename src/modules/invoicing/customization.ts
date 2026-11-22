@@ -90,7 +90,7 @@ export type SignaturePosition = "bottom_right" | "bottom_left";
 export interface SignatureConfig {
   /**
    * A URL, not an upload: this follows `logo_url` / `icon_url` exactly, and
-   * `loadLogo` (`./invoice-pdf.ts`) already fetches a remote image on a short timeout,
+   * `loadLogo` (`./pdf-branding.ts`) already fetches a remote image on a short timeout,
    * accepts PNG/JPEG, rasterises SVG, and warns with a reason rather than printing
    * nothing. There is no file-upload path anywhere in this repo, and adding one for the
    * signature alone would leave brand assets on the URL path and give us two mechanisms.

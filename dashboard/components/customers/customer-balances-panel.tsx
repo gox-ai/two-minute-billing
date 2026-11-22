@@ -32,7 +32,11 @@ export function CustomerBalancesPanel({
    */
   defaultCurrency: string;
 }) {
-  const balances: CustomerBalance[] = customer.balances ?? [];
+  // The API also lists a currency whose credit is used up, at 0. A row of dashes here is noise,
+  // so the table shows the same rows as before that rule.
+  const balances: CustomerBalance[] = (customer.balances ?? []).filter(
+    (b) => b.promotional_credits > 0 || b.refundable_credits > 0 || b.excess_payments > 0,
+  );
   const rows: CustomerBalance[] = balances.length
     ? balances
     : [

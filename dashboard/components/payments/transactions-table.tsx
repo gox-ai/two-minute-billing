@@ -1,5 +1,6 @@
 "use client";
 
+import { paymentSourceText } from "@/lib/payment-trigger";
 import * as React from "react";
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -173,7 +174,14 @@ export function TransactionsTable({
   const columns = React.useMemo<ColumnDef<Transaction>[]>(
     () => [
       {
+        accessorKey: "created_at",
+        id: "created_at",
+        header: "Created",
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
+      },
+      {
         id: "id",
+        meta: { phone: "title" },
         header: "Transaction",
         accessorFn: (t) => t.id,
         cell: ({ row }) => (
@@ -181,10 +189,13 @@ export function TransactionsTable({
             href={`/businesses/${biz}/transactions/${row.original.id}`}
             data-record-title
             // One box, so it can carry a shared view-transition name.
-            className="inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline"
+            // Narrow, the amount goes under the type; the figure itself never breaks.
+            className="inline-block text-sm font-medium text-primary hover:underline"
           >
             {enumLabel(row.original.type)} of{" "}
-            {money(row.original.amount_minor, row.original.currency)}
+            <span className="whitespace-nowrap">
+              {money(row.original.amount_minor, row.original.currency)}
+            </span>
           </Link>
         ),
       },
@@ -193,7 +204,7 @@ export function TransactionsTable({
         header: "Customer",
         accessorFn: (t) => `${t.customer_name ?? ""} ${t.customer_email ?? ""}`.trim(),
         // A long email wraps inside 208px; the default view then fits a 1280px screen.
-        meta: { cellClassName: "max-w-52 wrap-anywhere whitespace-normal" },
+        meta: { cellClassName: "wrap-anywhere whitespace-normal *:max-w-52" },
         cell: ({ row }) => {
           const t = row.original;
           if (!t.customer) return <TextCell />;
@@ -287,6 +298,14 @@ export function TransactionsTable({
           ),
       },
       {
+        id: "source",
+        header: "Source",
+        accessorFn: (t) => paymentSourceText(t.initiated_by),
+        cell: ({ row }) => (
+          <span className="text-sm">{paymentSourceText(row.original.initiated_by)}</span>
+        ),
+      },
+      {
         /**
          * The provider's own id for the charge — how a row is found from a bank
          * statement. It LINKS to that charge on the gateway's dashboard where we have
@@ -354,12 +373,6 @@ export function TransactionsTable({
             </span>
           );
         },
-      },
-      {
-        accessorKey: "created_at",
-        id: "created_at",
-        header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
     ],
     // `tz` is deliberately absent, as it was: it comes from context and re-reads on
@@ -645,7 +658,15 @@ export function TransactionsTable({
       persistKey={`transactions:${biz}`}
       // Off by default so the table fits its card at 1440px; all stay in the chooser. Type is
       // also in the title ("Payment of $29.00").
-      initialHidden={["id_at_gateway", "gateway", "payment_method", "invoice", "type", "amount"]}
+      initialHidden={[
+        "id_at_gateway",
+        "gateway",
+        "payment_method",
+        "invoice",
+        "type",
+        "amount",
+        "source",
+      ]}
       rowHref={(t) => `/businesses/${biz}/transactions/${t.id}`}
       rowMenu={(t) => (
         <RowMenu

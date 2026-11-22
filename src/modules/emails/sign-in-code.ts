@@ -48,6 +48,7 @@ export async function sendSignInCode(
     logoUrl: biz.logoUrl ?? undefined,
     iconUrl: biz.iconUrl ?? undefined,
     brandColor: biz.brandColor ?? undefined,
+    buttonTextColor: biz.buttonTextColor ?? undefined,
   };
   const rendered = renderEmail("portal_sign_in_code", { ...vars, code: input.code }, override);
   const logged = renderEmail("portal_sign_in_code", { ...vars, code: MASK }, override);

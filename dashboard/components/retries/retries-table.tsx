@@ -148,8 +148,17 @@ export function RetriesTable({
           id: "retry_status",
           header: "Retry status",
           accessorFn: (r) => retryStatusLabel(r),
+          // A given-up invoice that was later voided or written off says so: nothing will be
+          // collected, and the row needs no decision.
           cell: ({ row }) => (
-            <StatusChip status={row.original.dunning_status ?? row.original.status} />
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+              <StatusChip status={row.original.dunning_status ?? row.original.status} />
+              {row.original.written_off ? (
+                <Chip>Written off</Chip>
+              ) : row.original.status === "voided" && row.original.dunning_status ? (
+                <StatusChip status="voided" />
+              ) : null}
+            </span>
           ),
         },
         {

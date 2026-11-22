@@ -7,6 +7,8 @@ import {
   type SegmentFilter,
 } from "@/lib/api/segments";
 import { requirePermission } from "@/lib/session";
+import { getBillingModels } from "@/lib/api/billing-models";
+import { hasModel } from "@/lib/billing-models";
 import { PageHeader } from "@/components/page-header";
 import { Alert } from "@/components/ui/alert";
 import { ErrorState } from "@/components/states";
@@ -65,12 +67,13 @@ export default async function CustomerSegmentsPage({
       ? [search.filter]
       : [];
 
-  let businesses, segments, attributes;
+  let businesses, segments, attributes, models;
   try {
-    [businesses, segments, attributes] = await Promise.all([
+    [businesses, segments, attributes, models] = await Promise.all([
       listBusinesses(),
       listSegments(biz),
       listSegmentAttributes(biz),
+      getBillingModels(biz),
     ]);
   } catch (e) {
     return (
@@ -140,6 +143,8 @@ export default async function CustomerSegmentsPage({
           filters={filters}
           customers={population?.total ?? null}
           mrrByCurrency={population?.mrr_by_currency ?? {}}
+          revenueBilledByCurrency={population?.revenue_billed_by_currency ?? {}}
+          showMrr={hasModel(models, "subscriptions")}
           currency={currency}
           canSave={filters.length > 0}
         />
@@ -172,6 +177,7 @@ export default async function CustomerSegmentsPage({
                   total={total}
                   fallbackCurrency={currency}
                   tz={business?.timezone ?? null}
+                  showSubscriptions={hasModel(models, "subscriptions")}
                 />
               )}
             </PendingContent>
@@ -184,6 +190,7 @@ export default async function CustomerSegmentsPage({
               segments={segments.data}
               current={selected?.id ?? null}
               custom={custom}
+              models={models}
             />
           </div>
         </Row>

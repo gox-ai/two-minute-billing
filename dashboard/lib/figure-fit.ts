@@ -1,6 +1,6 @@
 /**
- * How wide a figure tile must be to show its figure on one line, so a phone puts two tiles
- * in a row only where every figure fits (`FigureTiles`). Pure, so it is unit-tested
+ * How wide a figure tile must be to show its figure on one line, so `FigureTiles` puts tiles
+ * side by side only where every figure fits, at any width. Pure, so it is unit-tested
  * (test/unit/figure-fit.test.ts).
  */
 

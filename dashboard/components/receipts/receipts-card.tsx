@@ -51,7 +51,7 @@ export function ReceiptsCard({
       ) : rows.length === 0 ? (
         <p className="m-0 text-sm text-muted-foreground">{emptyText}</p>
       ) : (
-        <Table phone="stack">
+        <Table phone="stack" fit>
           <TableHeader>
             <TableRow>
               <TableHead className="pl-5">Number</TableHead>

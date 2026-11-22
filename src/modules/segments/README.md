@@ -154,3 +154,4 @@ Gate: `pnpm verify:segments`.
   `customerFilterConditions` was extracted in `customers/service.ts` so the totals and
   the rows are answered by one condition builder.
 - **2026-11-05** — `segment_facts.last_order_at` (the last one-time order); the segment table shows "Last order <date>" for a buyer with no subscription.
+- **2026-11-19** — Segment totals add `revenue_billed_by_currency`: the `revenue_billed` fold (before tax, net of discounts, every revenue type) over the population's invoices of the last 12 months, read from the invoices (a segment is today's membership). The segment screen shows it beside MRR, and shows MRR only for a business with subscriptions.

@@ -1,0 +1,35 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "usage",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "The 20 customers billed the most usage revenue in the period, with the units each sent per meter.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "grid": {
+    "columns": [
+      {
+        "key": "usage_revenue",
+        "kind": "money",
+        "label": "Usage revenue"
+      }
+    ],
+    "rows": []
+  },
+  "headline": 0,
+  "key": "<id:1>",
+  "kind": "money",
+  "name": "Top Usage Consumers",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [],
+  "shape": "buckets",
+  "tags": [
+    "customers"
+  ]
+}

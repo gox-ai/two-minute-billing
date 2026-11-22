@@ -373,14 +373,14 @@ flowchart TB
   subgraph sg_tooling["Ops tooling (7)"]
     tooling["assistant · assistant-docs<br/>assistant-tools<br/>migration · oauth<br/>time-travel · transfer"]
   end
-  subgraph sg_customer["Customers & balances (9)"]
-    customer["checkout · credit-notes<br/>credits · customer-portal<br/>customers · metadata-rules<br/>segments · usage-controls<br/>wallet"]
+  subgraph sg_customer["Customers & balances (10)"]
+    customer["checkout · credit-notes<br/>credits · customer-portal<br/>customers · metadata-rules<br/>segments<br/>storefront-analytics<br/>usage-controls · wallet"]
   end
   subgraph sg_payments["Payments & gateway (9)"]
     payments["disputes · gateway<br/>payment-intents<br/>payment-methods<br/>payment-requests<br/>payments · receipts<br/>refunds · transactions"]
   end
   subgraph sg_billing["Subscriptions & billing (7)"]
-    billing["dunning-policies<br/>invoicing · metering<br/>metrics · model-prices<br/>subscriptions<br/>team-alerts"]
+    billing["dunning-policies<br/>invoicing · metering<br/>metrics · model-prices<br/>notifications<br/>subscriptions"]
   end
   subgraph sg_catalog["Catalog & pricing (6)"]
     catalog["catalog · coupons<br/>custom-fields<br/>entitlements<br/>reason-codes · tax"]
@@ -394,13 +394,13 @@ flowchart TB
   tooling -->|6| catalog
   tooling <-->|9| foundation
   customer <-->|28| payments
-  customer <-->|33| billing
+  customer <-->|34| billing
   customer <-->|14| catalog
-  customer <-->|34| foundation
+  customer <-->|35| foundation
   payments <-->|22| billing
   payments <-->|37| foundation
   billing <-->|11| catalog
-  billing <-->|29| foundation
+  billing <-->|31| foundation
   catalog <-->|10| foundation
 ```
 
@@ -408,8 +408,8 @@ flowchart TB
 |---|---|---|---|---|---|---|
 | **Foundation modules** | · | 4 | 12 | 12 | 15 | 1 |
 | **Catalog & pricing** | 6 | · | 3 | 2 |  |  |
-| **Customers & balances** | 22 | 11 | · | 19 | 14 | 1 |
-| **Subscriptions & billing** | 17 | 9 | 14 | · | 11 |  |
+| **Customers & balances** | 23 | 11 | · | 19 | 14 | 1 |
+| **Subscriptions & billing** | 19 | 9 | 15 | · | 11 |  |
 | **Payments & gateway** | 22 |  | 14 | 11 | · |  |
 | **Ops tooling** | 8 | 6 | 5 | 6 | 2 | · |
 <!-- END GENERATED: architecture-mermaid -->

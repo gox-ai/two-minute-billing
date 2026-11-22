@@ -168,7 +168,7 @@ export function researchToolDef(): ToolDef {
 }
 
 /** The read tool for the record a member is on, as their own call would make it. */
-const RECORD_READS: Record<
+export const RECORD_READS: Record<
   string,
   (id: string) => { tool: string; args: Record<string, unknown> }
 > = {
@@ -177,7 +177,8 @@ const RECORD_READS: Record<
   subscription: (id) => ({ tool: "get_subscription", args: { subscription: id } }),
   "credit note": (id) => ({ tool: "read_api", args: { path: `credit_notes/${id}` } }),
   transaction: (id) => ({ tool: "read_api", args: { path: `transactions/${id}` } }),
-  payment: (id) => ({ tool: "read_api", args: { path: `payment_intents/${id}` } }),
+  // The intent, its attempts with their errors, their gateway calls and the webhooks.
+  payment: (id) => ({ tool: "get_payment_attempts", args: { payment_intent: id } }),
 };
 
 export interface Prefetched {

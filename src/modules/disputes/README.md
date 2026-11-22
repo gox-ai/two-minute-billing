@@ -7,8 +7,10 @@
 Tracks card-network disputes / chargebacks and owns their **money side** on the append-only ledger
 (ADR-004). Gateway disputes are created and moved **only** by the inbound gateway-webhook pipeline.
 The one exception is a gateway with no dispute feed (`capabilities.disputeFeed: false`: Authorize.net,
-tmtest): its chargebacks never reach us, so a person records them and their outcome
-(`operator.ts`, `source='operator'`). Both paths post through the same `applyDisputeTransition`.
+CyberSource, PayU, tmtest): its chargebacks reach us late or never, so a person records them and
+their outcome (`operator.ts`, `source='operator'`). Both paths post through the same
+`applyDisputeTransition`. CyberSource's chargebacks also arrive a day late from its polled report
+(`disputeReport: true`); a case a person recorded first is matched, not booked again.
 One `disputes` row per dispute, keyed idempotently by `(organization_id, provider_dispute_id)`; an
 operator row's key is its own public id.
 
@@ -84,8 +86,12 @@ row update + event emit.
   reads `GatewayDefinition.disputeFeed`, pinned to the adapters by `test/unit/dispute-feed.test.ts`)
   and on a payment that already has a gateway-reported dispute, so one chargeback is never booked
   twice. Amount ≤ captured − refunds (not failed) − disputes (not won), read under the payment's
-  `FOR UPDATE` lock. The reverse case (a gateway dispute arriving after a hand record) cannot
-  happen on a no-feed gateway; tmtest can do both and is the only place it would double-book.
+  `FOR UPDATE` lock. One case reference is one dispute per business: a second record with it
+  (or with a gateway dispute's id) is refused 409.
+- **A gateway case after a hand record** (CyberSource's report, tmtest) is the hand-recorded row:
+  `handleDisputeEvent` finds it by `processor_reference` = the case id, else the oldest
+  operator row on that payment with no reference and the same amount (which takes the case id).
+  The later events move that row; nothing is booked twice. Both paths lock the case id first.
 
 ## Changelog
 - **2026-11-12** — The list takes `customer` (`cus_…`): only that customer's disputes; an unknown
@@ -149,3 +155,9 @@ row update + event emit.
   whole API key, and Mollie's booked two other businesses' chargebacks. `funds_withdrawn` on a
   payment still pending with nothing to take throws (retried) instead of marking it withdrawn
   with no ledger. `verify:settlement-report-poll` §8; conformance `S11.chargeback-*` (GoCardless).
+- **2026-11-17** — **Chargebacks for gateways with no dispute webhook.** The hand record takes
+  `evidence_due_by` and refuses a second record of one case reference in the business (409,
+  checked before the amount). A gateway event for a case a person recorded first moves that row
+  (`handRecordedTwin`): by reference, else same payment + amount with no reference. The
+  CyberSource chargeback report poll feeds this path. `dispute_recording.reported_daily` tells
+  the dashboard the gateway reports by daily report. `verify:dispute-recording` § E, § R, § C.

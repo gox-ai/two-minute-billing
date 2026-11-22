@@ -17,7 +17,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { decimalToMinor, minorToDecimalString } from "@/platform/currency";
 import { createLogger } from "@/platform/logger";
-import { normalizeBraintreeDecline, type DeclineSignal } from "./decline-codes";
+import {
+  BRAINTREE_CODE_TABLE,
+  normalizeBraintreeDecline,
+  type DeclineSignal,
+} from "./decline-codes";
 import { classifyGatewayHttp } from "./gateway-http-class";
 import { boundedProviderKey, providerFetch } from "./http";
 import {
@@ -564,6 +568,12 @@ const DEFINITE_CLASSES = new Set([
   "RESOURCE_LIMIT",
 ]);
 
+/** Is `code` a key of the Braintree code table (same lookup as the normalizer's)? */
+export function braintreeTableKnows(code: string | undefined): boolean {
+  if (!code) return false;
+  return [code, code.toUpperCase(), code.toLowerCase()].some((k) => k in BRAINTREE_CODE_TABLE);
+}
+
 /** The HTTP status an `errorClass` stands for (Braintree answers 200 with errors). */
 function httpTwin(status: number, ext: GqlError["extensions"] | undefined): number {
   if (status !== 200 || !ext) return status;
@@ -606,6 +616,19 @@ const NOT_CHECKED = {
   message: "We could not check the payment details. Try again.",
   retriable: true,
 };
+
+/** HTTP 401/403 or an AUTHENTICATION/AUTHORIZATION class, as an API error; else null. */
+export function keysRefusal(operation: string, e: unknown): BraintreeApiError | null {
+  if (e instanceof BraintreeApiError) {
+    const c = e.first?.extensions?.errorClass;
+    return c === "AUTHENTICATION" || c === "AUTHORIZATION" ? e : null;
+  }
+  if (e instanceof Error && /^Braintree refused the API keys/.test(e.message))
+    return new BraintreeApiError(operation, [
+      { message: e.message, extensions: { errorClass: "AUTHENTICATION" } },
+    ]);
+  return null;
+}
 
 /** An error on a refund, reverse or void that created nothing: the engine releases the hold. */
 function isDefiniteRefusal(err: BraintreeApiError | undefined): boolean {
@@ -879,6 +902,8 @@ export function normalizeBraintreeNotification(
         },
       ];
     }
+    // Not acted on; the id lets the attempt find it.
+    return [{ ...base, ...own, type: "unknown", ...(id ? { providerChargeId: id } : {}) }];
   }
   if (n.kind === "transaction_reviewed" && s)
     return [{ ...base, type: "review.closed", providerChargeId: xmlText(s, "transaction-id") }];
@@ -1182,17 +1207,26 @@ export class BraintreeProvider implements PaymentProvider {
     );
   }
 
-  /** A failure the decline rules recognise, or undefined (then the caller throws). */
+  /**
+   * A failure the decline rules or the code table recognise, or undefined (then the caller
+   * throws). A table-only processor code (2001 insufficient funds) is a decline, not ours.
+   */
   private classifiedApiFailure(err: BraintreeApiError): ChargeResult["failure"] | undefined {
     const code = err.signalCode;
-    const f = normalizeBraintreeDecline({ code, message: err.first?.message ?? null });
-    if (!f.ruleId) return undefined;
+    const errorClass = err.first?.extensions?.errorClass ?? "";
+    let f = normalizeBraintreeDecline({ code, message: err.first?.message ?? null });
+    const unknownOutcome = ["INTERNAL", "SERVICE_AVAILABILITY"].includes(errorClass);
+    // A validation code no rule or table entry names: our request, by its class.
+    if (!f.ruleId && errorClass === "VALIDATION" && !braintreeTableKnows(code))
+      f = normalizeBraintreeDecline({ category: errorClass });
+    if (!f.ruleId && (unknownOutcome || !braintreeTableKnows(code))) return undefined;
     return {
       code: f.code,
       ...(code ? { providerCode: code } : {}),
       message: f.message ?? err.first?.message ?? err.message,
       retriable: f.retriable,
-      ruleId: f.ruleId,
+      ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}),
+      ...(f.ruleId ? { ruleId: f.ruleId } : {}),
     };
   }
 
@@ -1433,19 +1467,41 @@ export class BraintreeProvider implements PaymentProvider {
       operation === "charge_payment_method"
         ? "ChargePaymentMethodInput"
         : "AuthorizePaymentMethodInput";
-    const { data, error } = await this.mutate<
-      Record<string, { transaction: BtTransaction | null }>
-    >(
-      operation,
-      `mutation($input: ${inputType}!) { ${field}(input: $input) { transaction { ${TX_FIELDS} } } }`,
-      {
-        input: {
-          apiRequestKey: boundedProviderKey(idempotencyKey, REQUEST_KEY_MAX),
-          paymentMethodId,
-          transaction,
+    let answer: {
+      data: Record<string, { transaction: BtTransaction | null }> | null;
+      error?: BraintreeApiError;
+    };
+    try {
+      answer = await this.mutate<Record<string, { transaction: BtTransaction | null }>>(
+        operation,
+        `mutation($input: ${inputType}!) { ${field}(input: $input) { transaction { ${TX_FIELDS} } } }`,
+        {
+          input: {
+            apiRequestKey: boundedProviderKey(idempotencyKey, REQUEST_KEY_MAX),
+            paymentMethodId,
+            transaction,
+          },
         },
-      },
-    );
+      );
+    } catch (e) {
+      // Refused keys created nothing: our request failed, not the payer's method.
+      const refused = keysRefusal(operation, e);
+      if (!refused) throw e;
+      const f = normalizeBraintreeDecline({ code: "AUTHENTICATION" });
+      return {
+        status: "failed",
+        providerChargeId: "",
+        failure: {
+          code: f.code,
+          providerCode: refused.signalCode ?? "AUTHENTICATION",
+          message: f.message ?? refused.message,
+          retriable: f.retriable,
+          ...(f.ruleId ? { ruleId: f.ruleId } : {}),
+        },
+        raw: refused.errors,
+      };
+    }
+    const { data, error } = answer;
     const tx = data?.[field]?.transaction;
     if (tx)
       return chargeResultFromTransaction(tx, {
@@ -2051,6 +2107,18 @@ export class BraintreeProvider implements PaymentProvider {
     );
     const tx = data?.captureTransaction?.transaction;
     if (tx) return { purpose: "payment", charge: chargeResultFromTransaction(tx) };
+    // The authorization is gone (2036, 2067): a failed capture, not an exception.
+    const gone = error ? this.classifiedApiFailure(error) : undefined;
+    if (gone?.code === "intent_expired")
+      return {
+        purpose: "payment",
+        charge: {
+          status: "failed",
+          providerChargeId: input.intentId,
+          failure: gone,
+          raw: error!.errors,
+        },
+      };
     throw this.unsettledMutation("capture_transaction", error);
   }
 

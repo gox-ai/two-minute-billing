@@ -75,6 +75,59 @@ describe("dashboard map: what counts as a control", () => {
   });
 });
 
+// A create page → its form → the price card → the price fields: three imports deep.
+const PRICE_PAGE = `
+import { Form } from "./form";
+export default function Page() { return <Form kind="plan" />; }`;
+const PRICE_FORM = `
+import { PriceCard } from "./price-card";
+export function Form({ kind }: { kind: string }) { return <PriceCard />; }`;
+const PRICE_CARD = `
+import { PriceFields } from "./price-fields";
+export function PriceCard() {
+  return (
+    <FormCard title="First price">
+      <Field name="pp_currency" label="Currency"><CurrencySelect /></Field>
+      <PriceFields model="flat" />
+    </FormCard>
+  );
+}`;
+const PRICE_FIELDS = `
+export function PriceFields({ model }: { model: string }) {
+  const amountLabel = model === "per_unit" ? "Price per unit" : "Price";
+  const hint = model === "flat" ? "One amount" : "Each unit";
+  return (
+    <Field name="amount_minor" label={amountLabel} help={hint}>
+      <Banner title={hint} />
+    </Field>
+  );
+}`;
+
+describe("dashboard map: fields three imports deep", () => {
+  let found: Array<{ label: string; kind: LabelKind; group: string | null; field?: true }>;
+  beforeAll(() => {
+    writeFileSync(join(dir, "price-page.tsx"), PRICE_PAGE);
+    writeFileSync(join(dir, "form.tsx"), PRICE_FORM);
+    writeFileSync(join(dir, "price-card.tsx"), PRICE_CARD);
+    writeFileSync(join(dir, "price-fields.tsx"), PRICE_FIELDS);
+    found = labelsIn(join(dir, "price-page.tsx"));
+  });
+  const of = (l: string) => found.filter((x) => x.label === l);
+
+  it("reads a field label from a variable, in the card that renders it", () => {
+    expect(of("Price").map((x) => [x.group, x.kind, x.field])).toEqual([
+      ["First price", "control", true],
+    ]);
+    expect(of("Price per unit")).toHaveLength(0);
+  });
+  it("marks a field label so the common-chrome filter keeps it", () => {
+    expect(of("Currency").map((x) => x.field)).toEqual([true]);
+  });
+  it("reads a computed title only on a field, never a hint", () => {
+    expect(of("One amount")).toHaveLength(0);
+  });
+});
+
 describe("dashboard map audit", () => {
   const screen = (controls: string[], extra: Partial<Screen> = {}): Screen => ({
     route: "/r",

@@ -8,7 +8,19 @@ import { apiGet, listQuery, type ListParams, type PagedList } from "@/lib/api";
 // 'dashboard' is a person working in this UI (actor = their email); 'system' is the
 // narrower "no human, no request" — seeds, verify runs. They are not interchangeable.
 // See `src/platform/event-context.ts` § EventSource.
-export type AuditSource = "api" | "dashboard" | "billing_clock" | "migration" | "system";
+export type AuditSource =
+  | "api"
+  | "dashboard"
+  | "assistant"
+  | "portal"
+  | "checkout"
+  | "webhook"
+  | "mcp"
+  | "hubspot"
+  | "billing_clock"
+  | "scheduled_job"
+  | "migration"
+  | "system";
 
 export interface AuditLog {
   object: "audit_log";

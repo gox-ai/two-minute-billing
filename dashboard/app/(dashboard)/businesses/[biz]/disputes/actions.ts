@@ -41,6 +41,14 @@ export async function recordDisputeAction(
     if (!isZoneQualified(rawDate)) errors.opened_at = "Select the date with the date field.";
     else openedAt = Math.floor(Date.parse(rawDate) / 1000);
   }
+  const rawDue = str(fd, "evidence_due_by");
+  let evidenceDueBy: number | undefined;
+  if (rawDue) {
+    if (!isZoneQualified(rawDue)) errors.evidence_due_by = "Select the date with the date field.";
+    else evidenceDueBy = Math.floor(Date.parse(rawDue) / 1000);
+  }
+  if (openedAt && evidenceDueBy && evidenceDueBy < openedAt)
+    errors.evidence_due_by = "Select a date on or after the dispute date.";
   if (Object.keys(errors).length) return actionError("Correct the highlighted fields.", { errors });
 
   const res = await recordDispute(biz, pay, {
@@ -48,6 +56,7 @@ export async function recordDisputeAction(
     reason: reason as DisputeReason,
     ...(reference ? { processor_reference: reference } : {}),
     ...(openedAt ? { opened_at: openedAt } : {}),
+    ...(evidenceDueBy ? { evidence_due_by: evidenceDueBy } : {}),
   });
   revalidate(biz, str(fd, "txn") || undefined);
   if (!res.ok)

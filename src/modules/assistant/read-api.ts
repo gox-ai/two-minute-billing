@@ -69,6 +69,7 @@ export function assistantReadApi(base: ToolDef): ToolDef {
       "GET a read endpoint of this business that the other tools do not cover. path is the part after /v1/businesses/{business}/, with no query string: put filters, limit and starting_after in query. " +
       "Collections: credit_notes, coupons, prices, products, payment_intents, transactions, disputes, retries, events, emails, payment_requests, unbilled_charges, usages, meters, credit_units, dunning_policies, tax_profiles, audit_logs. " +
       "One record: credit_notes/cn_…, payment_intents/pi_…; a customer's own: customers/cus_…/promotional_credits, …/wallet, …/payment_methods. " +
+      "Payments in depth: payment_intents with query customer (cus_…) lists one customer's intents; payment_intents/pi_…/attempts; gateway_requests with span_id[is] (an attempt's span_id) lists the calls that attempt made; gateway_webhooks with payment_intent[is] (pi_…) or payment_attempt[is] (pia_…) lists what the gateway sent about it. " +
       "If a path is not readable, the error lists the readable paths near it. Documents (pdf, html), bulk exports and connection settings are not available here.",
     input: {
       path: z

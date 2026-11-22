@@ -26,6 +26,8 @@ const refundBody = z.object({
   reason: z.string().max(500).optional(),
   /** A gateway decline of this refund: `block` or `issue_credit`. Omitted = the business rule. */
   on_decline: z.enum(DECLINED_REFUND_OUTCOMES).optional(),
+  /** Send a refund that repeats one sent in the last 10 minutes. */
+  confirm_repeat: z.boolean().optional(),
 });
 
 export async function registerRefundRoutes(app: FastifyInstance) {
@@ -69,6 +71,7 @@ export async function registerRefundRoutes(app: FastifyInstance) {
             },
           });
         }
+        const guardRepeat = !parsed.data.confirm_repeat;
         const refund =
           route === "excess"
             ? await refundExcessPayment({
@@ -77,8 +80,10 @@ export async function registerRefundRoutes(app: FastifyInstance) {
                 paymentPublicId: payPid,
                 amountMinor: parsed.data.amount_minor,
                 reason: parsed.data.reason,
+                guardRepeat,
               })
             : await refundPayment({
+                guardRepeat,
                 organizationId: req.organization!.id,
                 businessId: business.id,
                 paymentPublicId: payPid,
@@ -118,6 +123,14 @@ export async function registerRefundRoutes(app: FastifyInstance) {
            * foreign payment id AND that no new 400 appears on its siblings.
            */
           if (e.code === "not_found") return notFound(reply, e.message);
+          if (e.code === "possible_duplicate")
+            return reply.code(409).send({
+              error: {
+                type: "invalid_request_error",
+                code: "possible_duplicate",
+                message: e.message,
+              },
+            });
           return reply
             .code(400)
             .send({ error: { type: "invalid_request_error", message: e.message } });

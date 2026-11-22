@@ -37,9 +37,19 @@ import {
   mfaStatus,
 } from "@/modules/auth/service";
 import { totp } from "@/modules/auth/totp";
+import { sweepSecurityEvents } from "@/modules/auth/security-events";
 import { LIMITS } from "@/api/limits";
 import { config } from "@/platform/config";
-import { users, authTokens, loginAttempts, sessions, userMfa } from "@db/schema";
+import {
+  users,
+  authTokens,
+  loginAttempts,
+  sessions,
+  userMfa,
+  organizations,
+  memberships,
+  securityEvents,
+} from "@db/schema";
 
 const uniq = Date.now().toString().slice(-8);
 const checks: Array<[string, boolean]> = [];
@@ -468,6 +478,44 @@ checks.push([
     remaining.some((r) => r.outcome === "success") &&
       !remaining.some((r) => r.outcome === "bad_password"),
   ]);
+
+  // A member of a platform organization keeps login attempts and security events forever.
+  const [pOrg] = await systemDb
+    .insert(organizations)
+    .values({ publicId: `org_platverify${Date.now()}`, name: "platform verify", isPlatform: true })
+    .returning();
+  await systemDb
+    .insert(memberships)
+    .values({ organizationId: pOrg!.id, userId: tu.user.userId, role: "owner" });
+  const old = new Date(
+    Date.now() -
+      (Math.max(config.LOGIN_ATTEMPT_RETENTION_DAYS, config.SECURITY_EVENT_RETENTION_DAYS) + 1) *
+        86_400_000,
+  );
+  const [oldAttempt] = await systemDb
+    .insert(loginAttempts)
+    .values({ at: old, outcome: "bad_password", userId: tu.user.userId, emailHash })
+    .returning({ id: loginAttempts.id });
+  const [oldEvent] = await systemDb
+    .insert(securityEvents)
+    .values({ at: old, userId: tu.user.userId, kind: "verify_platform_keep", metadata: {} })
+    .returning({ id: securityEvents.id });
+  await sweepLoginAttempts();
+  await sweepSecurityEvents();
+  const keptAttempt = await systemDb
+    .select({ id: loginAttempts.id })
+    .from(loginAttempts)
+    .where(eq(loginAttempts.id, oldAttempt!.id));
+  const keptEvent = await systemDb
+    .select({ id: securityEvents.id })
+    .from(securityEvents)
+    .where(eq(securityEvents.id, oldEvent!.id));
+  checks.push([
+    "platform organization staff: old login attempts and security events are never deleted",
+    keptAttempt.length === 1 && keptEvent.length === 1,
+  ]);
+  await systemDb.delete(memberships).where(eq(memberships.organizationId, pOrg!.id));
+  await systemDb.delete(organizations).where(eq(organizations.id, pOrg!.id));
 }
 
 // ── password hashing format (audit L1) ─────────────────────────────────────────

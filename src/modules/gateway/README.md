@@ -110,8 +110,25 @@ The Notification URL carries the gateway account's public id so inbound events a
 exact account. **One shape for every gateway:**
 
 ```
-{WEBHOOK_BASE_URL}/v1/gateway_webhooks/<gateway>?id=<gwa_…>
+{GATEWAY_WEBHOOK_BASE_URL ?? WEBHOOK_BASE_URL}/v1/gateway_webhooks/<gateway>?id=<gwa_…>
 ```
+
+**Base URL and moves.** New registrations use `GATEWAY_WEBHOOK_BASE_URL` (unset = `WEBHOOK_BASE_URL`),
+so gateways can post to a host that forwards only `/v1/gateway_webhooks/`. Each account stores the
+URL it is registered under as `webhook_url` (platform-owned, like `webhook_endpoint_id`); an account
+registered before that key existed reads as `WEBHOOK_BASE_URL` (`accountNotificationUrl`). The card,
+removal on delete, the adapter's `notificationUrl` and Square's signature check all use that stored
+URL; Square also accepts the old and new bases while retries drain.
+
+When the stored URL differs from the target, `provisionWebhookEndpoint` moves the registration, even
+without `force` (so "Re-check endpoint" moves it, and `pnpm gateway:webhooks-move` moves them all):
+- Stripe, PayPal, Razorpay and Square change the URL of the existing registration (`previousUrl` →
+  `movedFromPreviousUrl`): same endpoint, same secret or webhook id, no double delivery.
+- Other gateways register the new URL, then remove the old registration. One with no remove call
+  stays where it is.
+- A refused move changes nothing; the old URL stays registered and working.
+
+The old base stays routed: retries and hand-configured gateways still post to it.
 
 **Simplified 2026-08-01 — the two older shapes are gone, not deprecated.** `?id=` resolves the
 business through `acc.businessId`, so `/v1/gateway_webhooks/<gateway>/<biz>` carried a segment
@@ -1144,6 +1161,44 @@ Known live findings:
 
 ## Changelog
 
+- **2026-11-20 (merchant-account alert)** — payer-side refusals no longer read as the merchant's
+  setup: PayU `E755`/`E756` → `card_restricted`, `E4290` → `bank_account_restricted` (terminal,
+  payer told to use another method). `recurring_not_enabled`'s label is now general ("not set up
+  for this type of payment"). `test/unit/merchant-account-family.test.ts` pins every gateway code
+  that may raise the "Payment gateway needs attention" alert.
+- **2026-11-19 (Phase C, all methods)** — `paymentSavesMethod`: Stripe adds `us_bank_account`
+  and `sepa_debit` (captured at confirm, method kept with its mandate), Razorpay adds `upi`
+  (recurring UPI order for the full amount; proved in test mode). New optional
+  `activeMethodTypes()`; Stripe reads `account.capabilities` once per key.
+- **2026-11-19 (Phase C)** — `capabilities.paymentSavesMethod`, `CreateIntentInput.saveForFuture`,
+  payment consume may return `paymentMethod`. Stripe (card; INR with India `mandate_options`
+  minus `currency`), Razorpay (recurring card order for the full amount, `tmbilling_save`),
+  PayPal (`store_in_vault: ON_SUCCESS`), TM Test (card).
+- **2026-11-19** — The API refuses credentials the adapter cannot be built from
+  (`assertCredentialsBuild` in `providers/registry.ts`; `checkCredentials` on create/update, on
+  in `gateway-routes`; internal callers and fixtures unchanged). PayU `card_type` codes map to
+  brand names (`payuBrand`). PayPal's 10-webhook limit gives the operator a next step.
+  TM Test: checkout-rail intents accept the test dialog's `client_result`; others throw
+  `ClientResultUnsupportedError`. Checkout.com Add card submits from our "Save card".
+- **2026-11-18** — `payerNeedsNewMethod(code)` (`providers/decline-codes.ts`): true for a TERMINAL
+  code or one whose instrument cannot pay again (`incorrect_number`, a mandate gone, a bank account
+  refused). The portal leads with "add a payment method" for these instead of "Pay".
+- **2026-11-17** — `gateway_request_logs` also holds `source = 'customer_browser'` rows: a refusal
+  the gateway gave the buyer's browser, booked on the attempt (payment-intents module). Method
+  `BROWSER`, no HTTP status, the gateway's error as the response body; the Gateway requests page
+  shows "Reported". `isStripeCardNotAccepted` / `CARD_NOT_ACCEPTED_CODE` (decline-codes) and
+  `CARD_NOT_ACCEPTED` (payer-wording): an India-issued American Express refused by Stripe.js reads
+  "This card cannot be used for this payment. Use a different card."
+- **2026-11-17** — Storefront gateway refusals read as our words (`dashboard/lib/gateway-errors.ts`).
+  RazorPay's sheet (`payment.failed`) maps `reason` through `normalizeRazorpayDecline` to our payer
+  sentence (`razorpayClientReason`), never RazorPay's `description`. Braintree, Adyen, Checkout.com,
+  Square (thrown), CyberSource (top message), Authorize.net and Cashfree show our lead and next step
+  only; Square `VALIDATION_ERROR` and Microform field details stay (field instructions). Gate:
+  `test/unit/storefront-gateway-errors.test.ts`.
+- **2026-11-17** — Gateway webhooks get their own base URL: `GATEWAY_WEBHOOK_BASE_URL`, and the
+  registered URL is stored per account (`webhook_url`). Registrations move in place on re-check,
+  re-register or `pnpm gateway:webhooks-move`; see "Base URL and moves" above. Gate:
+  `verify:gateway` (WH move checks), `test/unit/gateway-webhook-move.test.ts`.
 - **2026-11-12** — tmtest: a payment intent with no instrument (hosted purchase Pay, portal Pay
   now) answers the `sdk` challenge on every account, so the storefront shows Approve/Decline
   (`buyerPaymentDialog`, built in `gateways.ts`). `buyer_auth_mode=none` authorizes it at once, as
@@ -3118,6 +3173,158 @@ Known live findings:
     the `async_gateway_has_webhook` invariant check.
 
 - **2026-10-30** — Razorpay `razorpay.code.transaction_not_permitted_to_cardholder`: the reason arrives as the sentence "Transaction not permitted to issuer/cardholder" (ISO 57). Unmatched, it was stored as its own code and computed retriable; now `card_restricted`, which parks.
+- **2026-11-17** — Stripe `cross_border_classification_missing_name_and_address` (India
+  exports) is a decline, `billing_details_required`, booked with the PaymentIntent Stripe kept,
+  instead of a throw that left an orphaned intent. Retriable, never marks the card invalid; the
+  buyer reads "Add your billing name and address. Then try again." Cover:
+  `test/unit/stripe-cross-border-decline.test.ts`.
+- **2026-11-17** — Every documented Stripe error code (180, `docs.stripe.com/error-codes`,
+  `src/providers/stripe-documented-codes.ts`) is handled on purpose: 82 more `STRIPE_RULES`
+  (`stripe.code.<code>`), and `STRIPE_CODES_OUR_CALLS_NEVER_RAISE` (67, with reasons) for
+  Connect, payouts, Issuing, Terminal, Billing, Tax and legacy codes. Request/key/amount faults
+  book `gateway_request_rejected` instead of throwing; new canonical codes `incorrect_address`,
+  `bank_account_restricted` (TERMINAL) and `bank_account_not_verified`, all parked.
+  `classifiedThrowFailure` now offers the message too, so "No such PaymentMethod" under
+  `resource_missing` books `payment_method_not_found`. Refund refusals use
+  `STRIPE_REFUND_REFUSALS` for the operator's reason. Cover:
+  `test/unit/stripe-error-code-coverage.test.ts`.
+- **2026-11-17** — RazorPay `declineFailure` books a decline rule's message when the rule is
+  written for the payer (`exposedToPayer`), with its `ruleId`; otherwise RazorPay's description,
+  for operators. "Transaction not permitted to issuer/cardholder" now reads "Your bank does not
+  allow this payment on this card…". Cover: `test/unit/razorpay-payer-message.test.ts`.
+- **2026-11-17** — One payer rule for declines (`payerDeclineMessage`, `providers/decline-codes.ts`):
+  the payer reads a rule's payer sentence, an engine sentence under an engine-only code, or our
+  sentence for the canonical code (`PAYER_SENTENCE`); never the gateway's text or a raw code.
+  Checkout, vault setup and the portal's capture errors now go through it (`payerFailureText`).
+  `operatorFailureText` and `declineLabel` give operator text. The error taxonomy names every
+  code we book (`ENGINE_BOOKED_CODES`, e.g. `async_failed`, `setup_failed`, `try_again_later`,
+  `setup_cancelled`, `capture_refused`, `failed`). Mollie and tmtest `fetchIntent` report the
+  refusal. Cover: `test/unit/gateway-error-payer-text.test.ts`,
+  `test/unit/error-taxonomy-coverage.test.ts`, `verify:decline-overrides`.
+- **2026-11-18** — Decline retry audit, all 13 gateways (`providers/decline-codes.ts`). Every
+  documented code was run through its real normaliser; dead-instrument meanings that came back
+  retriable are now hard. `TERMINAL` gains `network_do_not_retry`, `incorrect_number`,
+  `payment_method_not_found` and `mandate_expired` (name and card-type refusals no longer map to
+  `incorrect_number`). `card_restricted` stays out of TERMINAL (it also carries limits the payer
+  can lift); its dead meanings get `retriable: false` rules: Stripe `invalid_account`,
+  `new_account_information_available`, `card_not_supported`, `currency_not_supported`,
+  `recurring_not_supported_by_bank`, `invalid_payment_information`, `compliance_violation`;
+  "not permitted to cardholder" (Visa 57) on Checkout.com, Adyen, Braintree, Cashfree, PayU and
+  Razorpay's sentence; card type/brand not accepted on Square, Adyen, Checkout.com, CyberSource,
+  Cashfree, PayU, Razorpay; PayPal Mastercard advice 01. Issuer "suspected fraud" is `fraudulent`
+  on PayU E338. Stripe's 71 decline codes are captured (`STRIPE_DECLINE_CODES.md`) and all mapped;
+  `transaction_not_allowed` is `card_declined` (Stripe: unknown reason), not `recurring_not_enabled`.
+  GoCardless `payment_stopped` is `debit_cancelled_by_payer`. `networkHardDecline` no longer
+  skips `card_restricted`/`incorrect_number`: with a never-resubmit network code they turn hard
+  and keep their code. An unknown raw value now books `charge_failed`, never itself as the code.
+  Stripe's `providerCode` is the `decline_code`. Gate: `test/unit/decline-retry-policy.test.ts`
+  (every documented code, dead set hard, soft set retriable, `card_restricted` pins).
+- **2026-11-17** — **CyberSource joins the settlement-report poll for chargebacks**
+  (`settlementReport: { 1440, 72 }`). It has no dispute webhook; `pollSettlements` downloads the
+  Reporting API's `ChargebackAndRetrievalDetailClass` subscription named `tmbilling_chargebacks`
+  (`GET /reporting/v3/report-downloads`, CSV) for each date from the window start to yesterday,
+  never fewer than three. A debit row gives `dispute.created` + `dispute.funds_withdrawn`, a credit
+  `dispute.funds_reinstated` + `dispute.won`, keyed on the case number; a row with no financial
+  impact, no request id or a foreign reference gives nothing. Catalogue: `disputeReport: true`,
+  `disputeFinalState: false`. The CSV column names are from the field reference, not a downloaded
+  report (TODO in the adapter). Cover: `test/unit/cybersource-chargeback-report.test.ts`,
+  `verify:cybersource` § 9.
+
+- **2026-11-17** — Per-gateway error breaks (PR 2 of the gateway audit). PayU: a `status: 0`
+  `si_transaction` refusal with no transaction is booked at once after one "Not Found"
+  `verify_payment` (documented request faults → `gateway_request_rejected`; others → hidden
+  `gateway_error` with PayU's text; an internal-fault text such as "Something went wrong" stays
+  indeterminate); a synchronous `failed` keeps the transaction's E-code; 30 more
+  E-codes classified. PayPal: vaulted-card declines classify from `processor_response`
+  (`paypal.processor.*`, advice 03/21, Mastercard waits) with `providerCode`/`ruleId`; a `DENIED`
+  authorization is never captured; capture-denied webhooks carry the decline; `ORDER_EXPIRED` /
+  `ORDER_NOT_APPROVED` → `payment_abandoned`. Checkout.com: Flow, 3DS-hold and hosted-page declines,
+  refused card checks and lapsed or cancelled payments reach the open attempt (`charge.failed`,
+  new events subscribed: needs a webhook re-provision per business). Adyen: session, card-save and
+  payment-link refusals reach the open attempt (`checkoutSessionId`, then reference) with the real
+  reason; dead stored tokens (800, 802, 803_3, 805, 26_006, 26_002) fail instead of throwing; SEPA
+  `ED05` → `processing_error`. Stripe: webhook declines classify on the full signal
+  (`stripeWebhookDeclineSignal`). Square: hosted Apple Pay refusals reach the `sqh_` intent;
+  `CANCELED` → `payment_abandoned` (hosted) or `intent_expired`; 401/403 → failed
+  `gateway_request_rejected`. GoCardless: dead-mandate cause on `payment_method.mandate_updated`
+  (not stored yet); billing-request exits and bank-authorisation refusals reach the open attempt;
+  token/permission/`invalid_api_usage` → `gateway_request_rejected`, rate limit → `processing_error`,
+  `bank_account_disabled` → `bank_account_closed`. Braintree: error-shaped declines classify from
+  the code table. RazorPay `payment_cancelled` on a mandate debit and Cashfree "Payment Stopped by
+  Drawer" / "Item cancelled" → `debit_cancelled_by_payer`. Cover: `test/unit/{payu-si-refusal,
+  paypal-card-decline,checkoutcom-flow-declines,adyen-live-refusals,stripe-webhook-decline-signal,
+  square-hosted-failure,gocardless-failure-causes,braintree-error-shaped-decline,
+  payer-stopped-debit}.test.ts`, the `verify:<gateway>` offline sections.
+- **2026-11-17** — Stripe.js confirm errors reach the buyer as our payer sentence for the code
+  (`stripeClientReason`, `dashboard/lib/gateway-errors.ts`), never Stripe's text; Element field
+  errors keep theirs. Cover: `test/unit/storefront-stripe-confirm.test.ts`.
+- **2026-11-17** — The gateway-webhooks `intent` filter falls back to `providerChargeId`: an event
+  type we do not act on (`setup_intent.created`) names the object only there, so the attempt's
+  "Webhook events" link showed 0 for events we had received. Cover: `verify:gateway` C7+.
+  New filters `payment_intent` and `payment_attempt` (our public ids) read the link stored on
+  `provider_events` (0540, `webhooks/event-link.ts`); a row from before the link matches by the
+  gateway ids the intent and attempt hold. The attempt's "Webhook events" link uses
+  `payment_attempt`. Adapters now keep the gateway object's id on events they normalize as
+  `unknown` (Adyen, Authorize.net, Braintree, Cashfree, Checkout.com, CyberSource, PayU,
+  RazorPay, Square); acted-on events are unchanged. Cover: `verify:gateway` C7-link,
+  `verify:gateway-conformance` S15, `verify:cybersource`.
+
+- **2026-11-17** — Every documented code handled: PayPal, Braintree, Square, Authorize.net (PR 4
+  of the gateway audit). Each gateway gets `src/providers/<gw>-documented-codes.ts` (lists from
+  `docs/references/<GW>_ERROR_CODES.md`), `<GW>_CODES_OUR_CALLS_NEVER_RAISE` in decline-codes.ts
+  and `test/unit/<gw>-error-code-coverage.test.ts` (each code recognised or never raised, never
+  both). Our own request faults → `gateway_request_rejected`. PayPal: 67 rules, 115 of 321 issues
+  recognised (47 request faults; merchant setup → `recurring_not_enabled`; receiving limit →
+  `gateway_limit_exceeded`; `TOKEN_NOT_FOUND` → `payment_method_not_found`; already-done steps →
+  `processing_error`, and consume reads the order back once); `AUTHENTICATION_FAILURE` /
+  `NOT_AUTHORIZED` → `gateway_request_rejected` (was `gateway_account_unavailable`); setup-token
+  and vault-exchange refusals are failures, not throws. Braintree: 56 rules (a spent or expired nonce →
+  `invalid_client_result`, as Authorize.net), an unknown
+  VALIDATION code → `gateway_request_rejected` by its class (`braintree.category.validation`),
+  refused keys (401/403, AUTHENTICATION/AUTHORIZATION) on a charge → failed
+  `gateway_request_rejected`; a capture of an expired authorization → failed `intent_expired`. Square: 70 rules (55 request faults, Plaid, delayed-capture);
+  a refused `buyer_email_address` charges again without it under its own key; a refused capture
+  of an expired hold → `intent_expired`. Authorize.net: 118 rules (FDC Omaha 202–224 by
+  meaning, eCheck 9/10/101 → `bank_account_invalid_details`, E00113–E00115 →
+  `invalid_client_result` on the payment path too, E00007 refused keys → failed
+  `gateway_request_rejected`); declined and fraud-declined authorization webhooks and the intent
+  poll carry the decline.
+
+- **2026-11-17** — Every documented code handled (PR 4, global gateways), on the Stripe model:
+  `src/providers/<gw>-documented-codes.ts`, `<GW>_CODES_OUR_CALLS_NEVER_RAISE`,
+  `test/unit/<gw>-error-code-coverage.test.ts` for Adyen (437), Checkout.com (413), CyberSource
+  (68), Mollie (43), GoCardless (92). Adyen: 37 more API codes ruled (request/setup faults →
+  `gateway_request_rejected`, card data → `incorrect_number`/`expired_card`/`incorrect_cvc`, token
+  and server faults → `processing_error`, 107 → `recurring_not_enabled`); `refusalReasonRaw` feeds
+  the Visa/Mastercard never-resubmit codes and advice 03/21 rules; refund failures keep the reason;
+  the refusal-text map is complete; the browser's reasonless session refusal
+  (`GENERIC_CLIENT_REFUSAL`) yields to the webhook's reason in either order. Checkout.com: string
+  `error_codes` ruled (dead card → `payment_method_not_found`/`expired_card`/`card_restricted`,
+  velocity → `retry_too_soon`, transient → `processing_error`, Flow tokens →
+  `invalid_client_result`, our request → `gateway_request_rejected`), 20 more response codes.
+  CyberSource: `DEBIT_CARD_USAGE_LIMIT_EXCEEDED`; a 502 `INVALID_OR_MISSING_CONFIG` is a refused
+  request, not a lookup; a poll carries the refusal. Mollie: `ED05`, a bare `failed`,
+  `capture_refused`; `canceled`/`expired` → `payment_abandoned` (were `do_not_honor`); an
+  unrecognised refusal reads the mandate and a deleted or `invalid` one is `no_valid_mandate`.
+  GoCardless: every API reason named; `link_not_found`/`resource_not_found` →
+  `payment_method_not_found`; the dead-mandate cause is stored on the payment method (0538).
+
+- **2026-11-17** — Every documented error code handled, India group (PR 4 of the gateway audit).
+  `src/providers/{razorpay,cashfree,payu}-documented-codes.ts` list each gateway's documented
+  codes; every one has a rule or a `<GW>_CODES_OUR_CALLS_NEVER_RAISE` reason
+  (`test/unit/{razorpay,cashfree,payu}-error-code-coverage.test.ts`). Dead instruments are hard
+  (Razorpay `incorrect_ifsc`; Cashfree "No Such Account", "Account Inoperative", "Dormant
+  Account", "Subscription is not active"; PayU E4110 and the other mandate-gone codes, E4316–E4318,
+  E4391, E4340). Cashfree "Not Arranged For" → `insufficient_funds` (was `debit_not_authorized`, which
+  ended the subscription); the same refusal on the same mandate a cycle later parks
+  (`REPEAT_REFUSAL_PARKS_RULES`, `refusedLastCycleToo`, `planFailureRearm.repeatedAcrossCycles`).
+  Razorpay `transaction_limit_exceeded` → `insufficient_funds` with a payer sentence; "Amount
+  exceeds maximum amount allowed" → `mandate_ceiling_exceeded`. Cashfree PG `error_reason` rules
+  now run before the message rules. Failure reasons reach the attempt: Razorpay `charge.failed`,
+  status poll and `fetchIntent` (`razorpayPaymentFailure`); Cashfree and PayU failed setups;
+  Cashfree's synchronous controlled-flow `FAILED` reads the payment's reason. PayU disputes stay
+  `unknown` (unsigned, and `txn_id` is PayU's id): an open decision in PROGRESS.
+
 
 ## Wallet domains (Apple Pay, Google Pay, Link) — 2026-09-05
 

@@ -57,7 +57,7 @@ its first grant, with currency and decimals.
   them (`hasRate`, `ratedOnly`). `availableUnits` of the live balance reports what the gate
   offers now (`unitBalanceAt`). The money limit on free grants does not apply; the unit has its
   own (`credit_config.unit_grant_limits.<unit>`: `max_units`, `alert_above_units`, in the unit's
-  smallest step; `checkUnitGrantLimit`, same refusal, audit row and team alert; a
+  smallest step; `checkUnitGrantLimit`, same refusal, audit row and team notification; a
   PATCH that omits the key keeps it). Settings > Credits has a Maximum and an Alert above
   field for each active unit with no rate. An automatic top-up for such a unit buys a pack
   (§ "Holds, the access check and the top-up in units").
@@ -608,3 +608,6 @@ Gotchas:
   every `failed_change_charge` value. Gate: `verify:change-invoice-revert` §5.
 - **2026-11-15** — `activatePaidCreditGrants` also hands a paid invoice to `onInvoicePaid`
   (`subscriptions/pending-change.ts`): a change held for that invoice applies after the commit.
+- **2026-11-16** — Team alerts removed: a grant above the alert amount queues the "Large free
+  credit grant" notification (`modules/notifications`); `verify:grant-limits` checks the queue row
+  and the bell row.

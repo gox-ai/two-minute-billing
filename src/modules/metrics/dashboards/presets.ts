@@ -7,11 +7,11 @@ import type { BillingModel } from "@/modules/metrics/billing-models";
  *
  * A saved-dashboard feature that starts empty asks the operator to know our catalogue
  * before it is worth anything — 97 reports, and a blank page with an "Add report" button.
- * These five are the answer to "what would a competent person put on the wall", one per
+ * These are the answer to "what would a competent person put on the wall", one per
  * job rather than one per taste, and they are what the Dashboards page opens on.
  *
  * **Declared in code, not seeded rows.** A preset is not data:
- *  - every business gets all five the moment it exists, including one created tomorrow —
+ *  - every business gets them the moment it exists, including one created tomorrow —
  *    no per-tenant seed, no backfill, nothing to go missing on a restore;
  *  - a preset cannot be half-deleted into a broken state, because there is nothing to
  *    delete. It is read-only by construction rather than by a permission check;
@@ -65,6 +65,7 @@ const OVERVIEW: PresetDashboard = {
   key: "overview",
   name: "Business overview",
   description: "The headline numbers and what moved them, for a weekly read.",
+  requires: "subscriptions",
   tiles: [
     { report: "mrr", size: "md" },
     { report: "cmrr", size: "md" },
@@ -91,6 +92,7 @@ const MOVEMENT: PresetDashboard = {
   key: "movement",
   name: "What moved it",
   description: "Every change to recurring revenue, and which plans produced it.",
+  requires: "subscriptions",
   tiles: [
     { report: "mrr_new", size: "md" },
     { report: "mrr_expansion", size: "md" },
@@ -114,6 +116,7 @@ const LIFECYCLE: PresetDashboard = {
   key: "lifecycle",
   name: "Lifecycle",
   description: "Signups, trials, activations and cancellations over a window.",
+  requires: "subscriptions",
   tiles: [
     { report: "customers_created", size: "md" },
     { report: "activations", size: "md" },
@@ -123,6 +126,33 @@ const LIFECYCLE: PresetDashboard = {
     { report: "subscription_quantity", size: "md" },
     { report: "trials_cumulative", size: "md" },
     { report: "activations", groupBy: "currency", size: "full" },
+  ],
+};
+
+/**
+ * **Revenue** — what was billed and collected, whatever the business sells.
+ *
+ * No `requires`: revenue, cash, customers and refunds exist for every model. For a business
+ * with no subscriptions this is the first board.
+ */
+const REVENUE: PresetDashboard = {
+  key: "revenue",
+  name: "Revenue",
+  description:
+    "Revenue billed and cash collected, by type, with customers, refunds and receivables.",
+  tiles: [
+    { report: "revenue_billed", groupBy: "revenue_type", size: "full" },
+    // Gross to net: gross, then what took it down to revenue billed.
+    { report: "revenue_billed_gross", size: "md" },
+    { report: "revenue_deductions", groupBy: "revenue_deduction", size: "full" },
+    { report: "cash_collected", groupBy: "cash_bucket", size: "full" },
+    { report: "billed_customers", size: "md" },
+    { report: "paying_customers_all", size: "md" },
+    { report: "revenue_per_customer", size: "md" },
+    { report: "customer_revenue_lifetime", size: "md" },
+    { report: "refunds_issued", size: "md" },
+    { report: "receivables_outstanding", size: "md" },
+    { report: "revenue_billed", groupBy: "product", size: "full" },
   ],
 };
 
@@ -189,6 +219,7 @@ export const PRESET_DASHBOARDS: ReadonlyArray<PresetDashboard> = [
   OVERVIEW,
   MOVEMENT,
   LIFECYCLE,
+  REVENUE,
   CREDITS,
   USAGE,
   SALES,
@@ -211,7 +242,7 @@ export const DEFAULT_PRESET = OVERVIEW;
  *
  * ⚠️ This used to validate against the REPORT registry. A dashboard resolves its tiles
  * through the semantic layer, so the check passed against a registry nobody reads any more
- * while all five presets rendered zero figures — a green gate over a dead screen. Validate
+ * while every preset rendered zero figures — a green gate over a dead screen. Validate
  * against the thing that actually answers the tile.
  */
 export function assertPresetsAreWellFormed(): string[] {

@@ -1,4 +1,5 @@
 import { paymentMethodTypeLabel } from "./filter-options";
+import { brandLabel } from "./labels";
 
 /**
  * How a saved instrument is named to the buyer, on the portal and the checkout. A mandate rail
@@ -11,10 +12,8 @@ export function instrumentLabel(pm: {
   last4?: string | null;
   mandateRail?: string | null;
 }): string {
-  // Gateways report brands in mixed case (`visa`, `Visa`).
-  const brand = pm.brand?.trim()
-    ? pm.brand.trim()[0]!.toUpperCase() + pm.brand.trim().slice(1)
-    : null;
+  // Gateways report brands in mixed case and as codes (`visa`, `Visa`, `mast`).
+  const brand = pm.brand?.trim() ? brandLabel(pm.brand.trim()) : null;
   const name = brand ?? paymentMethodTypeLabel(pm.type);
   if (pm.last4) return `${name} •••• ${pm.last4}`;
   if (pm.type === "paypal") return "PayPal account";

@@ -43,7 +43,7 @@ export function useFormModel<T extends object>(
 ) {
   const [values, setValues] = useDefaultState<T>(seed, (v) => JSON.stringify(v));
   const latest = React.useRef(values);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     latest.current = values;
   });
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { createdThrough } from "@/modules/events/provenance";
 import { loadBillingRulesRow, missingReason } from "@/modules/subscriptions/billing-rules-config";
 import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective";
 import { z } from "zod";
@@ -10,6 +11,8 @@ import {
   INVOICE_FILTER_OPS,
   INVOICE_FILTER_KINDS,
   INVOICE_SORT_FIELDS,
+  ORDER_FILTER_KINDS,
+  ORDER_FILTER_OPS,
   getInvoiceWithLines,
   pendingPaymentsForInvoices,
   previousInvoicePublicId,
@@ -40,6 +43,8 @@ import {
   InvoiceOpsError,
 } from "@/modules/invoicing/ops";
 import { arBucketValueError } from "@/modules/invoicing/ar-aging";
+import { getOrderDetail, listOrdersPage, type OrderRow } from "@/modules/invoicing/orders";
+import { filterDefinitions } from "@/modules/custom-fields/service";
 import { SHORTFALL_CHOICES } from "@/modules/subscriptions/collection-rules-config";
 import { OFFLINE_EXCESS_CHOICES } from "@/modules/payments/application-config";
 import { listRetriesPage, RETRY_SORT_FIELDS, serializeRetry } from "@/modules/invoicing/retries";
@@ -52,7 +57,7 @@ import { createComment } from "@/modules/comments/service";
 import { withTenant } from "@/platform/db";
 import { and, eq } from "drizzle-orm";
 import { paymentMethods } from "@db/schema";
-import { getCustomerByPublicId } from "@/modules/customers/service";
+import { customerCustomFieldFilterSet, getCustomerByPublicId } from "@/modules/customers/service";
 import { getSubscriptionByPublicId } from "@/modules/subscriptions/service";
 import { invoiceRefundGatewayAccount } from "@/modules/credit-notes/service";
 import type { invoices } from "@db/schema";
@@ -148,6 +153,42 @@ async function invoiceDetailView(req: FastifyRequest, business: BusinessRow, fou
   });
 }
 
+/** One order as the Orders list and the order page print it. */
+function serializeOrder(o: OrderRow) {
+  const inv = o.row.invoice;
+  return {
+    object: "order",
+    id: inv.publicId,
+    number: inv.number,
+    customer: {
+      id: o.row.customerPublicId,
+      name: o.row.customerName,
+      email: o.row.customerEmail,
+      country: o.customerCountry,
+      custom_fields: o.customerCustomFields,
+    },
+    products: o.products,
+    total_minor: Number(
+      inv.totalMinor -
+        (inv.promotionalCreditsAppliedMinor ?? 0n) -
+        (inv.grantCreditsPreTaxMinor ?? 0n),
+    ),
+    currency: inv.currency,
+    status: o.status,
+    invoice_status: inv.status,
+    refunded_minor: Number(o.refundedMinor),
+    discount_minor: Number(o.discountMinor),
+    tax_minor: Number(o.taxMinor),
+    created_at: inv.createdAt,
+    paid_at: inv.paidAt,
+    due_date: inv.dueDate,
+    channel: inv.channel,
+    payment_method: o.paymentMethod,
+    gateway: o.gateway,
+    coupons: o.coupons,
+  };
+}
+
 export async function registerInvoiceRoutes(app: FastifyInstance) {
   /**
    * List invoices — paginated, filtered and sorted server-side (§3.4 of
@@ -240,6 +281,95 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
     },
   );
 
+  /**
+   * Orders: invoices for one-time products, never for a subscription or a credit pack.
+   * Same paging, sort and filters as the invoice list, plus `order_status`
+   * (paid | due | refunded | partly_refunded), `product` (product id) and `coupon` (code).
+   */
+  app.get(
+    "/v1/businesses/:biz/orders",
+    { preHandler: [authenticate, requirePerm("invoices:view")] },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      // Customer custom fields (`cf_*`) narrow orders like they narrow customers: one
+      // definitions read, merged over the static maps, never replacing them.
+      const customFieldDefs = await filterDefinitions(
+        req.organization!.id,
+        business.id,
+        "customer",
+      );
+      const cf = customerCustomFieldFilterSet(customFieldDefs);
+      const q = parseListQuery(req, reply, {
+        includeDeleted: "none",
+        filterOps: { ...ORDER_FILTER_OPS, ...cf.ops },
+        filterKinds: { ...ORDER_FILTER_KINDS, ...cf.kinds },
+        sortFields: INVOICE_SORT_FIELDS,
+        bareParams: ["customer"],
+      });
+      if (!q) return;
+      let customerId: string | undefined;
+      const cusParam = (req.query as { customer?: string }).customer;
+      if (cusParam) {
+        const cus = await getCustomerByPublicId(req.organization!.id, business.id, cusParam);
+        if (!cus) return { object: "list", data: [], has_more: false, next_cursor: null, total: 0 };
+        customerId = cus.id;
+      }
+      const page = await listOrdersPage(req.organization!.id, business.id, {
+        ...q,
+        customerId,
+        extraSpecs: cf.specs,
+      });
+      return listResponse(page, serializeOrder);
+    },
+  );
+
+  /**
+   * One order: the list row plus every payment attempt and every refund. A 404 for an
+   * invoice that is not an order (subscription invoice, credit pack, draft) or that
+   * belongs to another business.
+   */
+  app.get(
+    "/v1/businesses/:biz/orders/:id",
+    { preHandler: [authenticate, requirePerm("invoices:view")] },
+    async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const id = (req.params as { id: string }).id;
+      const o = await getOrderDetail(req.organization!.id, business.id, id);
+      if (!o) {
+        return reply.code(404).send({
+          error: { type: "invalid_request_error", message: `We could not find the order ${id}.` },
+        });
+      }
+      return {
+        ...serializeOrder(o),
+        created_through: await createdThrough(req.organization!.id, "invoice", id),
+        payments: o.payments.map((p) => ({
+          id: p.id,
+          status: p.status,
+          amount_minor: Number(p.amountMinor),
+          currency: p.currency,
+          gateway: p.gateway,
+          payment_method: p.paymentMethod,
+          failure_code: p.failureCode,
+          failure_message: p.failureMessage,
+          created_at: p.createdAt,
+        })),
+        refunds: o.refunds.map((r) => ({
+          id: r.id,
+          payment: r.payment,
+          status: r.status,
+          amount_minor: Number(r.amountMinor),
+          currency: r.currency,
+          reason: r.reason,
+          gateway: r.gateway,
+          created_at: r.createdAt,
+        })),
+      };
+    },
+  );
+
   // The one gateway account a refund of this invoice goes through (the refund dialogs
   // show its balance). `gateway_account: null` = none, or several took the payments.
   app.get(
@@ -321,6 +451,7 @@ export async function registerInvoiceRoutes(app: FastifyInstance) {
       return {
         ...view,
         ...paged,
+        created_through: await createdThrough(req.organization!.id, "invoice", invId),
         payment_in_flight: inFlight.has(found.invoice.id),
         awaiting_authentication: inFlight.get(found.invoice.id)?.awaitingAuthentication ?? false,
       };

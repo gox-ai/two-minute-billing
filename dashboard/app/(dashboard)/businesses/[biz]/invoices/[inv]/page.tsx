@@ -1,7 +1,9 @@
+import { createdThroughLabel } from "@/lib/created-through";
 import { Fragment } from "react";
 import { isApiNotFound } from "@/lib/api";
 import { notFound } from "next/navigation";
 import { invoiceRefundAccount } from "@/lib/api/gateways";
+import { getOrder } from "@/lib/api/orders";
 import { AssistantRecordLabel } from "@/components/assistant/assistant-context";
 import { VoidInvoiceDialog } from "@/components/invoices/void-invoice-dialog";
 import { billingRules, shortfallWriteOffLimit } from "@/lib/billing-rules";
@@ -65,8 +67,11 @@ import {
 } from "@/components/invoices/invoice-lifecycle-actions";
 import { requirePermission, allows } from "@/lib/session";
 import { CollectInvoiceDialog } from "@/components/invoices/collect-invoice-dialog";
+import { ApplyCreditsDialog } from "@/components/invoices/apply-credits-dialog";
+import { applyCreditsPlan } from "@/lib/apply-credits";
 import { Chip, StatusChip, IdChip } from "@/components/patterns/chip";
 import { MiddleEllipsis } from "@/components/patterns/id-text";
+import { NoWrapDates } from "@/components/patterns/nowrap-dates";
 import { creditNoteChipStatus } from "@/lib/credit-note-status";
 import {
   RecordCrumbs,
@@ -109,7 +114,7 @@ export const dynamic = "force-dynamic";
 // only when legal for the invoice's status (`invoiceCapabilities` mirrors the
 // backend guards in src/modules/invoicing/{ops,pending}.ts + dunning.ts):
 //   pending     → Close (finalize; usage keeps accruing until then)
-//   open        → Collect, Record payment, Void, Write off, Credit note
+//   open        → Collect, Record payment, Apply credits, Void, Write off, Credit note
 //   payment_due → + Retry now, Stop dunning, Pause dunning
 //   voided      → Regenerate (subscription invoices only)
 //   paid        → Credit note (archival imported invoices: Credit note only)
@@ -148,6 +153,15 @@ export default async function InvoiceDetail({
   const sub = inv.subscription
     ? await getSubscription(biz, inv.subscription).catch(() => null)
     : null;
+
+  // An invoice for one-time products is also an order. Only an invoice with no subscription
+  // can be one; the order endpoint answers 404 for the rest, and a failed lookup is no loss.
+  const isOrder = inv.subscription
+    ? false
+    : await getOrder(biz, inv.id).then(
+        () => true,
+        () => false,
+      );
 
   // Payments-and-credits, fetched here (not inside the card) so it can seed the
   // Refresh control's client state — see invoice-refresh-panel.tsx.
@@ -333,6 +347,15 @@ export default async function InvoiceDetail({
   // source system.
   const canCreditNote = isManager && creditableMinor > 0;
   const canRefundCash = canCreditNote && !caps.archival && amountPaid > 0;
+  // Apply credits: an owed invoice and credit in its currency. The engine re-checks both.
+  const credit = customer?.balances?.find((b) => b.currency_code === inv.currency);
+  const creditRefundable = credit?.refundable_credits ?? 0;
+  const creditExcess = credit?.excess_payments ?? 0;
+  const canApplyCredits =
+    allows(user, "credit_notes:manage", "manager") &&
+    caps.open &&
+    amountDue > 0 &&
+    applyCreditsPlan(amountDue, creditRefundable, creditExcess).totalMinor > 0;
   const refundAccount = canRefundCash ? await invoiceRefundAccount(biz, inv.id) : null;
   const anyAction =
     caps.canClose ||
@@ -407,22 +430,25 @@ export default async function InvoiceDetail({
                   <TableCell className="pl-5">
                     <Link
                       href={`/businesses/${biz}/credit_notes/${cn.id}`}
-                      className="text-sm font-medium whitespace-nowrap text-primary hover:underline"
+                      className="flex max-w-56 min-w-0 text-primary hover:underline"
                     >
-                      {cn.number ?? cn.id}
+                      <MiddleEllipsis
+                        value={cn.number ?? cn.id}
+                        className="font-sans text-sm font-medium"
+                      />
                     </Link>
                   </TableCell>
                   <TableCell className="capitalize">{cn.credit_method}</TableCell>
                   <TableCell>
-                    <StatusChip status={creditNoteChipStatus(cn)} />
+                    <StatusChip
+                      status={creditNoteChipStatus(cn)}
+                      className="shrink whitespace-normal"
+                    />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {money(cn.total_minor, cn.currency)}
                   </TableCell>
-                  <TableCell
-                    className="truncate text-muted-foreground"
-                    title={cn.reason ?? undefined}
-                  >
+                  <TableCell className="wrap-anywhere whitespace-normal text-muted-foreground">
                     {cn.reason ?? "—"}
                   </TableCell>
                   <TableCell className="pr-5 text-muted-foreground">
@@ -431,16 +457,9 @@ export default async function InvoiceDetail({
                 </TableRow>
               ))}
             >
-              <Table phone="stack" className="table-fixed max-lg:min-w-2xl">
-                <colgroup>
-                  {/* At the 672px floor a status chip and a date still fit whole. */}
-                  <col className="w-[20%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[15%]" />
-                  <col />
-                  <col className="w-[21%]" />
-                </colgroup>
+              {/* Auto layout: a number shortens in the middle, the reason and a long status
+                  wrap, and an amount widens its own column instead of breaking. */}
+              <Table phone="stack" fit>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-5">ID</TableHead>
@@ -506,6 +525,17 @@ export default async function InvoiceDetail({
           facts={[
             inv.number ? <IdChip key="no" label="№" id={inv.number} /> : null,
             <IdChip key="id" id={inv.id} />,
+            isOrder ? (
+              <span key="order" className="text-sm text-muted-foreground">
+                This invoice is an order.{" "}
+                <Link
+                  href={`/businesses/${biz}/orders/${inv.id}`}
+                  className="text-primary hover:underline"
+                >
+                  View order
+                </Link>
+              </span>
+            ) : null,
             // The ACCOUNT HOLDER, not the bill-to contact (that is the Addresses card).
             inv.customer ? (
               <Link
@@ -615,7 +645,7 @@ export default async function InvoiceDetail({
                     </span>
                   ) : null}
                 </MoreSection>
-                {caps.canRecordPayment || canCreditNote || refundableCn ? (
+                {caps.canRecordPayment || canCreditNote || refundableCn || canApplyCredits ? (
                   <MoreSection heading="Payment and credit">
                     {/* Not due yet, so no attention card — early payment stays reachable here. */}
                     {inv.status === "posted" && caps.canCollect ? (
@@ -630,6 +660,19 @@ export default async function InvoiceDetail({
                         pms={collectPms}
                         firstTried={collectFirst}
                         trigger="link"
+                      />
+                    ) : null}
+                    {canApplyCredits ? (
+                      <ApplyCreditsDialog
+                        biz={biz}
+                        invoice={{
+                          id: inv.id,
+                          number: inv.number ?? null,
+                          dueMinor: amountDue,
+                          currency: inv.currency,
+                        }}
+                        refundableMinor={creditRefundable}
+                        excessMinor={creditExcess}
                       />
                     ) : null}
                     {caps.canRecordPayment ? (
@@ -761,32 +804,29 @@ export default async function InvoiceDetail({
                   )
                 ) : (
                   <>
-                    {/* Below sm only Items and Amount stay; the per-unit figures move under
-                        the description. */}
-                    <Table className="table-fixed max-lg:min-w-0">
-                      <colgroup>
-                        <col />
-                        <col className="hidden w-20 sm:table-column" />
-                        <col className="hidden w-28 sm:table-column" />
-                        {hasLineDiscounts ? <col className="hidden w-28 sm:table-column" /> : null}
-                        <col className="w-32 sm:w-36" />
-                      </colgroup>
+                    {/* Below sm, and wherever the grid would not fit the card, only Items and
+                        Amount stay; the per-unit figures move under the description. */}
+                    {/* Auto layout: the figures size to the widest amount and never break; the
+                        description wraps in the rest, 10rem at least. */}
+                    <Table fit>
                       <TableHeader>
                         <TableRow>
                           <TableHead className="pl-5">Items</TableHead>
-                          <TableHead className="hidden text-right sm:table-cell">Units</TableHead>
-                          <TableHead className="hidden text-right sm:table-cell">
+                          <TableHead className="hidden text-right unstacked:table-cell">
+                            Units
+                          </TableHead>
+                          <TableHead className="hidden text-right unstacked:table-cell">
                             Unit price
                           </TableHead>
                           {/* Only when a line was discounted: Subtotal is NET of these, so
                               without the column the items would outsum it unexplained. */}
                           {hasLineDiscounts ? (
-                            <TableHead className="hidden text-right sm:table-cell">
+                            <TableHead className="hidden text-right unstacked:table-cell">
                               Discount
                             </TableHead>
                           ) : null}
                           <TableHead className="pr-5 text-right">
-                            Amount<span className="hidden sm:inline"> ({inv.currency})</span>
+                            Amount<span className="hidden unstacked:inline"> ({inv.currency})</span>
                           </TableHead>
                         </TableRow>
                       </TableHeader>
@@ -794,7 +834,7 @@ export default async function InvoiceDetail({
                         {items.map((l) => (
                           <TableRow key={l.id}>
                             <TableCell className="pl-5 whitespace-normal">
-                              <span className="flex flex-col gap-0.5">
+                              <span className="flex flex-col gap-0.5 unstacked:min-w-40">
                                 {/* No link to the line's price: its route needs the product
                                     id, which `lines[]` does not carry. */}
                                 <span className="text-sm font-medium wrap-anywhere">
@@ -806,9 +846,9 @@ export default async function InvoiceDetail({
                                     <>
                                       {" "}
                                       ·{" "}
-                                      <span className="whitespace-nowrap">
+                                      <NoWrapDates>
                                         {fmtRange(l.period_start, l.period_end, tz)}
-                                      </span>
+                                      </NoWrapDates>
                                     </>
                                   ) : (
                                     ""
@@ -837,23 +877,33 @@ export default async function InvoiceDetail({
                                     showCost={canSeeCost}
                                   />
                                 ) : null}
-                                <span className="text-xs text-muted-foreground tabular-nums sm:hidden">
-                                  {lineQuantity(l)} × {lineUnitPrice(l, inv.currency)}
-                                  {(l.item_level_discount_minor ?? 0) > 0
-                                    ? ` · −${money(l.item_level_discount_minor ?? 0, inv.currency)} discount`
-                                    : ""}
+                                <span className="text-xs text-muted-foreground tabular-nums unstacked:hidden">
+                                  {lineQuantity(l)} ×{" "}
+                                  <span className="whitespace-nowrap">
+                                    {lineUnitPrice(l, inv.currency)}
+                                  </span>
+                                  {(l.item_level_discount_minor ?? 0) > 0 ? (
+                                    <>
+                                      {" "}
+                                      ·{" "}
+                                      <span className="whitespace-nowrap">
+                                        −{money(l.item_level_discount_minor ?? 0, inv.currency)}
+                                      </span>{" "}
+                                      discount
+                                    </>
+                                  ) : null}
                                 </span>
                               </span>
                             </TableCell>
                             {/* The decimal fields carry a meter line's truth; older rows fall back. */}
-                            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                            <TableCell className="hidden text-right tabular-nums unstacked:table-cell">
                               {lineQuantity(l)}
                             </TableCell>
-                            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                            <TableCell className="hidden text-right tabular-nums unstacked:table-cell">
                               {lineUnitPrice(l, inv.currency)}
                             </TableCell>
                             {hasLineDiscounts ? (
-                              <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
+                              <TableCell className="hidden text-right text-muted-foreground tabular-nums unstacked:table-cell">
                                 {/* A dash, not a zero: not discounted at all. Same as the PDF. */}
                                 {(l.item_level_discount_minor ?? 0) === 0
                                   ? "—"
@@ -874,7 +924,9 @@ export default async function InvoiceDetail({
                     </Table>
                     {/* Totals ladder: Subtotal → each named adjustment → Total → what reduced
                         the collectible → Amount due. Every row is a real engine figure. */}
-                    <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm">
+                    {/* As wide as its longest row (20rem at least), never wider than the card;
+                        a label wraps, an amount never does. */}
+                    <div className="ml-auto w-fit max-w-full min-w-xs space-y-1 px-5 py-4 text-sm [&_.tabular-nums]:whitespace-nowrap">
                       <div className="flex justify-between gap-8">
                         <span className="text-muted-foreground">Subtotal</span>
                         <span className="tabular-nums">
@@ -974,16 +1026,13 @@ export default async function InvoiceDetail({
                     ),
                   },
                   { label: "Invoiced on", value: fmtDateTime(inv.created_at, tz) },
+                  { label: "Created through", value: createdThroughLabel(inv.created_through) },
                   {
                     label: "Billing period",
                     value:
-                      inv.period_start || inv.period_end ? (
-                        <span className="whitespace-nowrap">
-                          {fmtRange(inv.period_start, inv.period_end, tz)}
-                        </span>
-                      ) : (
-                        "—"
-                      ),
+                      inv.period_start || inv.period_end
+                        ? fmtRange(inv.period_start, inv.period_end, tz)
+                        : "—",
                   },
                   inv.due_date ? { label: "Due date", value: fmtDate(inv.due_date, tz) } : null,
                   inv.expected_payment_date
@@ -1051,17 +1100,15 @@ export default async function InvoiceDetail({
                 invoice — the only place that names it. */}
             {discountDetails.length > 0 ? (
               <RecordCard id="discounts" title="Discount details" flush>
-                <Table className="table-fixed max-lg:min-w-0">
-                  <colgroup>
-                    <col />
-                    <col className="w-[34%]" />
-                    <col className="w-28" />
-                  </colgroup>
+                {/* Auto layout: the amount widens its own column instead of breaking. */}
+                <Table phone="stack" fit>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Discount</TableHead>
                       <TableHead>Applied on</TableHead>
-                      <TableHead className="pr-5 text-right">Amount</TableHead>
+                      <TableHead phone="aside" className="pr-5 text-right">
+                        Amount
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1091,7 +1138,9 @@ export default async function InvoiceDetail({
                                 <span className="font-medium wrap-anywhere">{named}</span>
                               ) : null}
                               {d.coupon_code && d.label && d.label !== d.coupon_code ? (
-                                <span className="text-muted-foreground">({d.label})</span>
+                                <span className="wrap-anywhere text-muted-foreground">
+                                  ({d.label})
+                                </span>
                               ) : null}
                             </span>
                           </TableCell>

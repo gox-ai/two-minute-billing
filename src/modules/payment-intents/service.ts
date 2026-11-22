@@ -26,6 +26,7 @@
  */
 import { activatePaidCreditGrants } from "@/modules/credits/packs";
 import type { AchAuthorizationEvidence } from "@/modules/payment-methods/ach-authorization";
+import { consentFromJson } from "@/modules/payment-methods/on-file-consent";
 import { methodTypeFor } from "@/modules/payments/method-type";
 import {
   and,
@@ -92,9 +93,18 @@ import type {
   ProviderCustomerRef,
   ProviderPaymentMethodRef,
 } from "@/providers/types";
-import { ProviderIndeterminateError, strandedObjectId } from "@/providers/types";
+import {
+  ClientResultUnsupportedError,
+  ProviderIndeterminateError,
+  strandedObjectId,
+} from "@/providers/types";
 import { allowsIntentPurpose } from "@/providers/types";
 import { gatewayReturnUrl } from "@/providers/buyer-return";
+import {
+  isGenericClientRefusal,
+  operatorFailureText,
+  withBuiltInRetry,
+} from "@/providers/decline-codes";
 import { CARD_LIMIT_CODE, CARD_LIMIT_MESSAGE, overCardLimit } from "@/modules/invoicing/card-limit";
 import { providerPaymentMethodRef } from "@/modules/payment-methods/provider-ref";
 import {
@@ -106,6 +116,7 @@ import {
   paymentAttempts,
   paymentMethods,
   gatewayAccounts,
+  gatewayRequestLogs,
   invoices,
   payments,
   businesses,
@@ -119,6 +130,13 @@ import { createLogger } from "@/platform/logger";
 // because `stale-pending.ts` answers the same question at the other end of the flow —
 // see `ttl.ts` for why the two tables are copies and what pins them together.
 import { intentExpiresAt, intentTtlMs } from "./ttl";
+import {
+  BROWSER_REPORTED,
+  browserFailureVerdict,
+  browserOperatorText,
+  type BrowserFailureOutcome,
+  type BrowserFailureOwner,
+} from "./browser-failure";
 
 const log = createLogger("payment-intents");
 
@@ -345,6 +363,218 @@ function attemptOutcomeOf(intent: IntentRef): {
     errorCode: null,
     errorText: null,
   };
+}
+
+/**
+ * The gateway refused an attempt the BUYER is still completing (on-session: a 3-D Secure
+ * check that failed, a card the browser confirmed and the bank declined). No transaction
+ * exists yet, so `reconcileChargeFailed` finds nothing, and the reason used to be lost: the
+ * sweep later closed the attempt as `intent_expired`, which told the business the buyer
+ * never tried when the bank had in fact refused them (2026-11-17, a refused authentication).
+ *
+ * The reason is written on the open attempt and its status is left alone: the buyer may
+ * still pay on the same intent with another card, and a success consumes it as usual. The
+ * sweep keeps this reason when it closes the attempt.
+ *
+ * Returns whether an open intent took it.
+ */
+export async function recordGatewayFailureOnOpenIntent(input: {
+  /** `providerIntentId ?? providerChargeId`: matched on `payment_intents.intent_at_gateway`. */
+  intentAtGateway: string | null;
+  /** Our intent's public id read back off the gateway object; tried when the id does not match. */
+  ownershipRef?: string | null;
+  /** Every id the event names, for the stale-attempt guard of an `ownershipRef` match. */
+  eventIds?: readonly (string | null | undefined)[];
+  /** The business that delivered the webhook; scopes the match. */
+  businessId: string | null;
+  failureCode: string;
+  /** Operator text (`operatorFailureText`). */
+  failureMessage: string | null;
+}): Promise<boolean> {
+  const found = await openIntentForGatewayFailure(input);
+  if (!found) return false;
+  return withTenant(found.pi.organizationId, async (tx) =>
+    recordFailureOnOpenAttempt(
+      tx,
+      found.pi,
+      { code: input.failureCode, message: input.failureMessage },
+      { replaceGenericClientRefusal: true },
+    ),
+  );
+}
+
+/**
+ * Write a gateway's refusal on the CURRENT attempt while it is still open, status unchanged:
+ * the #516 rule, shared by webhooks and polls. The expiry sweep keeps the reason.
+ */
+async function recordFailureOnOpenAttempt(
+  tx: Tx,
+  pi: PaymentIntent,
+  failure: { code: string; message?: string | null },
+  opts: { replaceGenericClientRefusal?: boolean } = {},
+): Promise<boolean> {
+  const attempt = await currentAttempt(tx, pi.id);
+  if (!attempt) return false;
+  const open = (OPEN_ATTEMPT_STATUSES as readonly string[]).includes(attempt.status);
+  // The browser failed it first with no reason (Adyen Drop-in): the webhook's reason wins.
+  const generic =
+    opts.replaceGenericClientRefusal &&
+    attempt.status === "failed" &&
+    isGenericClientRefusal({ code: attempt.errorCode, message: attempt.errorText }) &&
+    !isGenericClientRefusal(failure);
+  if (!open && !generic) return false;
+  await writeAttemptStatus(tx, attempt, {
+    status: attempt.status,
+    errorCode: failure.code,
+    errorText: failure.message ?? "The payment failed at the gateway.",
+  });
+  return true;
+}
+
+/**
+ * A refusal the gateway gave the BUYER'S BROWSER (Stripe.js confirm, the RazorPay sheet):
+ * the gateway rejected the request before an attempt existed on its side, so no webhook will
+ * ever say why, and the attempt stayed "In progress" with no error.
+ *
+ * Booked on the intent's open attempt the same way as `recordFailureOnOpenAttempt` (status
+ * unchanged: the buyer may still use another card), with operator text that ends in
+ * `BROWSER_REPORTED`. A browser row is added to the gateway request log under the attempt's
+ * span, with no HTTP status, because we did not see the call.
+ *
+ * The report is the buyer's own, so it is trusted only as far as it can reach
+ * (`browserFailureVerdict`): the intent must belong to the session (`owner`), be on the
+ * gateway the report names, and have an open attempt; a reason a webhook or our server
+ * already wrote is never replaced. A forged report can therefore only put operator text on
+ * that buyer's own open attempt.
+ */
+export async function recordBrowserFailureOnOpenIntent(input: {
+  organizationId: string;
+  businessId: string;
+  intentPublicId: string;
+  /** The session's customer, and any intent the session itself began (checkout). */
+  owner: BrowserFailureOwner;
+  gatewayKey: string;
+  /** Our canonical code, by the intent's purpose (`browserFailureCode`). */
+  failureCode: (purpose: "setup" | "payment") => string;
+  /** The gateway's own words: operator text, never shown to a payer. */
+  gatewayMessage: string | null;
+  /** The gateway's error as the browser got it, for the request log. */
+  gatewayError: Record<string, string | null>;
+  /** The buyer session, as the log's actor. */
+  actor: string;
+}): Promise<BrowserFailureOutcome> {
+  const result = await withTenant(input.organizationId, async (tx) => {
+    const [pi] = await tx
+      .select()
+      .from(paymentIntents)
+      .where(
+        and(
+          eq(paymentIntents.publicId, input.intentPublicId),
+          eq(paymentIntents.businessId, input.businessId),
+        ),
+      )
+      .limit(1);
+    const [account] = pi?.gatewayAccountId
+      ? await tx
+          .select({ gatewayKey: gatewayAccounts.gatewayKey })
+          .from(gatewayAccounts)
+          .where(eq(gatewayAccounts.id, pi.gatewayAccountId))
+          .limit(1)
+      : [];
+    const attempt = pi ? await currentAttempt(tx, pi.id) : null;
+    const outcome = browserFailureVerdict({
+      intent: pi ?? null,
+      owner: input.owner,
+      intentGateway: account?.gatewayKey ?? null,
+      reportGateway: input.gatewayKey,
+      attempt,
+    });
+    if (outcome !== "booked" || !pi || !attempt) return { outcome, booked: null };
+    const code = input.failureCode(pi.purpose === "setup" ? "setup" : "payment");
+    await writeAttemptStatus(tx, attempt, {
+      status: attempt.status,
+      errorCode: code,
+      errorText: browserOperatorText(code, input.gatewayMessage),
+    });
+    return { outcome, booked: { attempt, accountId: pi.gatewayAccountId } };
+  });
+  const booked = result.booked;
+  if (!booked) return result.outcome;
+  // Platform-global, written on the base connection like every other log row.
+  await systemDb.insert(gatewayRequestLogs).values({
+    businessId: input.businessId,
+    gatewayAccountId: booked.accountId,
+    gatewayKey: input.gatewayKey,
+    method: "BROWSER",
+    url: BROWSER_REPORTED,
+    status: null,
+    operation: "confirm (browser)",
+    source: "customer_browser",
+    actor: input.actor,
+    responseBody: input.gatewayError,
+    traceId: booked.attempt.traceId,
+    spanId: booked.attempt.spanId,
+  });
+  return "booked";
+}
+
+/**
+ * The open intent a gateway failure names. By `intent_at_gateway` first. Else by OUR id on
+ * the gateway object (`ownershipRef` = the intent's public id), for a gateway that answers
+ * under an id of its own (an Adyen pspReference, a hosted page's payment id).
+ *
+ * An `ownershipRef` match is the same for every attempt of the intent, so it is taken only
+ * when it cannot be stale news from an earlier attempt: the current attempt is the first,
+ * or is addressed by an id the event names. Two matches answer null, never a guess.
+ */
+export async function openIntentForGatewayFailure(input: {
+  intentAtGateway?: string | null;
+  ownershipRef?: string | null;
+  eventIds?: readonly (string | null | undefined)[];
+  businessId: string | null;
+}): Promise<{ pi: PaymentIntent; via: "gateway_id" | "ownership_ref" } | null> {
+  const open = notInArray(paymentIntents.status, ["consumed", "expired", "voided"]);
+  const scoped = input.businessId ? [eq(paymentIntents.businessId, input.businessId)] : [];
+  if (input.intentAtGateway) {
+    const [pi] = await systemDb
+      .select()
+      .from(paymentIntents)
+      .where(and(eq(paymentIntents.intentAtGateway, input.intentAtGateway), open, ...scoped))
+      .limit(1);
+    if (pi) return { pi, via: "gateway_id" };
+  }
+  if (!input.ownershipRef) return null;
+  const rows = await systemDb
+    .select()
+    .from(paymentIntents)
+    .where(and(eq(paymentIntents.publicId, input.ownershipRef), open, ...scoped))
+    .limit(2);
+  if (rows.length !== 1) return null;
+  const pi = rows[0]!;
+  const attempt = await withTenant(pi.organizationId, (tx) => currentAttempt(tx, pi.id));
+  const ids = new Set((input.eventIds ?? []).filter((x): x is string => !!x));
+  if (
+    attempt &&
+    attempt.attemptNumber > 1 &&
+    !(attempt.idAtGateway && ids.has(attempt.idAtGateway))
+  )
+    return null;
+  return { pi, via: "ownership_ref" };
+}
+
+/**
+ * A poll found the gateway REFUSED an intent (`FetchedIntent.failure`): keep the reason on
+ * the open attempt, so a missed webhook no longer ends as `intent_expired` with no why.
+ */
+async function recordPolledFailure(pi: PaymentIntent, fetched: FetchedIntent): Promise<void> {
+  if (fetched.status !== "failed" || !fetched.failure) return;
+  const f = fetched.failure;
+  await withTenant(pi.organizationId, (tx) =>
+    recordFailureOnOpenAttempt(tx, pi, {
+      code: f.code,
+      message: operatorFailureText(f),
+    }),
+  );
 }
 
 /** The highest-numbered attempt of an intent — the one every operation acts on. */
@@ -668,6 +898,14 @@ export interface CreatePaymentIntentInput {
    * Ignored elsewhere. Stored as `first_charge_minor`.
    */
   firstChargeMinor?: number;
+  /**
+   * A buyer-picks `payment` that also keeps the new method for later charges. Only where the
+   * gateway's `capabilities.paymentSavesMethod` lists the requested methods (card when none
+   * is named); refused otherwise, so a buyer is never told a card was saved when it was not.
+   */
+  saveForFuture?: boolean;
+  /** The consent the buyer accepted for `saveForFuture` (`on-file-consent.ts`). Required with it. */
+  saveConsent?: AchAuthorizationEvidence;
   /**
    * Pay on the gateway's hosted page with this wallet (`CreateIntentInput.hostedWallet`). Only
    * for a buyer-picks `payment`, on a gateway whose catalogue entry offers it.
@@ -1089,7 +1327,7 @@ export async function createPaymentIntent(
   // distinct intents for the same PM+amount must NOT collide at the gateway, and
   // neither must a retry against the same intent (see retryPaymentIntent).
   const piPublicId = publicId("pi");
-  const maxAmountMinor =
+  let maxAmountMinor =
     purpose === "setup" && input.maxAmountMinor != null ? BigInt(input.maxAmountMinor) : null;
   const firstOn = adapter.capabilities.setupCollectsFirstCharge ?? [];
   const firstChargeMinor =
@@ -1100,12 +1338,45 @@ export async function createPaymentIntent(
     input.methodTypes!.every((m) => (firstOn as string[]).includes(m))
       ? BigInt(input.firstChargeMinor)
       : null;
+  // Pay and save: a new method the buyer picks now, kept for later off-session charges.
+  let saveMethod = false;
+  /** The one method a pay-and-save payment keeps (the portal row's rail). */
+  let saveMethodTypes: string[] | null = null;
+  if (input.saveForFuture) {
+    const savesOn = (adapter.capabilities.paymentSavesMethod ?? []) as string[];
+    // None named: the gateway's own form, which the adapter limits to what it can save.
+    const asked = input.methodTypes?.length ? input.methodTypes : savesOn.slice(0, 1);
+    if (
+      purpose !== "payment" ||
+      !input.letBuyerChooseMethod ||
+      (input.session ?? "on_session") !== "on_session" ||
+      !ctx.customer ||
+      !input.saveConsent ||
+      asked.length === 0 ||
+      !asked.every((m) => savesOn.includes(m))
+    )
+      throw new PaymentIntentError(
+        "We cannot save a payment method with this payment. Pay without saving it, then add it under Payment methods.",
+        "save_not_supported",
+      );
+    saveMethod = true;
+    saveMethodTypes = asked;
+    // A saved method on a mandate rail (an India card) registers a mandate while it pays:
+    // the same per-debit ceiling Add card asks for. Stored, so a retry asks the same.
+    const { deriveMandateCeiling } = await import("@/modules/subscriptions/estimate");
+    maxAmountMinor = await deriveMandateCeiling(
+      input.organizationId,
+      input.businessId,
+      ctx.customer!.id,
+      currency,
+    );
+  }
   // Card limit (0482): an on-session charge above it may not be a card. A buyer-picks sheet
   // offers cards, so it is refused too; a non-card rail named here still goes ahead.
   const charged = purpose === "payment" ? BigInt(input.amountMinor ?? 0) : (firstChargeMinor ?? 0n);
   if (charged > 0n) {
     const asked = input.letBuyerChooseMethod
-      ? null
+      ? (saveMethodTypes ?? (input.methodTypes?.length ? input.methodTypes : null))
       : ctx.pm
         ? [ctx.pm.type]
         : (input.methodTypes ?? ["card"]);
@@ -1227,11 +1498,12 @@ export async function createPaymentIntent(
           // the adapter reads THIS field for it — never `amountMinor`, which is zero here.
           ...(maxAmountMinor != null ? { maxAmountMinor } : {}),
           ...(firstChargeMinor != null ? { firstChargeMinor } : {}),
+          ...(saveMethod ? { saveForFuture: true, methodTypes: saveMethodTypes! } : {}),
           ...(input.returnUrl ? { returnUrl: gatewayReturnUrl(adapter, input.returnUrl) } : {}),
           ...(input.cancelUrl ? { cancelUrl: gatewayReturnUrl(adapter, input.cancelUrl) } : {}),
-          ...(input.methodTypes && !input.letBuyerChooseMethod
-            ? { methodTypes: input.methodTypes }
-            : {}),
+          // A rail the buyer selected in our list pins the gateway's form to it (option C);
+          // without one, the gateway's own form offers its rails.
+          ...(input.methodTypes?.length && !saveMethod ? { methodTypes: input.methodTypes } : {}),
           ...(input.hostedWallet ? { hostedWallet: input.hostedWallet } : {}),
         }),
     );
@@ -1254,9 +1526,9 @@ export async function createPaymentIntent(
         code: "gateway_request_rejected",
         message:
           `The gateway rejected the request itself: ${(err as Error)?.message ?? String(err)} ` +
-          "This is a configuration or request fault on our side, not a problem with the card of the customer. " +
-          "A retry of the same request cannot succeed.",
-        retriable: false,
+          "This is a configuration or request fault on our side, not a problem with the card of the customer.",
+        // Retried like every refused request of ours (`OUR_REQUEST_REFUSED`).
+        retriable: true,
       },
       raw: { error: (err as Error)?.message ?? String(err) },
     };
@@ -1283,6 +1555,18 @@ export async function createPaymentIntent(
         firstChargeMinor,
         gatewayAccountId: ctx.account.id,
         paymentMethodId: ctx.pm?.id ?? null,
+        savedMethodChosen: purpose === "payment" ? !input.letBuyerChooseMethod : null,
+        saveMethod: saveMethod || null,
+        // The rail the buyer selected (a row of Pay now): a retry and a resume ask for it.
+        methodType:
+          saveMethodTypes?.[0] ??
+          (input.letBuyerChooseMethod && input.methodTypes?.length ? input.methodTypes[0]! : null),
+        // The rail rides with the consent, so a retry saves the method the buyer picked.
+        saveConsent: saveMethod
+          ? input.saveConsent
+            ? { ...input.saveConsent, methodType: saveMethodTypes![0] }
+            : null
+          : null,
         intentAtGateway: intent.intentId,
         nextAction: intent.authorization ?? null,
         attemptCount: 0,
@@ -1368,7 +1652,7 @@ export async function createPaymentIntent(
           invoiceId: ctx.invoiceId,
           errorCode: outcome.errorCode,
           errorText: outcome.errorText,
-          retriable: intent.failure?.retriable ?? null,
+          retriable: intent.failure ? withBuiltInRetry(intent.failure).retriable : null,
           paymentIntentId: row!.id,
           paymentAttemptId: attempt.id,
         });
@@ -1539,6 +1823,18 @@ export async function retryPaymentIntent(
         // the mismatch would only surface as a declined renewal months later.
         ...(pi.maxAmountMinor != null ? { maxAmountMinor: pi.maxAmountMinor } : {}),
         ...(pi.firstChargeMinor != null ? { firstChargeMinor: pi.firstChargeMinor } : {}),
+        ...(pi.saveMethod
+          ? {
+              saveForFuture: true,
+              methodTypes: [
+                pi.methodType ??
+                  (pi.saveConsent as { methodType?: string } | null)?.methodType ??
+                  "card",
+              ],
+            }
+          : pi.methodType
+            ? { methodTypes: [pi.methodType] }
+            : {}),
       }),
     );
   } catch (e) {
@@ -1648,7 +1944,7 @@ export async function retryPaymentIntent(
           invoiceId: pi.invoiceId,
           errorCode: outcome.errorCode,
           errorText: outcome.errorText,
-          retriable: intent.failure?.retriable ?? null,
+          retriable: intent.failure ? withBuiltInRetry(intent.failure).retriable : null,
           paymentIntentId: pi.id,
           paymentAttemptId: attempt.id,
         });
@@ -2161,10 +2457,19 @@ export async function failPaymentIntentFromGateway(
       !OPEN_ATTEMPT_STATUSES.includes(attempt.status as (typeof OPEN_ATTEMPT_STATUSES)[number])
     )
       return null;
-    const failed = await failAttempt(tx, attempt, failure.code, failure.message, pi.publicId);
+    // The webhook already named the reason on this attempt: keep it over a reasonless one.
+    const kept =
+      isGenericClientRefusal(failure) && attempt.errorCode
+        ? { code: attempt.errorCode, message: attempt.errorText ?? failure.message }
+        : failure;
+    const failed = await failAttempt(tx, attempt, kept.code, kept.message, pi.publicId);
+    // The payer left the gateway's page or it expired: its session is gone, so the intent
+    // closes as not paid and no longer holds the invoice against collection. A held
+    // authorization is left to the expiry path, which releases it.
+    const abandoned = failure.code === "payment_abandoned" && pi.status !== "authorized";
     const [row] = await tx
       .update(paymentIntents)
-      .set({ nextAction: null })
+      .set({ nextAction: null, ...(abandoned ? { status: "expired" as const } : {}) })
       .where(eq(paymentIntents.id, pi.id))
       .returning();
     await emitEvent(tx, {
@@ -2178,8 +2483,8 @@ export async function failPaymentIntentFromGateway(
           status: row!.status,
           purpose: pi.purpose,
           attempt_number: failed.attemptNumber,
-          error_code: failure.code,
-          error_text: failure.message,
+          error_code: kept.code,
+          error_text: kept.message,
         },
         row!.resourceVersion,
       ),
@@ -2374,6 +2679,12 @@ export interface ConsumePaymentIntentResult {
   charge?: ChargeResult;
   /** `purpose: 'setup'` — the instrument the intent existed to vault. */
   paymentMethod?: PaymentMethodRow;
+  /**
+   * `purpose: 'payment'` with `save_method`: the method the payment also saved. Absent
+   * with `saveFailed: true` when the money was taken but nothing could be saved.
+   */
+  savedPaymentMethod?: PaymentMethodRow;
+  saveFailed?: boolean;
 }
 
 /**
@@ -2673,6 +2984,7 @@ async function confirmAuthorizationWithGateway(
         gatewayStatus: fetched.status,
         ...money,
       });
+    await recordPolledFailure(pi, fetched);
     return { outcome: "not_authorized" };
   }
   if (capturedOnConfirm)
@@ -2730,7 +3042,8 @@ export async function applyClientResult(
   clientResult: Record<string, string>,
 ): Promise<{
   outcome: "authorized" | "failed" | "pending" | "past_challenge";
-  failure?: { code: string; message: string };
+  /** `message` is operator text; a payer reads `payerDeclineMessage(failure)`. */
+  failure?: { code: string; message: string; exposedToPayer?: boolean };
 } | null> {
   const pi = await getPaymentIntent(organizationId, businessId, piPublicId);
   if (!pi) return null;
@@ -2758,7 +3071,11 @@ export async function applyClientResult(
         clientResult,
         idempotencyKey: `pi_client_${pi.publicId}_a${attempt?.attemptNumber ?? 1}`,
       }),
-  );
+  ).catch((e: unknown) => {
+    if (e instanceof ClientResultUnsupportedError)
+      throw new PaymentIntentError(e.message, "client_result_unsupported");
+    throw e;
+  });
   log.info("the gateway answered a browser confirmation", {
     event: "intent_client_result_submitted",
     intent: pi.publicId,
@@ -2785,13 +3102,20 @@ export async function applyClientResult(
     return { outcome: "authorized" };
   }
   if (fetched.status === "failed") {
+    const code = fetched.failure?.code ?? "authorization_failed";
     const failure = {
-      code: fetched.failure?.code ?? "authorization_failed",
-      message:
-        fetched.failure?.message ??
-        `The payment provider did not accept the ${pi.purpose === "setup" ? "payment method" : "payment"}.`,
+      code,
+      message: fetched.failure?.message?.trim()
+        ? fetched.failure.message
+        : operatorFailureText({ code, providerCode: fetched.failure?.providerCode }),
+      ...(fetched.failure?.exposedToPayer !== undefined
+        ? { exposedToPayer: fetched.failure.exposedToPayer }
+        : {}),
     };
-    await failPaymentIntentFromGateway(organizationId, businessId, pi.publicId, failure);
+    await failPaymentIntentFromGateway(organizationId, businessId, pi.publicId, {
+      code: failure.code,
+      message: failure.message,
+    });
     return { outcome: "failed", failure };
   }
   return { outcome: "pending" };
@@ -2856,6 +3180,30 @@ export async function hostedWalletMismatch(
   return hosted !== wantsWallet;
 }
 
+/**
+ * An open intent whose capture the gateway already refused: release the hold so Pay starts
+ * a fresh payment. Capturing it again reuses the attempt's idempotency key, so the gateway
+ * replays the same refusal on every click until the intent expires.
+ * False when nothing was released: no refused capture, or the gateway cannot void (there
+ * the uncaptured hold lapses on its own; a second charge would hold the money twice).
+ */
+export async function releaseRefusedCapture(
+  organizationId: string,
+  businessId: string,
+  pi: PaymentIntent,
+): Promise<boolean> {
+  if (pi.purpose !== "payment" || pi.status !== "authorized" || pi.lastAttemptStatus !== "failed")
+    return false;
+  const gw = await loadIntentGateway(organizationId, businessId, pi);
+  if (!gw.adapter?.voidIntent || gw.adapter.capabilities.intentVoid === false) return false;
+  await voidPaymentIntent(organizationId, businessId, pi.publicId);
+  log.info("released a hold whose capture was refused, so Pay starts a fresh payment", {
+    event: "refused_capture_released",
+    intent: pi.publicId,
+  });
+  return true;
+}
+
 export async function resumeVerdictFromGateway(
   organizationId: string,
   businessId: string,
@@ -2900,9 +3248,11 @@ export async function resumeVerdictFromGateway(
   // Refused, with nothing left for the buyer to do here (a declined browser result): the
   // intent is dead, so close it and let Pay start a new one instead of a dead end.
   if (fetched.status === "failed" && !pi.nextAction) {
+    await recordPolledFailure(pi, fetched);
     await markPaymentIntentVoidedFromGateway(organizationId, businessId, pi.publicId);
     return "closed";
   }
+  await recordPolledFailure(pi, fetched);
   return "open";
 }
 
@@ -3234,7 +3584,84 @@ export async function consumePaymentIntent(
       ...(opts?.achAuthorization ? { achAuthorization: opts.achAuthorization } : {}),
     });
   }
-  return finishPaymentConsume({ organizationId, businessId, pi, ctx, result: outcome.charge });
+  const booked = await finishPaymentConsume({
+    organizationId,
+    businessId,
+    pi,
+    ctx,
+    result: outcome.charge,
+  });
+  if (!pi.saveMethod || outcome.charge.status === "failed") return booked;
+  return {
+    ...booked,
+    ...(await savePaidMethod({
+      organizationId,
+      businessId,
+      pi,
+      ctx,
+      adapter,
+      ref: outcome.paymentMethod,
+      trace,
+    })),
+  };
+}
+
+/**
+ * Pay and save: keep the method the payment used, with the buyer's consent. AFTER the
+ * booking and never able to undo it: the money is taken either way. A gateway that named no
+ * instrument, or a failed save, is reported (`saveFailed`) so the buyer is not told a
+ * method was saved when it was not.
+ */
+async function savePaidMethod(args: {
+  organizationId: string;
+  businessId: string;
+  pi: PaymentIntent;
+  ctx: ConsumeContext;
+  adapter: PaymentProvider;
+  ref: ProviderPaymentMethodRef | undefined;
+  trace: TraceContext;
+}): Promise<Pick<ConsumePaymentIntentResult, "savedPaymentMethod" | "saveFailed">> {
+  const { organizationId, businessId, pi, ctx, adapter, ref } = args;
+  if (!ref || !ctx.customer) {
+    log.warn("pay and save: the gateway named no saved instrument", {
+      event: "pay_and_save_no_instrument",
+      intent: pi.publicId,
+      gatewayKey: ctx.acc.gatewayKey,
+    });
+    return { saveFailed: true };
+  }
+  try {
+    const providerCustomerId =
+      ref.providerCustomerId ??
+      (
+        await withTraceContext({ ...args.trace, organizationId, businessId }, () =>
+          ensureProviderCustomer({
+            organizationId,
+            businessId,
+            customer: ctx.customer!,
+            provider: adapter,
+            gatewayAccountId: ctx.acc.id,
+          }),
+        )
+      ).providerCustomerId;
+    const consent = consentFromJson(pi.saveConsent);
+    const pm = await persistVaultedPaymentMethod({
+      organizationId,
+      businessId,
+      customer: ctx.customer,
+      vaulted: ref,
+      gatewayAccountId: ctx.acc.id,
+      providerCustomerId,
+      ...(consent ? { onFileConsent: consent } : {}),
+    });
+    await withTenant(organizationId, (tx) =>
+      tx.update(paymentIntents).set({ paymentMethodId: pm.id }).where(eq(paymentIntents.id, pi.id)),
+    );
+    return { savedPaymentMethod: pm };
+  } catch (e) {
+    log.error(e, { event: "pay_and_save_not_saved", intent: pi.publicId });
+    return { saveFailed: true };
+  }
 }
 
 type ConsumeContext = {
@@ -3590,7 +4017,7 @@ async function finishPaymentConsume(args: {
         invoiceId: inv.id,
         errorCode,
         errorText,
-        retriable: result.failure?.retriable ?? null,
+        retriable: result.failure ? withBuiltInRetry(result.failure).retriable : null,
         paymentIntentId: pi.id,
         paymentAttemptId: ctx.attempt?.id ?? null,
       },
@@ -3795,7 +4222,7 @@ async function failSetupConsume(args: {
           idAtGateway: ctx.attempt?.idAtGateway ?? null,
           errorCode,
           errorText,
-          retriable: failure?.retriable ?? null,
+          retriable: failure ? withBuiltInRetry(failure).retriable : null,
           paymentIntentId: pi.id,
           paymentAttemptId: ctx.attempt?.id ?? null,
         },
@@ -4118,7 +4545,11 @@ type HoldRelease =
    * `releaseHoldBeforeExpiry` rule 1). Those cases are logged `intent_hold_uncheckable`
    * rather than being silently indistinguishable from a genuine "nothing there".
    */
-  | { outcome: "not_held" }
+  | {
+      outcome: "not_held";
+      /** The poll found the gateway refused it, and why: kept on the closing attempt. */
+      failure?: FetchedIntent["failure"];
+    }
   /** The gateway released it; a `payment_reversal` transaction records it. */
   | {
       outcome: "released";
@@ -4337,6 +4768,8 @@ async function releaseHoldBeforeExpiry(pi: PaymentIntent): Promise<HoldRelease> 
       });
       return { outcome: "not_held" };
     }
+    if (fetched.status === "failed" && fetched.failure)
+      return { outcome: "not_held", failure: fetched.failure };
     if (fetched.status !== "authorized") return { outcome: "not_held" };
     // A real hold our record never learned about. WARN even if the release below
     // succeeds: an authorization the engine did not know it had is a delivery failure
@@ -4494,12 +4927,21 @@ export async function expirePaymentIntents(
             inArray(paymentAttempts.status, [...OPEN_ATTEMPT_STATUSES]),
           ),
         );
+      // The poll's reason, when the webhook that carried it never arrived.
+      const polled = release.outcome === "not_held" ? release.failure : undefined;
       for (const attempt of open) {
+        // A refusal the gateway already reported on this attempt is why it never
+        // completed: keep it rather than calling it an expiry.
+        const code = attempt.errorCode ?? polled?.code ?? null;
         await failAttempt(
           tx,
           attempt,
-          "intent_expired",
-          "The intent expired before it was consumed",
+          code ?? "intent_expired",
+          attempt.errorCode
+            ? (attempt.errorText ?? "The payment failed at the gateway.")
+            : polled
+              ? operatorFailureText(polled)
+              : "The intent expired before it was consumed",
           pi.publicId,
         );
       }
@@ -4639,7 +5081,8 @@ const toIntentRow = (
 /**
  * The newest attempt's error per intent, in ONE query for the whole page (the
  * `(payment_intent_id, attempt_number)` unique index serves the DISTINCT ON).
- * An intent whose newest attempt did not fail has no entry.
+ * An intent whose newest attempt did not fail has no entry, unless the attempt is still open
+ * and carries a refusal already (a webhook's or the browser's, written before it closes).
  */
 async function lastErrorsFor(
   tx: Tx,
@@ -4658,7 +5101,8 @@ async function lastErrorsFor(
     .where(inArray(paymentAttempts.paymentIntentId, intentIds))
     .orderBy(paymentAttempts.paymentIntentId, desc(paymentAttempts.attemptNumber));
   for (const r of rows) {
-    if (r.status === "failed")
+    const open = (OPEN_ATTEMPT_STATUSES as readonly string[]).includes(r.status);
+    if (r.status === "failed" || (open && r.errorCode))
       out.set(r.intentId, { code: r.errorCode ?? null, message: r.errorText ?? null });
   }
   return out;
@@ -4713,6 +5157,8 @@ export async function listPaymentIntentsPage(
      * unrecognised filter is how a list ends up answering a question nobody asked.
      */
     invoicePublicId?: string;
+    /** The customer page's filter. Same rule as `invoicePublicId`: a miss is an empty page. */
+    customerPublicId?: string;
     search?: string;
     filters?: ListFilter[];
     sortField?: string;
@@ -4736,6 +5182,16 @@ export async function listPaymentIntentsPage(
         .limit(1);
       // A never-true clause on a miss, never a DROPPED clause — see the field note.
       conds.push(inv ? eq(paymentIntents.invoiceId, inv.id) : sql`false`);
+    }
+    if (f.customerPublicId) {
+      const [cus] = await tx
+        .select({ id: customers.id })
+        .from(customers)
+        .where(
+          and(eq(customers.businessId, businessId), eq(customers.publicId, f.customerPublicId)),
+        )
+        .limit(1);
+      conds.push(cus ? eq(paymentIntents.customerId, cus.id) : sql`false`);
     }
 
     const { keysetId, offset } = parseCursor(f.startingAfter);

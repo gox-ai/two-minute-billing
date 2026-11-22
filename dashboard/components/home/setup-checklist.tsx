@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { SetupStep } from "@/lib/setup-readiness";
 import { StartTourLink } from "@/components/product-tour";
+import { SetupChecklistClose } from "./setup-checklist-close";
 
 /**
  * First run, on the one screen a new operator lands on.
@@ -19,9 +20,11 @@ import { StartTourLink } from "@/components/product-tour";
  * Only steps that BLOCK money are listed. Tax, email and brand are deliberately absent.
  */
 export function SetupChecklist({
+  biz,
   steps,
   sampleDataHref,
 }: {
+  biz: string;
   steps: SetupStep[];
   /** Transfer & Sample Data — the fastest way to see the product working. */
   sampleDataHref: string;
@@ -36,19 +39,23 @@ export function SetupChecklist({
   return (
     <Card className="mb-6">
       <CardContent>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold tracking-tight">Finish setup</h2>
-          <p className="text-xs text-muted-foreground">
-            {done} of {steps.length} done
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-muted-foreground">
+              {done} of {steps.length} done
+            </p>
+            <SetupChecklistClose biz={biz} />
+          </div>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Complete these steps. Then this business can send its first invoice.
         </p>
 
-        <ol className="mt-4 space-y-3">
+        {/* A narrow card puts each step's buttons under its text, so the text keeps the width. */}
+        <ol className="@container mt-4 space-y-3">
           {steps.map((step) => (
-            <li key={step.id} className="flex items-start gap-3">
+            <li key={step.id} className="flex flex-wrap items-start gap-x-3 gap-y-2">
               <span
                 aria-hidden
                 className={cn(
@@ -76,9 +83,16 @@ export function SetupChecklist({
                 )}
               </div>
               {step.done ? null : (
-                <Button asChild size="sm" variant={step.id === next.id ? "default" : "outline"}>
-                  <Link href={step.href}>{step.cta}</Link>
-                </Button>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2 @max-[32rem]:basis-full @max-[32rem]:justify-start @max-[32rem]:pl-8">
+                  {step.alt ? (
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={step.alt.href}>{step.alt.cta}</Link>
+                    </Button>
+                  ) : null}
+                  <Button asChild size="sm" variant={step.id === next.id ? "default" : "outline"}>
+                    <Link href={step.href}>{step.cta}</Link>
+                  </Button>
+                </div>
               )}
             </li>
           ))}

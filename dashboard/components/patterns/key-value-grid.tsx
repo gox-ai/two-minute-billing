@@ -29,7 +29,7 @@ export function KeyValueGrid({
   if (columns === 2) {
     const mid = Math.ceil(items.length / 2);
     return (
-      <div className={cn("grid gap-x-6 lg:grid-cols-2", className)}>
+      <div className={cn("grid grid-cols-1 gap-x-6 lg:grid-cols-2", className)}>
         <KeyValueGrid rows={items.slice(0, mid)} />
         <KeyValueGrid rows={items.slice(mid)} />
       </div>
@@ -40,7 +40,10 @@ export function KeyValueGrid({
       {items.map((r, i) => (
         // On a phone a value too long for the label's line takes the full width under it; the
         // label band then fills its own line.
-        <div key={i} className="grid grid-cols-[minmax(7rem,2fr)_5fr] max-sm:flex max-sm:flex-wrap">
+        <div
+          key={i}
+          className="grid grid-cols-[minmax(7rem,2fr)_minmax(0,5fr)] max-sm:flex max-sm:flex-wrap"
+        >
           <dt className="bg-muted/50 px-3 py-2 font-medium text-foreground/70 max-sm:flex-[1_0_7rem]">
             {r.label}
           </dt>

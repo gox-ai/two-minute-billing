@@ -78,6 +78,31 @@ date; `attemptCount`/`nextAttemptAt`) + invoice line items (`recurring|proration
 - Money = integer minor units; ledger append-only.
 
 ## Changelog
+- **2026-11-22** — `dunning-journey.ts`: `attributeTransactions` (one audit query per page), `attributePayingTransaction`, `attributeIntents` feed `initiated_by` on lists and detail routes. Invoice and order detail return `created_through`.
+- **2026-11-19** — `scheduledDebitsForInvoices` (`pre-debit.ts`): invoices with an unused, live
+  invoice notice, and when the debit is taken. Read by the portal invoice list.
+- **2026-11-18 (portal pay-and-save)** — `collectInvoiceNow` maps `CollectionDeferredError` to
+  `InvoiceCollectionScheduledError` (an `InvoiceOpsError` with `until`).
+  `collectOutstandingForNewPaymentMethod` reports a deferred invoice as `status: "scheduled"` with
+  `scheduled_at`, not as a failure.
+- **2026-11-18** — `collectOutstandingForNewPaymentMethod` entries carry `amount_minor` and
+  `currency` (`CollectedOnNewMethod`), so the portal can say how much a new method collected. The
+  operator route keeps the public `collected_invoices` shape `{ invoice, status }`.
+- **2026-11-18** — The PDF figure columns (Units, Unit price, Discount, Amount) and the summary
+  column grow to the widest figure, so an amount up to the engine maximum never breaks across
+  lines; the description column gives up the room.
+- **2026-11-18** — The invoice API adds `refundable_credits_applied_minor` and
+  `excess_payments_applied_minor`, the two parts of `credits_applied_minor`, read from the
+  invoice's own columns. A reader no longer has to guess which bucket paid.
+- **2026-11-18** — The invoice page offers "Apply credits" (More → Payment and credit) on an owed
+  invoice when the customer has refundable or excess credit in its currency and the member has
+  `credit_notes:manage`. The dialog shows the credit, what applies (refundable first, then
+  excess, up to the amount due) and what stays due, and posts those exact amounts to
+  `POST …/invoices/:inv/apply_credits`, so a changed balance is refused, not applied
+  differently. Refusals read "We could not apply credits. …" (`dashboard/lib/apply-credits.ts`).
+- **2026-11-17** — `planSubscriptionPeriodInvoice` takes `preview.pendingDiscounts`: coupons or a
+  manual discount the caller applies before the real invoice, priced in the same stack (the
+  reactivation estimate). Preview only; such a plan is never committed.
 - **2026-11-14** — `voidInvoiceInTx(tx, …)`: the same void inside the caller's transaction
   (no pending-debit cancel). `voidInvoice` keeps its behaviour; both share `applyVoid`. The
   change revert uses it so the revert and the void commit together.
@@ -1611,3 +1636,55 @@ estimate.ts`'s in-trial and term-reset preview branches gained the SAME cap chec
   `omit` leaves them out. Unset keeps the charge path. Cover: `verify:credit-overage` § 10.
 - **2026-11-15** — `applyVoid` ends a held change (`apply_when_paid`) whose invoice is voided by
   hand, in the void's transaction (`onHeldInvoiceVoided`: its credit notes are voided too).
+- **2026-11-17** — Retries: a voided invoice whose dunning gave up (`exhausted`/`stopped`) is
+  listed under `given_up` and All, never `attention` or the badge; a written-off invoice
+  (`paid` + `written_off`) is `given_up`, not `recovered`. The row carries `written_off`.
+  Cover: `verify:dunning-nonretriable`.
+- **2026-11-17** — The collection choke point applies `withBuiltInRetry` before the merchant's
+  override, so an adapter's literal non-retriable `gateway_request_rejected` retries. The local
+  mandate refusals carry `exposedToPayer: true` (our payer sentence). A pre-debit notice refused
+  for our request (`ourRefusal`) is retriable. `recordFailedPayment` passes `requestFault`, so a
+  refused request of ours that runs out of dunning parks for ops instead of the final action.
+  `request-fault-park.ts` decides "parked on our refused request" once (newest failed payment);
+  the dunning journey shows such an invoice as a `parked_for_ops` hold with no deadline and no
+  final action.
+- **2026-11-17** — Dead cards, backup, attempt caps (PR 3). Automatic collection holds a primary
+  a hard decline marked `invalid` (`resolveChargeCandidates({ skipUnusable })`): the best usable
+  method takes its place, and with none the rung is booked `payment_method_unusable`
+  (`provider_key='none'`, retriable) so the schedule and its emails go on; manual collect and an
+  explicit method still charge it. The card updater reviving an `invalid`/`expired` method
+  collects open invoices at once. A hard-declined primary is marked `invalid` after the pass, so
+  `payment_source_invalidated` carries `backup_paid` when the backup paid. Caps
+  (`representment.ts`): at most `MAX_PRESENTATIONS_PER_INVOICE` (8) automatic presentations per
+  invoice (`invoice_attempt_limit`); per card by brand (`cardCaps`: Visa 15/30 d, Mastercard
+  10/24 h and 30/30 d, other 10/24 h and 15/30 d), booked `card_attempt_limit` instead of
+  deferring the retry; our pre-flight refusals and `payment_abandoned` no longer count. India:
+  `retryRailOf` treats an India-issued card as rail `card` (cap 2 per invoice); Cashfree
+  `enach`/`pnach` follow NACH. `debit_cancelled_by_payer` and `payment_abandoned` never brand a
+  method or try the backup. Cover: `verify:dunning` DA–DF, `verify:dunning-smart`,
+  `test/unit/dunning-dead-cards-caps.test.ts`.
+- **2026-11-18** — PDF branding is shared: `pdf-branding.ts` holds the fonts, `openDocumentPdf`,
+  `loadLogo` + `LOGO_BOX`, `loadMasthead` / `drawMasthead` and `drawFooterBand` (signature +
+  contact line), moved out of `invoice-pdf.ts`. The receipt PDF draws through them. Invoice and
+  credit note output is byte-identical apart from `/CreationDate` and `/ID`. `signatureBlock` and
+  `addressCountry` (`document.ts`) are exported for the receipt.
+- **2026-11-20** — Orders list: `GET /v1/businesses/:biz/orders` (`orders.ts`, `listOrdersPage`). It
+  is `listInvoicesPage` with `ordersOnly`, which adds `orderRuleOn("invoices")` from
+  `metrics/daily/order-predicate.ts`, the same rule the reports use (no copy). Extra filter fields
+  `order_status` (paid | due | refunded | partly_refunded, from succeeded payments and refunds),
+  `product` (product id, one-time non-pack lines) and `coupon` (code); `ORDER_FILTER_OPS` /
+  `ORDER_FILTER_KINDS` also feed the `orders` saved-view entity. Rows add products with units, payment
+  method, gateway and coupon codes, read in four queries for the page only. Cover: `verify:orders-list`.
+- **2026-11-20** — Orders parity with Subscriptions. List filters added: `refunded_minor`, `tax_minor`,
+  `discount_minor`, `customer_country`, `gateway`, `payment_method_type`; `coupon` is text now (contains,
+  starts with, ends with); the customer's custom fields (`cf_*`) narrow orders through `extraSpecs`.
+  Rows add `discount_minor`, `tax_minor`, `due_date`, `channel`, customer `country` and `custom_fields`.
+  New `GET /v1/businesses/:biz/orders/:id` (`getOrderDetail`): the row plus `payments` and `refunds`;
+  404 for any invoice that is not an order or is in another business. Cover: `verify:orders-list`.
+  Note: the list prints `total_minor` net of promotional credit; `order_revenue` is the billed lines
+  and does not subtract it, so revenue can exceed the listed totals by the credit applied.
+- **2026-11-21** — `collectInvoice`: a held (invalid) method whose last presentation was a mandate
+  revocation now books `revocation_of_authorization` (non-retriable, no gateway call) instead of
+  `payment_method_unusable`, so `billing_rules_config.mandate_revoked` decides the invoice again.
+  The dead-card hold had pre-empted it: a renewal on a revoked mandate entered the generic schedule
+  rather than parking. Gates: `verify:settings-billing-rules`, `verify:dunning`.

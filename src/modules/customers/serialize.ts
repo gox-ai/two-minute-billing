@@ -2,11 +2,7 @@ import type { CustomerDiscount } from "@/modules/coupons/service";
 import { and, eq, sql } from "drizzle-orm";
 import type { Tx } from "@/platform/db";
 import { customers, contacts, subscriptions } from "@db/schema";
-import {
-  PROMOTIONAL_CREDIT,
-  REFUNDABLE_CREDIT,
-  EXCESS_PAYMENT,
-} from "@/modules/customers/balances-read";
+import { readBucketBalances, type BucketBalances } from "@/modules/customers/balances-read";
 import { getPaymentRoleIds } from "@/modules/payment-methods/serialize";
 import { flattenForApi } from "@/modules/custom-fields/service";
 import { createLogger } from "@/platform/logger";
@@ -16,7 +12,6 @@ import type { CollectedRevenue } from "@/modules/payments/revenue";
 
 const log = createLogger("customers");
 
-type BucketBalances = Record<string, { promotional: number; refundable: number; excess: number }>;
 /**
  * Optional derived blocks for `serializeCustomer`. Every field is independently
  * optional and each gates ONLY its own output key, because the callers differ in
@@ -36,6 +31,8 @@ type Financials = {
   effectiveCurrency?: string | null;
   /** `collectedRevenue` (payments/revenue.ts); detail GET only — a sum over every payment. */
   lifetimeRevenue?: CollectedRevenue[];
+  /** `billedRevenueForRecord` (metrics/record-revenue.ts); detail GET only. */
+  revenueBilled?: Array<{ currency: string; amount_minor: number }>;
   /** Active customer coupons (0520); detail GET only. */
   discounts?: CustomerDiscount[];
 };
@@ -207,6 +204,8 @@ export function serializeCustomer(c: typeof customers.$inferSelect, extra?: Fina
       : {}),
     locale: c.locale,
     auto_collection: c.autoCollection,
+    // Where this customer's new payment methods go; null = the business setting.
+    new_method_gateway_account: c.newMethodGatewayAccount ?? null,
     net_term_days: c.netTermDays,
     // Credit policy override and overdraft limit (0464); null = the business's settings.
     credit_settings: c.creditSettings ?? null,
@@ -242,6 +241,7 @@ export function serializeCustomer(c: typeof customers.$inferSelect, extra?: Fina
       ? { mrr: extra.mrr, balances: serializeBalances(extra.balances) }
       : {}),
     ...(extra?.lifetimeRevenue ? { lifetime_revenue: extra.lifetimeRevenue } : {}),
+    ...(extra?.revenueBilled ? { revenue_billed: extra.revenueBilled } : {}),
     ...(extra?.discounts ? { discounts: extra.discounts.map(serializeCustomerDiscount) } : {}),
     ...(extra?.roles
       ? {
@@ -299,24 +299,7 @@ export async function loadCustomerSnapshot(
     .limit(1);
   if (!c) return null;
 
-  const balanceRows = (await tx.execute(sql`
-    select currency, account,
-           coalesce(sum(case when direction = 'credit' then amount_minor else -amount_minor end), 0)::bigint as bal
-    from ledger_entries
-    where customer_id = ${c.id}
-      and account in (${PROMOTIONAL_CREDIT}, ${REFUNDABLE_CREDIT}, ${EXCESS_PAYMENT})
-    group by currency, account
-  `)) as unknown as Array<{ currency: string; account: string; bal: string | number }>;
-  const balances: BucketBalances = {};
-  const slot = (cur: string) => (balances[cur] ??= { promotional: 0, refundable: 0, excess: 0 });
-  for (const r of balanceRows) {
-    const bal = Number(r.bal);
-    if (bal === 0) continue;
-    const s = slot(r.currency);
-    if (r.account === PROMOTIONAL_CREDIT) s.promotional = Math.max(0, bal);
-    else if (r.account === REFUNDABLE_CREDIT) s.refundable = Math.max(0, bal);
-    else if (r.account === EXCESS_PAYMENT) s.excess = Math.max(0, bal);
-  }
+  const balances = await readBucketBalances(tx, c.id);
 
   const mrrRows = await tx
     .select({ currency: subscriptions.currency, mrr: subscriptions.mrr })

@@ -342,6 +342,20 @@ const normalize = (xml: string) =>
     "transaction_reviewed → review.closed",
     reviewed[0]?.type === "review.closed" && reviewed[0].providerChargeId === "txn0009",
   );
+  // An attempt finds a transaction event we do not act on by the transaction's id.
+  const disbursed = await normalize(
+    notification(
+      "transaction_disbursed",
+      "<transaction><id>txn0010</id><status>settled</status><type>sale</type>" +
+        "<order-id>tmbilling_ref:pi_X</order-id></transaction>",
+    ),
+  );
+  ok(
+    "an unacted transaction event keeps the transaction id and our tag",
+    disbursed[0]?.type === "unknown" &&
+      disbursed[0].providerChargeId === "txn0010" &&
+      disbursed[0].ownershipRef === "pi_X",
+  );
   const check = await normalize(notification("check", '<check type="boolean">true</check>'));
   ok(
     "the Control Panel's check is recorded as unknown",
@@ -398,7 +412,8 @@ console.log("declines");
     ["2000", "do_not_honor", true],
     ["2001", "insufficient_funds", true],
     ["2004", "expired_card", false],
-    ["2005", "incorrect_number", true],
+    // A number that cannot exist: hard (decline audit 2026-11-18).
+    ["2005", "incorrect_number", false],
     ["2010", "incorrect_cvc", true],
     ["2012", "lost_card", false],
     ["2013", "stolen_card", false],
@@ -409,7 +424,8 @@ console.log("declines");
     ["2108", "payment_method_not_found", false],
     ["3000", "processing_error", true],
     ["4001", "card_declined", true],
-    ["APPLICATION_INCOMPLETE", "gateway_request_rejected", false],
+    // Our refused request retries on every gateway (2026-11-17).
+    ["APPLICATION_INCOMPLETE", "gateway_request_rejected", true],
     ["CVV", "incorrect_cvc", true],
     ["RISK_THRESHOLD", "card_declined", true],
     ["91518", "payment_method_not_found", false],
@@ -423,16 +439,19 @@ console.log("declines");
     );
   }
   const unknown = normalizeBraintreeDecline("2999");
-  ok("an unmapped code passes through, retriable", unknown.code === "2999" && unknown.retriable);
+  ok(
+    "an unmapped code books charge_failed, retriable",
+    unknown.code === "charge_failed" && unknown.retriable,
+  );
   ok(
     "a merchant-setup refusal is hidden from the payer",
     normalizeBraintreeDecline("2026").exposedToPayer === false,
   );
   const pending = normalizeBraintreeDecline("2081");
   ok(
-    "2081 PayPal pending payments not supported: our setup, not retriable, hidden from the payer",
+    "2081 PayPal pending payments not supported: our setup, retried (ours), hidden from the payer",
     pending.code === "gateway_request_rejected" &&
-      pending.retriable === false &&
+      pending.retriable === true &&
       pending.exposedToPayer === false &&
       /Contact Braintree support/.test(pending.message ?? ""),
   );
@@ -444,10 +463,10 @@ console.log("declines");
       !normalizeBraintreeDecline("2075").retriable,
   );
   ok(
-    "PayPal business-account refusals (2063–2100) are ours, never retried",
+    "PayPal business-account refusals (2063–2100) are ours, retried on the schedule",
     ["2063", "2066", "2068", "2079", "2087", "2088", "2091", "2100"].every((c) => {
       const d = normalizeBraintreeDecline(c);
-      return d.code === "gateway_request_rejected" && !d.retriable && d.exposedToPayer === false;
+      return d.code === "gateway_request_rejected" && d.retriable && d.exposedToPayer === false;
     }),
   );
 
@@ -1029,9 +1048,9 @@ console.log("sdk flow (stubbed GraphQL)");
       idempotencyKey: "k6",
     });
     ok(
-      "an unrecognised VALIDATION error (nothing created) is a retriable failure that keeps the code",
+      "an unrecognised VALIDATION error (nothing created) is our refused request, retried, with the code",
       unknownValidation.status === "failed" &&
-        unknownValidation.failure?.code === "gateway_error" &&
+        unknownValidation.failure?.code === "gateway_request_rejected" &&
         unknownValidation.failure.retriable === true &&
         unknownValidation.failure.providerCode === "99999",
     );
@@ -1072,11 +1091,11 @@ console.log("sdk flow (stubbed GraphQL)");
       idempotencyKey: "k2081",
     });
     ok(
-      "a 2081 refusal keeps the gateway transaction id and is not retriable",
+      "a 2081 refusal keeps the gateway transaction id and is retried (ours)",
       pendingPaypal.status === "failed" &&
         pendingPaypal.providerChargeId === "bt2081tx" &&
         pendingPaypal.failure?.code === "gateway_request_rejected" &&
-        pendingPaypal.failure.retriable === false,
+        pendingPaypal.failure.retriable === true,
     );
     const declined2081 = chargeResultFromTransaction({
       ...tx("PROCESSOR_DECLINED", "bt2081b"),
@@ -1096,7 +1115,7 @@ console.log("sdk flow (stubbed GraphQL)");
       "a declined transaction keeps its id, and 2081 reads as our setup",
       declined2081.providerChargeId === "bt2081b" &&
         declined2081.failure?.code === "gateway_request_rejected" &&
-        declined2081.failure.retriable === false,
+        declined2081.failure.retriable === true,
     );
     answer = (op) =>
       op === "search"
@@ -1120,6 +1139,10 @@ console.log("sdk flow (stubbed GraphQL)");
     ok(
       "a refusal whose transaction cannot be found still fails, with no id",
       notFound.status === "failed" && notFound.providerChargeId === "",
+    );
+    ok(
+      "an error-shaped 2000 keeps its table class, not gateway_error",
+      notFound.failure?.code === "do_not_honor" && notFound.failure.providerCode === "2000",
     );
     globalThis.fetch = (async () => {
       throw new TypeError("fetch failed");

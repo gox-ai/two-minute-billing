@@ -9,12 +9,7 @@ import { SelectField } from "@/components/ui/select-field";
 import { Combobox } from "@/components/ui/combobox";
 import { contactBusiness, microformFailure } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import {
-  PaymentDialog,
-  PaymentDialogFooter,
-  PaymentPrivacyNote,
-  RefusalAlert,
-} from "./payment-dialog";
+import { SdkFrame, PaymentDialogFooter, PaymentPrivacyNote, RefusalAlert } from "./payment-dialog";
 import { countryOptions, sdkAmountLabel } from "./storefront-text";
 
 /**
@@ -120,12 +115,14 @@ type SdkExtras = {
 
 function CybersourceMicroformDialog({
   open,
+  inline,
   params,
   context,
   amountLabel,
   onSettle,
 }: {
   open: boolean;
+  inline: boolean;
   params: Params;
   context: GatewaySdkContext;
   amountLabel: string | null;
@@ -234,7 +231,8 @@ function CybersourceMicroformDialog({
     .join(", ");
 
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={purpose === "setup" ? "Add a card" : "Pay by card"}
@@ -249,7 +247,7 @@ function CybersourceMicroformDialog({
           <Label>Card number</Label>
           <div ref={numberRef} className="h-9 rounded-md border border-input px-3 py-2" />
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 items-end gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="cybs-exp-month">Expiration month</Label>
             <SelectField
@@ -327,17 +325,19 @@ function CybersourceMicroformDialog({
         )}
         <PaymentPrivacyNote business={context.businessName} />
       </div>
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} gateway="cybersource" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
+            Cancel
+          </Button>
+        )}
         <Button onClick={submit} disabled={!ready || busy}>
           {confirmLabel ??
             (purpose === "setup" ? "Save card" : amountLabel ? `Pay ${amountLabel}` : "Pay")}
         </Button>
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -367,14 +367,16 @@ export function openCybersourceMicroform(
       typeof params.clientLibraryIntegrity === "string" ? params.clientLibraryIntegrity : null,
   };
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
     const render = (open: boolean) =>
       root.render(
         <CybersourceMicroformDialog
           open={open}
+          inline={inline}
           params={mfParams}
           context={context}
           amountLabel={amountLabel}
@@ -388,7 +390,7 @@ export function openCybersourceMicroform(
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
     render(true);

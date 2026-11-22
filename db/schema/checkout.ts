@@ -17,6 +17,19 @@ import { customers } from "./customers";
 import { subscriptions } from "./subscriptions";
 import { invoices } from "./invoices";
 
+/** What a first charge's second post would repeat, kept for the webhook to finish it (0537). */
+export interface CheckoutChargeCompletion {
+  paymentMethodToken?: string;
+  paymentMethodId?: string;
+  gatewayAccountId?: string;
+  poNumber?: string;
+  consent: {
+    answer: { recurring?: boolean; recurring_text?: string; terms?: boolean; marketing?: boolean };
+    ip: string | null;
+    at: string;
+  } | null;
+}
+
 /**
  * Hosted-checkout sessions (#10d) — short-lived bearer tokens an operator (or
  * API) mints so a BUYER can subscribe to a chosen price at /checkout/<token>,
@@ -174,6 +187,12 @@ export const checkoutSessions = pgTable(
      * only thread back to the session that was waiting for it.
      */
     setupPaymentIntent: text("setup_payment_intent"),
+    /**
+     * The `pi_…` a first charge is waiting on (the 402 leg), and what its second post would
+     * repeat, so the webhook can finish a checkout the page never returned to (0537).
+     */
+    chargePaymentIntent: text("charge_payment_intent"),
+    chargeCompletion: jsonb("charge_completion").$type<CheckoutChargeCompletion>(),
     status: text("status").notNull().default("open"),
     publicId: text("public_id").notNull(), // cosess_…
     tokenHash: text("token_hash").notNull(),

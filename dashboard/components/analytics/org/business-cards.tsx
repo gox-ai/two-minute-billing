@@ -5,17 +5,18 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { HEX_RE } from "@/lib/brand";
 import { moneyCompact, pctFromBps } from "@/lib/format";
+import { plural } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { EmptyFigure } from "@/components/patterns/record-page";
 import { BizMark } from "@/components/business-mark";
-import type { RosterRow } from "@/components/analytics/org/business-roster";
+import { byRevenue, type RosterRow } from "@/components/analytics/org/business-roster";
 
 /** Cards before the "all" card; with this many or fewer businesses, every one gets a card. */
 const CARDS = 3;
 
 /**
- * The way into a business, first thing on the organization page: the largest by MRR as cards,
- * one click into each Home, and the rest one jump away in the list below.
+ * The way into a business, first thing on the organization page: the largest by 30-day
+ * revenue as cards, one click into each Home, and the rest one jump away in the list below.
  */
 export function BusinessCards({
   rows,
@@ -24,16 +25,14 @@ export function BusinessCards({
   fill = false,
 }: {
   rows: RosterRow[];
-  /** The reporting currency every MRR figure is stated in. */
+  /** The reporting currency every money figure is stated in. */
   currency: string | null;
   allHref: string;
   /** Fewer than four cards fill the row instead of leaving a quarter empty. */
   fill?: boolean;
 }) {
   if (rows.length === 0) return null;
-  const ordered = [...rows].sort(
-    (a, z) => (z.mrrMinor ?? -1) - (a.mrrMinor ?? -1) || a.name.localeCompare(z.name),
-  );
+  const ordered = byRevenue(rows);
   const fitsAll = ordered.length <= CARDS + 1;
   const shown = fitsAll ? ordered : ordered.slice(0, CARDS);
 
@@ -75,11 +74,35 @@ function BusinessCard({
 }: {
   row: RosterRow;
   currency: string | null;
-  /** The largest business states its MRR one step larger. */
+  /** The largest business states its headline one step larger. */
   lead: boolean;
 }) {
-  const mrr = row.mrrMinor != null && row.mrrMinor > 0 && currency ? row.mrrMinor : null;
+  const positive = (n: number | null | undefined) => (n != null && n > 0 && currency ? n : null);
+  const mrr = row.models?.subscriptions === false ? null : positive(row.mrrMinor);
+  const revenue = positive(row.revenueMinor);
+  const other = mrr != null ? positive(row.otherRevenueMinor) : null;
+  const headline = mrr ?? revenue;
   const dunning = row.subscriptionsInDunning ?? 0;
+  const bills = row.currency ? ` · bills in ${row.currency}` : "";
+  // A business that does not bill subscriptions names what it does sell, two models at most.
+  const sold =
+    mrr == null
+      ? [
+          row.models?.oneTime && row.orders
+            ? `${plural(row.orders, "order")}${
+                positive(row.averageOrderMinor)
+                  ? ` · ${moneyCompact(row.averageOrderMinor!, currency!)} average`
+                  : ""
+              }`
+            : null,
+          row.models?.usage && row.usageEvents ? plural(row.usageEvents, "usage event") : null,
+          row.models?.credits && positive(row.creditsUsedMinor)
+            ? `${moneyCompact(row.creditsUsedMinor!, currency!)} of credit used`
+            : null,
+        ]
+          .filter((x): x is string => x != null)
+          .slice(0, 2)
+      : [];
   return (
     <Link href={`/businesses/${row.id}`} className="group min-w-0">
       <Card className="anim-rise hoverable relative flex h-full flex-col gap-3 overflow-hidden p-6 group-hover:border-primary/40">
@@ -99,21 +122,31 @@ function BusinessCard({
         </div>
         <div className="flex flex-wrap items-baseline gap-x-2">
           {/* An absent figure is the one small muted dash, at the same size on every card. */}
-          {mrr != null ? (
+          {headline != null ? (
             <span className={cn("font-semibold tabular-nums", lead ? "text-2xl" : "text-lg")}>
-              {moneyCompact(mrr, currency!)}
+              {moneyCompact(headline, currency!)}
             </span>
           ) : (
             <EmptyFigure />
           )}
           <span className="text-sm text-muted-foreground">
             {mrr != null
-              ? `MRR${row.currency ? ` · bills in ${row.currency}` : ""}`
-              : "No recurring revenue yet"}
+              ? `MRR${bills}`
+              : revenue != null
+                ? `revenue, 30 days${bills}`
+                : "No revenue yet"}
           </span>
         </div>
+        {other != null ? (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            + {moneyCompact(other, currency!)} other revenue, 30 days
+          </span>
+        ) : null}
         <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          {row.payingSubscriptions != null ? (
+          {sold.map((x) => (
+            <span key={x}>{x}</span>
+          ))}
+          {mrr != null && row.payingSubscriptions != null ? (
             <span>{row.payingSubscriptions.toLocaleString("en")} paying</span>
           ) : null}
           {row.changeBps != null && mrr != null ? (

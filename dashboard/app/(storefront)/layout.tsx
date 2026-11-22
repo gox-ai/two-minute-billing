@@ -2,6 +2,7 @@ import "@/app/globals.css";
 import type { ReactNode } from "react";
 import { Inter } from "next/font/google";
 import { Providers } from "@/components/providers";
+import { StorefrontBeacon } from "./storefront-beacon";
 
 export const metadata = {
   title: "Billing",
@@ -65,6 +66,7 @@ export default function StorefrontLayout({ children }: { children: ReactNode }) 
                 there. Checkout deliberately does NOT widen: a 1200px-wide card form is a
                 worse form, not a better one. */}
             <div className="storefront-measure w-full max-w-3xl">{children}</div>
+            <StorefrontBeacon />
           </main>
         </Providers>
       </body>

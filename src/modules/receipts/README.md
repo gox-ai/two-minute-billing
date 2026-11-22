@@ -18,6 +18,15 @@ A numbered, immutable record of money received (0387). Not a tax invoice: no tax
 allocation line "customer credit". `snapshot` freezes payer, business identity, method words
 ("Visa ···4242", "Cash") and allocations, so a later rename does not rewrite history.
 
+## PDF
+
+`renderReceiptPdf` (`pdf.ts`) loads the business row itself, so the dashboard, portal and email
+paths all get the branding. It draws the invoice's masthead and footer band
+(`invoicing/pdf-branding.ts`) around its own body: received from, meta, applied to, total paid,
+and no tax lines. Logo and icon come from `snapshot.business.logo_url` / `icon_url`, frozen at
+creation; a snapshot without the keys (before 2026-11-18) prints the business's current ones
+(`receiptBranding`). Signature and contact line are always current, as on the invoice.
+
 ## Numbering
 
 One series per business, `businesses.receipt_prefix` (default `RCPT`) +
@@ -41,7 +50,12 @@ updated by every settlement would lock the row the invoice numberer and credit n
 Gate: `verify:receipts`.
 
 ## Changelog
+- **2026-11-22** — Detail route returns `initiated_by`: what started the charge behind the receipt.
 
 - **2026-10-25** — Module created (0387): sink, batch numberer + job, snapshot, PDF, API,
   portal routes, optional email attachment.
 - **2026-11-11** — The demo seed (`scripts/seed/load.ts`) builds a receipt for each succeeded payment with `createReceiptForPayment`, dated at the payment and numbered in order: its snapshot predates this module.
+- **2026-11-18** — Receipt PDF branding: logo masthead (logo, else icon, else the name in the
+  seller block), signature and contact footer, through the invoice's shared helpers. Snapshot
+  gains `business.logo_url` / `icon_url`; old snapshots fall back to the current logo. Layout
+  restyled to the invoice's sizes and inks; the applied-to table paginates.

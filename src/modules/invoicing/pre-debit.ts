@@ -1,4 +1,16 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { systemDb, withTenant } from "@/platform/db";
 import { businessWallClock } from "@/platform/clock";
 import { publicId } from "@/platform/ids";
@@ -593,7 +605,8 @@ export async function preDebitGate(input: {
     });
     return { kind: "refused", result: ourRefusal(sent) };
   }
-  // Our request was wrong (PayU E9260, a bad sequence number): parks for an operator.
+  // Our request was wrong (PayU E9260, a bad sequence number): retried on the schedule, and
+  // the `gateway_request_faults` ops alert names it.
   if (sent.status === "failed" && sent.failureCode === "gateway_request_rejected")
     return { kind: "refused", result: ourRefusal(sent) };
   // A final refusal (the mandate is revoked or inactive) keeps the gateway's class, so the
@@ -736,7 +749,7 @@ async function withdrawNotices(
   return done;
 }
 
-/** A notice refused for a reason on our side: parks the debit for an operator. */
+/** A notice refused for a reason on our side: retried on the schedule, never the payer's fault. */
 function ourRefusal(n: SentNotice): ChargeResult {
   return {
     status: "failed",
@@ -746,7 +759,7 @@ function ourRefusal(n: SentNotice): ChargeResult {
       providerCode: n.failureCode ?? undefined,
       message:
         "We could not send the advance notice of this payment to your bank, so we did not charge this payment method.",
-      retriable: false,
+      retriable: true,
     },
     raw: { pre_debit_notice: n.publicId },
   };
@@ -1003,4 +1016,42 @@ export async function releaseGatewayNotice(input: {
     until: at.toISOString(),
   });
   return new Date(at.getTime() + LEAD_MARGIN_MS);
+}
+
+/**
+ * Invoices with a debit already announced to the payer's bank and not yet made: when it is
+ * taken. The portal shows these as scheduled, not overdue, and offers no second payment.
+ */
+export async function scheduledDebitsForInvoices(
+  organizationId: string,
+  invoiceIds: string[],
+  now: Date,
+): Promise<Map<string, Date>> {
+  if (!invoiceIds.length) return new Map();
+  const rows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({
+        invoiceId: preDebitNotices.invoiceId,
+        debitAt: preDebitNotices.debitAt,
+        executableAfter: preDebitNotices.executableAfter,
+      })
+      .from(preDebitNotices)
+      .where(
+        and(
+          inArray(preDebitNotices.invoiceId, invoiceIds),
+          eq(preDebitNotices.purpose, "invoice"),
+          inArray(preDebitNotices.status, ["pending", "sent"]),
+          eq(preDebitNotices.debitsUsed, 0),
+          or(isNull(preDebitNotices.expiresAt), gt(preDebitNotices.expiresAt, now)),
+        ),
+      ),
+  );
+  const out = new Map<string, Date>();
+  for (const r of rows) {
+    if (!r.invoiceId) continue;
+    const at = r.executableAfter && r.executableAfter > r.debitAt ? r.executableAfter : r.debitAt;
+    const seen = out.get(r.invoiceId);
+    if (!seen || at < seen) out.set(r.invoiceId, at);
+  }
+  return out;
 }

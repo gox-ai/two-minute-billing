@@ -127,17 +127,39 @@ describe("stripe createIntent: an attempt that failed at the API is still an att
     expect(ref.status).toBe("inited");
   });
 
-  it("STILL THROWS every other invalid_request_error", async () => {
-    // Deliberately narrow: those are our bugs, and a decline-shaped result would bury
-    // them — which is exactly what happened to the missing `mandate` while this path
-    // was silent.
+  it("STILL THROWS an invalid_request_error no rule recognises", async () => {
+    // A code nothing here has seen is our bug, and a decline-shaped result would bury it.
+    // Every documented code now has a rule, so this one is deliberately undocumented.
     const other = new Stripe.errors.StripeInvalidRequestError({
       type: "invalid_request_error",
-      code: "parameter_unknown",
+      code: "some_code_stripe_never_documented",
       message: "Received unknown parameter: nope",
     } as never);
     await expect(providerThatFailsWith(other).createIntent(INPUT)).rejects.toThrow(
       /unknown parameter/i,
     );
+  });
+
+  it("BOOKS a documented request fault as ours, without branding the method", async () => {
+    const other = new Stripe.errors.StripeInvalidRequestError({
+      type: "invalid_request_error",
+      code: "parameter_unknown",
+      message: "Received unknown parameter: nope",
+    } as never);
+    const ref = await providerThatFailsWith(other).createIntent(INPUT);
+    expect(ref.failure?.code).toBe("gateway_error");
+    expect(ref.failure?.retriable).toBe(true);
+    expect(ref.failure?.ruleId).toBe("stripe.code.parameter_unknown");
+  });
+
+  it("a vanished payment method is read from the message, not called our bug", async () => {
+    const gone = new Stripe.errors.StripeInvalidRequestError({
+      type: "invalid_request_error",
+      code: "resource_missing",
+      message: "No such PaymentMethod: 'pm_XXXXXXXXXXXX01'",
+    } as never);
+    const ref = await providerThatFailsWith(gone).createIntent(INPUT);
+    expect(ref.failure?.code).toBe("payment_method_not_found");
+    expect(ref.failure?.retriable).toBe(false);
   });
 });

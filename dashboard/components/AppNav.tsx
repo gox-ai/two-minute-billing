@@ -20,6 +20,8 @@ import {
 import { useDashboardMode } from "@/components/mode-provider";
 import { useNavCollapse } from "@/components/nav-collapse";
 import { NAV_FOCUS, RailTip } from "@/components/rail-tip";
+import { navCountsAction, type NavCounts } from "@/app/(dashboard)/nav-counts-action";
+import type { BillingModelId } from "@/lib/billing-models";
 
 export interface BizPerms {
   manager: boolean;
@@ -51,13 +53,13 @@ export function AppNav({
   orgItems,
   businesses,
   perms,
-  bizCounts,
+  initialModels,
 }: {
   orgItems: NavItem[];
   businesses: BizRef[];
   perms: BizPerms;
-  /** Live counts for the viewed business's work surfaces; absent renders no badge. */
-  bizCounts?: { retries?: number; disputes?: number };
+  /** The billing models of the business in the URL, read on the server for the first paint. */
+  initialModels?: { biz: string; models: BillingModelId[] | null } | null;
 }) {
   const path = usePathname();
   const mode = useDashboardMode();
@@ -68,7 +70,8 @@ export function AppNav({
   }
   // The business's own mode, resolved once by the provider. Time Travel below is gated on it.
   const testMode = mode?.mode === "test";
-  return <BizSideNav biz={biz} perms={perms} testMode={testMode} counts={bizCounts} />;
+  const seeded = initialModels?.biz === biz ? (initialModels.models ?? undefined) : undefined;
+  return <BizSideNav biz={biz} perms={perms} testMode={testMode} seededModels={seeded} />;
 }
 
 /** How many businesses the org rail lists before handing over to the full roster. */
@@ -142,19 +145,50 @@ function inlineSmallGroup(e: BizNavEntry): BizNavEntry[] {
 type Entry = BizNavEntry;
 const isGroup = isBizNavGroup;
 
+/**
+ * The rail's badge counts for `biz`, read again on every navigation. The shell layout does
+ * not re-render when the page below it changes, so a count taken there stayed on the first
+ * business viewed. Unknown renders no badge.
+ */
+function useNavCounts(biz: string, path: string): NavCounts | undefined {
+  const [state, setState] = React.useState<{ biz: string; counts: NavCounts } | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    navCountsAction(biz).then(
+      (counts) => {
+        if (live) setState({ biz, counts });
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [biz, path]);
+  // A reading for another business is never shown, not even for one render.
+  return state?.biz === biz ? state.counts : undefined;
+}
+
 function BizSideNav({
   biz,
   perms,
   testMode,
-  counts,
+  seededModels,
 }: {
   biz: string;
   perms: BizPerms;
   testMode: boolean;
-  counts?: { retries?: number; disputes?: number };
+  seededModels?: BillingModelId[];
 }) {
   const path = usePathname();
-  const entries: Entry[] = businessNavEntries({ biz, perms, testMode, counts });
+  const counts = useNavCounts(biz, path);
+  const entries: Entry[] = businessNavEntries({
+    biz,
+    perms,
+    testMode,
+    counts,
+    // The server's reading until the rail has its own, so the first paint is right.
+    models: counts?.models ?? seededModels,
+  });
   // Consecutive visible entries sharing a section; a section with nothing visible drops out.
   const sections: Array<{ section?: BizNavSection; items: Entry[] }> = [];
   for (const e of entries.filter((x) => x.show)) {

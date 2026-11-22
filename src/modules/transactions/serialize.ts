@@ -64,9 +64,15 @@ export interface TransactionSerializeExtra {
    */
   pollSchedule?: { nextAt: Date; lastPolledAt: Date; attempts: number } | null;
   /** Set when a person may record a chargeback on this payment (single read only). */
-  disputeRecording?: { paymentPublicId: string; availableMinor: bigint } | null;
+  disputeRecording?: {
+    paymentPublicId: string;
+    availableMinor: bigint;
+    reportedDaily: boolean;
+  } | null;
   /** Set when a person may ask the gateway to cancel this debit (single read only). */
   pendingDebitCancel?: { paymentPublicId: string } | null;
+  /** The gateway's own refusal code on a failed row (single read only). */
+  gatewayCode?: string | null;
 }
 
 export function serializeTransaction(t: Transaction, extra?: TransactionSerializeExtra) {
@@ -108,6 +114,8 @@ export function serializeTransaction(t: Transaction, extra?: TransactionSerializ
     span_id: t.spanId ?? null,
     error_code: t.errorCode,
     error_text: t.errorText,
+    /** The gateway's own code beside our `error_code` (single read of a failed row only). */
+    gateway_code: extra?.gatewayCode ?? null,
     /**
      * THE MONEY ON THIS ROW HAS ALREADY GONE BACK — the one fact the operator Reconcile
      * panel was missing (#17).
@@ -153,6 +161,8 @@ export function serializeTransaction(t: Transaction, extra?: TransactionSerializ
       ? {
           payment: extra.disputeRecording.paymentPublicId,
           available_minor: Number(extra.disputeRecording.availableMinor),
+          // Disputes arrive a day late from a report; a case recorded first is not booked twice.
+          reported_daily: extra.disputeRecording.reportedDaily,
         }
       : null,
     /**

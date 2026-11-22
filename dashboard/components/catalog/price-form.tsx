@@ -429,7 +429,7 @@ export function PriceForm({
             <Wide>
               <p className="text-xs text-muted-foreground">
                 These limits apply to customers in the portal. Your team can set any quantity. Leave
-                empty to use the limits in Settings → Hosted pages.
+                empty to use the limits in Settings → Customer portal.
               </p>
             </Wide>
             <Field name="portal_min_quantity" label="Minimum seats">

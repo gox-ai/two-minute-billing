@@ -643,7 +643,11 @@ async function finishAuthentication(req: FastifyRequest, reply: FastifyReply, ct
           // came FROM them — no second lookup, and no mismatch to guard against.
           actor: ctx.operator?.email ?? (await dashboardActor(req, ctx.organization.id)),
         }
-      : { actor: ctx.apiKeyPublicId },
+      : {
+          actor: ctx.apiKeyPublicId,
+          // An OAuth access token is an AI agent over MCP, not an integration's key.
+          ...(req.oauthBusiness ? { source: "mcp" as const } : {}),
+        },
   );
   // Same moment, the trace side: `TraceContext` has declared `organizationId` since it
   // was written, documented as "filled in once auth resolves them" — and nothing ever

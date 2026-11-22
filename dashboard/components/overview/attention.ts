@@ -168,7 +168,12 @@ export async function loadAttention({
         });
 
       // What stops this business billing. Two gaps share one row, with an action for each.
-      const setup: Array<{ title: string; detail?: string; href: string; label: string }> = [];
+      const setup: Array<{
+        kind: AttentionKind;
+        title: string;
+        detail?: string;
+        actions: Array<{ href: string; label: string }>;
+      }> = [];
       if (accounts && b.default_currency) {
         const cur = b.default_currency;
         const matching = accounts.data.filter(
@@ -176,35 +181,39 @@ export async function loadAttention({
         );
         if (matching.length === 0)
           setup.push({
+            kind: "gateway",
             title: `No gateway charges ${cur}`,
             detail: "Connect a payment gateway before you bill customers.",
-            href: `${base}/settings/gateways/new`,
-            label: "Add gateway",
+            actions: [{ href: `${base}/settings/gateways/new`, label: "Add gateway" }],
           });
         else if (matching.length > 1 && !matching.some((a) => a.default))
           setup.push({
+            kind: "gateway",
             title: "No default gateway",
             detail: `${matching.length} gateway accounts charge ${cur}. Charges fail until one is the default.`,
-            href: `${base}/settings/gateways`,
-            label: "Select default",
+            actions: [{ href: `${base}/settings/gateways`, label: "Select default" }],
           });
       }
-      if (prices && !prices.data.some((p) => p.type === "recurring" && p.active !== false))
+      // Not ready only with no active price at all: a plan or a charge can bill a customer.
+      if (prices && !prices.data.some((p) => p.active !== false))
         setup.push({
-          title: "No recurring price",
-          detail: "A subscription needs at least one recurring price.",
-          href: `${base}/catalog/plans/new`,
-          label: "Create plan",
+          kind: "catalog",
+          title: "No price",
+          detail: "Create a plan or a charge before you bill customers.",
+          actions: [
+            { href: `${base}/catalog/plans/new`, label: "Create plan" },
+            { href: `${base}/catalog/charges/new`, label: "Create charge" },
+          ],
         });
       if (setup.length > 0)
         out.push({
           key: `setup_${b.id}`,
-          kind: setup[0]!.label === "Create plan" ? "catalog" : "gateway",
+          kind: setup[0]!.kind,
           tone: "warning",
           title: setup.length === 1 ? setup[0]!.title : "Not ready to bill",
           business: b.name,
           detail: setup.length === 1 ? setup[0]!.detail : setup.map((x) => `${x.title}.`).join(" "),
-          actions: setup.map(({ href, label }) => ({ href, label })),
+          actions: setup.flatMap((x) => x.actions),
         });
       return out;
     }),

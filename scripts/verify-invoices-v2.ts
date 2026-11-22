@@ -33,7 +33,13 @@ import { runInvoiceDueTransitions } from "@/modules/invoicing/due";
 import { stopDunning } from "@/modules/subscriptions/dunning";
 import { createFlatTaxRate } from "@/modules/tax/service";
 import { recordUsage } from "@/modules/metering/service";
-import { invoices, invoiceLineItems, subscriptions as subsTable, payments } from "@db/schema";
+import {
+  invoices,
+  invoiceLineItems,
+  subscriptions as subsTable,
+  payments,
+  paymentMethods,
+} from "@db/schema";
 
 const checks: Array<[string, boolean]> = [];
 const ok = (n: string, c: boolean) => checks.push([n, c]);
@@ -1679,8 +1685,14 @@ async function pinPeriod(subId: string) {
   const sub = await subFor(biz.id, c.id, await price(5000));
   const inv = await bill(biz.id, sub); // hard card charged at generation → not_paid
   // Reset to a POSTED subscription invoice with a past due date (a Net-D bill the
-  // clock will collect at term) + active sub, to exercise the due-date pass.
+  // clock will collect at term) + active sub, to exercise the due-date pass. The card goes
+  // back to valid too: the generation decline marked it invalid, and automatic collection
+  // holds an invalid card without presenting it, so there would be no decline to test.
   await withTenant(orgId, async (tx) => {
+    await tx
+      .update(paymentMethods)
+      .set({ status: "valid" })
+      .where(eq(paymentMethods.customerId, c.id));
     await tx
       .update(invoices)
       .set({

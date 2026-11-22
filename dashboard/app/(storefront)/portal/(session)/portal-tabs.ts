@@ -8,7 +8,7 @@
  * system says so. Keeping the plain values here means both halves share one definition.
  */
 
-export const PORTAL_TABS = ["invoices", "plan", "methods", "details"] as const;
+export const PORTAL_TABS = ["plan", "invoices", "methods", "details"] as const;
 export type PortalTab = (typeof PORTAL_TABS)[number];
 
 export const PORTAL_TAB_LABELS: Record<PortalTab, string> = {

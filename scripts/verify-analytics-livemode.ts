@@ -16,7 +16,7 @@ import { buildApp } from "@/index";
 import { closeDb, withTenant } from "@/platform/db";
 import { createOrganization, createBusiness, createApiKey } from "@/modules/tenancy/service";
 import { todayIn } from "@/modules/metrics/daily/public-query";
-import { metricDaily } from "@db/schema";
+import { metricDaily, metricWindows } from "@db/schema";
 
 const checks: Array<[string, boolean]> = [];
 const ok = (name: string, pass: boolean) => checks.push([name, pass]);
@@ -189,6 +189,63 @@ ok(
   "…and refuses the cross-mode slot alone",
   b.data[1].status === 422 && b.data[1].error.message === `No such business: ${testBiz.publicId}`,
 );
+
+// ── 3 · the org home's new figures count live businesses only ────────────────────────────
+// Asked the way the dashboard asks: the org's own 'all' key with livemode=live. Two live
+// businesses and one test business, so the cross-business sum path is exercised too.
+{
+  const o = await createOrganization({ name: "Analytics Livemode Org Home" });
+  const oid = o.organization.id;
+  const mk = (name: string, livemode: "live" | "test") =>
+    createBusiness({ organizationId: oid, name, defaultCurrency: "INR", livemode, timezone: TZ });
+  const bizes = [
+    { b: await mk("Org Home Live A", "live"), paid: 3n, revenue: 50_000n },
+    { b: await mk("Org Home Live B", "live"), paid: 2n, revenue: 20_000n },
+    { b: await mk("Org Home Test", "test"), paid: 7n, revenue: 900_000n },
+  ];
+  await withTenant(oid, async (tx) => {
+    for (const { b, paid, revenue } of bizes) {
+      await tx.insert(metricWindows).values({
+        organizationId: oid,
+        businessId: b.id,
+        windowName: "30d",
+        periodStart: addDays(today, -29),
+        periodEnd: today,
+        measure: "paying_customers_all",
+        currency: "INR",
+        value: paid,
+      });
+      await tx.insert(metricDaily).values(
+        [
+          { measure: "paying_customers_all", value: paid },
+          { measure: "revenue_billed", value: revenue },
+        ].map((r) => ({
+          organizationId: oid,
+          businessId: b.id,
+          grain: "day",
+          periodEnd: today,
+          computedAt,
+          dim: "",
+          dimValue: "",
+          currency: "INR",
+          ...r,
+        })),
+      );
+    }
+  });
+  const ask = (measure: string) =>
+    get(`/v1/analytics?measure=${measure}&range=30d&grain=day&livemode=live`, o.secret);
+  const paidLive = await ask("paying_customers_all");
+  ok(
+    "org-wide customers who paid counts the live businesses only (3 + 2 = 5, not 12)",
+    paidLive.statusCode === 200 && j(paidLive).total === 5,
+  );
+  const revLive = await ask("revenue_billed");
+  ok(
+    "org-wide revenue billed counts the live businesses only (70,000, not 970,000)",
+    revLive.statusCode === 200 && j(revLive).total === 70_000,
+  );
+}
 
 // ── verdict ───────────────────────────────────────────────────────────────────────────────
 await app.close();

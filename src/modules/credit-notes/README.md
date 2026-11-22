@@ -81,6 +81,7 @@ amount_minor). Ledger accounts: `credit_adjustments`, refundable-credit balance,
   rata to its tax. The note being written counts, so both in one note are netted too.
 
 ## Changelog
+- **2026-11-22** — Detail route returns `created_through`.
 - **2026-11-14** — `voidCreditNote` takes an optional `tx` and voids inside it (the change
   revert voids the change's notes in its own transaction).
 - **2026-11-13 (0530)** — `pack_refund: full` on an active pack in a unit with no rate: the used credits are drawn again from the customer's other grants and the rest written off (credits README), so `credits/pack-refund.ts` no longer refuses that pack while other credit is left. Other packs keep the 0529 rule. One path: the stored field and the writers' `packRefund`.
@@ -945,3 +946,4 @@ amount_minor). Ledger accounts: `credit_adjustments`, refundable-credit balance,
   `items[].kind` (every read). No stored row or amount changes. Gate: `verify:proration` §K.
 - **2026-11-13** — The credit-note document sets the new `meta.holdUntil` to null (a held invoice is
   an invoice-only state). No output change.
+- **2026-11-22** — `refundCreditNote({ guardRepeat })` forwards the repeat guard to the payout leg. A `possible_duplicate` refusal books no failed refund or event, the earmark is reversed, and the call throws `CreditNoteError` code `possible_duplicate`. `POST …/credit_notes/:cn/refund` takes `confirm_repeat` and answers 409. Gate: `verify:credit-notes`.

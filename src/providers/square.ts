@@ -325,10 +325,36 @@ export function squareFailure(sig: DeclineSignal): NonNullable<ChargeResult["fai
 const paymentError = (p: SquarePayment, top?: SquareError[]) =>
   p.card_details?.errors?.[0] ?? p.bank_account_details?.errors?.[0] ?? top?.[0];
 
+/** The payer left a hosted page: not a decline, so no instrument effect. */
+const PAYMENT_ABANDONED = {
+  code: "payment_abandoned",
+  message: "The payer did not complete the payment on the Square payment page.",
+  retriable: true,
+};
+
+/** A refusal of our access token or scopes: our setup, never the payer's card. */
+export function squareAccessFailure(
+  e: SquareError | undefined,
+): NonNullable<ChargeResult["failure"]> {
+  const sig = squareDeclineSignal(e);
+  const f = squareFailure(sig);
+  if (f.code === "gateway_request_rejected") return f;
+  return {
+    ...squareFailure({ ...sig, code: "UNAUTHORIZED" }),
+    ...(sig.code ? { providerCode: sig.code } : {}),
+  };
+}
+
 /** A payment read back (or answered), as a charge outcome. */
 export function chargeResultFromPayment(
   p: SquarePayment,
-  opts: { authorization?: boolean; claimed?: string; errors?: SquareError[] } = {},
+  opts: {
+    authorization?: boolean;
+    claimed?: string;
+    errors?: SquareError[];
+    /** The buyer was on a hosted page: a cancel means they left it. */
+    buyerPresent?: boolean;
+  } = {},
 ): ChargeResult {
   const methodUsed = squareMethodUsed(p, opts.claimed);
   const base = { providerChargeId: p.id, raw: p, ...(methodUsed ? { methodUsed } : {}) };
@@ -349,11 +375,14 @@ export function chargeResultFromPayment(
       return {
         status: "failed",
         ...base,
-        failure: {
-          code: "processing_error",
-          message: "Square canceled this payment before it was captured.",
-          retriable: true,
-        },
+        failure: opts.buyerPresent
+          ? PAYMENT_ABANDONED
+          : {
+              // An authorization cancels itself after 7 days uncaptured. The card is not at fault.
+              code: "intent_expired",
+              message: "Square canceled this payment before it was captured.",
+              retriable: true,
+            },
       };
   }
   // PENDING: an ACH debit in flight. Anything newer is not a verdict either.
@@ -515,8 +544,38 @@ export function normalizeSquareNotification(
         { ...common, type: "charge.succeeded" },
       ];
     }
-    // Another try on the same link may still pay it.
-    if (hosted && p.order_id) return [{ ...base, type: "unknown" }];
+    // A refused or cancelled try on a link: keep its reason on the open attempt, which stays
+    // open, because another try on the same link may still pay it.
+    if (hosted && p.order_id && (p.status === "FAILED" || p.status === "CANCELED")) {
+      const sig =
+        p.status === "FAILED"
+          ? squareDeclineSignal(paymentError(p), p.card_details?.card?.card_brand)
+          : undefined;
+      const f = sig ? squareFailure(sig) : PAYMENT_ABANDONED;
+      return [
+        {
+          ...base,
+          ownership: "ours",
+          ownershipRef: hosted,
+          type: "charge.failed",
+          providerIntentId: SQUARE_HOSTED_PREFIX + p.order_id,
+          providerChargeId: p.id,
+          failureCode: f.code,
+          failureRetriable: f.retriable,
+          failureMessage: f.message,
+          ...(sig?.code ? { providerFailureCode: sig.code } : {}),
+        },
+      ];
+    }
+    if (hosted && p.order_id)
+      return [
+        {
+          ...base,
+          type: "unknown",
+          providerIntentId: SQUARE_HOSTED_PREFIX + p.order_id,
+          ...(p.id ? { providerChargeId: p.id } : {}),
+        },
+      ];
     // The payment id is also the intent id (`submitClientResult`).
     const amount = toMinor(p.amount_money);
     const own = {
@@ -742,7 +801,20 @@ export class SquareProvider implements PaymentProvider {
         `We could not read Square's answer to ${operation} (HTTP ${res.status}).`,
       );
     }
-    if (res.status === 401) throw new Error(`Square refused the access token on ${operation}`);
+    if (res.status === 401)
+      throw new SquareApiError(
+        operation,
+        401,
+        json.errors?.length
+          ? json.errors
+          : [
+              {
+                category: "AUTHENTICATION_ERROR",
+                code: "UNAUTHORIZED",
+                detail: "Square refused the access token.",
+              },
+            ],
+      );
     return { status: res.status, json };
   }
 
@@ -1018,6 +1090,14 @@ export class SquareProvider implements PaymentProvider {
     try {
       r = await this.call(operation, "POST", "/v2/payments", body);
     } catch (e) {
+      // A refused access token created nothing: a definite failure of our setup.
+      if (e instanceof SquareApiError && e.status === 401)
+        return {
+          status: "failed",
+          providerChargeId: "",
+          failure: squareAccessFailure(e.errors[0]),
+          raw: { errors: e.errors },
+        };
       if (!(e instanceof ProviderIndeterminateError)) throw e;
       try {
         r = await this.call(`${operation}_replay`, "POST", "/v2/payments", body);
@@ -1039,6 +1119,13 @@ export class SquareProvider implements PaymentProvider {
         `Square says a payment exists for this ${operation} key, and we could not find it yet.`,
       );
     }
+    if (r.status === 403)
+      return {
+        status: "failed",
+        providerChargeId: "",
+        failure: squareAccessFailure(err),
+        raw: r.json,
+      };
     const f = squareFailure(squareDeclineSignal(err));
     if (isDecline(err, f))
       return { status: "failed", providerChargeId: "", failure: f, raw: r.json };
@@ -1046,7 +1133,7 @@ export class SquareProvider implements PaymentProvider {
   }
 
   async charge(input: ChargeInput): Promise<ChargeResult> {
-    return this.createPayment("charge_card", {
+    const body = {
       idempotency_key: squareIdempotencyKey("pay", input.idempotencyKey),
       source_id: input.paymentMethod.providerPaymentMethodId,
       customer_id: input.paymentMethod.providerCustomerId ?? input.customer.providerCustomerId,
@@ -1055,9 +1142,21 @@ export class SquareProvider implements PaymentProvider {
       autocomplete: true,
       reference_id: squareReference(input.idempotencyKey, input.ownershipRef),
       ...(input.description ? { note: input.description.slice(0, 500) } : {}),
-      ...(input.email ? { buyer_email_address: input.email.slice(0, 255) } : {}),
       customer_details: squareCustomerDetails(input.initiator),
+    };
+    if (!input.email) return this.createPayment("charge_card", body);
+    const r = await this.createPayment("charge_card", {
+      ...body,
+      buyer_email_address: input.email.slice(0, 255),
     });
+    // Square refused the receipt address; that refusal created nothing. The address is
+    // optional and the charge is not, so charge again without it under its own key.
+    if (r.status === "failed" && r.failure?.providerCode === "INVALID_EMAIL_ADDRESS")
+      return this.createPayment("charge_card", {
+        ...body,
+        idempotency_key: squareIdempotencyKey("pay_ne", input.idempotencyKey),
+      });
+    return r;
   }
 
   async fetchChargeStatus(input: { providerChargeId: string }): Promise<ChargeResult> {
@@ -1413,7 +1512,7 @@ export class SquareProvider implements PaymentProvider {
       const t = order?.tenders?.find((x) => x.payment_id ?? x.id);
       const p = t ? await this.readPayment(t.payment_id ?? t.id!) : null;
       if (!p) throw new Error(`Square has no payment on the order of ${input.intentId}`);
-      return { purpose: "payment", charge: chargeResultFromPayment(p) };
+      return { purpose: "payment", charge: chargeResultFromPayment(p, { buyerPresent: true }) };
     }
     if (decodeSquareIntent(input.intentId))
       throw new Error(
@@ -1482,8 +1581,16 @@ export class SquareProvider implements PaymentProvider {
         charge: chargeResultFromPayment(done, { errors: r.json.errors }),
       };
     const after = await this.readPayment(p.id);
-    if (after?.status === "COMPLETED")
+    if (after && ["COMPLETED", "CANCELED", "FAILED"].includes(after.status ?? ""))
       return { purpose: "payment", charge: chargeResultFromPayment(after) };
+    // A refusal the rules know (a hold that expired or was canceled): a failed capture.
+    const err = r.json.errors?.[0];
+    const f = squareFailure(squareDeclineSignal(err));
+    if (f.ruleId)
+      return {
+        purpose: "payment",
+        charge: { status: "failed", providerChargeId: p.id, failure: f, raw: r.json },
+      };
     throw new SquareApiError("capture_payment", r.status, r.json.errors ?? []);
   }
 
@@ -1574,16 +1681,50 @@ export class SquareProvider implements PaymentProvider {
    * Register our URL for the events we read, or bring an existing subscription of the same URL
    * up to date. The signature key Square minted is returned and stored as `webhook_secret`.
    */
-  async provisionWebhookEndpoint(input: { url: string }): Promise<ProvisionedWebhook> {
+  async provisionWebhookEndpoint(input: {
+    url: string;
+    previousUrl?: string;
+  }): Promise<ProvisionedWebhook> {
     if (!input.url.startsWith("https://"))
       throw new Error(
         "Square accepts only HTTPS notification URLs. Set WEBHOOK_BASE_URL to an HTTPS URL.",
       );
     const events = [...SQUARE_WEBHOOK_EVENTS];
     type Sub = { id?: string; signature_key?: string; enabled?: boolean; event_types?: string[] };
-    const existing = (await this.listWebhookSubscriptions()).find(
-      (s) => s.notification_url === input.url,
-    );
+    const subs = await this.listWebhookSubscriptions();
+    const atUrl = subs.find((s) => s.notification_url === input.url);
+    // A move keeps the subscription and its signature key; only the URL changes.
+    const atPrevious = input.previousUrl
+      ? subs.find((s) => s.notification_url === input.previousUrl)
+      : undefined;
+    if (!atUrl && atPrevious) {
+      await this.request(
+        "update_webhook_subscription",
+        "PUT",
+        `/v2/webhooks/subscriptions/${encodeURIComponent(atPrevious.id)}`,
+        {
+          subscription: {
+            notification_url: input.url,
+            enabled: true,
+            event_types: events,
+            api_version: SQUARE_VERSION,
+          },
+        },
+      );
+      const got = await this.request<{ subscription?: Sub }>(
+        "get_webhook_subscription",
+        "GET",
+        `/v2/webhooks/subscriptions/${encodeURIComponent(atPrevious.id)}`,
+      );
+      if (!got.subscription?.signature_key)
+        throw new Error("Square returned no signature key for the webhook subscription");
+      return {
+        webhookSecret: got.subscription.signature_key,
+        providerEndpointId: atPrevious.id,
+        movedFromPreviousUrl: true,
+      };
+    }
+    const existing = atUrl;
     if (existing) {
       // Payloads arrive at the subscription's version, so it must be ours.
       const same =
@@ -1646,7 +1787,7 @@ export class SquareProvider implements PaymentProvider {
    */
   private async hostedRefOf(n: SquareNotification): Promise<string | null> {
     const p = n.data?.object?.payment;
-    if (!p?.order_id || p.status !== "COMPLETED") return null;
+    if (!p?.order_id || !["COMPLETED", "FAILED", "CANCELED"].includes(p.status ?? "")) return null;
     if (p.location_id && p.location_id !== this.opts.locationId) return null;
     const ref = p.reference_id ?? "";
     if (OUR_REFERENCE.test(ref) || TAGGED_REFERENCE.test(ref)) return null;
@@ -1667,9 +1808,11 @@ export class SquareProvider implements PaymentProvider {
       throw new Error(
         "This Square account has no webhook signature key. Register the webhook first.",
       );
-    const urls = [input.notificationUrl, this.opts.notificationUrl].filter(
-      (u, i, a): u is string => !!u && a.indexOf(u) === i,
-    );
+    const urls = [
+      input.notificationUrl,
+      this.opts.notificationUrl,
+      ...(input.alternateNotificationUrls ?? []),
+    ].filter((u, i, a): u is string => !!u && a.indexOf(u) === i);
     verifySquareSignature(
       this.opts.signatureKey,
       headerValue(input.headers, SQUARE_SIGNATURE_HEADER),

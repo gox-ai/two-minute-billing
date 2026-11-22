@@ -47,7 +47,8 @@ describe("decline rules: matching on more than the code", () => {
       category: "invalid_request_error",
     });
     expect(n.code).toBe("gateway_request_rejected");
-    expect(n.retriable).toBe(false);
+    // Our refused request retries on every gateway (2026-11-17).
+    expect(n.retriable).toBe(true);
   });
 
   it("the category catch-all must NOT outrank a specific message rule", () => {
@@ -66,11 +67,11 @@ describe("decline rules: matching on more than the code", () => {
 
   it("#63's code is now known to the NORMALISER, not just to the adapter", () => {
     // The adapter learned it via a hardcoded `err.code ===` check on 2026-09-05. This is
-    // where it belongs, and it must classify as a merchant-side park, not a retry.
+    // where it belongs. Since 2026-11-17 a refused request of ours retries on the schedule.
     const n = normalizeStripeDecline({ code: "payment_intent_payment_attempt_failed" });
     expect(n.code).toBe("gateway_request_rejected");
-    expect(n.retriable).toBe(false);
-    expect(classifyDecline(n.code)).toBe("park");
+    expect(n.retriable).toBe(true);
+    expect(classifyDecline(n.code)).toBe("retry");
   });
 
   it("a bare string still works — every existing call site passes one", () => {

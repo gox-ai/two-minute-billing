@@ -529,11 +529,11 @@ console.log("\n§11 the built-in dashboards");
 {
   const problems = assertPresetsAreWellFormed();
   check("every preset tile names a live measure", problems.length === 0, problems.join(" | "));
-  eq_("there are six of them", PRESET_DASHBOARDS.length, 6);
+  eq_("there are seven of them", PRESET_DASHBOARDS.length, 7);
   eq_(
     "and they are the ones the module exports",
     PRESET_DASHBOARDS.map((p) => p.key).join(","),
-    "overview,movement,lifecycle,credits,usage,sales",
+    "overview,movement,lifecycle,revenue,credits,usage,sales",
   );
   check(
     "each has tiles and a description",
@@ -559,6 +559,11 @@ console.log("\n§11 the built-in dashboards");
   check(
     "and a model preset is left out for a business without that model",
     !presetRows.some((d) => d.dashboard.publicId === presetPublicId("credits")),
+  );
+  eq_(
+    "a business with no subscriptions opens on Revenue, and sees no subscription board",
+    presetRows.map((d) => d.dashboard.publicId).join(","),
+    presetPublicId("revenue"),
   );
   check(
     "and they lead the list, so the page opens on one",

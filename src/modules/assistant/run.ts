@@ -24,7 +24,16 @@ import {
   shapeForModel,
   stripInvisible,
 } from "@/modules/assistant-tools/shape";
-import { checkFigures, dropUnverifiedLinks, linkBareUrls, recordPaths, urlTitles } from "./figures";
+import {
+  checkFigures,
+  dropUnverifiedLinks,
+  linkBareUrls,
+  recordPaths,
+  recordRoutes,
+  routeForType,
+  unprefixedRecordLinks,
+  urlTitles,
+} from "./figures";
 import { redactSourceLeaks, StreamGuard } from "./leaks";
 import { FollowUpFilter, withoutFollowUps } from "./follow-ups";
 import { packText, prefetch, researchToolDef, RESEARCH_TOOLS, type ResearchPack } from "./research";
@@ -52,7 +61,15 @@ import { fitError } from "./action-rules";
 import { ASSISTANT_NAME } from "./name";
 import { CARD_TOOLS, QUIET_TOOLS } from "./visibility";
 import { dashboardScreens } from "@/modules/assistant-docs/screens";
-import { idsIn, resolveGuide, STEP_ACTIONS, type Guide, type StepAction } from "./guide";
+import {
+  GUIDE_SCOPES,
+  idsIn,
+  resolveGuide,
+  STEP_ACTIONS,
+  type Guide,
+  type GuideScope,
+  type StepAction,
+} from "./guide";
 import { screenForPath } from "@/modules/assistant-docs/screens";
 import { describeUserAgent } from "@/modules/emails/templates";
 import { supportOffered } from "./support";
@@ -84,6 +101,8 @@ export type AssistantEvent =
         source_redactions: number;
         /** Links the answer cited that no tool returned, taken out (their text kept). */
         removed_links?: string[];
+        /** Ids in the answer with no prefix, id → dashboard folder, for the panel to link. */
+        record_links?: Record<string, string>;
         timing?: TurnTiming;
       };
     }
@@ -625,9 +644,10 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AssistantEvent>
   let guide: Guide | null = null;
   tools.show_in_app = tool({
     description:
-      'Call it BEFORE writing your answer, whenever the answer is something the member does in the dashboard: it offers a Show me button that opens the screen and highlights each control in turn. screen: the screen\'s path exactly as the reference or research gave it; params: record ids for its {placeholders}, from records you read. steps: up to 4, in order; control is a label visible on the screen, copied exactly from the screen\'s controls (a button, a row or field label, a tab, or an option the screen lists, such as one provider in a directory); never a card title, a page title or a breadcrumb; within is the card the control sits in, from the screen\'s cards, or a row label in it when the control\'s label repeats; say is one short instruction and may name an option to select; do is what the member does with the control: click (a button, tab, row or link), enter (type a value in a field), select (choose an option) or submit (save or submit the form). To fill in a field, the control is the field\'s label, do is enter and say holds the value, e.g. {control: "Percentage", do: "enter", say: "Set Percentage to 40."}; to pick an option, do is select. Example: {control: "Excess payments", within: "Subscription configurations", do: "click", say: "Find Excess payments in Subscription configurations."}, then {control: "Change", within: "Excess payments", do: "click", say: "Select Change, then Never auto-apply here, then Save."}. To save or submit a form, give the button its own last step: control is its label from the "Action bar" card (for example "Save changes" or "Create coupon"), with no within and do submit, e.g. {control: "Save changes", do: "submit", say: "Select Save changes."}. Never give a card as the control for a button. Use only labels that belong to the control the answer is about. One guide per answer.',
+      'Call it BEFORE writing your answer, whenever the answer is something the member does in the dashboard: it offers a Show me button that opens the screen and highlights each control in turn. screen: the screen\'s path exactly as the reference or research gave it; params: record ids for its {placeholders}, from records you read. steps: up to 4, in order; control is a label visible on the screen, copied exactly from the screen\'s controls (a button, a row or field label, a tab, or an option the screen lists, such as one provider in a directory); never a card title, a page title or a breadcrumb; within is the card the control sits in, from the screen\'s cards, or a row label in it when the control\'s label repeats; say is one short instruction and may name an option to select; do is what the member does with the control: click (a button, tab, row or link), enter (type a value in a field), select (choose an option) or submit (save or submit the form). To fill in a field, the control is the field\'s label, do is enter and say holds the value, e.g. {control: "Percentage", do: "enter", say: "Set Percentage to 40."}; to pick an option, do is select. Example: {control: "Excess payments", within: "Subscription configurations", do: "click", say: "Find Excess payments in Subscription configurations."}, then {control: "Change", within: "Excess payments", do: "click", say: "Select Change, then Never auto-apply here, then Save."}. To save or submit a form, give the button its own last step: control is its label from the "Action bar" card (for example "Save changes" or "Create coupon"), with no within and do submit, e.g. {control: "Save changes", do: "submit", say: "Select Save changes."}. Never give a card as the control for a button. Use only labels that belong to the control the answer is about. scope: one_record when the member asks to change or act on one record (a customer, an invoice, a subscription), whole_business when they ask about a rule for every customer; a question about the record the member is on, or its money, is one_record unless they ask about every customer. A one_record guide opens that record\'s screen, never a settings page. If no screen has a control that does what the answer says, do not call it. One guide per answer.',
     inputSchema: z.object({
       screen: z.string().min(1).max(200),
+      scope: z.enum(GUIDE_SCOPES),
       params: z.record(z.string(), z.string().max(80)).optional(),
       steps: z
         .array(
@@ -644,6 +664,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AssistantEvent>
     execute: async (
       a: {
         screen: string;
+        scope: GuideScope;
         params?: Record<string, string>;
         steps: Array<{ control: string; within?: string; say: string; do: StepAction }>;
       },
@@ -656,6 +677,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AssistantEvent>
       const r = resolveGuide({
         input: {
           screen: a.screen,
+          scope: a.scope,
           params: a.params,
           steps: a.steps.map((s) => ({
             control: stripInvisible(s.control),
@@ -1117,10 +1139,16 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AssistantEvent>
   for (const r of earlier) read.add(r.id);
   if (input.page?.record?.id) read.add(input.page.record.id);
   for (const m of input.mentions ?? []) read.add(m.id);
+  // Where each record came from: an imported id has no prefix to route it by.
+  const routes = recordRoutes(evidence);
+  for (const r of [input.page?.record, ...(input.mentions ?? [])]) {
+    const route = r ? routeForType(r.type) : null;
+    if (r && route) routes.set(r.id, route);
+  }
   const cite = (t: string) => [
     ...evidence,
     ...referenceEvidence(preVisible, t),
-    { links: recordPaths(input.business.id, read) },
+    { links: recordPaths(input.business.id, read, routes) },
     // A figure the member wrote ("I need $170") may be repeated back without a tool saying it.
     { member_question: input.content },
   ];
@@ -1138,8 +1166,10 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AssistantEvent>
     text = linked;
     yield { type: "replace_text", text };
   }
+  const recordLinks = unprefixedRecordLinks(text, routes);
   const figures = {
     ...checked,
+    ...(Object.keys(recordLinks).length ? { record_links: recordLinks } : {}),
     source_redactions: sourceRedactions,
     ...(invented.length ? { removed_links: invented } : {}),
     timing: turnTiming({ timing, turnStart, usage, steps }),

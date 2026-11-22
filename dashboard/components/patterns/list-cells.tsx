@@ -1,6 +1,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { StatusChip } from "@/components/patterns/chip";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -10,8 +11,9 @@ import { cn } from "@/lib/utils";
  * line 1 = status chip + bold linked name (+ any trailing chips), line 2 = the
  * mono id / email / sub-line.
  *
- * Each line has a fixed height (24px, the chip; then 20px), so every row of a list
- * that leads with this cell is the same height whether or not it carries a chip.
+ * Each line is at least 24px (the chip), then 20px, so every row of a list that leads
+ * with this cell is the same height whether or not it carries a chip. A long name wraps
+ * and grows its line instead of running into the next column.
  */
 export function InfoCell({
   status,
@@ -34,7 +36,8 @@ export function InfoCell({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="flex h-6 items-center gap-2">
+      {/* A stacked row: a wide chip puts the title on the next line instead of squeezing it. */}
+      <span className="flex min-h-6 items-center gap-x-2 list-narrow:flex-wrap">
         {status ? <StatusChip status={status} /> : null}
         {href ? (
           // `data-record-title`: the name glides into the record's title (lib/shared-title.ts).
@@ -51,9 +54,10 @@ export function InfoCell({
         {trailing}
       </span>
       {sub ? (
-        <span className="flex h-5 items-center">
+        <span className="flex min-h-5 items-center">
           {typeof sub === "string" ? (
-            <span className="font-mono text-xs text-muted-foreground">{sub}</span>
+            // An id past 320px shortens in the middle; the full id is in the tooltip.
+            <MiddleEllipsis value={sub} className="max-w-80 text-xs text-muted-foreground" />
           ) : (
             sub
           )}
@@ -64,7 +68,10 @@ export function InfoCell({
   );
 }
 
-/** Right-aligned money (`₹10,799.00`). The symbol names the currency; a code goes in the column head. */
+/**
+ * Right-aligned money (`₹10,799.00`). The symbol names the currency; a code goes in the column
+ * head. One line always: a figure never breaks inside its digits.
+ */
 export function MoneyCell({
   minor,
   currency,
@@ -76,7 +83,7 @@ export function MoneyCell({
 }) {
   if (minor == null || !currency) return <Dash />;
   return (
-    <span className={cn("text-sm font-medium tabular-nums", className)}>
+    <span className={cn("text-sm font-medium whitespace-nowrap tabular-nums", className)}>
       {money(minor, currency)}
     </span>
   );

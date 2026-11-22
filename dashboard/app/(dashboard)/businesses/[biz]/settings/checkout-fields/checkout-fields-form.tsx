@@ -57,7 +57,11 @@ const BILLING: Row[] = [
   { key: "billing.city", label: "City" },
   { key: "billing.state", label: "State / province (printed name)", help: WHERE_USED },
   { key: "billing.state_code", label: "State / province code", help: WHERE_USED },
-  { key: "billing.postal_code", label: "Postal / ZIP code", help: WHERE_USED },
+  {
+    key: "billing.postal_code",
+    label: "Postal / ZIP code",
+    help: `${WHERE_USED} City and state fill in from the postal code.`,
+  },
   {
     key: "billing.country",
     label: "Country",
@@ -208,9 +212,9 @@ function PoNumberRow({
       consequence={
         !collectsPoNumber ? (
           <>
-            PO number collection is disabled under{" "}
+            PO number collection is disabled in the{" "}
             <Link href={hostedPagesHref} className="text-primary hover:underline">
-              Hosted pages
+              checkout settings
             </Link>
             , so we do not apply this setting. Enable it there first.
           </>

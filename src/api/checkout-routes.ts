@@ -54,6 +54,7 @@ import {
   readCheckoutInvoiceState,
   CheckoutError,
   CheckoutActionRequiredError,
+  recordCheckoutChargeIntent,
 } from "@/modules/checkout/service";
 import { serializePaymentIntent } from "@/modules/payment-intents/service";
 import { effectiveMethodTypes } from "@/modules/gateway/service";
@@ -97,7 +98,7 @@ import {
 import {
   addressFieldLocksFor,
   addressRequirementIssues,
-  billingDetailsComplete,
+  billingDetailsMissing,
   withAddressFieldLocks,
 } from "@/modules/checkout/address-field-rules";
 import { liveTaxRegimes } from "@/modules/tax/service";
@@ -721,7 +722,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
          * own become editable.
          */
         if (!ctx.customerPinned && !parsed.data.email) {
-          return badRequest(reply, "email is required to start a checkout");
+          return badRequest(reply, "Enter your email address.");
         }
         /**
          * NOTE: `customer.email` is one of the fifteen matrix keys (default `show`), but
@@ -751,7 +752,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           isRequired(fieldConfig, "customer.tax_registration_number") &&
           !parsed.data.tax_registration_number?.trim()
         ) {
-          return badRequest(reply, "tax_registration_number is required");
+          return badRequest(reply, "Enter your tax ID.");
         }
         /**
          * Ship-to (0360). Hidden → any sent value is ignored. A customer the session did not
@@ -766,7 +767,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           if (shipMissing.length > 0)
             return badRequest(reply, requirementIssuesError(shipMissing, "shipping_address"));
         } else if (shippingState === "mandatory" && parsed.data.address) {
-          return badRequest(reply, "shipping_address is required");
+          return badRequest(reply, "Enter a shipping address.");
         }
         // Sent → the default book entry; a details post without one under `show` clears it.
         const shippingAddress =
@@ -805,23 +806,26 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
               shippingAddress,
             });
         await markCheckoutDetailsSubmitted(ctx);
+        const billingMissing = billingDetailsMissing(fieldConfig, hasBillingName(customer), {
+          line1: customer.addressLine1,
+          city: customer.city,
+          state: customer.state,
+          state_code: customer.stateCode,
+          postal_code: customer.postalCode,
+          country: customer.country,
+          first_name: customer.billingFirstName,
+          phone: customer.billingPhone ?? customer.phone,
+        });
         return reply.code(200).send({
           object: "checkout_customer",
           id: customer.publicId,
           email: customer.email,
           // Derived, read-only — same rule as `serializeCustomer`.
           name: holderName(customer),
-          // Indian-gateway export rule: card setup needs a name + address up front.
-          // Same gate as the portal's (`serializePortalMe`) and it must stay the same:
-          // ANY usable billing name counts — the address contact, then the account
-          // holder. Testing the old `customer.name` column made our own invention
-          // mandatory before a card could be vaulted, which this form cannot satisfy at
-          // all: it collects the billing CONTACT, and nothing collects `name`.
-          // Line1 and country count only where this checkout requires them (0334).
-          billing_details_complete: billingDetailsComplete(fieldConfig, hasBillingName(customer), {
-            line1: customer.addressLine1,
-            country: customer.country,
-          }),
+          // Same gate as the portal's (`serializePortalMe`): any usable billing name, plus the
+          // address fields this checkout requires.
+          billing_details_complete: billingMissing.length === 0,
+          billing_details_missing: billingMissing,
         });
       } catch (e) {
         if (e instanceof CheckoutError) return badRequest(reply, e.message);
@@ -1140,7 +1144,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
         return badRequest(
           reply,
           "return_url and cancel_url are required. To omit them, configure default_return_url and " +
-            "default_cancel_url on this business in Settings → Hosted pages",
+            "default_cancel_url on this business in Settings → Checkout",
         );
       }
       const { returnUrl, cancelUrl } = redirect;
@@ -1284,7 +1288,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           isRequired(fieldConfig, "invoice.po_number") &&
           !parsed.data.po_number?.trim()
         ) {
-          return badRequest(reply, "po_number is required");
+          return badRequest(reply, "Enter a PO number.");
         }
       }
       /**
@@ -1430,6 +1434,27 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
         // session is open again — the buyer completes `next_action` and re-posts
         // this route with `payment_intent`.
         if (e instanceof CheckoutActionRequiredError) {
+          // So the webhook can finish it if this page never posts the second leg.
+          try {
+            await recordCheckoutChargeIntent(
+              ctx,
+              e.intent.publicId,
+              {
+                ...(parsed.data.token ? { paymentMethodToken: parsed.data.token } : {}),
+                ...(vaultedPmId ? { paymentMethodId: vaultedPmId } : {}),
+                ...(parsed.data.gateway_account
+                  ? { gatewayAccountId: parsed.data.gateway_account }
+                  : {}),
+                ...(parsed.data.po_number ? { poNumber: parsed.data.po_number } : {}),
+              },
+              parsed.data.consent ? { answer: parsed.data.consent, ip: clientIp(req) } : null,
+            );
+          } catch (recordError) {
+            log.error(recordError, {
+              event: "checkout_charge_intent_record_failed",
+              intent: e.intent.publicId,
+            });
+          }
           const view = serializePaymentIntent(e.intent);
           return reply.code(402).send({
             error: {

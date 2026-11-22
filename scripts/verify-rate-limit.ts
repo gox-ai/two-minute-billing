@@ -46,6 +46,7 @@ import {
   RETENTION_MS,
   AUTH_WINDOW_MS,
   SIGNUP_WINDOW_MS,
+  HOUR_WINDOW_MS,
 } from "@/platform/rate-limit";
 import { readFileSync } from "node:fs";
 import { config } from "@/platform/config";
@@ -401,10 +402,13 @@ const countersFor = async (orgId: string) =>
   );
 }
 
-/** Wait out the last 10s of a window, so a sequence of calls cannot straddle a reset. */
-async function clearOfBoundary(windowMs = 60_000) {
+/**
+ * Wait out the last `marginMs` of a window, so a sequence of calls cannot straddle a reset.
+ * Windows are epoch-aligned, so an hour window resets at :30 local in a half-hour timezone.
+ */
+async function clearOfBoundary(windowMs = 60_000, marginMs = 10_000) {
   const into = Date.now() % windowMs;
-  if (into > windowMs - 10_000) await new Promise((r) => setTimeout(r, windowMs - into + 50));
+  if (into > windowMs - marginMs) await new Promise((r) => setTimeout(r, windowMs - into + 50));
 }
 
 const PW = "Correct-Horse-Battery-9";
@@ -520,6 +524,8 @@ await withKnobs({ RATE_LIMIT_INVITES_PER_USER: 2, RATE_LIMIT_INVITES_PER_ORG: 3 
       email: `rlk-${n}-${uniq}@example.com`,
       role: "developer",
     });
+  // Each invite may wait out an SMTP timeout (~10s), so keep 90s clear of the hour reset.
+  await clearOfBoundary(HOUR_WINDOW_MS, 90_000);
   const a = [await invite(o.token, 1), await invite(o.token, 2), await invite(o.token, 3)];
   ok(
     `§K invite: 2 per user allowed (got ${a[0]!.statusCode},${a[1]!.statusCode})`,
@@ -588,6 +594,7 @@ await withKnobs(
         customer: "cus_XXXXXXXXXXXX01",
         to,
       });
+    await clearOfBoundary(HOUR_WINDOW_MS);
     const a = [
       await send(`rl-a-${uniq}@example.com`),
       await send(`rl-a-${uniq}@example.com`),
@@ -613,6 +620,7 @@ await withKnobs(
   async () => {
     const collect = (inv: string, verb = "collect") =>
       asKey(kOrg.secret, `/v1/businesses/${kBiz.publicId}/invoices/${inv}/${verb}`);
+    await clearOfBoundary(HOUR_WINDOW_MS);
     await clearOfBoundary();
     const a = [
       await collect(`inv_RL01${uniq}`),

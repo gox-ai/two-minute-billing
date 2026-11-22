@@ -397,7 +397,7 @@ export function computeInvoiceTax(input: {
         let parts: bigint[];
         if (inclusive) {
           const mag = lb >= 0n ? lb : -lb;
-          const split = splitByWeight(r > 0n ? (mag * r) / (10000n + r) : 0n, weights);
+          const split = splitByWeight(backOutMinor(mag, r), weights);
           parts = lb >= 0n ? split : split.map((v) => -v);
         } else {
           parts = resolution.components.map((c) => halfUpAt(lb, c.rateBps));
@@ -430,7 +430,7 @@ export function computeInvoiceTax(input: {
       // component's gross already contains the others' tax.
       const r = BigInt(resolution.totalRateBps);
       const mag = base >= 0n ? base : -base;
-      const poolMag = r > 0n ? (mag * r) / (10000n + r) : 0n;
+      const poolMag = backOutMinor(mag, r);
       // `splitByWeight` is defined for a non-negative total, so split the MAGNITUDE and
       // re-sign — that keeps its largest-remainder guarantee (parts sum exactly) intact
       // in both directions rather than reimplementing it for negatives.
@@ -712,8 +712,19 @@ export function taxLinesFromRows(
 }
 
 /**
+ * Tax inside a non-negative gross at combined rate `r` (bps): `gross × r / (10000 + r)`,
+ * rounded half-up, as exclusive tax and credit notes round. Truncating made the tax a
+ * minor unit low on about half of all amounts (₹117 at 18%: 17.8475 → 17.84).
+ */
+export function backOutMinor(grossMinor: bigint, r: bigint): bigint {
+  if (r <= 0n) return 0n;
+  const d = 10000n + r;
+  return (grossMinor * r + d / 2n) / d;
+}
+
+/**
  * Tax INSIDE a gross amount, as `computeInvoiceTax` backs it out: once on the gross at the
- * combined rate (floored), or per line under per-line rounding. The estimate path's twin of
+ * combined rate (half-up), or per line under per-line rounding. The estimate path's twin of
  * the inclusive branch, so a preview states the tax the invoice books.
  */
 export function inclusiveTaxMinorFor(
@@ -723,8 +734,8 @@ export function inclusiveTaxMinorFor(
 ): bigint {
   const r = BigInt(resolution.totalRateBps);
   if (grossMinor <= 0n || r <= 0n) return 0n;
-  // Floored on the magnitude and re-signed, as `computeInvoiceTax` backs out a credit line.
-  const out = (b: bigint) => (b >= 0n ? (b * r) / (10000n + r) : -((-b * r) / (10000n + r)));
+  // On the magnitude and re-signed, as `computeInvoiceTax` backs out a credit line.
+  const out = (b: bigint) => (b >= 0n ? backOutMinor(b, r) : -backOutMinor(-b, r));
   const bases =
     resolution.rounding === "per_line" && lineAmounts && lineAmounts.length > 1
       ? perLineBases(lineAmounts, grossMinor)

@@ -548,6 +548,12 @@ export class MollieProvider implements PaymentProvider {
     );
   }
 
+  /** Is the mandate deleted or `invalid`? A failed read answers false: the refusal stands. */
+  private async mandateGone(customerId: string, mandateId: string): Promise<boolean> {
+    const m = await this.getMandate(customerId, mandateId).catch(() => undefined);
+    return m === null || m?.status === "invalid";
+  }
+
   /** A mandate as a stored instrument. Throws for a mandate type we do not offer. */
   describeMandate(m: MollieMandate, customerId: string): ProviderPaymentMethodRef {
     const type = MANDATE_METHOD[m.method ?? ""];
@@ -922,6 +928,8 @@ export class MollieProvider implements PaymentProvider {
     return {
       intentId: p.id,
       status,
+      // The reason is on the payment already read: a missed webhook keeps it.
+      ...(status === "failed" ? { failure: mollieFailure(p) } : {}),
       providerChargeId: p.id,
       amountMinor: toMinor(p.amount),
       currency: p.amount.currency,
@@ -966,11 +974,14 @@ export class MollieProvider implements PaymentProvider {
     // A refused create: no payment exists. Classify on Mollie's sentence.
     const detail = res.error.detail ?? "";
     // Both measured: "…has no valid mandate…" and "No suitable mandates found for customer".
-    const signal: DeclineSignal = /no valid mandate|no suitable mandates/i.test(detail)
+    let signal: DeclineSignal = /no valid mandate|no suitable mandates/i.test(detail)
       ? { code: "no_valid_mandate", message: detail }
       : /does not accept recurring payments/i.test(detail)
         ? { code: "method_not_recurring", message: detail }
         : { code: "request_rejected", message: detail };
+    // Mollie does not document the refusal for a revoked mandate: read the mandate itself.
+    if (signal.code === "request_rejected" && (await this.mandateGone(a.customerId, a.mandateId)))
+      signal = { code: "no_valid_mandate", message: detail };
     const norm = normalizeMollieDecline(signal);
     return {
       status: "failed",

@@ -69,7 +69,10 @@ export const GATEWAY_FACTORIES: Record<ProviderKey, GatewayFactory> = {
             ? creds.create_intent_fault
             : null,
         perDebitMandateReference: creds.per_debit_mandate_reference === "true",
-        chargeFault: creds.charge_fault === "mandate_missing" ? "mandate_missing" : null,
+        chargeFault:
+          creds.charge_fault === "mandate_missing" || creds.charge_fault === "request_rejected"
+            ? creds.charge_fault
+            : null,
         ensureCustomerFault:
           creds.ensure_customer_fault === "reject" ||
           creds.ensure_customer_fault === "indeterminate"

@@ -1,6 +1,5 @@
 import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
-import type { TeamAlertsConfig } from "@/lib/api";
 import { composeDocumentNumber } from "@/lib/document-numbering";
 import { resolveCreditConfig, type CreditConfigInput } from "@/lib/credits";
 import { businessTz } from "@/lib/business-tz-server";
@@ -176,10 +175,20 @@ export default async function BusinessSettingsHub({
           description="Emails, invoices, and what your customers see"
         >
           <SettingsLinkRow
-            title="Hosted pages"
-            description="What customers can do on your hosted checkout and self-serve portal, including whether they may enter a coupon code."
+            title="Checkout"
+            description="How the hosted checkout looks and what it asks a buyer. This includes consent, coupon codes and one-time purchases."
             value={b.allow_customer_coupons ? "Coupon codes accepted" : "No coupon entry"}
-            href={`${base}/hosted-pages`}
+            href={`${base}/checkout`}
+          />
+          <SettingsLinkRow
+            title="Customer portal"
+            description="What customers can do in the self-serve portal. This includes plan changes, cancelling, payment methods and portal links."
+            value={
+              b.storefront_config?.allow_cancel_subscription === true
+                ? "Customers can cancel"
+                : "Customers cannot cancel"
+            }
+            href={`${base}/portal`}
           />
           {/* 0245. Also the AVS control: requiring the postal code is what turns on ZIP
             verification, since AVS is checked gateway-side. A merchant looking for
@@ -271,14 +280,8 @@ export default async function BusinessSettingsHub({
 
         <SettingsGroup
           title="Advanced"
-          description="Team alerts, custom data, reason codes, data import and the audit log"
+          description="Custom data, reason codes, data import and the audit log"
         >
-          <SettingsLinkRow
-            title="Team alerts"
-            description="Email your team about large overdue invoices and failed webhooks, and send a daily summary."
-            value={teamAlertsSummary(b.team_alerts_config)}
-            href={`${base}/team-alerts`}
-          />
           <SettingsLinkRow
             title="Custom fields"
             description="Define typed fields on customers and subscriptions."
@@ -357,13 +360,4 @@ export default async function BusinessSettingsHub({
       </SettingsHub>
     </SettingsPage>
   );
-}
-
-/** How many team alerts are on, read off the resolved `team_alerts_config`. */
-function teamAlertsSummary(c: TeamAlertsConfig | undefined): string {
-  if (!c || c.recipients.length === 0) return "Off";
-  const on = [c.overdue.enabled, c.webhook_failures.enabled, c.daily_digest.enabled].filter(
-    Boolean,
-  ).length;
-  return on === 0 ? "Off" : `${on} of 3 on`;
 }

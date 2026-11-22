@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1621" />
+    <title>You are offline · Two Minute Billing</title>
+    <!-- The service worker shows this page when a navigation fails. Self-contained: no request
+         may leave it, because there is no network. -->
+    <style>
+      :root {
+        --background: #f2f6fb;
+        --foreground: #101828;
+        --card: #ffffff;
+        --muted-foreground: #5f6f86;
+        --border: #e2e9f2;
+        --solid: #4e4eda;
+        color-scheme: light dark;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #0a0f18;
+          --foreground: #eaf0f8;
+          --card: #0f1621;
+          --muted-foreground: #8b9bb0;
+          --border: #1e2836;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 24px 16px;
+        background: var(--background);
+        color: var(--foreground);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        width: 100%;
+        max-width: 400px;
+        padding: 32px 24px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        text-align: center;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .brand svg {
+        width: 20px;
+        height: 20px;
+      }
+      h1 {
+        margin: 24px 0 8px;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0 0 24px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--muted-foreground);
+      }
+      button {
+        height: 36px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--solid);
+        color: #ffffff;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 3px solid color-mix(in oklab, var(--solid) 50%, transparent);
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path
+            d="M0 0H64V64L53.33 52.57L42.67 64L32 52.57L21.33 64L10.67 52.57L0 64Z"
+            fill="#4E4EDA"
+          />
+        </svg>
+        Two Minute Billing
+      </div>
+      <h1>You are offline</h1>
+      <p>
+        We do not keep billing data on this device. Connect to the internet to see your businesses.
+      </p>
+      <button type="button" id="retry">Try again</button>
+    </main>
+    <script>
+      document.getElementById("retry").addEventListener("click", () => location.reload());
+    </script>
+  </body>
+</html>

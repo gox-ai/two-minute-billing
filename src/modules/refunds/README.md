@@ -39,6 +39,26 @@ their payouts through here.
 
 ## Changelog
 
+- **2026-11-18** — An operator refund of excess (`refundExcessPayment` without
+  `ownLeftoverOnly`) is capped at the payment's "Still held" (`stillHeld`, from the same
+  `excessLots` the list reads), so the screen and the API agree. Above it: "We could not refund
+  $X. You can refund up to $Y from this payment." Used up: "We could not refund this payment.
+  Invoices already used all of its excess credit." `listExcessPayments({ includeUsed })` also
+  lists used-up payments. `verify:excess-refund` § 7 checks the refusal.
+
+- **2026-11-18** — `listExcessPayments` shows what each payment STILL holds. It used to sum only
+  the payment's own rows, so an invoice draw (`credit_applied`, keyed by the invoice) never
+  reduced it: a payment whose credit two invoices had used up still listed as held in full.
+  `allocateExcess` (`excess-allocation.ts`, pure, unit-tested) takes every draw that is not a
+  payment's own row from the oldest lot first (the pool has no per-payment draw order, so
+  oldest-first is the rule; an overpayment's recorded absorb comes off its own lot). The
+  remaining amounts sum to the bucket; a payment with nothing left is not listed. Row adds
+  `remainingMinor`; `heldMinor` keeps its meaning (received less own refunds). `refundableMinor`
+  is `remainingMinor` under the operator refund's caps (`operatorRefundableExcess`, shared with
+  `refundExcessPayment`, which is unchanged). `verify:excess-refund` § 7 is the production shape
+  (one overpayment, two invoices take it all, list empty, bucket 0); the suite is now in
+  `verify:all`.
+
 - **2026-11-12** — A gateway refusal in `refundPayment` emits ONE `refund_failed` event (via
   `refundFailed`), carrying `refund.invoice`, `credit_note`, `reason` and the flat keys; the thrown
   `RefundError` is marked `eventEmitted`. The old event had no invoice, so it enriched to no
@@ -213,3 +233,4 @@ their payouts through here.
   `RefundResult.failureMessage` feeds `errorText` on the `refund_failed` path; the fallback is
   "The payment gateway refused the refund."
 - **2026-11-05 (0501)** — `refunds.on_decline` (null = the business rule): `refundPayment({ onDecline })` stores it on the reservation, and `reverseRefund` reads it before `billing_rules_config.declined_refund` (`declineOutcome`), so an async gateway decline honours the call's choice. Route field `on_decline` on `POST …/payments/:pay/refund` (revenue refunds only; held excess always returns to credit, and credit-note payouts keep their own decline handling). Gate: `verify:settings-dunning-p2` (2.15 per call).
+- **2026-11-22** — Repeat guard. `refundPayment({ guardRepeat })` (default false) throws `RefundError` code `possible_duplicate` when the payment has a `pending` or `succeeded` refund of the SAME amount from the last 10 minutes of DB time (`app_now()`). A `failed` refund never blocks. The check runs under the payment `FOR UPDATE` lock, before the reservation, so two concurrent clicks cannot both pass. `refundExcessPayment` forwards the flag. `POST …/payments/:pay/refund` takes `confirm_repeat` and answers 409 `possible_duplicate`; automated callers are unchanged. Gate: `verify:refund`.

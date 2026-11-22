@@ -162,8 +162,8 @@ function ItemRow({ biz, plan, row }: { biz: string; plan: string; row: AttachedR
   const detachable = via === "attached";
 
   return (
-    <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-      <div className="flex min-w-0 flex-col gap-1">
+    <li className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 py-3">
+      <div className="flex min-w-0 flex-[1_1_14rem] flex-col gap-1">
         <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
           <Link
             href={`/businesses/${biz}/catalog/products/${item.id}`}

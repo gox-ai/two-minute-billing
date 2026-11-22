@@ -8,7 +8,7 @@ import MkPageHero from "~/components/marketing/MkPageHero.vue";
 
 definePageMeta({ layout: "marketing", header: false, footer: false });
 
-const UPDATED = "11 November 2026";
+const UPDATED = "19 November 2026";
 
 const sections = [
   { id: "who-we-are", title: "Who we are" },
@@ -67,7 +67,10 @@ useMarketingSeo({
 
     <UContainer class="py-14 lg:py-20">
       <div class="grid gap-10 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-16">
-        <nav aria-label="On this page" class="lg:sticky lg:top-[calc(6rem+var(--mk-campaign-h))] lg:self-start">
+        <nav
+          aria-label="On this page"
+          class="lg:sticky lg:top-[calc(6rem+var(--mk-campaign-h))] lg:self-start"
+        >
           <p class="mk-label">On this page</p>
           <ol class="mt-3 grid gap-1 text-sm max-lg:grid-cols-2 max-lg:gap-x-6">
             <li v-for="s in sections" :key="s.id">
@@ -178,6 +181,22 @@ useMarketingSeo({
                 <strong>We send emails for you.</strong> Invoices, receipts and payment reminders go
                 to your customers from the Service.
               </li>
+              <li>
+                <strong>Visits to checkout and billing portal pages.</strong> When your customer
+                opens a checkout link or the billing portal, we record the type of device, the
+                browser family, the operating system family, the website that sent them, the
+                campaign tags in the link, the country, and how long each step is on screen. We do
+                not use cookies or any other identifier for this, and we do not keep the IP address
+                or the full browser details. If the browser sends a Global Privacy Control or Do Not
+                Track signal, we record nothing about that visit.
+              </li>
+              <li>
+                <strong>Email opens and clicks.</strong> If you turn on open and click tracking, we
+                add a small image to the emails we send for you, and we send each link through our
+                server. We record when an email is opened or a link is clicked, the type of device
+                and browser family, and the link. We do not keep the IP address or the recipient's
+                address with these records. You can turn this off for each business.
+              </li>
             </ul>
             <p>
               If you are a customer of a business that uses Two Minute Billing, that business
@@ -233,7 +252,8 @@ useMarketingSeo({
             </p>
             <p>
               <strong>In the Service.</strong> The dashboard uses cookies to keep you signed in and
-              to keep your account secure.
+              to keep your account secure. The checkout and billing portal pages that we host for
+              your business set no analytics cookies.
             </p>
           </section>
 
@@ -289,6 +309,10 @@ useMarketingSeo({
               <li>
                 <strong>Billy screenshots.</strong> Deleted with the conversation, and in all cases
                 after 90 days.
+              </li>
+              <li>
+                <strong>Page visits and email opens and clicks.</strong> We delete them after 13
+                months.
               </li>
             </ul>
           </section>

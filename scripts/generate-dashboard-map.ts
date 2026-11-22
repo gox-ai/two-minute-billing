@@ -360,6 +360,19 @@ const COMPUTED_LABEL = new Set([
   "LogicalExpression",
 ]);
 
+/**
+ * A computed label's values: a label map, a choice, or a variable holding one. Not a sentence
+ * fragment ("Due in ") or a colour.
+ */
+function computedLabels(v: Node | null | undefined, ctx: Ctx, variables = true): string[] {
+  const e = v?.type === "JSXExpressionContainer" ? (v.expression as Node) : v;
+  if (!e || !(COMPUTED_LABEL.has(e.type) || (variables && e.type === "Identifier"))) return [];
+  exactKeys = true;
+  const vs = labelValues(evaluate(e, ctx));
+  exactKeys = false;
+  return vs.filter((l) => !/\s[?.:,]$|^#[0-9a-f]{3,8}$/i.test(l));
+}
+
 const libBusy = new Set<string>();
 /** While reading a computed label: a map indexed by an unknown key yields nothing, not every value. */
 let exactKeys = false;
@@ -569,7 +582,10 @@ function importsOf(
  * (a guide's `within`), and a breadcrumb or page title is page chrome, never a control.
  */
 export type LabelKind = "control" | "option" | "heading" | "crumb" | "title";
-type Labelled = { group: string | null; label: string; kind: LabelKind };
+/** `field`: it labels a form field that posts a value (an element with a `name`). */
+type Labelled = { group: string | null; label: string; kind: LabelKind; field?: true };
+/** Props that name the field an element posts: a field label is a control on any screen. */
+const FIELD_LABEL_PROPS = new Set(["label", "ariaLabel", "aria-label"]);
 
 /** `Crumb[]`, optional or not: the page header's breadcrumb trail type. */
 function isCrumbs(t: Node | undefined): boolean {
@@ -818,13 +834,14 @@ function frameActions(name: string, open: Node, ctx: Ctx): string[] {
 /**
  * Visible labels in source order, each with the card it renders in. A component's labels count
  * where the page renders it (an inline editor inside "Subscription configurations" belongs to
- * that card), two imports deep. `call` is how the parent renders it: a computed action label
- * reads the props it is given (`kind="plan"` → "Create plan").
+ * that card), three imports deep: as far as the audit reads (a page → its form → the form's
+ * price fields). `call` is how the parent renders it: a computed action label reads the props it
+ * is given (`kind="plan"` → "Create plan").
  */
 export function labelsIn(
   file: string,
   inherited: string | null = null,
-  depth = 2,
+  depth = 3,
   seen: ReadonlySet<string> = new Set(),
   call?: { name: string; props: Map<string, V[]>; spread: boolean },
   only?: string[],
@@ -847,9 +864,10 @@ export function labelsIn(
     group: string | null,
     v: string | null | undefined,
     kind: LabelKind = "control",
+    field = false,
   ) => {
     const label = v ? clean(v) : "";
-    if (useful(label)) out.push({ group, label, kind });
+    if (useful(label)) out.push({ group, label, kind, ...(field ? { field: true as const } : {}) });
   };
   // Page chrome, read by type: the value of a `Crumb[]` prop, what that value is built from
   // (`crumbs`, `[...baseCrumbs, …]`, `ruleCrumbs(biz, "Pause")`), and any `Crumb[]` declaration.
@@ -911,6 +929,9 @@ export function labelsIn(
       if (card) push(group, card, "heading");
       const g = card || group;
       const trail = trailOf(name);
+      const posts = (open.attributes as Node[]).some(
+        (a) => a.type === "JSXAttribute" && (a.name as Node).name === "name" && a.value,
+      );
       // Label props count on any element (a SelectField's ariaLabel, an Input's aria-label).
       for (const a of open.attributes as Node[]) {
         if (a.type !== "JSXAttribute") continue;
@@ -928,12 +949,16 @@ export function labelsIn(
               `${relative(ROOT, file)}: ${OPTIONS_ATTR}="${src}" names no source in OPTION_SOURCES`,
             );
           for (const l of labels) push(g, l, "option");
-        } else if (LABEL_PROPS.has(key))
-          push(
-            g,
-            literal(a.value as Node),
-            CARD_TAGS.has(name) && (key === "title" || key === "heading") ? "heading" : "control",
-          );
+        } else if (LABEL_PROPS.has(key)) {
+          const kind =
+            CARD_TAGS.has(name) && (key === "title" || key === "heading") ? "heading" : "control";
+          const field = posts && FIELD_LABEL_PROPS.has(key);
+          const lit = literal(a.value as Node);
+          if (lit) push(g, lit, kind, field);
+          // A field label read through a variable or a choice (`label={amountLabel}`).
+          else if (field)
+            for (const l of computedLabels(a.value as Node, ctx)) push(g, l, kind, field);
+        }
         if (SUBMIT_PROPS.has(key) && !ACTION_FRAMES[name])
           for (const l of actionLabels(a.value as Node, ctx)) push(g, l);
       }
@@ -965,12 +990,7 @@ export function labelsIn(
       if (k && LABEL_KEYS.has(k)) {
         const lit = literal(node.value as Node);
         if (lit) push(group, lit);
-        else if (COMPUTED_LABEL.has((node.value as Node).type)) {
-          exactKeys = true;
-          const vs = labelValues(evaluate(node.value as Node, ctx));
-          exactKeys = false;
-          for (const l of vs) if (!/\s[?.:,]$|^#[0-9a-f]{3,8}$/i.test(l)) push(group, l);
-        }
+        else for (const l of computedLabels(node.value as Node, ctx, false)) push(group, l);
       }
     } else if (node.type === "CallExpression") {
       const callee = node.callee as Node;
@@ -1069,6 +1089,7 @@ export async function buildDashboardMap(): Promise<Screen[]> {
     CREATE_PAGES: Array<{ label: string; path: string; section: string }>;
   };
   const screens: Screen[] = [];
+  const fieldsOf = new Map<string, Set<string>>();
   for (const file of walk(APP).sort()) {
     const route = routeOf(file);
     // A catch-all only throws notFound(); it is not a screen.
@@ -1110,6 +1131,7 @@ export async function buildDashboardMap(): Promise<Screen[]> {
     );
     const headings = [...new Set(all.filter((l) => l.kind === "heading").map((l) => l.label))];
     const options = [...new Set(all.filter((l) => l.kind === "option").map((l) => l.label))];
+    fieldsOf.set(route, new Set(all.filter((l) => l.field).map((l) => l.label)));
     const byGroup = new Map<string | null, string[]>();
     for (const { group, label: c } of labelled) {
       const list = byGroup.get(group) ?? [];
@@ -1139,8 +1161,9 @@ export async function buildDashboardMap(): Promise<Screen[]> {
     });
   }
   // Chrome every screen shares ("Loading", "Reload", "Required") names no screen: drop a label
-  // found on more than one screen in six. Action bars and declared options are exempt: "Cancel"
-  // is common chrome and still the button a guide must name; an option is listed on purpose.
+  // found on more than one screen in six. Action bars, declared options and field labels are
+  // exempt: "Cancel" is common chrome and still the button a guide must name; an option is listed
+  // on purpose; a field that posts a value ("Currency") is a control wherever it is.
   const seen = new Map<string, number>();
   for (const s of screens) {
     const own = new Set(s.groups.filter((g) => g.title !== ACTIONS).flatMap((g) => g.controls));
@@ -1149,7 +1172,7 @@ export async function buildDashboardMap(): Promise<Screen[]> {
   const common = screens.length / 6;
   const keep = (c: string) => (seen.get(c) ?? 0) <= common;
   for (const s of screens) {
-    const opts = new Set(s.options);
+    const opts = new Set([...(s.options ?? []), ...(fieldsOf.get(s.route) ?? [])]);
     const kept = (c: string) => keep(c) || opts.has(c);
     s.groups = s.groups
       .map((g) => ({

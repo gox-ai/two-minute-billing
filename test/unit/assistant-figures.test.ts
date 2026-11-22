@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { checkFigures } from "@/modules/assistant/figures";
+import {
+  checkFigures,
+  recordPaths,
+  recordRoutes,
+  unprefixedRecordLinks,
+} from "@/modules/assistant/figures";
 
 const tool = {
   result: {
@@ -95,5 +100,41 @@ describe("checkFigures", () => {
     const list = { data: Array.from({ length: 42 }, () => ({ total_minor: 1000 })) };
     expect(checkFigures("You have 42 unpaid invoices.", [list]).unverified).toEqual([]);
     expect(checkFigures("You have 45 unpaid invoices.", [list]).unverified).toEqual(["45"]);
+  });
+});
+
+describe("links for an imported id with no prefix", () => {
+  const results = [
+    {
+      customer: { object: "customer", id: "Qx7LmN2pRt4VwY9Za", first_name: "Ilse" },
+      recent_invoices: {
+        data: [{ object: "invoice", id: "Wm4Ra9Tc2Lx8", customer: "Qx7LmN2pRt4VwY9Za" }],
+      },
+    },
+  ];
+  it("routes a record by the object it came in", () => {
+    const routes = recordRoutes(results);
+    expect(routes.get("Qx7LmN2pRt4VwY9Za")).toBe("customers");
+    expect(routes.get("Wm4Ra9Tc2Lx8")).toBe("invoices");
+    expect(recordPaths("biz_1", ["Qx7LmN2pRt4VwY9Za", "inv_9", "zz"], routes)).toEqual([
+      "/businesses/biz_1/customers/Qx7LmN2pRt4VwY9Za",
+      "/businesses/biz_1/invoices/inv_9",
+    ]);
+  });
+  it("lets the answer link the imported record's page", () => {
+    const routes = recordRoutes(results);
+    const answer =
+      "See [the customer](/businesses/biz_1/customers/Qx7LmN2pRt4VwY9Za) and Wm4Ra9Tc2Lx8.";
+    const evidence = [...results, { links: recordPaths("biz_1", routes.keys(), routes) }];
+    expect(checkFigures(answer, evidence).unverified_links).toEqual([]);
+    expect(unprefixedRecordLinks(answer, routes)).toEqual({
+      Qx7LmN2pRt4VwY9Za: "customers",
+      Wm4Ra9Tc2Lx8: "invoices",
+    });
+  });
+  it("names no link for an id inside a longer word", () => {
+    expect(
+      unprefixedRecordLinks("ref xWm4Ra9Tc2Lx8y", new Map([["Wm4Ra9Tc2Lx8", "invoices"]])),
+    ).toEqual({});
   });
 });

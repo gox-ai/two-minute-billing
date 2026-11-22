@@ -14,12 +14,7 @@ import {
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
 import { useDefaultState } from "@/lib/use-default-state";
 import { cn } from "@/lib/utils";
-import {
-  PaymentDialog,
-  PaymentDialogFooter,
-  PaymentPrivacyNote,
-  RefusalAlert,
-} from "./payment-dialog";
+import { SdkFrame, PaymentDialogFooter, PaymentPrivacyNote, RefusalAlert } from "./payment-dialog";
 import { sdkAmountLabel } from "./storefront-text";
 
 /**
@@ -97,12 +92,14 @@ type Extra = "apple_pay" | "google_pay" | "cash_app_pay" | "afterpay" | "ach";
 
 function SquarePaymentsDialog({
   open,
+  inline,
   params,
   context,
   amountLabel,
   onSettle,
 }: {
   open: boolean;
+  inline: boolean;
   params: Params;
   context: GatewaySdkContext;
   amountLabel: string | null;
@@ -278,14 +275,16 @@ function SquarePaymentsDialog({
   const confirmLabel = (context as GatewaySdkContext & { confirmLabel?: string }).confirmLabel;
 
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={purpose === "setup" ? "Add a card" : "Pay"}
       description={
         purpose === "setup"
           ? "Enter your card details. We check the card before we save it."
-          : `Select how to pay${amountLabel ? ` ${amountLabel}` : ""}.`
+          : // In a list row the row already says how; only the card fields show there.
+            `${inline ? "Enter your card details to pay" : "Select how to pay"}${amountLabel ? ` ${amountLabel}` : ""}.`
       }
     >
       {/* One primary: the card, committed from the footer. A wallet is a one-tap shortcut
@@ -328,7 +327,7 @@ function SquarePaymentsDialog({
         ) : null}
         <div ref={cardEl} className="min-h-24" />
         <PaymentPrivacyNote business={context.businessName} />
-        <RefusalAlert message={errorAtBank && bankOpen ? null : error} />
+        <RefusalAlert message={errorAtBank && bankOpen ? null : error} gateway="square" />
         {offered.includes("ach") ? (
           bankOpen ? (
             <div className="flex flex-col gap-2 border-t pt-3">
@@ -369,7 +368,7 @@ function SquarePaymentsDialog({
               >
                 Continue to your bank
               </Button>
-              <RefusalAlert message={errorAtBank ? error : null} />
+              <RefusalAlert message={errorAtBank ? error : null} gateway="square" step="bank" />
             </div>
           ) : (
             <Button
@@ -385,9 +384,11 @@ function SquarePaymentsDialog({
         ) : null}
       </div>
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
+            Cancel
+          </Button>
+        )}
         <Button
           onClick={() => {
             const c = card.current;
@@ -401,7 +402,7 @@ function SquarePaymentsDialog({
               (purpose === "setup" ? "Save card" : amountLabel ? `Pay ${amountLabel}` : "Pay"))}
         </Button>
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -429,14 +430,16 @@ export function openSquarePayments(
     });
   const amountLabel = sdkAmountLabel(params.amount, params.currency);
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
     const render = (open: boolean) =>
       root.render(
         <SquarePaymentsDialog
           open={open}
+          inline={inline}
           params={params}
           context={context}
           amountLabel={amountLabel}
@@ -450,7 +453,7 @@ export function openSquarePayments(
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
     render(true);

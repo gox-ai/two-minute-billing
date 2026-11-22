@@ -11,7 +11,7 @@ and money ops beyond CRUD (promotional credits, excess payments, ad-hoc collect,
 ## Responsibilities
 - Customer + contact CRUD; per-customer overrides (auto_collection, net_term_days, invoice_notes).
 - Three derived balances: **promotional** (pre-tax), **refundable**, **excess payment** — read via
-  `getCustomerBalances`; mutated via promotional-credit and excess-payment ops (ledger-backed).
+  `getCustomerBalances` (every currency the customer ever held credit in, zeros included); mutated via promotional-credit and excess-payment ops (ledger-backed).
 - VAT status validation (pluggable), calendar billing-date, GDPR personal-data clear.
 - Ad-hoc `collectPayment` (apply excess/refundable first, charge remainder, oldest-due-first).
 - `planCreditApplication` — the pre-tax/post-tax balance application order consumed by invoicing.
@@ -61,6 +61,37 @@ stored columns.
 - Multi-currency collect is limited to the primary due currency (collect body has no currency field — nit).
 
 ## Changelog
+- **2026-11-22** — Detail route returns `created_through`.
+- **2026-11-20 (feat/detail-revenue-metrics)** — Customer detail adds `revenue_billed[]`: lifetime
+  net billed revenue per currency, before tax and less credit notes, from
+  `metrics/record-revenue.ts`. `lifetime_revenue[]` stays cash collected net of refunds. The
+  customer page shows Revenue with Cash collected beneath it. Gate: `verify:metric-revenue-net`.
+- **2026-11-20 (fix/reports-model-gaps)** — The customer list filters by `days_since_last_usage` and
+  `credit_runway_days` (group "Usage and credit"); the report links used them but the list had no
+  field, so it opened unfiltered. `verify:customers` D12.
+- **2026-11-20 (fix/reports-model-gaps)** — `credit_runway_days` counts a credit unit with no
+  money rate in its own units: one pool per currency for rated credit, one per rateless unit, and
+  the field is the pool that runs out first (`metrics/daily/credit-runway.ts`, shared with
+  `credit_runway_customers`). Before, such a unit (face value 0) read as no credit. `credit_balance`
+  stays face value.
+- **2026-11-18 (feat/customer-zero-balances)** — `balances[]` on `GET …/customers/:cus` and in
+  event content lists every currency the customer has a ledger row in, in any of the three
+  buckets, with 0 where a balance is used up; a currency never used is still absent. Sorted by
+  currency code. One fold (`foldBucketBalances` / `readBucketBalances`) now serves the API read
+  and the event snapshot, which each had a copy. Additive: same keys and shapes. The customer
+  page's balances panel hides all-zero rows, so it renders as before.
+- **2026-11-18** — `GET …/excess_payments?include_used=true` also lists payments whose excess
+  invoices used up (`remaining_minor` 0): the history Billy reads.
+- **2026-11-18** — `GET …/customers/:cus/excess_payments` adds `remaining_minor`: what is still on
+  the excess balance from each payment after invoices used credit, oldest payment first. The
+  values sum to the excess balance, and a payment with nothing left is no longer listed.
+  `held_minor` is unchanged (received less own refunds) because API callers may read it. The
+  customer page's "Held as excess credit" list shows "Excess received" and "Still held".
+- **2026-11-17** — The customer page's History card has a Payment intents tab (after
+  Transactions): `listPaymentIntents({ customer })`, paged through `/api/lists/payment_intents`.
+  Open intents write no transaction, so this is where a buyer stuck on a payment page shows.
+- **2026-11-17** — `ShippingAddressError.payerMessage`: the portal's archive refusal says "a live
+  subscription ships to it" with no subscription id; operators keep the id in `message`.
 - **2026-11-03** — `collectPayment` settles open invoices in `payment_application.invoice_order` (2.66): oldest due first (unset: the same ORDER BY as before) or newest first (ties: creation, then id, descending).
 - **2026-11-03** — `billing_cc_emails` / `billing_bcc_emails` (≤ 10 each; 0486) on create/update/read.
 

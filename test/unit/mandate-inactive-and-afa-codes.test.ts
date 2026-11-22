@@ -218,9 +218,23 @@ describe("e-mandate codes: the additions are the ones intended", () => {
   it("exactly one decline_code rule exists, and it is this one", () => {
     // A second one would need the same precedence argument made again; make adding it
     // deliberate rather than incidental.
-    const byDeclineCode = ALL_DECLINE_RULES.filter((r) => r.field === "decline_code");
+    // PayPal's `processor_response.response_code` rules read the same field on another
+    // gateway, after the issue code; they do not compete with these.
+    const byDeclineCode = ALL_DECLINE_RULES.filter(
+      (r) => r.field === "decline_code" && !r.id.startsWith("paypal.processor."),
+    );
     expect(byDeclineCode.map((r) => r.id)).toEqual([
       "stripe.decline_code.transaction_not_approved",
+      // Hard on Stripe (2026-11-17): a restricted card never paid on a later try.
+      "stripe.decline_code.restricted_card",
+      // Hard on Stripe (2026-11-18 decline audit): only another card pays.
+      "stripe.decline_code.invalid_account",
+      "stripe.decline_code.new_account_information_available",
+      "stripe.decline_code.card_not_supported",
+      "stripe.decline_code.currency_not_supported",
+      "stripe.decline_code.recurring_not_supported_by_bank",
+      "stripe.decline_code.invalid_payment_information",
+      "stripe.decline_code.compliance_violation",
     ]);
   });
 

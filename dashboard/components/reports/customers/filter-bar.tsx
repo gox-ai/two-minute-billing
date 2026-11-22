@@ -99,6 +99,8 @@ export function SegmentFilterBar({
   filters,
   customers,
   mrrByCurrency,
+  revenueBilledByCurrency,
+  showMrr,
   currency,
   canSave,
 }: {
@@ -109,6 +111,10 @@ export function SegmentFilterBar({
   filters: SegmentFilter[];
   customers: number | null;
   mrrByCurrency: Record<string, number>;
+  /** Revenue billed in the last 12 months, every type. */
+  revenueBilledByCurrency: Record<string, number>;
+  /** MRR shows only for a business that has subscriptions. */
+  showMrr: boolean;
   /** The business's own currency — what a single-currency figure is printed in. */
   currency: string;
   /** False for an empty predicate: "all customers" is not a segment worth saving. */
@@ -135,18 +141,14 @@ export function SegmentFilterBar({
   const remove = (i: number) => apply(filters.filter((_, n) => n !== i));
   const mrrCurrency = mrrComparisonCurrency(filters, currency);
 
-  const currencies = Object.keys(mrrByCurrency);
-  const summary =
-    currencies.length === 0
-      ? money(0, currency)
-      : currencies.length === 1
-        ? money(mrrByCurrency[currencies[0]!]!, currencies[0]!)
-        : // Never one number over several currencies. Each is printed on its own, because
-          // adding minor units of different currencies produces a figure of nothing.
-          currencies
-            .sort()
-            .map((c) => money(mrrByCurrency[c]!, c))
-            .join(" · ");
+  // Never one number over several currencies. Each is printed on its own, because
+  // adding minor units of different currencies produces a figure of nothing.
+  const perCurrency = (by: Record<string, number>) => {
+    const codes = Object.keys(by).sort();
+    return codes.length === 0 ? money(0, currency) : codes.map((c) => money(by[c]!, c)).join(" · ");
+  };
+  const summary = perCurrency(mrrByCurrency);
+  const revenueSummary = perCurrency(revenueBilledByCurrency);
 
   return (
     <>
@@ -169,9 +171,17 @@ export function SegmentFilterBar({
                 {(customers ?? 0).toLocaleString("en")}
               </span>
             </div>
+            {showMrr ? (
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <span className={KPI_LABEL}>MRR</span>
+                <span className="text-2xl font-semibold wrap-anywhere tabular-nums">{summary}</span>
+              </div>
+            ) : null}
             <div className="flex min-w-0 flex-col gap-1.5">
-              <span className={KPI_LABEL}>MRR</span>
-              <span className="text-2xl font-semibold wrap-anywhere tabular-nums">{summary}</span>
+              <span className={KPI_LABEL}>Revenue billed, 12 months</span>
+              <span className="text-2xl font-semibold wrap-anywhere tabular-nums">
+                {revenueSummary}
+              </span>
             </div>
           </div>
         </div>

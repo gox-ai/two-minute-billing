@@ -10,11 +10,13 @@ import {
   RotateCcw,
   ScrollText,
   Settings,
+  ShoppingBag,
   TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
 import type { PermissionKey } from "@/lib/permissions.generated";
+import { hasModel, type BillingModelId } from "@/lib/billing-models";
 
 /**
  * THE BUSINESS-SCOPED NAV, IN ONE PLACE, because it now has two consumers.
@@ -93,10 +95,16 @@ export function businessNavEntries({
   perms,
   testMode,
   counts,
+  models,
 }: {
   biz: string;
   perms: BizNavPerms;
   testMode: boolean;
+  /**
+   * The billing models the business has. A report for a model it lacks is hidden; its URL
+   * still opens. Omit when unknown: everything shows.
+   */
+  models?: readonly BillingModelId[] | null;
   /**
    * Live counts for the work surfaces. Omit a key to render no badge — the layout soft-fails
    * these, and "we could not count" must not display as zero.
@@ -129,17 +137,29 @@ export function businessNavEntries({
         { href: `${base}/reports/stats`, label: "Stats", show: true },
         { href: `${base}/reports/explore`, label: "Explore", show: true },
         { href: `${base}/reports/customers`, label: "Customers", show: true },
-        { href: `${base}/reports/cancellations`, label: "Cancellations", show: true },
+        {
+          href: `${base}/reports/cancellations`,
+          label: "Cancellations",
+          show: hasModel(models, "subscriptions"),
+        },
         { href: `${base}/reports/recovery`, label: "Recovery", show: true },
+        { href: `${base}/reports/checkout`, label: "Checkout", show: true },
+        { href: `${base}/reports/portal`, label: "Portal", show: true },
+        { href: `${base}/reports/emails`, label: "Emails", show: true },
         {
           href: `${base}/reports/usage-margin`,
-          label: "Usage margin",
-          show: sees(perms, "usage_margin:view", "manager"),
+          label: "Usage",
+          show: sees(perms, "usage_margin:view", "manager") && hasModel(models, "usage"),
         },
         {
           href: `${base}/reports/credits`,
           label: "Credits",
-          show: sees(perms, "credits:view", "manager"),
+          show: sees(perms, "credits:view", "manager") && hasModel(models, "credits"),
+        },
+        {
+          href: `${base}/reports/sales`,
+          label: "Sales",
+          show: hasModel(models, "one_time"),
         },
       ],
     },
@@ -155,6 +175,14 @@ export function businessNavEntries({
       label: "Subscriptions",
       icon: CreditCard,
       show: sees(perms, "subscriptions:view", "manager"),
+      section: "billing",
+    },
+    // Every business sees it, whatever its billing models: the sidebar stays complete.
+    {
+      href: `${base}/orders`,
+      label: "Orders",
+      icon: ShoppingBag,
+      show: sees(perms, "invoices:view", "ops"),
       section: "billing",
     },
     {

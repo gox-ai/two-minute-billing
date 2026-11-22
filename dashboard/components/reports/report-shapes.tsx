@@ -121,6 +121,12 @@ export function CohortGrid({
   currency: string;
 }) {
   const { sort, onSort } = useSort();
+  // Money cells (revenue per buyer) are minor units, shaded against the largest cell: they
+  // have no 100% to measure against.
+  const moneyCells = matrix.value_kind === "money";
+  const maxCell = moneyCells
+    ? Math.max(0, ...matrix.rows.flatMap((r) => r.values.map((v) => v ?? 0)))
+    : 0;
 
   // Fixed ladder rather than an interpolated alpha: an arbitrary `bg-primary/[37%]` is a
   // value Tailwind has to generate per cell, and six steps read as six steps.
@@ -210,14 +216,101 @@ export function CohortGrid({
                 title={
                   v == null
                     ? "Not measured. This month has not started."
-                    : `${(v / 100).toFixed(1)}%`
+                    : moneyCells
+                      ? money(v, currency)
+                      : `${(v / 100).toFixed(1)}%`
                 }
                 className={
                   "px-2 text-right tabular-nums " +
-                  (v == null ? "text-muted-foreground/60" : shade(v))
+                  (v == null
+                    ? "text-muted-foreground/60"
+                    : shade(moneyCells ? (maxCell > 0 ? (v / maxCell) * 10000 : 0) : v))
                 }
               >
-                {v == null ? "—" : `${(v / 100).toFixed(0)}%`}
+                {v == null
+                  ? "—"
+                  : moneyCells
+                    ? moneyCompact(v, currency)
+                    : `${(v / 100).toFixed(0)}%`}
+              </TableCell>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+/**
+ * A ranked table with several columns per row (top usage consumers, commitment pacing).
+ * Each column states what its cells hold, so this renders any such report. The row's name
+ * links to its customer when the engine gave one.
+ */
+export function ReportGrid({
+  grid,
+  currency,
+  biz,
+  groupLabel = "Customer",
+}: {
+  grid: NonNullable<ReportPayload["grid"]>;
+  currency: string;
+  biz: string;
+  groupLabel?: string;
+}) {
+  const { sort, onSort } = useSort();
+  const cell = (v: number | string | null, kind: (typeof grid.columns)[number]["kind"]) => {
+    if (v == null || v === "") return "—";
+    if (kind === "text") return String(v);
+    const n = Number(v);
+    if (kind === "money") return money(n, currency);
+    if (kind === "rate") return `${(n / 100).toFixed(1)}%`;
+    return n.toLocaleString("en", { maximumFractionDigits: 4 });
+  };
+  const ordered = sorted(grid.rows, sort, (r) => {
+    if (sort?.col === "group") return r.group;
+    const i = grid.columns.findIndex((c) => c.key === sort?.col);
+    const v = i < 0 ? null : (r.values[i] ?? null);
+    return v == null ? null : typeof v === "number" ? v : String(v);
+  });
+  return (
+    <Table phone="stack" fit>
+      <TableHeader>
+        <TableRow>
+          <SortHead col="group" sort={sort} onSort={onSort} className="whitespace-nowrap">
+            {groupLabel}
+          </SortHead>
+          {grid.columns.map((c) => (
+            <SortHead
+              key={c.key}
+              col={c.key}
+              sort={sort}
+              onSort={onSort}
+              align={c.kind === "text" ? "left" : "right"}
+              className={c.kind === "text" ? "whitespace-nowrap" : "text-right whitespace-nowrap"}
+            >
+              {c.label}
+            </SortHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {ordered.map((r, n) => (
+          <TableRow key={`${r.group_id ?? r.group}-${n}`}>
+            <TableCell className="whitespace-nowrap">
+              {r.group_id ? (
+                <Link
+                  href={`/businesses/${biz}/customers/${r.group_id}`}
+                  className="text-primary hover:underline"
+                >
+                  {r.group}
+                </Link>
+              ) : (
+                r.group
+              )}
+            </TableCell>
+            {grid.columns.map((c, i) => (
+              <TableCell key={c.key} className={c.kind === "text" ? "" : "text-right tabular-nums"}>
+                {cell(r.values[i] ?? null, c.kind)}
               </TableCell>
             ))}
           </TableRow>

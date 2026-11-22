@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { ASSISTANT_NAME } from "@/lib/assistant";
 import { SEGMENT_TRACK, segmentItem } from "@/components/ui/segmented";
 
-export type OrgSettingsPageKey = "general" | "legal" | "reporting" | "security";
+export type OrgSettingsPageKey = "general" | "legal" | "reporting" | "security" | "notifications";
 
 interface NavItem {
   key: string;
@@ -24,8 +24,11 @@ interface NavItem {
 export function OrgSettingsNav({
   active,
   billing,
+  teamNotifications = false,
 }: {
   active: OrgSettingsPageKey;
+  /** Owners and admins: the Team notifications page. */
+  teamNotifications?: boolean;
   /** Shown when the edition bills organizations; `note` reads the live access state. */
   billing: { note?: string } | null;
 }) {
@@ -37,6 +40,9 @@ export function OrgSettingsNav({
         { key: "legal", label: "Legal entity", href: "/settings/legal" },
         { key: "reporting", label: "Reporting", href: "/settings/reporting" },
         { key: "security", label: "Security", href: "/settings/security" },
+        ...(teamNotifications
+          ? [{ key: "notifications", label: "Team notifications", href: "/settings/notifications" }]
+          : []),
       ],
     },
     {

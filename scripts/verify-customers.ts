@@ -35,6 +35,7 @@ import {
   listPaymentMethods,
 } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
+import { createPromotionalGrant, recordGrantMovement } from "@/modules/credits/service";
 import { createSubscription } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod, createInvoiceFromLines } from "@/modules/invoicing/service";
 import { collectPayment } from "@/modules/customers/collect";
@@ -55,6 +56,7 @@ import {
   paymentMethods,
   subscriptions,
   customers,
+  meters,
   transactions,
 } from "@db/schema";
 import { buildApp } from "@/index";
@@ -1764,6 +1766,186 @@ async function bill(
     usdOk.statusCode === 201,
   );
   await app.close();
+}
+
+// ── D11: balances[] lists a used-up currency at 0; a currency never used is absent ──
+{
+  const b = await createBusiness({
+    organizationId: orgId,
+    name: "D11 zero balances",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  const c = await createCustomer({
+    organizationId: orgId,
+    businessId: b.id,
+    email: "d11@a.com",
+    autoCollection: "off",
+  });
+  await recordExcessPayment({
+    organizationId: orgId,
+    businessId: b.id,
+    customer: c,
+    amountMinor: 569900,
+    currency: "INR",
+  });
+  const { invoice } = await createInvoiceFromLines({
+    organizationId: orgId,
+    businessId: b.id,
+    customerId: c.id,
+    currency: "INR",
+    lines: [{ description: "uses all the excess", amountMinor: 600000n }],
+    applyCredit: true,
+  });
+  ok(
+    "D11: the INR invoice used all the excess credit",
+    invoice.excessPaymentsAppliedMinor === 569900n &&
+      (await bucketBalancesForCurrency(orgId, c.id, "INR")).excess === 0n,
+  );
+
+  const app = await buildApp({ logger: false });
+  const res = await app.inject({
+    method: "GET",
+    url: `/v1/businesses/${b.publicId}/customers/${c.publicId}`,
+    headers: { authorization: `Bearer ${org.secret}` },
+  });
+  await app.close();
+  const body = res.json() as { balances?: Array<Record<string, unknown>> };
+  ok(
+    "D11: GET customer lists INR with zeros after its excess was fully applied",
+    res.statusCode === 200 &&
+      JSON.stringify(body.balances) ===
+        JSON.stringify([
+          {
+            currency_code: "INR",
+            promotional_credits: 0,
+            refundable_credits: 0,
+            excess_payments: 0,
+          },
+        ]),
+  );
+  ok(
+    "D11: GET customer does not list USD, the business currency the customer never used",
+    !body.balances?.some((x) => x.currency_code === "USD"),
+  );
+
+  const { loadCustomerSnapshot } = await import("@/modules/customers/serialize");
+  const snap = (await withTenant(orgId, (tx) => loadCustomerSnapshot(tx, c.publicId, b.id))) as {
+    balances?: unknown;
+  } | null;
+  ok(
+    "D11: the event snapshot lists the same balances as GET",
+    JSON.stringify(snap?.balances) === JSON.stringify(body.balances),
+  );
+
+  const fresh = await createCustomer({
+    organizationId: orgId,
+    businessId: b.id,
+    email: "d11-none@a.com",
+  });
+  ok(
+    "D11: a customer that never held credit lists no currency",
+    Object.keys(await getCustomerBalances(orgId, fresh.id)).length === 0,
+  );
+}
+
+// ── D12: usage and credit-runway filters (the report links open these) ──────────────
+{
+  const b = await createBusiness({
+    organizationId: orgId,
+    name: "D12 usage and runway filters",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  const mk = (k: string) =>
+    createCustomer({ organizationId: orgId, businessId: b.id, email: `d12-${k}@a.com` });
+  const [ca, cb, cc] = [await mk("a"), await mk("b"), await mk("c")];
+  const [meter] = await withTenant(orgId, (tx) =>
+    tx
+      .insert(meters)
+      .values({
+        organizationId: orgId,
+        businessId: b.id,
+        key: "d12-tokens",
+        name: "Tokens",
+        eventName: "tokens",
+        aggregation: "count",
+      })
+      .returning({ id: meters.id }),
+  );
+  const usedAgo = (customerId: string, days: number) =>
+    withTenant(orgId, (tx) =>
+      tx.execute(sql`insert into usage_rollups
+        (organization_id, business_id, customer_id, meter_id, bucket_start, generation, event_count, value_sum)
+        values (${orgId}, ${b.id}, ${customerId}, ${meter!.id}, now() - make_interval(days => ${days}), 0, 1, 1)`),
+    );
+  await usedAgo(ca.id, 40);
+  await usedAgo(cb.id, 10);
+  const credit = async (c: typeof ca, amount: bigint, draw: bigint) => {
+    const g = await createPromotionalGrant({
+      organizationId: orgId,
+      businessId: b.id,
+      customerPublicId: c.publicId,
+      currency: "USD",
+      amount,
+    });
+    if (draw > 0n)
+      await withTenant(orgId, async (tx) => {
+        const [inv] = await tx
+          .insert(invoices)
+          .values({
+            organizationId: orgId,
+            businessId: b.id,
+            customerId: c.id,
+            publicId: `inv_d12_${c.publicId}`,
+            status: "paid",
+            currency: "USD",
+            subtotalMinor: draw,
+            totalMinor: 0n,
+          })
+          .returning({ id: invoices.id });
+        await recordGrantMovement(tx, {
+          grant: g,
+          kind: "draw",
+          units: -draw,
+          faceMinor: -draw,
+          invoiceId: inv!.id,
+        });
+      });
+  };
+  await credit(ca, 7000n, 1000n); // 6000 left, 1000 a week: 42 days
+  await credit(cb, 1000n, 500n); // 500 left, 500 a week: 7 days
+  await credit(cc, 10000n, 0n); // no use: no runway
+  const emails = async (field: string, ...f: Array<[string, string]>) =>
+    (
+      await listCustomersPage(orgId, b.id, {
+        limit: 100,
+        filters: f.map(([op, value]) => ({ field, op, value })),
+      })
+    ).data
+      .map((c) => c.email)
+      .sort()
+      .join(",");
+  ok(
+    "D12: days_since_last_usage gte 30 lists only the customer who stopped",
+    (await emails("days_since_last_usage", ["gte", "30"])) === "d12-a@a.com",
+  );
+  ok(
+    "D12: days_since_last_usage gte 5 lists both with usage, not the one who never sent any",
+    (await emails("days_since_last_usage", ["gte", "5"])) === "d12-a@a.com,d12-b@a.com",
+  );
+  ok(
+    "D12: credit_runway_days lte 7 lists the 7-day runway only",
+    (await emails("credit_runway_days", ["lte", "7"])) === "d12-b@a.com",
+  );
+  ok(
+    "D12: credit_runway_days gt 7 and lte 90 lists the 42-day runway only",
+    (await emails("credit_runway_days", ["gt", "7"], ["lte", "90"])) === "d12-a@a.com",
+  );
+  ok(
+    "D12: credit_runway_days gt 90 lists nobody (no use gives no runway)",
+    (await emails("credit_runway_days", ["gt", "90"])) === "",
+  );
 }
 
 let pass = true;

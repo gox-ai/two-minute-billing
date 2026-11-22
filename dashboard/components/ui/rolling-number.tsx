@@ -53,14 +53,16 @@ function Digit({ part }: { part: Extract<RollPart, { kind: "digit" }> }) {
   return (
     <span className="roll-digit">
       <span className="roll-ghost">{part.to}</span>
-      <span
-        className="roll-column"
-        data-roll={part.from !== part.to ? "" : undefined}
-        style={style}
-      >
-        {COLUMN.map((d) => (
-          <span key={d}>{d}</span>
-        ))}
+      <span className="roll-window">
+        <span
+          className="roll-column"
+          data-roll={part.from !== part.to ? "" : undefined}
+          style={style}
+        >
+          {COLUMN.map((d) => (
+            <span key={d}>{d}</span>
+          ))}
+        </span>
       </span>
     </span>
   );

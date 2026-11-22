@@ -23,6 +23,9 @@ const READING: Record<string, string> = {
   gateway_account_unavailable: "No gateway account is available for this payment.",
   no_payment_method: "The customer has no payment method.",
   card_limit_exceeded: "The amount is more than the card limit of the business.",
+  card_restricted: "The card cannot be used for this payment.",
+  setup_failed: "The gateway refused to save the payment method.",
+  authorization_failed: "The gateway refused the authorization.",
 };
 
 const plain = (s: string) =>

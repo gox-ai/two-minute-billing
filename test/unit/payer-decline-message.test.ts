@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  payerNeedsNewMethod,
   payerDeclineMessage,
   payerRefusal,
   declineHiddenFromPayer,
@@ -24,10 +25,12 @@ describe("payerDeclineMessage follows the business's Tell-the-customer override"
     expect(payerDeclineMessage({ code: OURS, message: "raw request error" }, FALLBACK)).toBe(
       PAYER_SAFE_INTERNAL_FAILURE,
     );
+    // The gateway's own words never reach the payer: our sentence for the code does.
+    const ours = payerDeclineMessage({ code: THEIRS }, FALLBACK);
+    expect(ours).toMatch(/^Your bank declined the payment because/);
     expect(payerDeclineMessage({ code: THEIRS, message: "Insufficient funds." }, FALLBACK)).toBe(
-      "Insufficient funds.",
+      ours,
     );
-    expect(payerDeclineMessage({ code: THEIRS }, FALLBACK)).toBe(FALLBACK);
   });
 
   it("override hide → show reveals the message", () => {
@@ -123,5 +126,26 @@ describe("payerRefusal gives a present buyer one opening and one next step", () 
     expect(payerRefusal(LEAD, "The card has expired. Contact your bank.")).toBe(
       `${LEAD} The card has expired. Contact your bank. We did not charge you.`,
     );
+  });
+});
+
+describe("payerNeedsNewMethod", () => {
+  it("leads with a new method only when the same one cannot succeed", () => {
+    for (const c of [
+      "expired_card",
+      "lost_card",
+      "STOLEN_CARD",
+      "mandate_expired",
+      "bank_account_closed",
+    ])
+      expect(payerNeedsNewMethod(c)).toBe(true);
+    for (const c of [
+      "insufficient_funds",
+      "authentication_required",
+      "incorrect_cvc",
+      "processing_error",
+      null,
+    ])
+      expect(payerNeedsNewMethod(c)).toBe(false);
   });
 });

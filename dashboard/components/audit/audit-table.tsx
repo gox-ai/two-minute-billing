@@ -30,6 +30,11 @@ const SOURCE_TONE: Record<string, React.ComponentProps<typeof Chip>["tone"]> = {
   dashboard: "blue",
   checkout: "blue",
   portal: "blue",
+  assistant: "blue",
+  mcp: "blue",
+  // A gateway or another system told us: no one at our end acted.
+  webhook: "tan",
+  hubspot: "tan",
   billing_clock: "tan",
   migration: "green",
   // `system` — a seed or a verify run, nothing to act on, so the default tone.

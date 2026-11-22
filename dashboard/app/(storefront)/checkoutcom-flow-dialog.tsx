@@ -5,12 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { checkoutcomFailure, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import {
-  PaymentDialog,
-  PaymentDialogFooter,
-  PaymentPrivacyNote,
-  RefusalAlert,
-} from "./payment-dialog";
+import { SdkFrame, PaymentDialogFooter, PaymentPrivacyNote, RefusalAlert } from "./payment-dialog";
 import { sdkAmountLabel } from "./storefront-text";
 
 /**
@@ -24,6 +19,9 @@ const FLOW_SRC = "https://checkout-web-components.checkout.com/index.js";
 interface FlowComponent {
   mount(el: HTMLElement): void;
   unmount?(): void;
+  /** With `showPayButton: false`: our own button submits. */
+  submit?(): void;
+  isValid?(): boolean;
 }
 interface FlowCheckout {
   create(name: "flow", options?: Record<string, unknown>): FlowComponent;
@@ -53,6 +51,7 @@ function loadFlow(): Promise<void> {
 
 function CheckoutcomFlowDialog({
   open,
+  inline,
   params,
   purpose,
   amountLabel,
@@ -60,6 +59,7 @@ function CheckoutcomFlowDialog({
   onSettle,
 }: {
   open: boolean;
+  inline: boolean;
   businessName: string;
   params: { publicKey: string; environment: string; paymentSession: Record<string, unknown> };
   purpose: GatewaySdkContext["purpose"];
@@ -69,6 +69,9 @@ function CheckoutcomFlowDialog({
   const container = React.useRef<HTMLDivElement>(null);
   const [error, setError] = React.useState<string | null>(null);
   const setup = purpose === "setup";
+  // Add card: Flow's own button says "Pay", so ours ("Save card") submits instead.
+  const flow = React.useRef<FlowComponent | null>(null);
+  const [ready, setReady] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
@@ -104,8 +107,10 @@ function CheckoutcomFlowDialog({
           },
         });
         if (cancelled || !container.current) return;
-        component = checkout.create("flow");
+        component = checkout.create("flow", setup ? { showPayButton: false } : {});
         component.mount(container.current);
+        flow.current = component;
+        setReady(true);
       } catch (e) {
         if (!cancelled)
           setError(
@@ -118,11 +123,14 @@ function CheckoutcomFlowDialog({
     return () => {
       cancelled = true;
       component?.unmount?.();
+      flow.current = null;
+      setReady(false);
     };
   }, [open, params, onSettle, setup, purpose]);
 
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={setup ? "Add a card" : "Pay"}
@@ -134,13 +142,32 @@ function CheckoutcomFlowDialog({
     >
       <div ref={container} className="min-h-40" />
       <PaymentPrivacyNote business={businessName} instrument={setup ? "card" : "other"} />
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} gateway="checkoutcom" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
+            Cancel
+          </Button>
+        )}
+        {setup ? (
+          <Button
+            disabled={!ready}
+            onClick={() => {
+              const c = flow.current;
+              if (!c?.submit) return;
+              if (c.isValid && !c.isValid()) {
+                setError("We could not save your card. Correct the card details. Then try again.");
+                return;
+              }
+              setError(null);
+              c.submit();
+            }}
+          >
+            Save card
+          </Button>
+        ) : null}
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -163,14 +190,16 @@ export function openCheckoutcomFlow(
   const amountLabel = sdkAmountLabel(params.amount, params.currency);
   const flowParams = { publicKey, environment, paymentSession };
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
     const render = (open: boolean) =>
       root.render(
         <CheckoutcomFlowDialog
           open={open}
+          inline={inline}
           params={flowParams}
           purpose={context.purpose}
           amountLabel={amountLabel}
@@ -185,7 +214,7 @@ export function openCheckoutcomFlow(
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
     render(true);

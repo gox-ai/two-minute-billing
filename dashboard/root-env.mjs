@@ -21,6 +21,7 @@ export const ROOT_ENV_KEYS = Object.freeze([
   "TMBILLING_API_URL",
   "TMBILLING_PUBLIC_API_URL",
   "ADVERTISED_API_URL",
+  "GATEWAY_WEBHOOK_BASE_URL",
   "TMBILLING_EDITION",
   "ALLOW_INSECURE_COOKIES",
   "CSP_REPORT_ONLY",
@@ -39,7 +40,13 @@ export const ROOT_ENV_KEYS = Object.freeze([
  * NEXT_DIST_DIR is set per build by `deploy/reload.sh` (a value in `.env` would point
  * `next start` at the staging directory), and NEXT_OUTPUT by the Docker image build.
  */
-export const PROCESS_ONLY_KEYS = Object.freeze(["NODE_ENV", "NEXT_DIST_DIR", "NEXT_OUTPUT"]);
+export const PROCESS_ONLY_KEYS = Object.freeze([
+  "NODE_ENV",
+  "NEXT_DIST_DIR",
+  "NEXT_OUTPUT",
+  // Turns the service worker on under `next dev` (it is always on in a production build).
+  "NEXT_PUBLIC_ENABLE_SW",
+]);
 
 /**
  * Listed although the name looks like a secret. ACCOUNT_BILLING_TOKEN is a bearer the dashboard

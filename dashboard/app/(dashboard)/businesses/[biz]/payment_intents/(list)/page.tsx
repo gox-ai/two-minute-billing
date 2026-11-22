@@ -15,6 +15,7 @@ import {
 } from "@/components/analytics/payments-analytics-block";
 import { ErrorState } from "@/components/states";
 import { requirePermission } from "@/lib/session";
+import { urlFilters } from "@/lib/list-source";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,11 @@ export default async function PaymentIntentsPage({
     range?: string;
     gateway?: string;
     payment_method?: string;
+    /** `field:op:value`, repeatable (see `urlFilters`). */
+    filter?: string | string[];
+    customer?: string;
+    status?: string;
+    purpose?: string;
   }>;
 }) {
   const [{ biz }, search] = await Promise.all([params, searchParams]);
@@ -68,9 +74,20 @@ export default async function PaymentIntentsPage({
   const tab = search.tab === "list" ? "list" : "dashboard";
   const range = isPaymentsAnalyticsRange(search.range) ? search.range : DEFAULT_RANGE;
 
+  // A deep link's narrowing (`?filter=customer:is:cus_…`). The engine takes exactly these
+  // three as bare params, so the first page is narrowed with the `is` rows only.
+  const deepLinkFilters = urlFilters(search, { customer: true, status: true, purpose: true });
+  const pick = (field: string) =>
+    deepLinkFilters.find((f) => f.field === field && f.op === "is")?.value;
+
   const [businesses, intents, gatewayCatalog] = await Promise.all([
     listBusinesses(),
-    listPaymentIntents(biz, { limit: 50 }),
+    listPaymentIntents(biz, {
+      limit: 50,
+      customer: pick("customer"),
+      status: pick("status"),
+      purpose: pick("purpose"),
+    }),
     getGatewayCatalogOrEmpty(),
   ]);
   const name = businesses.data.find((b) => b.id === biz)?.name ?? biz;
@@ -124,6 +141,7 @@ export default async function PaymentIntentsPage({
         total={intents.total ?? intents.data.length}
         hasMore={intents.has_more}
         nextCursor={intents.next_cursor}
+        initialFilters={deepLinkFilters}
       />
     </>
   );

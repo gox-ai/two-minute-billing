@@ -219,24 +219,58 @@ checks.push(
     await setDunning(declined.invoice.id, "in_progress");
   }
 
-  // A VOIDED invoice must drop off, however it landed in dunning. The predicate had no
-  // status filter on its dunning arm, so a dunned-then-voided invoice stayed on the screen
-  // forever — 122 of 476 rows on the real book. Voiding here rather than seeding, so the
-  // assertion exercises the real void path.
+  // A VOIDED invoice drops off the screen, EXCEPT where dunning gave up (exhausted or
+  // stopped): that is the record of what dunning failed to collect, so it stays under
+  // "Given up" only (user decision 2026-11-17; 35 such rows were on no list). Before that a
+  // dunned-then-voided invoice stayed everywhere (122 of 476 rows), and then nowhere.
+  // Voiding here rather than seeding, so the assertion exercises the real void path.
   {
-    const before = await listRetriesPage(orgId, biz.id, { limit: 50 });
-    const listedBefore = before.data.some((r) => r.invoice.publicId === expired.invoice.publicId);
-    await voidInvoice(orgId, biz.id, expired.invoice.publicId);
-    const after = await listRetriesPage(orgId, biz.id, { limit: 50 });
-    const row = after.data.find((r) => r.invoice.publicId === expired.invoice.publicId);
+    const setInvoice = (invoiceId: string, set: Partial<typeof invoices.$inferInsert>) =>
+      withTenant(orgId, (tx) => tx.update(invoices).set(set).where(eq(invoices.id, invoiceId)));
+    const ids = async (state?: "attention" | "recovered" | "given_up") =>
+      (await listRetriesPage(orgId, biz.id, { limit: 50, state })).data.map(
+        (r) => r.invoice.publicId,
+      );
+    const id = expired.invoice.publicId;
+
+    const listedBefore = (await ids()).includes(id);
+    await voidInvoice(orgId, biz.id, id);
     checks.push(
       ["retries: the voided invoice was listed before it was voided", listedBefore],
-      ["retries: a voided invoice drops off the screen", row == null],
-      // …and its dunning history is NOT erased: the row is truthful, the screen was wrong
-      // to list it. A sweep that cleared the column instead would have destroyed a record.
+      ["retries: a voided give-up stays under Given up", (await ids("given_up")).includes(id)],
+      ["retries: ...and on All", (await ids()).includes(id)],
+      ["retries: ...but not under Needs attention", !(await ids("attention")).includes(id)],
+      // …and its dunning history is NOT erased: the row is truthful.
       [
         "retries: voiding does not erase the dunning history",
         (await dunningStatusOf(expired.invoice.id)) != null,
+      ],
+    );
+
+    // Voided while dunning was still working it: nobody will collect it and dunning did not
+    // give up, so it is on no list.
+    await setInvoice(expired.invoice.id, { dunningStatus: "in_progress" });
+    checks.push([
+      "retries: a voided invoice with an active retry drops off the screen",
+      !(await ids()).includes(id),
+    ]);
+
+    // A write-off settles the invoice with a credit note, so it reads `paid`. It is bad debt,
+    // not money collected: Given up, never Recovered.
+    await setInvoice(expired.invoice.id, {
+      status: "paid",
+      writtenOff: true,
+      dunningStatus: "stopped",
+    });
+    const writtenOff = (await listRetriesPage(orgId, biz.id, { limit: 50 })).data.find(
+      (r) => r.invoice.publicId === id,
+    );
+    checks.push(
+      ["retries: a written-off invoice is under Given up", (await ids("given_up")).includes(id)],
+      ["retries: ...not under Recovered", !(await ids("recovered")).includes(id)],
+      [
+        "retries: the serializer says written_off",
+        writtenOff != null && serializeRetry(writtenOff).written_off === true,
       ],
     );
   }

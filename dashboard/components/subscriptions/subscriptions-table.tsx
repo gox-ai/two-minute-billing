@@ -420,7 +420,8 @@ export function SubscriptionsTable({
               sub={
                 labelIsId && addons.length === 0 ? undefined : (
                   // `min-w-0`: the line shrinks with its cell, so the id shortens in the middle.
-                  <span className="flex min-w-0 items-center gap-2">
+                  // A stacked row wraps the add-on chip under the id instead of overflowing.
+                  <span className="flex min-w-0 items-center gap-x-2 gap-y-0.5 list-narrow:flex-wrap">
                     {labelIsId ? null : (
                       <MiddleEllipsis
                         value={s.id}
@@ -532,7 +533,11 @@ export function SubscriptionsTable({
           // A cancelled subscription bills nothing: a dash, not "$0.00".
           if (s.status === "cancelled" || m == null) return <TextCell />;
           if (mrrCurrency)
-            return <span className="text-sm font-medium tabular-nums">{money(m, s.currency)}</span>;
+            return (
+              <span className="text-sm font-medium whitespace-nowrap tabular-nums">
+                {money(m, s.currency)}
+              </span>
+            );
           return <MoneyCell minor={m} currency={s.currency} />;
         },
       },

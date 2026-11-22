@@ -13,7 +13,7 @@ export interface ActionResult {
   errors?: Record<string, string>;
   /** 'conflict' → the toast offers a Reload action (CP-0 optimistic concurrency).
    *  'step_up_required' → the caller asks the operator to confirm their identity, then retries. */
-  code?: "conflict" | "step_up_required";
+  code?: "conflict" | "step_up_required" | "possible_duplicate";
   /** A success with a caveat the operator must see (the action stood, a side-effect didn't). */
   warning?: boolean;
   /** Success only: the record the action created — the form lands there. */

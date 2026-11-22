@@ -87,6 +87,8 @@ export function recordDispute(
     processor_reference?: string;
     /** Unix seconds. */
     opened_at?: number;
+    /** Unix seconds. */
+    evidence_due_by?: number;
   },
 ) {
   return apiWrite(`/v1/businesses/${biz}/payments/${pay}/disputes`, body, "POST");

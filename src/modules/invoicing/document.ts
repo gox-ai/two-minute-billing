@@ -535,7 +535,7 @@ export function billToName(
  * number; deliberately tolerant, because an address with no country is common and must
  * fall back to the neutral label rather than throwing on a billing path.
  */
-function addressCountry(address: unknown): string | null {
+export function addressCountry(address: unknown): string | null {
   if (!address || typeof address !== "object") return null;
   const c = (address as Record<string, unknown>).country;
   return typeof c === "string" && c.trim() ? c.trim() : null;
@@ -695,7 +695,7 @@ export function printedRate(stored: string, minPlaces = 4): string {
  * The signature block, or null when the merchant has set neither half. Null rather than
  * a pair of nulls so the renderers can test one thing.
  */
-function signatureBlock(custom: InvoiceCustomization): InvoiceDocument["signature"] {
+export function signatureBlock(custom: InvoiceCustomization): InvoiceDocument["signature"] {
   const { imageUrl, caption, position } = custom.signature;
   return imageUrl || caption ? { imageUrl, caption, position } : null;
 }

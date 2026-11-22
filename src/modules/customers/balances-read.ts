@@ -102,36 +102,58 @@ export async function customerCreditBalance(
   return b.promotional + b.refundable + b.excess;
 }
 
+/** Per-currency bucket balances in minor units, as the customer API lists them. */
+export type BucketBalances = Record<
+  string,
+  { promotional: number; refundable: number; excess: number }
+>;
+
+/** One `(currency, account)` sum from the customer's credit-bucket ledger rows. */
+export interface BucketSumRow {
+  currency: string;
+  account: string;
+  bal: string | number;
+}
+
 /**
- * All three balances per currency for a customer — the read model behind the
- * customer API `balances[]` and reconciliation. Any currency with a nonzero
- * bucket appears; buckets default to 0.
+ * Which currencies the customer API lists: every currency the customer has a ledger row in, in
+ * any of the three buckets, with 0 where a bucket is 0. So a used-up balance reads as 0, not as
+ * "never had any". A currency the customer never held credit in is not listed. Sorted by code.
+ */
+export function foldBucketBalances(rows: BucketSumRow[]): BucketBalances {
+  const out: BucketBalances = {};
+  for (const r of [...rows].sort((a, b) => a.currency.localeCompare(b.currency))) {
+    const s = (out[r.currency] ??= { promotional: 0, refundable: 0, excess: 0 });
+    const bal = Math.max(0, Number(r.bal));
+    if (r.account === PROMOTIONAL_CREDIT) s.promotional = bal;
+    else if (r.account === REFUNDABLE_CREDIT) s.refundable = bal;
+    else if (r.account === EXCESS_PAYMENT) s.excess = bal;
+  }
+  return out;
+}
+
+/** The customer's bucket balances per currency, read on `tx` (see `foldBucketBalances`). */
+export async function readBucketBalances(tx: Tx, customerId: string): Promise<BucketBalances> {
+  const rows = (await tx.execute(sql`
+    select currency, account,
+           coalesce(sum(case when direction = 'credit' then amount_minor else -amount_minor end), 0)::bigint as bal
+    from ledger_entries
+    where customer_id = ${customerId}
+      and account in (${PROMOTIONAL_CREDIT}, ${REFUNDABLE_CREDIT}, ${EXCESS_PAYMENT})
+    group by currency, account
+  `)) as unknown as BucketSumRow[];
+  return foldBucketBalances(rows);
+}
+
+/**
+ * All three balances per currency for a customer: the read model behind the customer API
+ * `balances[]` and reconciliation. Currency rule: `foldBucketBalances`.
  */
 export async function getCustomerBalances(
   organizationId: string,
   customerId: string,
-): Promise<Record<string, { promotional: number; refundable: number; excess: number }>> {
-  return withTenant(organizationId, async (tx) => {
-    const rows = (await tx.execute(sql`
-      select currency, account,
-             coalesce(sum(case when direction = 'credit' then amount_minor else -amount_minor end), 0)::bigint as bal
-      from ledger_entries
-      where customer_id = ${customerId}
-        and account in (${PROMOTIONAL_CREDIT}, ${REFUNDABLE_CREDIT}, ${EXCESS_PAYMENT})
-      group by currency, account
-    `)) as unknown as Array<{ currency: string; account: string; bal: string | number }>;
-    const out: Record<string, { promotional: number; refundable: number; excess: number }> = {};
-    const slot = (cur: string) => (out[cur] ??= { promotional: 0, refundable: 0, excess: 0 });
-    for (const r of rows) {
-      const bal = Number(r.bal);
-      if (bal === 0) continue;
-      const s = slot(r.currency);
-      if (r.account === PROMOTIONAL_CREDIT) s.promotional = Math.max(0, bal);
-      else if (r.account === REFUNDABLE_CREDIT) s.refundable = Math.max(0, bal);
-      else if (r.account === EXCESS_PAYMENT) s.excess = Math.max(0, bal);
-    }
-    return out;
-  });
+): Promise<BucketBalances> {
+  return withTenant(organizationId, (tx) => readBucketBalances(tx, customerId));
 }
 
 /**

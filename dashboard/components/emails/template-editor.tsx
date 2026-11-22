@@ -1,14 +1,7 @@
 "use client";
 
 import * as React from "react";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  ChevronDownIcon,
-  MonitorIcon,
-  SmartphoneIcon,
-  TextIcon,
-} from "lucide-react";
+import { ChevronDownIcon, MonitorIcon, SmartphoneIcon, TextIcon } from "lucide-react";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
@@ -16,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { SortableList } from "@/components/ui/sortable-list";
 import { SwitchField } from "@/components/ui/switch";
 import { useIsClient } from "@/components/safe-html";
 import { sanitizeHtmlDocument } from "@/lib/sanitize-html";
@@ -873,12 +867,7 @@ function LayoutCard({
     k === "footer";
   const visible = order.filter(present);
 
-  const move = (k: BlockKey, dir: -1 | 1) => {
-    const v = [...visible];
-    const i = v.indexOf(k);
-    const j = i + dir;
-    if (j < 0 || j >= v.length) return;
-    [v[i], v[j]] = [v[j]!, v[i]!];
+  const reorder = (v: BlockKey[]) => {
     let n = 0;
     setOrder(order.map((b) => (present(b) ? v[n++]! : b)));
   };
@@ -934,38 +923,17 @@ function LayoutCard({
       {visible.length > 1 ? (
         <div className="space-y-1.5 px-5 py-4">
           <div className="text-sm font-medium">Section order</div>
-          <ol className="divide-y rounded-md border">
-            {visible.map((k, i) => (
-              <li key={k} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
-                <span>{BLOCK_LABEL[k]}</span>
-                <span className="flex gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="touch-target relative"
-                    aria-label={`Move ${BLOCK_LABEL[k]} up`}
-                    disabled={i === 0}
-                    onClick={() => move(k, -1)}
-                  >
-                    <ArrowUpIcon />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="touch-target relative"
-                    aria-label={`Move ${BLOCK_LABEL[k]} down`}
-                    disabled={i === visible.length - 1}
-                    onClick={() => move(k, 1)}
-                  >
-                    <ArrowDownIcon />
-                  </Button>
-                </span>
-              </li>
-            ))}
-          </ol>
-          <p className="text-xs text-muted-foreground">Your logo and heading always come first.</p>
+          <SortableList
+            items={visible}
+            onReorder={reorder}
+            itemLabel={(k) => BLOCK_LABEL[k]}
+            className="rounded-md"
+            itemClassName="px-3 py-1.5 text-sm"
+            renderItem={(k) => <span>{BLOCK_LABEL[k]}</span>}
+          />
+          <p className="text-xs text-muted-foreground">
+            Drag a section to change the order. Your logo and heading always come first.
+          </p>
         </div>
       ) : null}
     </SettingsCard>

@@ -48,8 +48,11 @@ import {
   // CHARGE it produced in the same row, which is how a transaction with no
   // `id_at_gateway` can still be tied to its money (#17).
   providerEvents,
+  // Platform-global too: the refused call's response, for the gateway's own code.
+  gatewayRequestLogs,
   settlementPollSchedule,
 } from "@db/schema";
+import { gatewayCodeInResponse } from "@/providers/decline-codes";
 import { accountHolderName } from "@/modules/customers/names";
 // The SQL mirror of `accountHolderName` — the `customer_name` filter must match the
 // name the money log PRINTS, not the deprecated `customers.name` column.
@@ -386,6 +389,12 @@ export interface TransactionDetailed {
    */
   fraudSignal?: FraudSignal | null;
   /**
+   * The gateway's own refusal code (`invalid_account`) beside our reading, read from the
+   * failed call's logged response (single read of a failed row only). Null when no logged
+   * call in the row's span carries one.
+   */
+  gatewayCode?: string | null;
+  /**
    * Money this row would book that has already gone back to the payer (#17). Resolved by
    * the SINGLE read only (`getTransactionDetailed`) and only for a reconcilable row: it
    * costs extra queries per transaction, and it is the operator Reconcile panel — one row
@@ -408,7 +417,11 @@ export interface TransactionDetailed {
    * A person may record a chargeback on this payment (its gateway sends no dispute events).
    * Single read of a succeeded payment only; absent or `null` means the action is not offered.
    */
-  disputeRecording?: { paymentPublicId: string; availableMinor: bigint } | null;
+  disputeRecording?: {
+    paymentPublicId: string;
+    availableMinor: bigint;
+    reportedDaily: boolean;
+  } | null;
   /**
    * A person may ask the gateway to cancel this debit (`cancel_pending_debit`). Single read
    * of an `in_progress` payment on a gateway that supports it; `null` means not offered.
@@ -783,6 +796,8 @@ export async function getTransactionDetailed(
   // Applies to every status: a settled success can be flagged days later, so this is not
   // gated the way the verdict-bearing extras below are.
   const fraudSignal = await fraudSignalForTransaction(detailed.txn);
+  if (FAILED_STATUSES.has(detailed.txn.status))
+    return { ...detailed, fraudSignal, gatewayCode: await gatewayCodeForTransaction(detailed.txn) };
   // Only where a verdict is actually on offer — see `settledReturn`'s note above.
   if (detailed.txn.status === "in_progress") {
     const [poll] = await withTenant(organizationId, (tx) =>
@@ -822,6 +837,33 @@ export async function getTransactionDetailed(
     fraudSignal,
     settledReturn: await settledReturnForTransaction(organizationId, detailed.txn),
   };
+}
+
+const FAILED_STATUSES: ReadonlySet<string> = new Set(["failed", "late_failed"]);
+
+/**
+ * The gateway's code from the newest logged call in this row's span that carries one.
+ * Platform connection: `gateway_request_logs` has no RLS grant for the tenant role.
+ */
+async function gatewayCodeForTransaction(txn: Transaction): Promise<string | null> {
+  if (!txn.spanId || !txn.gatewayKey) return null;
+  const rows = await systemDb
+    .select({ body: gatewayRequestLogs.responseBody })
+    .from(gatewayRequestLogs)
+    .where(
+      and(
+        eq(gatewayRequestLogs.spanId, txn.spanId),
+        eq(gatewayRequestLogs.gatewayKey, txn.gatewayKey),
+        eq(gatewayRequestLogs.businessId, txn.businessId),
+      ),
+    )
+    .orderBy(desc(gatewayRequestLogs.createdAt))
+    .limit(20);
+  for (const r of rows) {
+    const code = gatewayCodeInResponse(r.body);
+    if (code) return code;
+  }
+  return null;
 }
 
 /**

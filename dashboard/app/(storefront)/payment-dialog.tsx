@@ -19,8 +19,10 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { stripeAppearance } from "@/lib/stripe-elements";
-import { gatewayFailure, refusalMessage, RETRY_IN_FORM } from "@/lib/gateway-errors";
+import { refusalMessage, RETRY_IN_FORM, stripeClientFailure } from "@/lib/gateway-errors";
 import { confirmStripeIntent } from "@/lib/stripe-confirm";
+import { clearActiveIntent, reportBuyerError, setActiveGateway } from "@/lib/buyer-error-report";
+import { PAYER_CLIENT_REASON, PAYER_NEXT_STEP } from "../../../src/providers/payer-wording";
 import { ShieldCheck } from "lucide-react";
 import { privacyText, type Instrument } from "./storefront-text";
 
@@ -54,6 +56,7 @@ export function PaymentDialog({
   description?: string;
   children: React.ReactNode;
 }) {
+  useGatewayLayerFocus(open);
   return (
     <Dialog
       open={open}
@@ -97,11 +100,92 @@ export function PaymentDialog({
  * The dialog's action row. Sticky at the foot of the scrolling body, so Cancel and the
  * commit button stay on screen however tall the gateway's form is.
  */
+/**
+ * A body-level element added after the dialog opened (Radix marked the ones already there
+ * with `data-aria-hidden`) and not one of ours: a gateway's layer, such as its 3-D Secure
+ * challenge.
+ */
+function inGatewayLayer(el: EventTarget | null): boolean {
+  if (!(el instanceof Element) || !document.body.contains(el)) return false;
+  let top: Element = el;
+  while (top.parentElement && top.parentElement !== document.body) top = top.parentElement;
+  // Our own layers (a second dialog, a select's list) carry `data-slot` or Radix's wrapper.
+  const ours =
+    top.matches("[data-slot], [data-radix-popper-content-wrapper], [data-radix-focus-guard]") ||
+    top.firstElementChild?.matches("[data-slot]") === true;
+  return top.parentElement === document.body && !top.hasAttribute("data-aria-hidden") && !ours;
+}
+
+/**
+ * The dialog's focus trap pulled focus back out of a gateway's 3-D Secure challenge, so the
+ * buyer could not type the code. While open, focus moving into such a layer is not reported
+ * to the trap. Pointer events: see globals.css.
+ */
+function useGatewayLayerFocus(open: boolean) {
+  React.useEffect(() => {
+    if (!open) return;
+    const onIn = (e: FocusEvent) => {
+      if (inGatewayLayer(e.target)) e.stopImmediatePropagation();
+    };
+    const onOut = (e: FocusEvent) => {
+      if (inGatewayLayer(e.relatedTarget)) e.stopImmediatePropagation();
+    };
+    window.addEventListener("focusin", onIn, true);
+    window.addEventListener("focusout", onOut, true);
+    return () => {
+      window.removeEventListener("focusin", onIn, true);
+      window.removeEventListener("focusout", onOut, true);
+    };
+  }, [open]);
+}
+
+/** Set by `SdkFrame` when a gateway's form is drawn inside a list row, not in a dialog. */
+const InlineFrame = React.createContext(false);
+/** True inside a gateway form drawn in a list row: no Cancel there, the row is the choice. */
+export const useInlineFrame = () => React.useContext(InlineFrame);
+
 export function PaymentDialogFooter({ children }: { children: React.ReactNode }) {
+  const inline = React.useContext(InlineFrame);
+  if (inline) return <div className="flex justify-end gap-2">{children}</div>;
   return (
     <div className="sticky bottom-0 z-10 -mx-6 mt-auto flex justify-end gap-2 bg-popover px-6 pt-2">
       {children}
     </div>
+  );
+}
+
+/**
+ * A gateway's form frame: our dialog, or — with `inline` — a plain block inside the open
+ * row of Pay now / Add a payment method (the row already names the method, so no title).
+ */
+export function SdkFrame({
+  inline = false,
+  open,
+  onClose,
+  title,
+  description,
+  children,
+}: {
+  inline?: boolean;
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  if (inline)
+    return open ? (
+      <InlineFrame.Provider value>
+        <div className="flex flex-col gap-3">
+          {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+          {children}
+        </div>
+      </InlineFrame.Provider>
+    ) : null;
+  return (
+    <PaymentDialog open={open} onClose={onClose} title={title} description={description}>
+      {children}
+    </PaymentDialog>
   );
 }
 
@@ -134,21 +218,33 @@ export { refusalMessage } from "@/lib/gateway-errors";
  * changes: under a tall gateway form or below the fold it was easy to miss. `nearest` moves
  * the dialog body or the page only as far as needed; the bottom margin clears the sticky
  * `PaymentDialogFooter`. The error `Alert` is `role="alert"`, so it is announced.
+ *
+ * Each message shown is reported for ops (`reportBuyerError`): this is where a payment error
+ * reaches the buyer, so it is where a gateway's own words are caught.
  */
 export function RefusalAlert({
   message,
   className,
+  gateway,
+  step,
 }: {
   message: string | null | undefined;
   className?: string;
+  /** The gateway whose form this is, when the message carries no signal of its own. */
+  gateway?: string;
+  /** Where on the page, for the report. */
+  step?: string;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
-    if (message) ref.current?.scrollIntoView({ block: "nearest", behavior: "instant" });
-  }, [message]);
+    if (!message) return;
+    ref.current?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    reportBuyerError(message, { gateway, step });
+  }, [message, gateway, step]);
   if (!message) return null;
   return (
-    <div ref={ref} className={cn("scroll-mt-4 scroll-mb-14", className)}>
+    // Keyed on the message, so a new refusal slides in again.
+    <div key={message} ref={ref} className={cn("sf-refusal scroll-mt-4 scroll-mb-14", className)}>
       <Alert tone="error">{message}</Alert>
     </div>
   );
@@ -170,6 +266,7 @@ export function StripeIntentForm({
   confirmLabel,
   busyLabel,
   returnUrl,
+  failureLead,
   onBeforeConfirm,
   onCancel,
   onAuthorized,
@@ -182,6 +279,11 @@ export function StripeIntentForm({
   busyLabel: string;
   /** Where Stripe sends the buyer back after a method that redirects (`?pay=` / `?setup=`). */
   returnUrl?: string;
+  /**
+   * A setup's failure lead. Checkout passes "We could not take your payment." when the
+   * same click also charges, so a decline does not read as a save problem.
+   */
+  failureLead?: string;
   /** Runs before the confirm, so the return page can find what a redirect left behind. */
   onBeforeConfirm?: () => void;
   onCancel: () => void;
@@ -208,6 +310,7 @@ export function StripeIntentForm({
         confirmLabel={confirmLabel}
         busyLabel={busyLabel}
         returnUrl={returnUrl}
+        failureLead={failureLead}
         onBeforeConfirm={onBeforeConfirm}
         onCancel={onCancel}
         onAuthorized={onAuthorized}
@@ -222,6 +325,7 @@ function StripeIntentFormInner({
   confirmLabel,
   busyLabel,
   returnUrl,
+  failureLead,
   onBeforeConfirm,
   onCancel,
   onAuthorized,
@@ -231,6 +335,7 @@ function StripeIntentFormInner({
   confirmLabel: string;
   busyLabel: string;
   returnUrl?: string;
+  failureLead?: string;
   onBeforeConfirm?: () => void;
   onCancel: () => void;
   onAuthorized: (
@@ -240,7 +345,16 @@ function StripeIntentFormInner({
 }) {
   const stripe = useStripe();
   const elements = useElements();
+  React.useEffect(() => {
+    setActiveGateway("stripe");
+    // The form closes on success and on Cancel: the flow is over either way.
+    return () => {
+      setActiveGateway(null);
+      clearActiveIntent();
+    };
+  }, []);
   const [busy, setBusy] = React.useState(false);
+  const inlineFrame = React.useContext(InlineFrame);
   const [ready, setReady] = React.useState(false);
   // A payment the server already confirmed on a saved card only needs the bank's check:
   // asking for the card again would let the buyer pay with a different one. Holds the
@@ -273,7 +387,14 @@ function StripeIntentFormInner({
     setError(null);
     try {
       onBeforeConfirm?.();
-      const outcome = await confirmStripeIntent(stripe, elements, purpose, clientSecret, returnUrl);
+      const outcome = await confirmStripeIntent(
+        stripe,
+        elements,
+        purpose,
+        clientSecret,
+        returnUrl,
+        failureLead,
+      );
       // Every failure is shown here, a field error too: never left to the Element alone.
       if (!outcome.ok) return void setError(outcome.error);
       const refused = await onAuthorized(outcome.providerToken, { pending: outcome.pending });
@@ -284,8 +405,8 @@ function StripeIntentFormInner({
         refusalMessage(
           purpose === "payment"
             ? "We could not confirm your payment."
-            : "We could not save your payment method.",
-          "The request did not finish",
+            : (failureLead ?? "We could not save your payment method."),
+          PAYER_CLIENT_REASON.requestUnfinished,
           `Select ${confirmLabel} to try again.`,
         ),
       );
@@ -313,7 +434,7 @@ function StripeIntentFormInner({
         return;
       }
       setError(
-        gatewayFailure("We could not confirm your payment.", first.error?.message, RETRY_IN_FORM),
+        stripeClientFailure("We could not confirm your payment.", first.error, RETRY_IN_FORM),
       );
       // A failed check leaves the intent waiting for a card: show the card form.
       if (after?.status === "requires_payment_method") setProbe(false);
@@ -321,7 +442,7 @@ function StripeIntentFormInner({
       setError(
         refusalMessage(
           "We could not confirm your payment.",
-          "The request did not finish",
+          PAYER_CLIENT_REASON.requestUnfinished,
           `Select ${confirmLabel} to try again.`,
         ),
       );
@@ -337,7 +458,7 @@ function StripeIntentFormInner({
           We charge the card that you added. Your bank asks you to confirm the payment in the next
           step.
         </p>
-        <RefusalAlert message={error} />
+        <RefusalAlert message={error} gateway="stripe" step="saved_card" />
         <PaymentDialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
@@ -368,10 +489,10 @@ function StripeIntentFormInner({
       */}
       <RefusalAlert
         message={
-          loadFailed
-            ? "We could not open the payment form. Close this dialog and reload the page. Then try again."
-            : null
+          loadFailed ? `We could not open the payment form. ${PAYER_NEXT_STEP.reloadDialog}` : null
         }
+        gateway="stripe"
+        step="payment_form"
       />
       <div className={cn("relative", !ready && !loadFailed && "min-h-[360px]")}>
         <div className={cn("transition-opacity", ready ? "opacity-100" : "opacity-0")}>
@@ -387,11 +508,14 @@ function StripeIntentFormInner({
         </div>
         {!ready && !loadFailed ? <CardFormSkeleton /> : null}
       </div>
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} gateway="stripe" step="payment_form" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={onCancel} disabled={busy}>
-          Cancel
-        </Button>
+        {/* Inline in a list row, another row is the way out: no Cancel. */}
+        {inlineFrame ? null : (
+          <Button variant="outline" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        )}
         {/* Disabled until READY, not merely until Stripe.js exists: confirming against an
             element that has not mounted fails, and the buyer would have paid for the
             error with a real card in the box. */}

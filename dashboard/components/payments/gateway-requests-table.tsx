@@ -16,7 +16,7 @@ import { EmptyState } from "@/components/states";
 import { EditDrawer } from "@/components/edit-drawer";
 import { Button } from "@/components/ui/button";
 import { fmtDateTime } from "@/lib/format-date";
-import { enumLabel } from "@/lib/labels";
+import { sourceLabel } from "@/components/audit/labels";
 import type { GatewayRequestLog } from "@/lib/api/payments";
 import { Activity } from "lucide-react";
 import { useBusinessTz } from "@/components/business-tz";
@@ -84,6 +84,18 @@ function truncateMiddle(s: string, max = 64): string {
   const head = Math.ceil((max - 1) / 2);
   const tail = Math.floor((max - 1) / 2);
   return `${s.slice(0, head)}…${s.slice(s.length - tail)}`;
+}
+
+/**
+ * A refusal the customer's browser got from the gateway (`source: customer_browser`). We
+ * did not see that call, so it has no HTTP status: it reads "Reported", never a number.
+ */
+const fromBrowser = (r: { source: string | null }) => r.source === "customer_browser";
+
+/** The status chip's text: the HTTP status, "error" for a call that threw, "Reported". */
+function statusText(r: { status: number | null; error: string | null; source: string | null }) {
+  if (fromBrowser(r)) return "Reported";
+  return r.status ?? (r.error ? "error" : "—");
 }
 
 function statusTone(status: number | null, error: string | null): "green" | "tan" | "red" | "gray" {
@@ -177,17 +189,23 @@ export function GatewayRequestsTable({
         header: "Source",
         accessorFn: (r) => r.source ?? "—",
         cell: ({ row }) => (
-          <TextCell>{row.original.source ? enumLabel(row.original.source) : null}</TextCell>
+          <TextCell>{row.original.source ? sourceLabel(row.original.source) : null}</TextCell>
         ),
       },
       {
         id: "status",
         header: "Status",
-        accessorFn: (r) => r.status ?? (r.error ? "error" : "—"),
+        accessorFn: (r) => statusText(r),
         cell: ({ row }) => (
           <span className="flex items-center gap-2">
-            <Chip tone={statusTone(row.original.status, row.original.error)}>
-              {row.original.status ?? (row.original.error ? "error" : "—")}
+            <Chip
+              tone={
+                fromBrowser(row.original)
+                  ? "tan"
+                  : statusTone(row.original.status, row.original.error)
+              }
+            >
+              {statusText(row.original)}
             </Chip>
             {row.original.error ? (
               <TruncateCell value={row.original.error} width="max-w-48" className="text-xs" />
@@ -289,7 +307,8 @@ export function GatewayRequestsTable({
         type: "select",
         group: "Delivery",
         options: mergeOptions(
-          HTTP_METHOD_OPTIONS,
+          // Not a verb: a refusal the customer's browser got from the gateway and reported.
+          [...HTTP_METHOD_OPTIONS, { value: "BROWSER", label: "Browser (reported)" }],
           rows.map((r) => r.method),
         ),
         serverOps: ENUM_OPS,
@@ -353,9 +372,18 @@ export function GatewayRequestsTable({
           <div className="space-y-4 pb-6">
             <dl className="divide-y">
               <DetailRow label="Status">
-                <Chip tone={statusTone(detail.status, detail.error)}>
-                  {detail.status ?? (detail.error ? "error" : "—")}
-                </Chip>
+                {fromBrowser(detail) ? (
+                  <span className="flex flex-col gap-1">
+                    <Chip tone="tan">Reported</Chip>
+                    <span className="text-sm text-muted-foreground">
+                      Reported by the customer&apos;s browser. The gateway answered the browser, not
+                      our server, so there is no HTTP status. The response body is the error the
+                      browser got.
+                    </span>
+                  </span>
+                ) : (
+                  <Chip tone={statusTone(detail.status, detail.error)}>{statusText(detail)}</Chip>
+                )}
               </DetailRow>
               <DetailRow label="Gateway">
                 <GatewayLabel
@@ -373,7 +401,9 @@ export function GatewayRequestsTable({
               <DetailRow label="Operation">
                 <span className="font-mono text-xs">{detail.operation ?? "—"}</span>
               </DetailRow>
-              <DetailRow label="Source">{enumLabel(detail.source)}</DetailRow>
+              <DetailRow label="Source">
+                {detail.source ? sourceLabel(detail.source) : "—"}
+              </DetailRow>
               <DetailRow label="Actor">{detail.actor ?? "—"}</DetailRow>
               <DetailRow label="Duration">
                 {detail.duration_ms != null ? `${detail.duration_ms} ms` : "—"}

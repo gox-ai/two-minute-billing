@@ -13,6 +13,7 @@ import {
   type PricedLink,
   type ProductCard,
 } from "./plans";
+import { fitFigure } from "../../fit-figure";
 
 /**
  * The plan cards with one cadence switch over them. Each card is one product; the switch
@@ -82,7 +83,7 @@ export function ProductTile({
   const model = price.model ?? "flat";
   const fixed = price.amount_minor != null && (model === "flat" || model === "per_unit");
   return (
-    <div className="flex flex-col gap-4 rounded-xl border bg-card p-5">
+    <div className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
       {card.image_url ? (
         // eslint-disable-next-line @next/next/no-img-element -- a merchant image on our CDN
         <img
@@ -92,15 +93,17 @@ export function ProductTile({
         />
       ) : null}
       <div className="flex flex-col gap-1">
-        <h3 className="text-lg font-semibold">{card.name}</h3>
+        <h3 className="text-lg font-semibold wrap-break-word">{card.name}</h3>
         {card.description ? (
           <p className="text-sm text-muted-foreground">{card.description}</p>
         ) : null}
       </div>
       <div className="flex flex-col gap-1">
         {fixed ? (
-          <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <span className="text-2xl font-semibold tabular-nums">{price.amount}</span>
+          <div className="@container flex flex-wrap items-baseline gap-x-1.5">
+            <span className="text-2xl font-semibold whitespace-nowrap tabular-nums">
+              <span style={fitFigure(price.amount)}>{price.amount}</span>
+            </span>
             <span className="text-sm text-muted-foreground">
               {model === "per_unit" ? "per unit " : ""}
               {cadenceSuffix(cadence)}

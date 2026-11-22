@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { reportBuyerError } from "@/lib/buyer-error-report";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -134,7 +135,10 @@ function ReleaseHoldButton({
     setBusy(true);
     try {
       const res = await portalAbandonAuthenticationAction(invoice);
-      if (!res.ok) return void toast.error(res.error);
+      if (!res.ok) {
+        reportBuyerError(res.error, { step: "pay_now_instead" });
+        return void toast.error(res.error);
+      }
       setOpen(false);
       // Not a success toast: nothing succeeded, a block was lifted. The one case that
       // IS a success is the one where their money had already arrived.

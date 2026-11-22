@@ -28,19 +28,23 @@
       "We could not read the organization’s figures",
       "Select a currency to total this across businesses",
       "Report in",
+      "Paying customers",
+      "MRR",
       "ARR",
       "Committed",
       "Cancelling",
-      "Paying customers",
       "ARPC",
       "Paying subs",
       "Renewing",
-      "Trial conversion, 30 days",
-      "Ended",
-      "New MRR",
+      "Churn, 30 days",
       "Churned",
       "MRR churn",
       "MRR lost",
+      "Trial conversion, 30 days",
+      "Ended",
+      "New MRR",
+      "Revenue, 30 days",
+      "Revenue by type",
       "Needs attention",
       "Standalone test businesses",
       "Reporting settings",
@@ -48,8 +52,9 @@
       "Add gateway",
       "No default gateway",
       "Select default",
-      "No recurring price",
+      "No price",
       "Create plan",
+      "Create charge",
       "Not ready to bill",
       "Two-factor authentication is off for your account",
       "Enable 2FA",
@@ -83,19 +88,23 @@
           "We could not read the organization’s figures",
           "Select a currency to total this across businesses",
           "Report in",
+          "Paying customers",
+          "MRR",
           "ARR",
           "Committed",
           "Cancelling",
-          "Paying customers",
           "ARPC",
           "Paying subs",
           "Renewing",
-          "Trial conversion, 30 days",
-          "Ended",
-          "New MRR",
+          "Churn, 30 days",
           "Churned",
           "MRR churn",
           "MRR lost",
+          "Trial conversion, 30 days",
+          "Ended",
+          "New MRR",
+          "Revenue, 30 days",
+          "Revenue by type",
           "Needs attention",
           "Standalone test businesses",
           "Reporting settings",
@@ -103,8 +112,9 @@
           "Add gateway",
           "No default gateway",
           "Select default",
-          "No recurring price",
+          "No price",
           "Create plan",
+          "Create charge",
           "Not ready to bill",
           "Two-factor authentication is off for your account",
           "Enable 2FA",
@@ -120,6 +130,129 @@
     "headings": ["Create business", "What happens next"]
   },
   {
+    "route": "/account/notifications",
+    "scope": "org",
+    "label": "Your notifications",
+    "section": "Your account",
+    "controls": [
+      "We could not load your notifications",
+      "Team alerts are now notifications",
+      "Dismiss",
+      "Team notifications",
+      "Install Two Minute Billing",
+      "Install",
+      "Not now",
+      "How to install",
+      "Send a test notification",
+      "Disable",
+      "This device",
+      "Enable on this device",
+      "Remove",
+      "Email",
+      "Push and email",
+      "Push",
+      "Notify me about",
+      "Selected businesses",
+      "Set different settings for a business",
+      "Settings for",
+      "Default",
+      "Use Default for this business",
+      "Daily summary",
+      "Weekly summary",
+      "Time",
+      "Summary time",
+      "Day of the weekly summary",
+      "Send by",
+      "Send summaries by",
+      "Send on a day with no activity",
+      "Time zone",
+      "Search city, region or offset…",
+      "Hold push notifications at night",
+      "From",
+      "Quiet hours from",
+      "To",
+      "Quiet hours to",
+      "Send dispute notifications during quiet hours"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "We could not load your notifications",
+          "Team alerts are now notifications",
+          "Dismiss",
+          "Team notifications",
+          "Install Two Minute Billing",
+          "Install",
+          "Not now",
+          "How to install",
+          "Send a test notification",
+          "Disable",
+          "This device",
+          "Enable on this device",
+          "Push and email",
+          "Email",
+          "Push"
+        ]
+      },
+      {
+        "title": "Where we send notifications",
+        "controls": ["Send a test notification", "Remove", "Email"]
+      },
+      {
+        "title": "Businesses",
+        "controls": ["Notify me about", "Selected businesses"]
+      },
+      {
+        "title": "Events",
+        "controls": [
+          "Set different settings for a business",
+          "Settings for",
+          "Default",
+          "Use Default for this business"
+        ]
+      },
+      {
+        "title": "Summaries",
+        "controls": [
+          "Daily summary",
+          "Weekly summary",
+          "Time",
+          "Summary time",
+          "Day of the weekly summary",
+          "Send by",
+          "Send summaries by",
+          "Send on a day with no activity",
+          "Time zone"
+        ]
+      },
+      {
+        "title": "Time zone",
+        "controls": ["Search city, region or offset…"]
+      },
+      {
+        "title": "Quiet hours",
+        "controls": [
+          "Hold push notifications at night",
+          "From",
+          "Quiet hours from",
+          "To",
+          "Quiet hours to",
+          "Send dispute notifications during quiet hours"
+        ]
+      }
+    ],
+    "headings": [
+      "Install the app",
+      "Where we send notifications",
+      "Businesses",
+      "Events",
+      "Summaries",
+      "Time zone",
+      "Quiet hours"
+    ]
+  },
+  {
     "route": "/account",
     "scope": "org",
     "label": "Your account",
@@ -127,6 +260,7 @@
     "controls": [
       "Rename",
       "Remove",
+      "Add a second method",
       "Make new recovery codes?",
       "Make new codes",
       "Forget",
@@ -143,6 +277,7 @@
       "Appearance",
       "Password",
       "Active sessions",
+      "Notifications",
       "Trusted browsers",
       "Profile photo file",
       "Full name",
@@ -187,6 +322,7 @@
         "controls": [
           "Rename",
           "Remove",
+          "Add a second method",
           "Make new recovery codes?",
           "Make new codes",
           "Forget",
@@ -203,6 +339,7 @@
           "Appearance",
           "Password",
           "Active sessions",
+          "Notifications",
           "Trusted browsers"
         ]
       },
@@ -353,9 +490,13 @@
       "One-time sales",
       "Collections",
       "Views",
+      "Close setup steps",
       "load sample data",
       "Open search",
       "Close",
+      "Install Two Minute Billing",
+      "Install",
+      "Not now",
       "overview",
       "recurring revenue",
       "collections",
@@ -375,10 +516,6 @@
       "MRR at risk",
       "Cannot be charged",
       "Cards expiring",
-      "Revenue, 30 days",
-      "Collected",
-      "Customers",
-      "Per customer",
       "Credit balance",
       "Liability",
       "Used, 30 days",
@@ -386,6 +523,10 @@
       "Events",
       "Orders, 30 days",
       "Average order",
+      "Revenue, 30 days",
+      "Collected",
+      "Customers",
+      "Per customer",
       "MRR",
       "ARR",
       "Committed",
@@ -414,6 +555,8 @@
       "Churned MRR by kind",
       "Revenue mix",
       "Revenue billed by type",
+      "Gross revenue",
+      "Net revenue",
       "Cash",
       "Recovered by dunning",
       "Refunds",
@@ -437,7 +580,7 @@
       "Net MRR growth",
       "Revenue per new subscription",
       "Revenue lost per churned subscription",
-      "Customer lifetime value",
+      "Subscription lifetime value",
       "Average customer lifetime",
       "Subscriptions per customer",
       "MRR movement",
@@ -546,6 +689,9 @@
           "Views",
           "Open search",
           "Close",
+          "Install Two Minute Billing",
+          "Install",
+          "Not now",
           "overview",
           "recurring revenue",
           "collections",
@@ -565,10 +711,6 @@
           "MRR at risk",
           "Cannot be charged",
           "Cards expiring",
-          "Revenue, 30 days",
-          "Collected",
-          "Customers",
-          "Per customer",
           "Credit balance",
           "Liability",
           "Used, 30 days",
@@ -576,6 +718,10 @@
           "Events",
           "Orders, 30 days",
           "Average order",
+          "Revenue, 30 days",
+          "Collected",
+          "Customers",
+          "Per customer",
           "MRR",
           "ARR",
           "Committed",
@@ -604,6 +750,8 @@
           "Churned MRR by kind",
           "Revenue mix",
           "Revenue billed by type",
+          "Gross revenue",
+          "Net revenue",
           "Cash",
           "Recovered by dunning",
           "Refunds",
@@ -627,7 +775,7 @@
           "Net MRR growth",
           "Revenue per new subscription",
           "Revenue lost per churned subscription",
-          "Customer lifetime value",
+          "Subscription lifetime value",
           "Average customer lifetime",
           "Subscriptions per customer",
           "MRR movement",
@@ -715,10 +863,28 @@
       },
       {
         "title": "Finish setup",
-        "controls": ["load sample data"]
+        "controls": ["Close setup steps", "load sample data"]
       }
     ],
-    "headings": ["Finish setup"]
+    "headings": ["Finish setup", "Install the app"]
+  },
+  {
+    "route": "/businesses/{business}/activity",
+    "scope": "biz",
+    "label": "Activity log",
+    "section": "Activity",
+    "controls": ["No activity yet", "Older events", "View all", "Details"],
+    "groups": [
+      {
+        "title": null,
+        "controls": ["No activity yet", "Older events", "Details"]
+      },
+      {
+        "title": "Activity log",
+        "controls": ["View all"]
+      }
+    ],
+    "headings": ["Activity log"]
   },
   {
     "route": "/businesses/{business}/audit",
@@ -813,6 +979,9 @@
       "Tax code (HSN/SAC)",
       "Last modified",
       "Created at",
+      "Row actions",
+      "View associated subscriptions",
+      "Edit",
       "Product catalog",
       "Import"
     ],
@@ -835,6 +1004,9 @@
           "Tax code (HSN/SAC)",
           "Last modified",
           "Created at",
+          "Row actions",
+          "View associated subscriptions",
+          "Edit",
           "Product catalog",
           "Import"
         ]
@@ -854,6 +1026,7 @@
       "Remove image",
       "Product image",
       "Usage-based (metered)",
+      "Cancel",
       "Price",
       "Renews",
       "After trial",
@@ -863,12 +1036,37 @@
       "After payment",
       "Changed",
       "Internal name",
+      "Add-on ID",
       "External name",
       "Product group",
       "Description",
       "Unit of measure",
       "Add the first price now",
+      "Currency",
       "Frequency",
+      "Frequency count",
+      "Billing interval",
+      "Pricing model",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
+      "Units per package",
+      "Free units",
+      "Percentage",
+      "Free amount",
+      "Bill from · Locked",
+      "Bill from",
+      "Subscription quantity",
+      "Recorded usage",
+      "Minimum spend",
+      "Usage aggregation · Locked",
+      "Carry the level to the next period · Locked",
+      "Time unit · Locked",
+      "Usage aggregation",
+      "Carry the level to the next period",
+      "Time unit",
+      "Hour",
+      "Day",
       "SKU",
       "Trial period",
       "Trial period unit",
@@ -886,8 +1084,7 @@
       "Tax behavior",
       "Exclusive",
       "Inclusive",
-      "Create add-on",
-      "Cancel"
+      "Create add-on"
     ],
     "groups": [
       {
@@ -906,6 +1103,7 @@
           "After payment",
           "Changed",
           "Internal name",
+          "Add-on ID",
           "External name",
           "Product group",
           "Description",
@@ -920,7 +1118,32 @@
         "title": "First price",
         "controls": [
           "Add the first price now",
+          "Currency",
           "Frequency",
+          "Frequency count",
+          "Billing interval",
+          "Pricing model",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
+          "Units per package",
+          "Free units",
+          "Percentage",
+          "Free amount",
+          "Bill from · Locked",
+          "Bill from",
+          "Subscription quantity",
+          "Recorded usage",
+          "Minimum spend",
+          "Usage aggregation · Locked",
+          "Carry the level to the next period · Locked",
+          "Time unit · Locked",
+          "Usage aggregation",
+          "Carry the level to the next period",
+          "Time unit",
+          "Hour",
+          "Day",
           "SKU",
           "Unit of measure",
           "Trial period",
@@ -951,6 +1174,7 @@
       "How you sell it",
       "After payment",
       "Image",
+      "Summary",
       "First price",
       "Applicability",
       "Accounting",
@@ -978,6 +1202,9 @@
       "Tax code (HSN/SAC)",
       "Last modified",
       "Created at",
+      "Row actions",
+      "View associated subscriptions",
+      "Edit",
       "Product catalog",
       "Import"
     ],
@@ -1000,6 +1227,9 @@
           "Tax code (HSN/SAC)",
           "Last modified",
           "Created at",
+          "Row actions",
+          "View associated subscriptions",
+          "Edit",
           "Product catalog",
           "Import"
         ]
@@ -1019,6 +1249,7 @@
       "Remove image",
       "Product image",
       "Usage-based (metered)",
+      "Cancel",
       "Price",
       "Renews",
       "After trial",
@@ -1028,12 +1259,37 @@
       "After payment",
       "Changed",
       "Internal name",
+      "One-time product ID",
       "External name",
       "Product group",
       "Description",
       "Unit of measure",
       "Add the first price now",
+      "Currency",
       "Frequency",
+      "Frequency count",
+      "Billing interval",
+      "Pricing model",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
+      "Units per package",
+      "Free units",
+      "Percentage",
+      "Free amount",
+      "Bill from · Locked",
+      "Bill from",
+      "Subscription quantity",
+      "Recorded usage",
+      "Minimum spend",
+      "Usage aggregation · Locked",
+      "Carry the level to the next period · Locked",
+      "Time unit · Locked",
+      "Usage aggregation",
+      "Carry the level to the next period",
+      "Time unit",
+      "Hour",
+      "Day",
       "SKU",
       "Trial period",
       "Trial period unit",
@@ -1051,8 +1307,7 @@
       "Tax behavior",
       "Exclusive",
       "Inclusive",
-      "Create one-time product",
-      "Cancel"
+      "Create one-time product"
     ],
     "groups": [
       {
@@ -1071,6 +1326,7 @@
           "After payment",
           "Changed",
           "Internal name",
+          "One-time product ID",
           "External name",
           "Product group",
           "Description",
@@ -1085,7 +1341,32 @@
         "title": "First price",
         "controls": [
           "Add the first price now",
+          "Currency",
           "Frequency",
+          "Frequency count",
+          "Billing interval",
+          "Pricing model",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
+          "Units per package",
+          "Free units",
+          "Percentage",
+          "Free amount",
+          "Bill from · Locked",
+          "Bill from",
+          "Subscription quantity",
+          "Recorded usage",
+          "Minimum spend",
+          "Usage aggregation · Locked",
+          "Carry the level to the next period · Locked",
+          "Time unit · Locked",
+          "Usage aggregation",
+          "Carry the level to the next period",
+          "Time unit",
+          "Hour",
+          "Day",
           "SKU",
           "Unit of measure",
           "Trial period",
@@ -1116,6 +1397,7 @@
       "How you sell it",
       "After payment",
       "Image",
+      "Summary",
       "First price",
       "Applicability",
       "Accounting",
@@ -1215,6 +1497,7 @@
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details",
       "Delete unused codes",
       "Delete all unused codes?"
@@ -1231,6 +1514,8 @@
           "Not redeemed",
           "Archived",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Delete unused codes",
           "Delete all unused codes?"
@@ -1272,7 +1557,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       }
     ],
     "headings": ["Add codes", "Coupon set", "Rename coupon set", "Codes", "Activity log"]
@@ -1396,6 +1681,8 @@
           "Redemptions",
           "Discount given",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details"
         ]
       },
@@ -1441,7 +1728,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -1469,6 +1756,7 @@
       "Clone coupon",
       "Cancel",
       "Code",
+      "Currency",
       "Valid",
       "Limit",
       "Redeemed",
@@ -1515,7 +1803,7 @@
     "groups": [
       {
         "title": null,
-        "controls": ["Clone coupon", "Code", "Valid", "Limit", "Redeemed"]
+        "controls": ["Clone coupon", "Code", "Currency", "Valid", "Limit", "Redeemed"]
       },
       {
         "title": "Coupon info",
@@ -1529,7 +1817,8 @@
           "Discount type",
           "Percentage",
           "Fixed amount",
-          "Amount"
+          "Amount",
+          "Currency"
         ]
       },
       {
@@ -1594,6 +1883,7 @@
       "Clone coupon",
       "Cancel",
       "Code",
+      "Currency",
       "Valid",
       "Limit",
       "Redeemed",
@@ -1639,7 +1929,7 @@
     "groups": [
       {
         "title": null,
-        "controls": ["Clone coupon", "Code", "Valid", "Limit", "Redeemed"]
+        "controls": ["Clone coupon", "Code", "Currency", "Valid", "Limit", "Redeemed"]
       },
       {
         "title": "Coupon info",
@@ -1647,7 +1937,14 @@
       },
       {
         "title": "Discount",
-        "controls": ["Amount off", "Discount type", "Percentage", "Fixed amount", "Amount"]
+        "controls": [
+          "Amount off",
+          "Discount type",
+          "Percentage",
+          "Fixed amount",
+          "Amount",
+          "Currency"
+        ]
       },
       {
         "title": "Applies to",
@@ -2150,6 +2447,9 @@
       "Tax code (HSN/SAC)",
       "Last modified",
       "Created at",
+      "Row actions",
+      "View associated subscriptions",
+      "Edit",
       "Product catalog",
       "Import"
     ],
@@ -2171,6 +2471,9 @@
           "Tax code (HSN/SAC)",
           "Last modified",
           "Created at",
+          "Row actions",
+          "View associated subscriptions",
+          "Edit",
           "Product catalog",
           "Import"
         ]
@@ -2190,6 +2493,7 @@
       "Remove image",
       "Product image",
       "Usage-based (metered)",
+      "Cancel",
       "Price",
       "Renews",
       "After trial",
@@ -2199,12 +2503,37 @@
       "After payment",
       "Changed",
       "Internal name",
+      "Plan ID",
       "External name",
       "Product group",
       "Description",
       "Unit of measure",
       "Add the first price now",
+      "Currency",
       "Frequency",
+      "Frequency count",
+      "Billing interval",
+      "Pricing model",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
+      "Units per package",
+      "Free units",
+      "Percentage",
+      "Free amount",
+      "Bill from · Locked",
+      "Bill from",
+      "Subscription quantity",
+      "Recorded usage",
+      "Minimum spend",
+      "Usage aggregation · Locked",
+      "Carry the level to the next period · Locked",
+      "Time unit · Locked",
+      "Usage aggregation",
+      "Carry the level to the next period",
+      "Time unit",
+      "Hour",
+      "Day",
       "SKU",
       "Trial period",
       "Trial period unit",
@@ -2222,8 +2551,7 @@
       "Tax behavior",
       "Exclusive",
       "Inclusive",
-      "Create plan",
-      "Cancel"
+      "Create plan"
     ],
     "groups": [
       {
@@ -2242,6 +2570,7 @@
           "After payment",
           "Changed",
           "Internal name",
+          "Plan ID",
           "External name",
           "Product group",
           "Description",
@@ -2256,7 +2585,32 @@
         "title": "First price",
         "controls": [
           "Add the first price now",
+          "Currency",
           "Frequency",
+          "Frequency count",
+          "Billing interval",
+          "Pricing model",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
+          "Units per package",
+          "Free units",
+          "Percentage",
+          "Free amount",
+          "Bill from · Locked",
+          "Bill from",
+          "Subscription quantity",
+          "Recorded usage",
+          "Minimum spend",
+          "Usage aggregation · Locked",
+          "Carry the level to the next period · Locked",
+          "Time unit · Locked",
+          "Usage aggregation",
+          "Carry the level to the next period",
+          "Time unit",
+          "Hour",
+          "Day",
           "SKU",
           "Unit of measure",
           "Trial period",
@@ -2287,6 +2641,7 @@
       "How you sell it",
       "After payment",
       "Image",
+      "Summary",
       "First price",
       "Applicability",
       "Accounting",
@@ -2388,6 +2743,7 @@
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details"
     ],
     "groups": [
@@ -2405,6 +2761,8 @@
           "MRR",
           "Products",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details"
         ]
       },
@@ -2418,7 +2776,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       }
     ],
     "headings": ["View associated", "Product group", "Products in this group", "Activity log"]
@@ -2477,6 +2835,7 @@
       "Enabled",
       "Disabled",
       "Unlimited",
+      "Same as the credits",
       "Renews",
       "How many",
       "Windows start",
@@ -2502,6 +2861,7 @@
       "View details",
       "Set amount",
       "Invoice usage early",
+      "Currency",
       "Save",
       "Remove",
       "Stop invoicing usage early?",
@@ -2535,6 +2895,7 @@
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details",
       "Add a note for your team…",
       "Comment",
@@ -2570,6 +2931,8 @@
           "MRR",
           "Selling",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Product details"
         ]
@@ -2587,6 +2950,7 @@
           "Enabled",
           "Disabled",
           "Unlimited",
+          "Same as the credits",
           "Renews",
           "How many",
           "Windows start",
@@ -2621,6 +2985,7 @@
         "controls": [
           "Set amount",
           "Invoice usage early",
+          "Currency",
           "Save",
           "Remove",
           "Stop invoicing usage early?"
@@ -2665,7 +3030,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -2711,15 +3076,35 @@
       "After payment",
       "Changed",
       "Internal name",
+      "Plan ID",
+      "Add-on ID",
+      "One-time product ID",
       "External name",
       "Product group",
       "Description",
       "Unit of measure",
       "Add the first price now",
+      "Currency",
       "Frequency",
       "Frequency count",
       "Billing interval",
       "Pricing model",
+      "Bill from a meter",
+      "No meter",
+      "Amount",
+      "Markup on",
+      "List price",
+      "Your cost",
+      "Markup",
+      "Rates are",
+      "Number of units for each rate",
+      "Default rate",
+      "Any",
+      "Fixed rate",
+      "Markup %",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
       "Units per package",
       "Free units",
       "Percentage",
@@ -2773,6 +3158,9 @@
           "After payment",
           "Changed",
           "Internal name",
+          "Plan ID",
+          "Add-on ID",
+          "One-time product ID",
           "External name",
           "Product group",
           "Description",
@@ -2787,10 +3175,28 @@
         "title": "First price",
         "controls": [
           "Add the first price now",
+          "Currency",
           "Frequency",
           "Frequency count",
           "Billing interval",
           "Pricing model",
+          "Bill from a meter",
+          "No meter",
+          "Amount",
+          "Markup on",
+          "List price",
+          "Your cost",
+          "Markup",
+          "Rates are",
+          "Number of units for each rate",
+          "Default rate",
+          "Any",
+          "Fixed rate",
+          "Markup %",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
           "Units per package",
           "Free units",
           "Percentage",
@@ -2892,6 +3298,7 @@
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details"
     ],
     "groups": [
@@ -2920,6 +3327,8 @@
           "MRR",
           "Pricing",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details"
         ]
       },
@@ -2954,7 +3363,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       }
     ],
     "headings": [
@@ -2982,6 +3391,7 @@
       "Renews",
       "Tax",
       "Applies to",
+      "Currency",
       "Frequency",
       "Pricing model",
       "Price ID",
@@ -2990,6 +3400,22 @@
       "Once",
       "Frequency count",
       "Billing interval",
+      "Bill from a meter",
+      "No meter",
+      "Amount",
+      "Markup on",
+      "List price",
+      "Your cost",
+      "Markup",
+      "Rates are",
+      "Number of units for each rate",
+      "Default rate",
+      "Any",
+      "Fixed rate",
+      "Markup %",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
       "Units per package",
       "Free units",
       "Percentage",
@@ -3020,16 +3446,23 @@
       "When the trial ends",
       "Activate and charge",
       "Cancel the subscription",
+      "Give credit each billing period",
       "Unit",
       "Priority",
       "Expires after",
       "Tax on the credit",
       "Taxed at purchase",
       "Taxed at use",
+      "How many",
+      "Windows start",
+      "From the subscription start",
+      "On the calendar",
       "Short first window",
       "The full amount",
       "A prorated amount",
       "Nothing until the first full window",
+      "When the credits renew",
+      "At the end of the billing period",
       "Unused credit expires",
       "Carry unused credit to the next period",
       "Part to carry",
@@ -3063,11 +3496,12 @@
       },
       {
         "title": "Locked after create",
-        "controls": ["Frequency", "Pricing model", "Price ID"]
+        "controls": ["Currency", "Frequency", "Pricing model", "Price ID"]
       },
       {
         "title": "Price",
         "controls": [
+          "Currency",
           "Billed",
           "Recurring",
           "Once",
@@ -3081,6 +3515,23 @@
         "title": "Pricing",
         "controls": [
           "Pricing model",
+          "Bill from a meter",
+          "No meter",
+          "Amount",
+          "Markup on",
+          "List price",
+          "Your cost",
+          "Markup",
+          "Rates are",
+          "Number of units for each rate",
+          "Default rate",
+          "Any",
+          "Fixed rate",
+          "Markup %",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
           "Units per package",
           "Free units",
           "Percentage",
@@ -3125,16 +3576,24 @@
       {
         "title": "Grants credit",
         "controls": [
+          "Give credit each billing period",
           "Unit",
           "Priority",
           "Expires after",
           "Tax on the credit",
           "Taxed at purchase",
           "Taxed at use",
+          "Renews",
+          "How many",
+          "Windows start",
+          "From the subscription start",
+          "On the calendar",
           "Short first window",
           "The full amount",
           "A prorated amount",
           "Nothing until the first full window",
+          "When the credits renew",
+          "At the end of the billing period",
           "Unused credit expires",
           "Carry unused credit to the next period",
           "Part to carry",
@@ -3200,6 +3659,7 @@
       "Renews",
       "Tax",
       "Applies to",
+      "Currency",
       "Frequency",
       "Pricing model",
       "Price ID",
@@ -3208,6 +3668,22 @@
       "Once",
       "Frequency count",
       "Billing interval",
+      "Bill from a meter",
+      "No meter",
+      "Amount",
+      "Markup on",
+      "List price",
+      "Your cost",
+      "Markup",
+      "Rates are",
+      "Number of units for each rate",
+      "Default rate",
+      "Any",
+      "Fixed rate",
+      "Markup %",
+      "Price per unit",
+      "Rate per unit of usage",
+      "Price per package",
       "Units per package",
       "Free units",
       "Percentage",
@@ -3238,16 +3714,23 @@
       "When the trial ends",
       "Activate and charge",
       "Cancel the subscription",
+      "Give credit each billing period",
       "Unit",
       "Priority",
       "Expires after",
       "Tax on the credit",
       "Taxed at purchase",
       "Taxed at use",
+      "How many",
+      "Windows start",
+      "From the subscription start",
+      "On the calendar",
       "Short first window",
       "The full amount",
       "A prorated amount",
       "Nothing until the first full window",
+      "When the credits renew",
+      "At the end of the billing period",
       "Unused credit expires",
       "Carry unused credit to the next period",
       "Part to carry",
@@ -3281,11 +3764,12 @@
       },
       {
         "title": "Locked after create",
-        "controls": ["Frequency", "Pricing model", "Price ID"]
+        "controls": ["Currency", "Frequency", "Pricing model", "Price ID"]
       },
       {
         "title": "Price",
         "controls": [
+          "Currency",
           "Billed",
           "Recurring",
           "Once",
@@ -3299,6 +3783,23 @@
         "title": "Pricing",
         "controls": [
           "Pricing model",
+          "Bill from a meter",
+          "No meter",
+          "Amount",
+          "Markup on",
+          "List price",
+          "Your cost",
+          "Markup",
+          "Rates are",
+          "Number of units for each rate",
+          "Default rate",
+          "Any",
+          "Fixed rate",
+          "Markup %",
+          "Price per unit",
+          "Rate per unit of usage",
+          "Price per package",
+          "Price",
           "Units per package",
           "Free units",
           "Percentage",
@@ -3343,16 +3844,24 @@
       {
         "title": "Grants credit",
         "controls": [
+          "Give credit each billing period",
           "Unit",
           "Priority",
           "Expires after",
           "Tax on the credit",
           "Taxed at purchase",
           "Taxed at use",
+          "Renews",
+          "How many",
+          "Windows start",
+          "From the subscription start",
+          "On the calendar",
           "Short first window",
           "The full amount",
           "A prorated amount",
           "Nothing until the first full window",
+          "When the credits renew",
+          "At the end of the billing period",
           "Unused credit expires",
           "Carry unused credit to the next period",
           "Part to carry",
@@ -3514,6 +4023,8 @@
       "State",
       "Retry",
       "Loading…",
+      "GSTIN",
+      "Registration number",
       "27AAFCN5032R1ZX",
       "Save registration",
       "State to override",
@@ -3522,7 +4033,6 @@
       "Inclusive of tax",
       "Your registered state",
       "— none —",
-      "GSTIN",
       "GST Reg #",
       "VAT Reg #",
       "Tax reg #",
@@ -3562,6 +4072,8 @@
           "State",
           "Retry",
           "Loading…",
+          "GSTIN",
+          "Registration number",
           "27AAFCN5032R1ZX",
           "Save registration",
           "Save tax settings"
@@ -3673,6 +4185,7 @@
       "Credit note number",
       "Credit note ID",
       "Invoice ID",
+      "Subscription ID",
       "Type",
       "Status",
       "Customer ID",
@@ -3728,6 +4241,7 @@
           "Credit note number",
           "Credit note ID",
           "Invoice ID",
+          "Subscription ID",
           "Type",
           "Status",
           "Customer ID",
@@ -3768,6 +4282,8 @@
       "Refund credit note",
       "Amount",
       "Comment",
+      "Possible repeat refund",
+      "Refund again",
       "Issue refund",
       "Reason",
       "Refund method",
@@ -3789,12 +4305,14 @@
       "Customer",
       "Invoice",
       "Created",
+      "Created through",
       "Voided at",
       "Channel",
       "View transaction",
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details",
       "Add a note for your team…",
       "No comments yet",
@@ -3812,6 +4330,8 @@
           "Mark the refund paid",
           "Return as credit",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Void",
           "Void this credit note?"
@@ -3819,7 +4339,7 @@
       },
       {
         "title": "Refund credit note",
-        "controls": ["Amount", "Comment", "Issue refund"]
+        "controls": ["Amount", "Comment", "Possible repeat refund", "Refund again", "Issue refund"]
       },
       {
         "title": "Record an offline refund",
@@ -3854,6 +4374,7 @@
           "Reason",
           "Note",
           "Created",
+          "Created through",
           "Voided at",
           "Channel"
         ]
@@ -3864,7 +4385,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -4020,6 +4541,8 @@
       "VAT number status",
       "VAT validated at",
       "Withholding rate (%)",
+      "Days since last usage",
+      "Credit runway (days)",
       "Created",
       "Updated",
       "References",
@@ -4121,6 +4644,8 @@
           "VAT number status",
           "VAT validated at",
           "Withholding rate (%)",
+          "Days since last usage",
+          "Credit runway (days)",
           "Created",
           "Updated",
           "References",
@@ -4143,6 +4668,7 @@
     "label": "Create Quick Charge",
     "section": "Customers",
     "controls": [
+      "Cancel",
       "Subtotal",
       "Customer",
       "When",
@@ -4156,8 +4682,7 @@
       "Description",
       "Close",
       "Add",
-      "Add charges",
-      "Cancel"
+      "Add charges"
     ],
     "groups": [
       {
@@ -4186,7 +4711,7 @@
         "controls": ["Add charges", "Cancel"]
       }
     ],
-    "headings": ["Charges", "Currency"]
+    "headings": ["Summary", "Charges", "Currency"]
   },
   {
     "route": "/businesses/{business}/customers/{cus}/add_charge_price",
@@ -4194,6 +4719,7 @@
     "label": "Add Charge",
     "section": "Customers",
     "controls": [
+      "Cancel",
       "Subtotal",
       "Customer",
       "When",
@@ -4206,8 +4732,7 @@
       "Description",
       "Close",
       "Add",
-      "Add charges",
-      "Cancel"
+      "Add charges"
     ],
     "groups": [
       {
@@ -4235,7 +4760,7 @@
         "controls": ["Add charges", "Cancel"]
       }
     ],
-    "headings": ["Charges", "Currency"]
+    "headings": ["Summary", "Charges", "Currency"]
   },
   {
     "route": "/businesses/{business}/customers/{cus}/credits/grants/{grant}",
@@ -4301,6 +4826,7 @@
       "Paid",
       "Unit",
       "Money",
+      "Currency",
       "Price, before tax",
       "Tax",
       "Tax treatment",
@@ -4364,6 +4890,7 @@
           "Paid",
           "Unit",
           "Money",
+          "Currency",
           "Price, before tax",
           "Tax",
           "Tax treatment",
@@ -4489,11 +5016,14 @@
       "No customer policy",
       "Net term days",
       "Not set",
+      "City",
+      "Place for this postal code",
+      "Select a place…",
       "Country",
       "Select a country…",
+      "Retry",
       "Address line 3",
       "+ Add address line 3",
-      "Retry",
       "Tax exempt",
       "Price type",
       "Use the price type of each price",
@@ -4502,15 +5032,18 @@
       "VAT / GST number",
       "Withholding / TDS rate",
       "Tax treatment",
+      "GSTIN",
       "Tax registration number",
       "CC on invoices and receipts",
       "finance@example.com",
       "BCC on invoices and receipts",
       "records@example.com",
+      "Metadata",
       "Metadata as JSON",
       "None",
       "True",
       "False",
+      "Suggestions",
       "Customers",
       "Edit",
       "Save changes",
@@ -4564,22 +5097,28 @@
         "title": "Billing address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       },
       {
         "title": "Default shipping address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       },
       {
@@ -4593,6 +5132,7 @@
           "VAT / GST number",
           "Withholding / TDS rate",
           "Tax treatment",
+          "GSTIN",
           "Tax registration number"
         ]
       },
@@ -4607,7 +5147,15 @@
       },
       {
         "title": "JSON metadata",
-        "controls": ["Metadata as JSON", "None", "Not set", "True", "False"]
+        "controls": [
+          "Metadata",
+          "Metadata as JSON",
+          "None",
+          "Not set",
+          "True",
+          "False",
+          "Suggestions"
+        ]
       },
       {
         "title": "Action bar",
@@ -4634,6 +5182,9 @@
     "section": "Customers",
     "controls": [
       "View customers",
+      "Gateway for new payment methods",
+      "Same as business setting",
+      "Save",
       "ID",
       "Email",
       "First name",
@@ -4641,6 +5192,7 @@
       "Company",
       "Phone",
       "Created",
+      "Created through",
       "Preferred currency",
       "Language",
       "Auto collection",
@@ -4672,16 +5224,18 @@
       "Change billing date",
       "Day of month",
       "Billing date source",
-      "Save",
       "Tax details",
       "Billing address",
       "Edit billing address",
       "Not set",
+      "City",
+      "Place for this postal code",
+      "Select a place…",
       "Country",
       "Select a country…",
+      "Retry",
       "Address line 3",
       "+ Add address line 3",
-      "Retry",
       "Save address",
       "Additional contacts",
       "Edit",
@@ -4698,6 +5252,7 @@
       "Collect payment",
       "Close",
       "Payment method",
+      "Automatic: primary, then backups",
       "Request payment",
       "How to request payment",
       "Charge now",
@@ -4716,6 +5271,7 @@
       "Note",
       "Record payment",
       "Manage credits",
+      "Currency",
       "Manage promotional credits",
       "Action",
       "Credit action",
@@ -4736,31 +5292,57 @@
       "Archive customer?",
       "API requests",
       "View invoice",
-      "Automatic: primary, then backups",
       "Collect",
-      "No payment method on file",
-      "Request a card",
-      "Total due",
-      "Upcoming payment",
-      "Lifetime revenue",
-      "Billing",
-      "New subscription",
-      "No subscriptions",
-      "No payment methods",
-      "Make primary",
-      "Remove backup",
-      "Make backup",
       "Done",
       "To",
       "name@example.com",
       "Add a covering message…",
+      "No payment method on file",
+      "Request a card",
+      "Automatic retry",
+      "Last attempt, at the end of the dunning period",
+      "Held for our team: no automatic charges",
+      "Final action",
+      "View earlier on the invoice",
+      "Total due",
+      "Upcoming payment",
+      "Revenue",
+      "Billing",
+      "New subscription",
+      "No subscriptions",
+      "No payment methods",
+      "Gateway",
+      "Gateway account",
+      "Reference ID",
+      "Payment method ID",
+      "Status",
+      "Expiry date",
+      "Funding",
+      "Holder type",
+      "Issuing country",
+      "Issuing bank",
+      "3D Secure",
+      "International use",
+      "Recurring debits",
+      "Fingerprint",
+      "Mandate rail",
+      "Mandate status",
+      "Max per debit",
+      "Mandate expires",
+      "AVS / CVC",
+      "Make primary",
+      "Remove backup",
+      "Make backup",
       "Remove payment method?",
       "Promotional credits",
       "Refundable credits",
       "Excess payments",
       "its invoice",
       "Refund…",
+      "Reason",
       "e.g. Charged twice for the same period",
+      "Possible repeat refund",
+      "Refund again",
       "Refund",
       "View usage by model and day",
       "View credits",
@@ -4782,13 +5364,14 @@
       "Records",
       "Invoices",
       "Transactions",
+      "Payment intents",
       "Credit notes",
       "Email logs",
       "Events",
+      "No payment intents",
       "View",
       "Type",
       "Cc (contacts)",
-      "Status",
       "Transport",
       "Provider feedback",
       "Attempts",
@@ -4809,6 +5392,9 @@
         "title": null,
         "controls": [
           "View customers",
+          "Gateway for new payment methods",
+          "Same as business setting",
+          "Save",
           "ID",
           "Email",
           "First name",
@@ -4816,6 +5402,7 @@
           "Company",
           "Phone",
           "Created",
+          "Created through",
           "Preferred currency",
           "Language",
           "Auto collection",
@@ -4849,11 +5436,14 @@
           "Billing address",
           "Edit billing address",
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
           "+ Add address line 3",
-          "Retry",
           "Save address",
           "Additional contacts",
           "Edit",
@@ -4870,16 +5460,42 @@
           "Automatic: primary, then backups",
           "No payment method on file",
           "Request a card",
+          "Automatic retry",
+          "Last attempt, at the end of the dunning period",
+          "Held for our team: no automatic charges",
+          "Final action",
+          "View earlier on the invoice",
           "Invoice",
           "Total due",
           "Upcoming payment",
-          "Lifetime revenue",
+          "Revenue",
           "Billing",
+          "Gateway",
+          "Gateway account",
+          "Reference ID",
+          "Payment method ID",
+          "Status",
+          "Expiry date",
+          "Funding",
+          "Holder type",
+          "Issuing country",
+          "Issuing bank",
+          "3D Secure",
+          "International use",
+          "Recurring debits",
+          "Fingerprint",
+          "Mandate rail",
+          "Mandate status",
+          "Max per debit",
+          "Mandate expires",
+          "AVS / CVC",
           "Make primary",
           "Remove backup",
           "Make backup",
           "Remove payment method?",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Account details",
           "Clear personal data"
@@ -4898,6 +5514,7 @@
         "controls": [
           "Collect payment",
           "Payment method",
+          "Automatic: primary, then backups",
           "Request payment",
           "How to request payment",
           "Charge now",
@@ -4908,6 +5525,7 @@
           "Record offline payment",
           "Manage credits",
           "Amount",
+          "Currency",
           "Manage promotional credits",
           "Action",
           "Credit action",
@@ -4949,11 +5567,14 @@
         "controls": [
           "Edit billing address",
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
           "+ Add address line 3",
-          "Retry",
           "Save address",
           "Edit Customer",
           "Restore",
@@ -4967,16 +5588,16 @@
         "controls": ["API requests"]
       },
       {
+        "title": "Send email",
+        "controls": ["Done", "Email", "To", "name@example.com", "Note", "Add a covering message…"]
+      },
+      {
         "title": "Subscriptions",
         "controls": ["New subscription", "No subscriptions"]
       },
       {
         "title": "Payment methods",
         "controls": ["No payment methods"]
-      },
-      {
-        "title": "Send email",
-        "controls": ["Done", "Email", "To", "name@example.com", "Note", "Add a covering message…"]
       },
       {
         "title": "Balances & credits",
@@ -4990,7 +5611,14 @@
       },
       {
         "title": "Refund excess payment",
-        "controls": ["Amount", "e.g. Charged twice for the same period", "Refund"]
+        "controls": [
+          "Amount",
+          "Reason",
+          "e.g. Charged twice for the same period",
+          "Possible repeat refund",
+          "Refund again",
+          "Refund"
+        ]
       },
       {
         "title": "Usage this period",
@@ -5033,11 +5661,14 @@
         "controls": [
           "Label",
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
           "+ Add address line 3",
-          "Retry",
           "Make this the default shipping address",
           "Restore",
           "Make default",
@@ -5050,9 +5681,11 @@
         "controls": [
           "Invoices",
           "Transactions",
+          "Payment intents",
           "Credit notes",
           "Email logs",
           "Events",
+          "No payment intents",
           "View",
           "Type",
           "To",
@@ -5068,7 +5701,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -5089,9 +5722,10 @@
       "Record offline payment",
       "Customer",
       "Developers",
+      "Send email",
+      "What happens next, if each retry fails",
       "Subscriptions",
       "Payment methods",
-      "Send email",
       "Unbilled charges",
       "Balances & credits",
       "Held as excess credit",
@@ -5189,6 +5823,7 @@
       "Plan",
       "Watch",
       "Meter",
+      "Currency",
       "Thresholds in",
       "Thresholds",
       "Send an email to the customer",
@@ -5303,6 +5938,7 @@
           "Watch",
           "Meter",
           "Interval",
+          "Currency",
           "Thresholds in",
           "Thresholds",
           "Send an email to the customer",
@@ -5336,6 +5972,7 @@
       "Resolution",
       "Cost",
       "Per",
+      "Currency",
       "Starts",
       "Note",
       "Save cost",
@@ -5355,6 +5992,7 @@
           "Resolution",
           "Cost",
           "Per",
+          "Currency",
           "Starts",
           "Note",
           "Save cost"
@@ -5403,11 +6041,14 @@
       "No customer policy",
       "Net term days",
       "Not set",
+      "City",
+      "Place for this postal code",
+      "Select a place…",
       "Country",
       "Select a country…",
+      "Retry",
       "Address line 3",
       "+ Add address line 3",
-      "Retry",
       "Tax exempt",
       "Price type",
       "Use the price type of each price",
@@ -5416,15 +6057,18 @@
       "VAT / GST number",
       "Withholding / TDS rate",
       "Tax treatment",
+      "GSTIN",
       "Tax registration number",
       "CC on invoices and receipts",
       "finance@example.com",
       "BCC on invoices and receipts",
       "records@example.com",
+      "Metadata",
       "Metadata as JSON",
       "None",
       "True",
       "False",
+      "Suggestions",
       "Customers",
       "New customer",
       "Save changes",
@@ -5478,22 +6122,28 @@
         "title": "Billing address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       },
       {
         "title": "Default shipping address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       },
       {
@@ -5507,6 +6157,7 @@
           "VAT / GST number",
           "Withholding / TDS rate",
           "Tax treatment",
+          "GSTIN",
           "Tax registration number"
         ]
       },
@@ -5521,7 +6172,15 @@
       },
       {
         "title": "JSON metadata",
-        "controls": ["Metadata as JSON", "None", "Not set", "True", "False"]
+        "controls": [
+          "Metadata",
+          "Metadata as JSON",
+          "None",
+          "Not set",
+          "True",
+          "False",
+          "Suggestions"
+        ]
       },
       {
         "title": "Action bar",
@@ -5664,7 +6323,7 @@
       "Provider feedback",
       "Attempts",
       "Last error",
-      "Delivery report"
+      "Email report"
     ],
     "groups": [
       {
@@ -5691,7 +6350,7 @@
           "Provider feedback",
           "Attempts",
           "Last error",
-          "Delivery report"
+          "Email report"
         ]
       }
     ],
@@ -5700,36 +6359,11 @@
   {
     "route": "/businesses/{business}/emails/report",
     "scope": "biz",
-    "label": "Email delivery report",
+    "label": "Report",
     "section": "Emails",
-    "controls": [
-      "Delivered",
-      "Failed",
-      "Bounced",
-      "Complaints",
-      "Skipped",
-      "Waiting",
-      "Not sent to a mail server",
-      "Period",
-      "weeks"
-    ],
-    "groups": [
-      {
-        "title": null,
-        "controls": [
-          "Delivered",
-          "Failed",
-          "Bounced",
-          "Complaints",
-          "Skipped",
-          "Waiting",
-          "Not sent to a mail server",
-          "Period",
-          "weeks"
-        ]
-      }
-    ],
-    "headings": ["By email type", "By week"]
+    "controls": [],
+    "groups": [],
+    "headings": []
   },
   {
     "route": "/businesses/{business}/events",
@@ -5740,6 +6374,10 @@
       "We could not load the events",
       "API",
       "Dashboard",
+      "Customer portal",
+      "Checkout",
+      "Gateway notification",
+      "AI agent (MCP)",
       "Billing clock / jobs",
       "Migration",
       "System",
@@ -5748,6 +6386,7 @@
       "Event type",
       "Resource type",
       "Resource ID",
+      "Customer ID",
       "Source",
       "Actor",
       "Trace ID",
@@ -5766,6 +6405,10 @@
           "We could not load the events",
           "API",
           "Dashboard",
+          "Customer portal",
+          "Checkout",
+          "Gateway notification",
+          "AI agent (MCP)",
           "Billing clock / jobs",
           "Migration",
           "System",
@@ -5774,6 +6417,7 @@
           "Event type",
           "Resource type",
           "Resource ID",
+          "Customer ID",
           "Source",
           "Actor",
           "Trace ID",
@@ -5806,6 +6450,8 @@
       "API version",
       "Resource",
       "Occurred at",
+      "Audit record",
+      "View audit record",
       "Webhook status",
       "Webhook deliveries",
       "enabled webhook endpoint",
@@ -5855,6 +6501,8 @@
           "API version",
           "Resource",
           "Occurred at",
+          "Audit record",
+          "View audit record",
           "Webhook status"
         ]
       }
@@ -5880,6 +6528,7 @@
       "Operation",
       "Source",
       "Method",
+      "Browser (reported)",
       "URL",
       "HTTP status",
       "Error",
@@ -5909,6 +6558,7 @@
           "Operation",
           "Source",
           "Method",
+          "Browser (reported)",
           "URL",
           "HTTP status",
           "Error",
@@ -5942,6 +6592,8 @@
       "Webhook ID",
       "Transaction",
       "Gateway intent",
+      "Payment intent",
+      "Payment attempt",
       "Gateway",
       "Event type",
       "Outcome",
@@ -5954,7 +6606,10 @@
       "Received",
       "Inspect",
       "No gateway webhooks",
-      "Provider event id"
+      "Webhook",
+      "Provider event id",
+      "Headers",
+      "Payload"
     ],
     "groups": [
       {
@@ -5971,6 +6626,8 @@
           "Webhook ID",
           "Transaction",
           "Gateway intent",
+          "Payment intent",
+          "Payment attempt",
           "Gateway",
           "Event type",
           "Outcome",
@@ -5983,7 +6640,10 @@
           "Received",
           "Inspect",
           "No gateway webhooks",
-          "Provider event id"
+          "Webhook",
+          "Provider event id",
+          "Headers",
+          "Payload"
         ]
       }
     ],
@@ -6414,6 +7074,7 @@
       "Customer name",
       "Customer email",
       "Subscription ID",
+      "Currency",
       "Sub total (minor units)",
       "Amount (minor units)",
       "Promotional discount (minor units)",
@@ -6492,6 +7153,7 @@
           "Customer name",
           "Customer email",
           "Subscription ID",
+          "Currency",
           "Sub total (minor units)",
           "Amount (minor units)",
           "Promotional discount (minor units)",
@@ -6535,6 +7197,7 @@
           "Search by name, email, company, phone or ID…",
           "Search customers",
           "Create customer",
+          "Currency",
           "Currency (optional)",
           "Description",
           "Add item",
@@ -6559,12 +7222,18 @@
       "Attempts",
       "Next automatic retry",
       "No payments yet",
+      "Automatic retry",
+      "Last attempt, at the end of the dunning period",
+      "Held for our team: no automatic charges",
+      "Final action",
+      "View earlier on the invoice",
       "Pause dunning…",
       "Pause dunning",
       "Pause retries until",
       "Stop dunning?",
       "Create credit note",
       "Open search",
+      "View order",
       "View receipts",
       "Close this invoice?",
       "Retry now",
@@ -6598,6 +7267,11 @@
       "Automatic: primary, then backups",
       "Payment method",
       "Collect",
+      "Refundable credit available",
+      "Excess payments available",
+      "Credit to apply",
+      "Amount due after",
+      "Apply credits",
       "Record an offline payment",
       "Payment date",
       "Reference number",
@@ -6625,6 +7299,8 @@
       "Refund date",
       "Record refund",
       "Issue a refund",
+      "Possible repeat refund",
+      "Refund again",
       "Issue refund",
       "Pay out credit note",
       "Close invoice now",
@@ -6640,6 +7316,7 @@
       "Customer",
       "Subscription",
       "Invoiced on",
+      "Created through",
       "Billing period",
       "Due date",
       "Expected payment",
@@ -6653,6 +7330,7 @@
       "Records",
       "No activity yet",
       "Older events",
+      "View all",
       "Details",
       "Add a note for your team…",
       "No comments yet",
@@ -6672,11 +7350,17 @@
           "Attempts",
           "Next automatic retry",
           "No payments yet",
+          "Automatic retry",
+          "Last attempt, at the end of the dunning period",
+          "Held for our team: no automatic charges",
+          "Final action",
+          "View earlier on the invoice",
           "Pause dunning…",
           "Pause dunning",
           "Pause retries until",
           "Stop dunning?",
           "Open search",
+          "View order",
           "Close invoice now",
           "Close this invoice?",
           "Pending invoice",
@@ -6689,6 +7373,8 @@
           "This payment did not pay this invoice",
           "View the customer's balances",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Void invoice",
           "Void invoice?",
@@ -6763,6 +7449,16 @@
         "controls": ["Payment method", "Collect"]
       },
       {
+        "title": "Apply credits",
+        "controls": [
+          "Refundable credit available",
+          "Excess payments available",
+          "Credit to apply",
+          "Amount due after",
+          "Apply credits"
+        ]
+      },
+      {
         "title": "Record an offline payment",
         "controls": ["Payment method", "Payment date", "Reference number", "Note", "Record payment"]
       },
@@ -6783,7 +7479,7 @@
       },
       {
         "title": "Issue a refund",
-        "controls": ["Issue refund"]
+        "controls": ["Possible repeat refund", "Refund again", "Issue refund"]
       },
       {
         "title": "Line items",
@@ -6795,6 +7491,7 @@
           "Customer",
           "Subscription",
           "Invoiced on",
+          "Created through",
           "Billing period",
           "Due date",
           "Expected payment",
@@ -6830,7 +7527,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -6842,11 +7539,13 @@
       }
     ],
     "headings": [
+      "What happens next, if each retry fails",
       "Credit notes",
       "Invoice actions",
       "Send email",
       "Payment and credit",
       "Collect payment",
+      "Apply credits",
       "Record an offline payment",
       "Create a credit note",
       "Record an offline refund",
@@ -6871,6 +7570,280 @@
     "headings": []
   },
   {
+    "route": "/businesses/{business}/orders",
+    "scope": "biz",
+    "label": "Orders",
+    "section": "Orders",
+    "controls": [
+      "API",
+      "Dashboard",
+      "System (billing clock)",
+      "Import",
+      "Paid",
+      "Due",
+      "Refunded",
+      "Partly refunded",
+      "All orders",
+      "Invoice number",
+      "Invoice ID",
+      "Status",
+      "Invoice status",
+      "Product",
+      "Coupon code",
+      "Channel",
+      "Customer ID",
+      "Customer name",
+      "Customer email",
+      "Billing country",
+      "Amount (minor units)",
+      "Discount (minor units)",
+      "Tax (minor units)",
+      "Refunded (minor units)",
+      "Gateway",
+      "Payment method type",
+      "Date",
+      "Paid on",
+      "Due date",
+      "Amount",
+      "References",
+      "View order",
+      "View invoice",
+      "View customer",
+      "Quick actions",
+      "Download invoice PDF",
+      "Refund",
+      "No orders yet",
+      "Create a payment link",
+      "Create a one-time product"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "API",
+          "Dashboard",
+          "System (billing clock)",
+          "Import",
+          "Paid",
+          "Due",
+          "Refunded",
+          "Partly refunded",
+          "All orders",
+          "Invoice number",
+          "Invoice ID",
+          "Status",
+          "Invoice status",
+          "Product",
+          "Coupon code",
+          "Channel",
+          "Customer ID",
+          "Customer name",
+          "Customer email",
+          "Billing country",
+          "Amount (minor units)",
+          "Discount (minor units)",
+          "Tax (minor units)",
+          "Refunded (minor units)",
+          "Gateway",
+          "Payment method type",
+          "Date",
+          "Paid on",
+          "Due date",
+          "Amount",
+          "References",
+          "View order",
+          "View invoice",
+          "View customer",
+          "Quick actions",
+          "Download invoice PDF",
+          "Refund",
+          "No orders yet",
+          "Create a payment link",
+          "Create a one-time product"
+        ]
+      }
+    ],
+    "headings": []
+  },
+  {
+    "route": "/businesses/{business}/orders/{order}",
+    "scope": "biz",
+    "label": "Order",
+    "section": "Orders",
+    "controls": [
+      "View orders",
+      "Amount",
+      "Reason code",
+      "Reason",
+      "Note",
+      "Comment",
+      "Issue a refund",
+      "Possible repeat refund",
+      "Refund again",
+      "Issue refund",
+      "Record an offline refund",
+      "Refund method",
+      "Refund date",
+      "Reference number",
+      "Record refund",
+      "Create a credit note",
+      "This credit note should",
+      "What this credit note should do",
+      "Adjust the amount due",
+      "Provide refundable credits",
+      "Advanced: edit line items ›",
+      "Create credit note",
+      "Paid",
+      "Due",
+      "Refunded",
+      "Partly refunded",
+      "View invoice",
+      "View receipts",
+      "Done",
+      "Email",
+      "To",
+      "name@example.com",
+      "Add a covering message…",
+      "No line items",
+      "Status",
+      "Ordered on",
+      "Created through",
+      "Paid on",
+      "Due date",
+      "Channel",
+      "Invoice status",
+      "Payment",
+      "Customer",
+      "Billed to",
+      "Billing address",
+      "Discount",
+      "Documents",
+      "Credit note",
+      "View receipts for this order",
+      "Records",
+      "No activity yet",
+      "Older events",
+      "View all",
+      "Details",
+      "Add a note for your team…",
+      "No comments yet",
+      "Delete"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "View orders",
+          "Amount",
+          "Reason code",
+          "Reason",
+          "Note",
+          "Comment",
+          "Issue a refund",
+          "Record an offline refund",
+          "Create a credit note",
+          "Paid",
+          "Due",
+          "Refunded",
+          "Partly refunded",
+          "View invoice",
+          "Payment",
+          "Customer",
+          "Documents",
+          "Records",
+          "No activity yet",
+          "Older events",
+          "Details"
+        ]
+      },
+      {
+        "title": "Issue a refund",
+        "controls": ["Possible repeat refund", "Refund again", "Issue refund"]
+      },
+      {
+        "title": "Record an offline refund",
+        "controls": ["Refund method", "Refund date", "Reference number", "Record refund"]
+      },
+      {
+        "title": "Create a credit note",
+        "controls": [
+          "This credit note should",
+          "What this credit note should do",
+          "Adjust the amount due",
+          "Provide refundable credits",
+          "Advanced: edit line items ›",
+          "Create credit note"
+        ]
+      },
+      {
+        "title": "Order actions",
+        "controls": ["View receipts"]
+      },
+      {
+        "title": "Send email",
+        "controls": ["Done", "Email", "To", "name@example.com", "Note", "Add a covering message…"]
+      },
+      {
+        "title": "Items",
+        "controls": ["No line items"]
+      },
+      {
+        "title": "Order details",
+        "controls": [
+          "Status",
+          "Paid",
+          "Due",
+          "Refunded",
+          "Partly refunded",
+          "Ordered on",
+          "Created through",
+          "Paid on",
+          "Due date",
+          "Channel",
+          "Invoice status"
+        ]
+      },
+      {
+        "title": "Customer",
+        "controls": ["Customer", "Email", "Billed to", "Billing address"]
+      },
+      {
+        "title": "Coupon",
+        "controls": ["Discount"]
+      },
+      {
+        "title": "Documents",
+        "controls": ["Credit note", "View receipts for this order"]
+      },
+      {
+        "title": "Activity log",
+        "controls": ["View all"]
+      },
+      {
+        "title": "Comments",
+        "controls": ["Add a note for your team…", "Comment", "No comments yet", "Delete"]
+      }
+    ],
+    "headings": [
+      "Issue a refund",
+      "Record an offline refund",
+      "Create a credit note",
+      "Order actions",
+      "Send email",
+      "Refund and credit",
+      "Items",
+      "Order details",
+      "Payment",
+      "Refunds",
+      "Customer",
+      "Coupon",
+      "Documents",
+      "Activity log",
+      "Comments",
+      "JSON metadata"
+    ]
+  },
+  {
     "route": "/businesses/{business}/payment_intents",
     "scope": "biz",
     "label": "Payment intents",
@@ -6889,6 +7862,7 @@
       "Status",
       "Type",
       "Payment",
+      "Customer ID",
       "No payment intents",
       "Views",
       "We could not load the payments dashboard",
@@ -6918,6 +7892,7 @@
           "Status",
           "Type",
           "Payment",
+          "Customer ID",
           "No payment intents",
           "Views",
           "We could not load the payments dashboard",
@@ -6959,6 +7934,7 @@
       "Amount",
       "Gateway",
       "Created at",
+      "Source",
       "Mandate ceiling",
       "Expires at",
       "Voided at",
@@ -7003,6 +7979,7 @@
           "Amount",
           "Gateway",
           "Created at",
+          "Source",
           "Mandate ceiling",
           "Expires at",
           "Voided at",
@@ -7094,6 +8071,8 @@
       "Paid",
       "Cancel reason",
       "Created",
+      "Sent by",
+      "Source",
       "View all"
     ],
     "groups": [
@@ -7142,7 +8121,9 @@
           "Expires",
           "Paid",
           "Cancel reason",
-          "Created"
+          "Created",
+          "Sent by",
+          "Source"
         ]
       },
       {
@@ -7284,6 +8265,106 @@
     ]
   },
   {
+    "route": "/businesses/{business}/reports/checkout",
+    "scope": "biz",
+    "label": "Checkout report",
+    "section": "Reports",
+    "controls": [
+      "Businesses",
+      "Portfolio",
+      "Current",
+      "Performance",
+      "Period",
+      "Compare to the previous period",
+      "Last 7 days",
+      "Last 28 days",
+      "Last 90 days",
+      "This month",
+      "Last month",
+      "All checkout links",
+      "All products",
+      "checkout report",
+      "Checkouts opened per minute",
+      "Checkouts opened",
+      "Conversion rate",
+      "Completed checkouts",
+      "Revenue",
+      "Average order value",
+      "Abandoned",
+      "Recovered by reminders",
+      "Median time to complete",
+      "No tracked visits in this period",
+      "No reason recorded",
+      "Other reasons",
+      "1st reminder, 1 hour after",
+      "2nd reminder, 1 day after",
+      "Unknown browser",
+      "All countries",
+      "All devices"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Businesses",
+          "Portfolio",
+          "Current",
+          "Performance",
+          "Period",
+          "Compare to the previous period",
+          "Last 7 days",
+          "Last 28 days",
+          "Last 90 days",
+          "This month",
+          "Last month",
+          "All checkout links",
+          "All products",
+          "checkout report",
+          "Checkouts opened per minute",
+          "Checkouts opened",
+          "Conversion rate",
+          "Completed checkouts",
+          "Revenue",
+          "Average order value",
+          "Abandoned",
+          "Recovered by reminders",
+          "Median time to complete",
+          "No tracked visits in this period",
+          "All countries",
+          "All devices"
+        ]
+      },
+      {
+        "title": "Payment failures",
+        "controls": ["No reason recorded", "Other reasons"]
+      },
+      {
+        "title": "Abandoned and recovered",
+        "controls": ["1st reminder, 1 hour after", "2nd reminder, 1 day after"]
+      },
+      {
+        "title": "Browsers",
+        "controls": ["Unknown browser"]
+      }
+    ],
+    "headings": [
+      "Checkout funnel",
+      "Checkouts opened and completed",
+      "Where buyers come from",
+      "By checkout link",
+      "Payment methods",
+      "Payment failures",
+      "Abandoned and recovered",
+      "Recovered after each reminder",
+      "Coupons",
+      "Billing country",
+      "Time to complete",
+      "Devices",
+      "Browsers",
+      "Time on each step"
+    ]
+  },
+  {
     "route": "/businesses/{business}/reports/credits",
     "scope": "biz",
     "label": "Credits",
@@ -7292,13 +8373,23 @@
       "Meter",
       "Day",
       "Customer",
+      "7 days or less",
+      "8 to 30 days",
+      "31 to 90 days",
+      "More than 90 days",
+      "No use in the last 7 days",
       "From month",
       "To month",
+      "Currency",
       "Unit",
       "All units",
       "Credit in money",
       "View report",
       "No paid credit",
+      "Credit burn rate",
+      "Packs sold",
+      "Pack sales billed",
+      "Revenue recognized",
       "From",
       "To",
       "Group by",
@@ -7307,13 +8398,24 @@
     "groups": [
       {
         "title": null,
-        "controls": ["Meter", "Day", "Customer", "No refused usage"]
+        "controls": [
+          "Meter",
+          "Day",
+          "Customer",
+          "7 days or less",
+          "8 to 30 days",
+          "31 to 90 days",
+          "More than 90 days",
+          "No use in the last 7 days",
+          "No refused usage"
+        ]
       },
       {
         "title": "Deferred credit revenue",
         "controls": [
           "From month",
           "To month",
+          "Currency",
           "Unit",
           "All units",
           "Credit in money",
@@ -7325,11 +8427,26 @@
         "controls": ["No paid credit"]
       },
       {
+        "title": "Burn rate and runway",
+        "controls": ["Credit burn rate"]
+      },
+      {
+        "title": "Credit packs",
+        "controls": ["Packs sold", "Pack sales billed", "Revenue recognized"]
+      },
+      {
         "title": "Refused usage",
         "controls": ["From", "To", "Group by", "View report"]
       }
     ],
-    "headings": ["Deferred credit revenue", "By month", "Refused usage"]
+    "headings": [
+      "Deferred credit revenue",
+      "By month",
+      "Burn rate and runway",
+      "Credit with no money value",
+      "Credit packs",
+      "Refused usage"
+    ]
   },
   {
     "route": "/businesses/{business}/reports/customers",
@@ -7346,6 +8463,7 @@
       "Present",
       "Absent",
       "Select one",
+      "Days",
       "Name",
       "Description",
       "customers",
@@ -7365,7 +8483,8 @@
           "Value",
           "Present",
           "Absent",
-          "Select one"
+          "Select one",
+          "Days"
         ]
       },
       {
@@ -7422,6 +8541,15 @@
       "Nothing to report yet",
       "Explore",
       "No widgets on this board yet",
+      "Last 7 days",
+      "Last 30 days",
+      "Last 90 days",
+      "Last 6 months",
+      "Last 12 months",
+      "This month",
+      "Last month",
+      "This quarter",
+      "This year",
       "Keep arranging",
       "Discard changes",
       "Discard",
@@ -7442,16 +8570,7 @@
       "Dimension to split by",
       "With chart",
       "Figure only",
-      "Width for the new tile",
-      "Last 7 days",
-      "Last 30 days",
-      "Last 90 days",
-      "Last 6 months",
-      "Last 12 months",
-      "This month",
-      "Last month",
-      "This quarter",
-      "This year"
+      "Width for the new tile"
     ],
     "groups": [
       {
@@ -7480,15 +8599,6 @@
           "Nothing to report yet",
           "Explore",
           "No widgets on this board yet",
-          "Keep arranging",
-          "Discard changes",
-          "Discard",
-          "Edit layout",
-          "Quarter width",
-          "Half width",
-          "Three quarters",
-          "Full width",
-          "Add widget",
           "Last 7 days",
           "Last 30 days",
           "Last 90 days",
@@ -7497,7 +8607,16 @@
           "This month",
           "Last month",
           "This quarter",
-          "This year"
+          "This year",
+          "Keep arranging",
+          "Discard changes",
+          "Discard",
+          "Edit layout",
+          "Quarter width",
+          "Half width",
+          "Three quarters",
+          "Full width",
+          "Add widget"
         ]
       },
       {
@@ -7532,6 +8651,93 @@
       "My dashboards",
       "Shared with the organization",
       "Add a widget"
+    ]
+  },
+  {
+    "route": "/businesses/{business}/reports/emails",
+    "scope": "biz",
+    "label": "Email report",
+    "section": "Reports",
+    "controls": [
+      "Businesses",
+      "Portfolio",
+      "Current",
+      "Performance",
+      "Period",
+      "Compare to the previous period",
+      "Last 7 days",
+      "Last 28 days",
+      "Last 90 days",
+      "This month",
+      "Last month",
+      "All email types",
+      "All transports",
+      "email report",
+      "Emails queued per minute",
+      "Emails queued",
+      "Delivered rate",
+      "Open rate",
+      "Click rate",
+      "Bounce rate",
+      "Complaint rate",
+      "Failed",
+      "Skipped",
+      "Portal visits from emails",
+      "Recovered by failed-payment emails",
+      "Failed, bounced or complaint",
+      "No reason stored"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Businesses",
+          "Portfolio",
+          "Current",
+          "Performance",
+          "Period",
+          "Compare to the previous period",
+          "Last 7 days",
+          "Last 28 days",
+          "Last 90 days",
+          "This month",
+          "Last month",
+          "All email types",
+          "All transports",
+          "email report",
+          "Emails queued per minute",
+          "Emails queued",
+          "Delivered rate",
+          "Open rate",
+          "Click rate",
+          "Bounce rate",
+          "Complaint rate",
+          "Failed",
+          "Skipped",
+          "Portal visits from emails",
+          "Recovered by failed-payment emails"
+        ]
+      },
+      {
+        "title": "Emails per day",
+        "controls": ["Failed, bounced or complaint"]
+      },
+      {
+        "title": "Skipped emails",
+        "controls": ["No reason stored"]
+      }
+    ],
+    "headings": [
+      "From queue to payment",
+      "Emails per day",
+      "By email type",
+      "Most-clicked links",
+      "Why emails did not arrive",
+      "By transport",
+      "Recipient domains",
+      "Failed-payment emails in order",
+      "Skipped emails",
+      "Recent emails"
     ]
   },
   {
@@ -7604,6 +8810,105 @@
     "headings": ["Query"]
   },
   {
+    "route": "/businesses/{business}/reports/portal",
+    "scope": "biz",
+    "label": "Portal report",
+    "section": "Reports",
+    "controls": [
+      "Downloaded an invoice PDF",
+      "Businesses",
+      "Portfolio",
+      "Current",
+      "Performance",
+      "Period",
+      "Compare to the previous period",
+      "Last 7 days",
+      "Last 28 days",
+      "Last 90 days",
+      "This month",
+      "Last month",
+      "All arrivals",
+      "All plans",
+      "portal report",
+      "Visits per minute",
+      "Portal visits",
+      "Customers",
+      "Visits with an action",
+      "Paid in the portal",
+      "Recovered from failed-payment emails",
+      "Payment methods added",
+      "Cancellations",
+      "Save rate",
+      "Settings, Customer portal",
+      "Started to cancel",
+      "Saw an offer",
+      "Took an offer",
+      "Saved",
+      "No tracked visits in this period",
+      "All countries",
+      "All devices"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Downloaded an invoice PDF",
+          "Businesses",
+          "Portfolio",
+          "Current",
+          "Performance",
+          "Period",
+          "Compare to the previous period",
+          "Last 7 days",
+          "Last 28 days",
+          "Last 90 days",
+          "This month",
+          "Last month",
+          "All arrivals",
+          "All plans",
+          "portal report",
+          "Visits per minute",
+          "Portal visits",
+          "Customers",
+          "Visits with an action",
+          "Paid in the portal",
+          "Recovered from failed-payment emails",
+          "Payment methods added",
+          "Cancellations",
+          "Save rate",
+          "No tracked visits in this period",
+          "All countries",
+          "All devices"
+        ]
+      },
+      {
+        "title": "Payment methods",
+        "controls": ["Settings, Customer portal"]
+      },
+      {
+        "title": "Plan changes and cancellations",
+        "controls": ["Started to cancel", "Saw an offer", "Took an offer", "Saved"]
+      }
+    ],
+    "headings": [
+      "How customers arrive",
+      "From link to action",
+      "Visits and visits with an action",
+      "What customers do",
+      "Payments in the portal",
+      "Payment methods",
+      "Why customers delete a method",
+      "Plan changes and cancellations",
+      "Cancel flow",
+      "Offers taken",
+      "Cancellation reasons",
+      "Portal sections viewed",
+      "Countries",
+      "Devices",
+      "Recent portal visits"
+    ]
+  },
+  {
     "route": "/businesses/{business}/reports/recovery",
     "scope": "biz",
     "label": "Recovery",
@@ -7656,6 +8961,77 @@
       }
     ],
     "headings": ["Dunning outcomes", "By outcome", "Active recoveries"]
+  },
+  {
+    "route": "/businesses/{business}/reports/sales",
+    "scope": "biz",
+    "label": "Sales",
+    "section": "Reports",
+    "controls": [
+      "Businesses",
+      "Portfolio",
+      "Current",
+      "Performance",
+      "Period",
+      "Compare to the previous period",
+      "Last 7 days",
+      "Last 28 days",
+      "Last 90 days",
+      "This month",
+      "Last month",
+      "sales report",
+      "Orders",
+      "Order revenue",
+      "Average order value",
+      "Buyers",
+      "Returning buyer rate",
+      "Refunds",
+      "Refund rate",
+      "Revenue per buyer, all time",
+      "Repeat buyers"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Businesses",
+          "Portfolio",
+          "Current",
+          "Performance",
+          "Period",
+          "Compare to the previous period",
+          "Last 7 days",
+          "Last 28 days",
+          "Last 90 days",
+          "This month",
+          "Last month",
+          "sales report",
+          "Orders",
+          "Order revenue",
+          "Average order value",
+          "Buyers",
+          "Returning buyer rate",
+          "Refunds",
+          "Refund rate",
+          "Revenue per buyer, all time"
+        ]
+      },
+      {
+        "title": "Discounts",
+        "controls": ["Repeat buyers"]
+      }
+    ],
+    "headings": [
+      "Orders and revenue",
+      "By product",
+      "First-time and returning buyers",
+      "Discounts",
+      "Repeat purchases by cohort",
+      "Revenue per buyer by cohort",
+      "Order revenue by country",
+      "Order revenue by payment gateway",
+      "Order revenue by coupon"
+    ]
   },
   {
     "route": "/businesses/{business}/reports/stats",
@@ -7739,29 +9115,26 @@
         ]
       }
     ],
-    "headings": [
-      "Movement by period",
-      "Retention by cohort",
-      "Compared with earlier months",
-      "What moved it",
-      "By plan"
-    ]
+    "headings": ["Movement by period", "Compared with earlier months", "What moved it", "By plan"]
   },
   {
     "route": "/businesses/{business}/reports/usage-margin",
     "scope": "biz",
-    "label": "Usage margin",
+    "label": "Usage",
     "section": "Reports",
     "controls": [
       "Customer",
       "Model",
       "Meter",
       "Plan",
-      "We could not load the usage margin report.",
+      "We could not load the usage report.",
       "From",
       "To",
+      "Currency",
       "Group by",
       "View report",
+      "Customers who stopped",
+      "Commitment shortfall billed",
       "No revenue or usage cost"
     ],
     "groups": [
@@ -7772,16 +9145,18 @@
           "Model",
           "Meter",
           "Plan",
-          "We could not load the usage margin report.",
+          "We could not load the usage report.",
+          "Customers who stopped",
+          "Commitment shortfall billed",
           "No revenue or usage cost"
         ]
       },
       {
         "title": "Filters",
-        "controls": ["From", "To", "Group by", "View report"]
+        "controls": ["From", "To", "Currency", "Group by", "View report"]
       }
     ],
-    "headings": ["Filters"]
+    "headings": ["Filters", "Units by meter", "Top consumers", "Commitment pacing", "Margin"]
   },
   {
     "route": "/businesses/{business}/retries",
@@ -8992,8 +10367,10 @@
       "Before an upgrade",
       "Before a downgrade",
       "When an upgrade starts",
+      "Save this timing",
       "When a downgrade starts",
       "Coupons on a plan change",
+      "Save this choice",
       "Refuse a downgrade if past due",
       "Prorate when you change the end of a term",
       "Billing rules",
@@ -9055,6 +10432,7 @@
           "Before an upgrade",
           "Before a downgrade",
           "When an upgrade starts",
+          "Save this timing",
           "When a downgrade starts"
         ]
       },
@@ -9065,6 +10443,7 @@
           "Coupons on a plan change",
           "Credit from a change",
           "Documents for a credit from a change",
+          "Save this choice",
           "Refuse a downgrade if past due"
         ]
       },
@@ -9194,6 +10573,11 @@
       "Hex value",
       "#ff6700",
       "Select a color",
+      "Button text color",
+      "#ffffff",
+      "Select a text color",
+      "Automatic",
+      "Button preview",
       "Brand color",
       "The invoice PDF and its HTML twin",
       "What a customer sees at /checkout/…",
@@ -9209,6 +10593,7 @@
           "Icon",
           "Favicon",
           "Brand color",
+          "Button text color",
           "The invoice PDF and its HTML twin",
           "What a customer sees at /checkout/…",
           "What a customer sees at /portal/…"
@@ -9230,7 +10615,12 @@
           "https://…/favicon.png",
           "Hex value",
           "#ff6700",
-          "Select a color"
+          "Select a color",
+          "Button text color",
+          "#ffffff",
+          "Select a text color",
+          "Automatic",
+          "Button preview"
         ]
       },
       {
@@ -9275,11 +10665,14 @@
       "Monday",
       "Fiscal year starts in",
       "Not set",
+      "City",
+      "Place for this postal code",
+      "Select a place…",
       "Country",
       "Select a country…",
+      "Retry",
       "Address line 3",
       "+ Add address line 3",
-      "Retry",
       "Validate EU VAT numbers against VIES"
     ],
     "groups": [
@@ -9329,11 +10722,14 @@
         "title": "Business address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       },
       {
@@ -9383,7 +10779,7 @@
       "Postal / ZIP code",
       "Country",
       "PO number at checkout",
-      "Hosted pages",
+      "checkout settings",
       "Shipping address at checkout",
       "Save"
     ],
@@ -9413,7 +10809,7 @@
           "Postal / ZIP code",
           "Country",
           "PO number at checkout",
-          "Hosted pages",
+          "checkout settings",
           "Shipping address at checkout"
         ]
       },
@@ -9427,6 +10823,113 @@
       }
     ],
     "headings": ["How these apply", "Customer", "Billing address", "Invoice", "Shipping address"]
+  },
+  {
+    "route": "/businesses/{business}/settings/checkout",
+    "scope": "biz",
+    "label": "Checkout",
+    "section": "Settings",
+    "controls": [
+      "Checkout report",
+      "Layout",
+      "Checkout layout",
+      "One page",
+      "Steps",
+      "Check for bots after failed payments",
+      "Off",
+      "After 1 failure",
+      "Ask customers to agree to recurring charges",
+      "Ask customers to accept your terms",
+      "Terms URL",
+      "https://",
+      "Privacy policy URL",
+      "Offer a marketing opt-in",
+      "Let customers add or remove a coupon code",
+      "Coupon codes a customer can enter",
+      "Save the customer's payment method",
+      "Ask the customer",
+      "Always",
+      "Never",
+      "Hide zero-value line items",
+      "Collect a PO number at checkout",
+      "Checkout and portal fields",
+      "Default return URL",
+      "https://…",
+      "Default cancel URL",
+      "Consent",
+      "Coupon codes",
+      "One-time purchases",
+      "Line items",
+      "Redirect defaults",
+      "Save"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Checkout report",
+          "Layout",
+          "Consent",
+          "Coupon codes",
+          "One-time purchases",
+          "Line items",
+          "Redirect defaults"
+        ]
+      },
+      {
+        "title": "Checkout layout",
+        "controls": ["Layout", "Checkout layout", "One page", "Steps"]
+      },
+      {
+        "title": "Payment protection",
+        "controls": ["Check for bots after failed payments", "Off", "After 1 failure"]
+      },
+      {
+        "title": "Consent at checkout",
+        "controls": [
+          "Ask customers to agree to recurring charges",
+          "Ask customers to accept your terms",
+          "Terms URL",
+          "https://",
+          "Privacy policy URL",
+          "Offer a marketing opt-in"
+        ]
+      },
+      {
+        "title": "Coupon codes",
+        "controls": [
+          "Let customers add or remove a coupon code",
+          "Coupon codes a customer can enter"
+        ]
+      },
+      {
+        "title": "One-time purchases",
+        "controls": ["Save the customer's payment method", "Ask the customer", "Always", "Never"]
+      },
+      {
+        "title": "Checkout",
+        "controls": [
+          "Hide zero-value line items",
+          "Collect a PO number at checkout",
+          "Checkout and portal fields",
+          "Default return URL",
+          "https://…",
+          "Default cancel URL"
+        ]
+      },
+      {
+        "title": "Action bar",
+        "controls": ["Save"]
+      }
+    ],
+    "headings": [
+      "Checkout layout",
+      "Payment protection",
+      "Consent at checkout",
+      "Coupon codes",
+      "One-time purchases",
+      "Checkout"
+    ]
   },
   {
     "route": "/businesses/{business}/settings/credit-notes",
@@ -9448,6 +10951,8 @@
       "Next number",
       "Dynamic prefix",
       "Fiscal year starts in",
+      "Separator",
+      "Separator — prefix to date",
       "Separator — date to number",
       "Increment by",
       "Credit note status",
@@ -9483,6 +10988,8 @@
           "Next number",
           "Dynamic prefix",
           "Fiscal year starts in",
+          "Separator",
+          "Separator — prefix to date",
           "Separator — date to number",
           "Increment by"
         ]
@@ -9539,6 +11046,7 @@
       "View credit units",
       "We could not load the plan overdraft limits of this unit.",
       "Cancel",
+      "Currency",
       "Smallest amount",
       "Name",
       "Plural name",
@@ -9548,6 +11056,7 @@
       "Money value",
       "Has a money value",
       "No money value",
+      "Overdraft limit, in units",
       "Negative balance when plan credits renew",
       "Carry it",
       "Forgive it",
@@ -9562,6 +11071,7 @@
         "controls": [
           "View credit units",
           "We could not load the plan overdraft limits of this unit.",
+          "Currency",
           "Smallest amount",
           "Archive",
           "Archive unit"
@@ -9573,15 +11083,22 @@
       },
       {
         "title": "Value · Locked",
-        "controls": ["Value of one unit", "Decimal places"]
+        "controls": ["Currency", "Value of one unit", "Decimal places"]
       },
       {
         "title": "Value",
-        "controls": ["Money value", "Has a money value", "No money value", "Decimal places"]
+        "controls": [
+          "Money value",
+          "Has a money value",
+          "No money value",
+          "Currency",
+          "Decimal places"
+        ]
       },
       {
         "title": "When credits run out",
         "controls": [
+          "Overdraft limit, in units",
           "Negative balance when plan credits renew",
           "Carry it",
           "Forgive it",
@@ -9602,6 +11119,7 @@
     "section": "Settings",
     "controls": [
       "Cancel",
+      "Currency",
       "Smallest amount",
       "Name",
       "Plural name",
@@ -9611,6 +11129,7 @@
       "Money value",
       "Has a money value",
       "No money value",
+      "Overdraft limit, in units",
       "Negative balance when plan credits renew",
       "Carry it",
       "Forgive it",
@@ -9620,7 +11139,7 @@
     "groups": [
       {
         "title": null,
-        "controls": ["Smallest amount"]
+        "controls": ["Currency", "Smallest amount"]
       },
       {
         "title": "Unit",
@@ -9628,15 +11147,22 @@
       },
       {
         "title": "Value · Locked",
-        "controls": ["Value of one unit", "Decimal places"]
+        "controls": ["Currency", "Value of one unit", "Decimal places"]
       },
       {
         "title": "Value",
-        "controls": ["Money value", "Has a money value", "No money value", "Decimal places"]
+        "controls": [
+          "Money value",
+          "Has a money value",
+          "No money value",
+          "Currency",
+          "Decimal places"
+        ]
       },
       {
         "title": "When credits run out",
         "controls": [
+          "Overdraft limit, in units",
           "Negative balance when plan credits renew",
           "Carry it",
           "Forgive it",
@@ -9864,6 +11390,7 @@
       "Two Minute Billing sets it for me",
       "Exchange rate",
       "Apply",
+      "Currency",
       "Select a currency",
       "Existing rates are not converted",
       "Save",
@@ -9902,7 +11429,7 @@
       },
       {
         "title": "Add currency",
-        "controls": ["Select a currency", "Add currency"]
+        "controls": ["Currency", "Select a currency", "Add currency"]
       },
       {
         "title": "Price types",
@@ -10204,6 +11731,9 @@
       "Hold for a new card",
       "Your choice",
       "Hold hard declines for the customer",
+      "Retry, then hold",
+      "Hold for the customer",
+      "Hold until you fix it",
       "Retry timeline preview",
       "Cards",
       "Bank debits",
@@ -10237,6 +11767,9 @@
           "Hold for a new card",
           "Your choice",
           "Hold hard declines for the customer",
+          "Retry, then hold",
+          "Hold for the customer",
+          "Hold until you fix it",
           "Retry timeline preview",
           "Cards",
           "Bank debits",
@@ -10380,10 +11913,22 @@
       "Hold for a new card",
       "Your choice",
       "Hold hard declines for the customer",
+      "Retry, then hold",
+      "Hold for the customer",
+      "Hold until you fix it",
       "Retry timeline preview",
       "Cards",
       "Bank debits",
       "Offline invoices",
+      "Mark not paid (debt stands)",
+      "Void the invoice",
+      "Write off (bad debt, credit note)",
+      "Reverse (paid, order-cancellation credit note)",
+      "Cancel now",
+      "Cancel at the end of the term",
+      "Pause",
+      "Keep, and stop automatic charges",
+      "Keep active, and continue to bill",
       "Dunning",
       "Retries",
       "Retry timing",
@@ -10405,10 +11950,22 @@
           "Hold for a new card",
           "Your choice",
           "Hold hard declines for the customer",
+          "Retry, then hold",
+          "Hold for the customer",
+          "Hold until you fix it",
           "Retry timeline preview",
           "Cards",
           "Bank debits",
           "Offline invoices",
+          "Mark not paid (debt stands)",
+          "Void the invoice",
+          "Write off (bad debt, credit note)",
+          "Reverse (paid, order-cancellation credit note)",
+          "Cancel now",
+          "Cancel at the end of the term",
+          "Pause",
+          "Keep, and stop automatic charges",
+          "Keep active, and continue to bill",
           "Dunning",
           "Decline handling",
           "Retries",
@@ -10544,10 +12101,22 @@
       "Hold for a new card",
       "Your choice",
       "Hold hard declines for the customer",
+      "Retry, then hold",
+      "Hold for the customer",
+      "Hold until you fix it",
       "Retry timeline preview",
       "Cards",
       "Bank debits",
       "Offline invoices",
+      "Mark not paid (debt stands)",
+      "Void the invoice",
+      "Write off (bad debt, credit note)",
+      "Reverse (paid, order-cancellation credit note)",
+      "Cancel now",
+      "Cancel at the end of the term",
+      "Pause",
+      "Keep, and stop automatic charges",
+      "Keep active, and continue to bill",
       "Dunning",
       "Retries",
       "Retry timing",
@@ -10568,10 +12137,22 @@
           "Hold for a new card",
           "Your choice",
           "Hold hard declines for the customer",
+          "Retry, then hold",
+          "Hold for the customer",
+          "Hold until you fix it",
           "Retry timeline preview",
           "Cards",
           "Bank debits",
           "Offline invoices",
+          "Mark not paid (debt stands)",
+          "Void the invoice",
+          "Write off (bad debt, credit note)",
+          "Reverse (paid, order-cancellation credit note)",
+          "Cancel now",
+          "Cancel at the end of the term",
+          "Pause",
+          "Keep, and stop automatic charges",
+          "Keep active, and continue to bill",
           "Dunning",
           "Decline handling",
           "Retries",
@@ -10967,6 +12548,7 @@
       "Your URL",
       "Your URL for email links",
       "https://",
+      "Track opens and clicks",
       "Attach the receipt PDF to the payment confirmation email",
       "Receipt numbering",
       "Save"
@@ -11048,6 +12630,10 @@
         ]
       },
       {
+        "title": "Opens and clicks",
+        "controls": ["Track opens and clicks"]
+      },
+      {
         "title": "Receipts",
         "controls": [
           "Attach the receipt PDF to the payment confirmation email",
@@ -11059,7 +12645,7 @@
         "controls": ["Save"]
       }
     ],
-    "headings": ["Setup", "Sending", "Links", "Receipts"],
+    "headings": ["Setup", "Sending", "Links", "Opens and clicks", "Receipts"],
     "options": [
       "Invoice issued",
       "Invoice to pay",
@@ -11322,7 +12908,8 @@
       "Last modified",
       "Add gateway",
       "Open",
-      "No gateway accounts"
+      "No gateway accounts",
+      "Save"
     ],
     "groups": [
       {
@@ -11349,9 +12936,13 @@
           "Open",
           "No gateway accounts"
         ]
+      },
+      {
+        "title": "Where new payment methods go",
+        "controls": ["Save"]
       }
     ],
-    "headings": []
+    "headings": ["Where new payment methods go"]
   },
   {
     "route": "/businesses/{business}/settings/gateways/{gwa}",
@@ -11538,306 +13129,9 @@
     "scope": "biz",
     "label": "Hosted pages",
     "section": "Settings",
-    "controls": [
-      "Message when a portal link cannot be used",
-      "Link",
-      "https://… or mailto:…",
-      "Link address",
-      "Link to the customer’s billing portal",
-      "Billing rules",
-      "Layout",
-      "Checkout layout",
-      "One page",
-      "Steps",
-      "Check for bots after failed payments",
-      "Off",
-      "After 1 failure",
-      "Ask customers to agree to recurring charges",
-      "Ask customers to accept your terms",
-      "Terms URL",
-      "https://",
-      "Privacy policy URL",
-      "Offer a marketing opt-in",
-      "Let customers change their plan",
-      "Seat changes",
-      "Increases only",
-      "Increases and decreases",
-      "Seat limits",
-      "Min",
-      "Minimum seats",
-      "Max",
-      "Maximum seats",
-      "Let customers add or remove add-ons",
-      "Move to a shorter billing period",
-      "Always",
-      "After 12 months",
-      "Never",
-      "Charge for an upgrade",
-      "Follow Billing rules",
-      "Now",
-      "On the next invoice",
-      "Subscriptions that can change",
-      "Let customers withdraw a scheduled change",
-      "Let customers add or remove a coupon code",
-      "Coupon codes a customer can enter",
-      "Let customers download their invoices",
-      "Let customers pay an unpaid invoice",
-      "Let customers remove a payment method",
-      "Show customers their usage this period",
-      "Also show the projected usage",
-      "Let customers cancel their own subscription",
-      "When a customer's cancellation takes effect",
-      "At the end of the current term",
-      "Immediately",
-      "Ask for a reason when a customer cancels in the portal",
-      "Optional",
-      "Required",
-      "Do not ask",
-      "Offer a pause before the customer cancels",
-      "Pause length",
-      "No end date",
-      "The customer selects the length",
-      "Offer a cheaper plan before the customer cancels",
-      "No plan offer",
-      "Offer a coupon before the customer cancels",
-      "Coupon code",
-      "Coupon code to offer",
-      "Offer “Contact us” before the customer cancels",
-      "Contact page URL",
-      "Make each offer one time per customer",
-      "Let customers pause and resume",
-      "Let customers skip a renewal",
-      "Most renewals a customer can skip in 12 months",
-      "Let customers undo a cancellation",
-      "Let customers restart an ended subscription",
-      "Price of the new term",
-      "Current price of the plan",
-      "Price the subscription had",
-      "Days after the end that a customer can restart",
-      "Unpaid invoices of the subscription",
-      "Customer pays them first",
-      "They do not stop a restart",
-      "Save the customer's payment method",
-      "Ask the customer",
-      "Let customers sign in with an email code",
-      "How long an API portal link works",
-      "API portal link hours",
-      "How long a portal link in an email works",
-      "Email portal link days",
-      "How long a customer stays signed in",
-      "Portal session hours",
-      "Pay an invoice",
-      "Change the payment method",
-      "Change the plan",
-      "Cancel a subscription",
-      "Back link in the portal",
-      "Portal back link URL",
-      "Hide cancelled subscriptions",
-      "Hide invoices with a zero total",
-      "Hide voided invoices",
-      "Hide zero-value line items",
-      "Collect a PO number at checkout",
-      "Checkout and portal fields",
-      "Default return URL",
-      "https://…",
-      "Default cancel URL",
-      "Coupon codes",
-      "In the portal, customers can",
-      "Self-serve cancel",
-      "One-time purchases",
-      "Checkout",
-      "Redirect defaults",
-      "Expired portal link",
-      "Save"
-    ],
-    "groups": [
-      {
-        "title": null,
-        "controls": [
-          "Message when a portal link cannot be used",
-          "Link",
-          "https://… or mailto:…",
-          "Link address",
-          "Link to the customer’s billing portal",
-          "Billing rules",
-          "Coupon codes",
-          "In the portal, customers can",
-          "Self-serve cancel",
-          "One-time purchases",
-          "Checkout",
-          "Redirect defaults",
-          "Expired portal link"
-        ]
-      },
-      {
-        "title": "Checkout layout",
-        "controls": ["Layout", "Checkout layout", "One page", "Steps"]
-      },
-      {
-        "title": "Payment protection",
-        "controls": ["Check for bots after failed payments", "Off", "After 1 failure"]
-      },
-      {
-        "title": "Consent at checkout",
-        "controls": [
-          "Ask customers to agree to recurring charges",
-          "Ask customers to accept your terms",
-          "Terms URL",
-          "https://",
-          "Privacy policy URL",
-          "Offer a marketing opt-in"
-        ]
-      },
-      {
-        "title": "Plan changes",
-        "controls": [
-          "Let customers change their plan",
-          "Seat changes",
-          "Off",
-          "Increases only",
-          "Increases and decreases",
-          "Seat limits",
-          "Min",
-          "Minimum seats",
-          "Max",
-          "Maximum seats",
-          "Let customers add or remove add-ons",
-          "Move to a shorter billing period",
-          "Always",
-          "After 12 months",
-          "Never",
-          "Charge for an upgrade",
-          "Follow Billing rules",
-          "Now",
-          "On the next invoice",
-          "Subscriptions that can change",
-          "Let customers withdraw a scheduled change"
-        ]
-      },
-      {
-        "title": "Coupon codes",
-        "controls": [
-          "Let customers add or remove a coupon code",
-          "Coupon codes a customer can enter"
-        ]
-      },
-      {
-        "title": "Invoices and payment methods",
-        "controls": [
-          "Let customers download their invoices",
-          "Let customers pay an unpaid invoice",
-          "Let customers remove a payment method"
-        ]
-      },
-      {
-        "title": "Usage",
-        "controls": ["Show customers their usage this period", "Also show the projected usage"]
-      },
-      {
-        "title": "Cancelling, pausing, skipping and reactivating",
-        "controls": [
-          "Let customers cancel their own subscription",
-          "When a customer's cancellation takes effect",
-          "At the end of the current term",
-          "Immediately",
-          "Ask for a reason when a customer cancels in the portal",
-          "Optional",
-          "Required",
-          "Do not ask",
-          "Offer a pause before the customer cancels",
-          "Pause length",
-          "No end date",
-          "The customer selects the length",
-          "Offer a cheaper plan before the customer cancels",
-          "No plan offer",
-          "Offer a coupon before the customer cancels",
-          "Coupon code",
-          "Coupon code to offer",
-          "Offer “Contact us” before the customer cancels",
-          "https://",
-          "Contact page URL",
-          "Make each offer one time per customer",
-          "Let customers pause and resume",
-          "Let customers skip a renewal",
-          "Most renewals a customer can skip in 12 months",
-          "Let customers undo a cancellation",
-          "Let customers restart an ended subscription",
-          "Price of the new term",
-          "Current price of the plan",
-          "Price the subscription had",
-          "Days after the end that a customer can restart",
-          "Unpaid invoices of the subscription",
-          "Customer pays them first",
-          "They do not stop a restart"
-        ]
-      },
-      {
-        "title": "One-time purchases",
-        "controls": ["Save the customer's payment method", "Ask the customer", "Always", "Never"]
-      },
-      {
-        "title": "Portal links",
-        "controls": [
-          "Let customers sign in with an email code",
-          "How long an API portal link works",
-          "API portal link hours",
-          "How long a portal link in an email works",
-          "Email portal link days",
-          "How long a customer stays signed in",
-          "Portal session hours"
-        ]
-      },
-      {
-        "title": "Links to one task",
-        "controls": [
-          "Pay an invoice",
-          "Change the payment method",
-          "Change the plan",
-          "Cancel a subscription",
-          "Back link in the portal",
-          "https://",
-          "Portal back link URL"
-        ]
-      },
-      {
-        "title": "Hidden in the portal",
-        "controls": [
-          "Hide cancelled subscriptions",
-          "Hide invoices with a zero total",
-          "Hide voided invoices"
-        ]
-      },
-      {
-        "title": "Checkout",
-        "controls": [
-          "Hide zero-value line items",
-          "Collect a PO number at checkout",
-          "Checkout and portal fields",
-          "Default return URL",
-          "https://…",
-          "Default cancel URL"
-        ]
-      },
-      {
-        "title": "Action bar",
-        "controls": ["Save"]
-      }
-    ],
-    "headings": [
-      "Checkout layout",
-      "Payment protection",
-      "Consent at checkout",
-      "Plan changes",
-      "Coupon codes",
-      "Invoices and payment methods",
-      "Usage",
-      "Cancelling, pausing, skipping and reactivating",
-      "One-time purchases",
-      "Portal links",
-      "Links to one task",
-      "Hidden in the portal",
-      "Checkout"
-    ]
+    "controls": [],
+    "groups": [],
+    "headings": []
   },
   {
     "route": "/businesses/{business}/settings/invoices",
@@ -11859,6 +13153,8 @@
       "Next number",
       "Dynamic prefix",
       "Fiscal year starts in",
+      "Separator",
+      "Separator — prefix to date",
       "Separator — date to number",
       "Increment by",
       "Invoice status",
@@ -11898,6 +13194,8 @@
           "Next number",
           "Dynamic prefix",
           "Fiscal year starts in",
+          "Separator",
+          "Separator — prefix to date",
           "Separator — date to number",
           "Increment by"
         ]
@@ -11955,12 +13253,6 @@
       "Maximum length",
       "Description",
       "The purchase order number from the CRM",
-      "Create a rule",
-      "Validate metadata",
-      "Strict mode",
-      "Edit",
-      "Paths, optional values, strict mode and archiving",
-      "Create rule",
       "Text",
       "Number",
       "True or false",
@@ -11968,7 +13260,14 @@
       "Email",
       "One of a list",
       "Object",
-      "Array"
+      "Array",
+      "Any type",
+      "Create a rule",
+      "Validate metadata",
+      "Strict mode",
+      "Edit",
+      "Paths, optional values, strict mode and archiving",
+      "Create rule"
     ],
     "groups": [
       {
@@ -11993,11 +13292,6 @@
           "Maximum length",
           "Description",
           "The purchase order number from the CRM",
-          "Create a rule",
-          "Validate metadata",
-          "Strict mode",
-          "Edit",
-          "Create rule",
           "Text",
           "Number",
           "True or false",
@@ -12005,7 +13299,13 @@
           "Email",
           "One of a list",
           "Object",
-          "Array"
+          "Array",
+          "Any type",
+          "Create a rule",
+          "Validate metadata",
+          "Strict mode",
+          "Edit",
+          "Create rule"
         ]
       },
       {
@@ -12031,7 +13331,8 @@
       "Tax calculation",
       "Tax rates",
       "Customer-facing essentials",
-      "Hosted pages",
+      "Checkout",
+      "Customer portal",
       "Checkout and portal fields",
       "Email notifications",
       "Subscription reminders",
@@ -12046,7 +13347,6 @@
       "Revenue recovery",
       "Dunning for failed payments",
       "Advanced",
-      "Team alerts",
       "Custom fields",
       "Metadata rules",
       "Reason codes",
@@ -12074,7 +13374,8 @@
           "Tax calculation",
           "Tax rates",
           "Customer-facing essentials",
-          "Hosted pages",
+          "Checkout",
+          "Customer portal",
           "Checkout and portal fields",
           "Email notifications",
           "Subscription reminders",
@@ -12089,7 +13390,6 @@
           "Revenue recovery",
           "Dunning for failed payments",
           "Advanced",
-          "Team alerts",
           "Custom fields",
           "Metadata rules",
           "Reason codes",
@@ -12192,6 +13492,263 @@
       }
     ],
     "headings": ["Your instructions", "Create a payment instruction"]
+  },
+  {
+    "route": "/businesses/{business}/settings/portal",
+    "scope": "biz",
+    "label": "Customer portal",
+    "section": "Settings",
+    "controls": [
+      "Portal report",
+      "Message when a portal link cannot be used",
+      "Link",
+      "https://… or mailto:…",
+      "Link address",
+      "Link to the customer’s billing portal",
+      "Billing rules",
+      "Let customers change their plan",
+      "Seat changes",
+      "Off",
+      "Increases only",
+      "Increases and decreases",
+      "Seat limits",
+      "Min",
+      "Minimum seats",
+      "Max",
+      "Maximum seats",
+      "Let customers add or remove add-ons",
+      "Move to a shorter billing period",
+      "Always",
+      "After 12 months",
+      "Never",
+      "Charge for an upgrade",
+      "Follow Billing rules",
+      "Now",
+      "On the next invoice",
+      "Subscriptions that can change",
+      "Let customers withdraw a scheduled change",
+      "Let customers download their invoices",
+      "Let customers pay an unpaid invoice",
+      "Let customers remove a payment method",
+      "Show customers their usage this period",
+      "Also show the projected usage",
+      "Let customers cancel their own subscription",
+      "When a customer's cancellation takes effect",
+      "At the end of the current term",
+      "Immediately",
+      "Ask for a reason when a customer cancels in the portal",
+      "Optional",
+      "Required",
+      "Do not ask",
+      "Offer a pause before the customer cancels",
+      "Pause length",
+      "No end date",
+      "The customer selects the length",
+      "Offer a cheaper plan before the customer cancels",
+      "No plan offer",
+      "Offer a coupon before the customer cancels",
+      "Coupon code",
+      "Coupon code to offer",
+      "Offer “Contact us” before the customer cancels",
+      "https://",
+      "Contact page URL",
+      "Make each offer one time per customer",
+      "Let customers pause and resume",
+      "Let customers skip a renewal",
+      "Most renewals a customer can skip in 12 months",
+      "Let customers undo a cancellation",
+      "Let customers reactivate an ended subscription",
+      "Price of the new term",
+      "Current price of the plan",
+      "Price the subscription had",
+      "Days after the end that a customer can reactivate",
+      "Unpaid invoices of the subscription",
+      "Customer pays them first",
+      "They do not stop a reactivation",
+      "Save the new payment method",
+      "Ask the customer",
+      "Ask why when a customer deletes their last payment method",
+      "Let customers sign in with an email code",
+      "How long an API portal link works",
+      "API portal link hours",
+      "How long a portal link in an email works",
+      "Email portal link days",
+      "How long a customer stays signed in",
+      "Portal session hours",
+      "Pay an invoice",
+      "Change the payment method",
+      "Change the plan",
+      "Cancel a subscription",
+      "Back link in the portal",
+      "Portal back link URL",
+      "Hide cancelled subscriptions",
+      "Hide invoices with a zero total",
+      "Hide voided invoices",
+      "Checkout page",
+      "Customers can",
+      "Plan changes",
+      "Self-serve cancel",
+      "Pay now with a new card",
+      "Last payment method deleted",
+      "Expired portal link",
+      "Save"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Portal report",
+          "Message when a portal link cannot be used",
+          "Link",
+          "https://… or mailto:…",
+          "Link address",
+          "Link to the customer’s billing portal",
+          "Billing rules",
+          "Customers can",
+          "Plan changes",
+          "Self-serve cancel",
+          "Pay now with a new card",
+          "Last payment method deleted",
+          "Expired portal link"
+        ]
+      },
+      {
+        "title": "Plan changes",
+        "controls": [
+          "Let customers change their plan",
+          "Seat changes",
+          "Off",
+          "Increases only",
+          "Increases and decreases",
+          "Seat limits",
+          "Min",
+          "Minimum seats",
+          "Max",
+          "Maximum seats",
+          "Let customers add or remove add-ons",
+          "Move to a shorter billing period",
+          "Always",
+          "After 12 months",
+          "Never",
+          "Charge for an upgrade",
+          "Follow Billing rules",
+          "Now",
+          "On the next invoice",
+          "Subscriptions that can change",
+          "Let customers withdraw a scheduled change"
+        ]
+      },
+      {
+        "title": "Invoices and payment methods",
+        "controls": [
+          "Let customers download their invoices",
+          "Let customers pay an unpaid invoice",
+          "Let customers remove a payment method"
+        ]
+      },
+      {
+        "title": "Usage",
+        "controls": ["Show customers their usage this period", "Also show the projected usage"]
+      },
+      {
+        "title": "Cancelling, pausing, skipping and reactivating",
+        "controls": [
+          "Let customers cancel their own subscription",
+          "When a customer's cancellation takes effect",
+          "At the end of the current term",
+          "Immediately",
+          "Ask for a reason when a customer cancels in the portal",
+          "Optional",
+          "Required",
+          "Do not ask",
+          "Offer a pause before the customer cancels",
+          "Pause length",
+          "No end date",
+          "The customer selects the length",
+          "Offer a cheaper plan before the customer cancels",
+          "No plan offer",
+          "Offer a coupon before the customer cancels",
+          "Coupon code",
+          "Coupon code to offer",
+          "Offer “Contact us” before the customer cancels",
+          "https://",
+          "Contact page URL",
+          "Make each offer one time per customer",
+          "Let customers pause and resume",
+          "Let customers skip a renewal",
+          "Most renewals a customer can skip in 12 months",
+          "Let customers undo a cancellation",
+          "Let customers reactivate an ended subscription",
+          "Price of the new term",
+          "Current price of the plan",
+          "Price the subscription had",
+          "Days after the end that a customer can reactivate",
+          "Unpaid invoices of the subscription",
+          "Customer pays them first",
+          "They do not stop a reactivation"
+        ]
+      },
+      {
+        "title": "Pay now with a new card",
+        "controls": ["Save the new payment method", "Ask the customer", "Always", "Never"]
+      },
+      {
+        "title": "Delete a payment method",
+        "controls": ["Ask why when a customer deletes their last payment method"]
+      },
+      {
+        "title": "Portal links",
+        "controls": [
+          "Let customers sign in with an email code",
+          "How long an API portal link works",
+          "API portal link hours",
+          "How long a portal link in an email works",
+          "Email portal link days",
+          "How long a customer stays signed in",
+          "Portal session hours"
+        ]
+      },
+      {
+        "title": "Links to one task",
+        "controls": [
+          "Pay an invoice",
+          "Change the payment method",
+          "Change the plan",
+          "Cancel a subscription",
+          "Back link in the portal",
+          "https://",
+          "Portal back link URL"
+        ]
+      },
+      {
+        "title": "Hidden in the portal",
+        "controls": [
+          "Hide cancelled subscriptions",
+          "Hide invoices with a zero total",
+          "Hide voided invoices"
+        ]
+      },
+      {
+        "title": "Coupon codes",
+        "controls": ["Checkout page"]
+      },
+      {
+        "title": "Action bar",
+        "controls": ["Save"]
+      }
+    ],
+    "headings": [
+      "Plan changes",
+      "Invoices and payment methods",
+      "Usage",
+      "Cancelling, pausing, skipping and reactivating",
+      "Pay now with a new card",
+      "Delete a payment method",
+      "Portal links",
+      "Links to one task",
+      "Hidden in the portal",
+      "Coupon codes"
+    ]
   },
   {
     "route": "/businesses/{business}/settings/reason-codes",
@@ -12349,83 +13906,6 @@
     "headings": ["Price type per currency", "Tax rounding", "Your tax ID per country"]
   },
   {
-    "route": "/businesses/{business}/settings/team-alerts",
-    "scope": "biz",
-    "label": "Team alerts",
-    "section": "Settings",
-    "controls": [
-      "Team member",
-      "Confirmed",
-      "Waiting for confirmation",
-      "Send again",
-      "Recipients",
-      "Overdue invoices",
-      "Failed webhooks",
-      "Daily summary",
-      "Large free credit",
-      "Send alerts to",
-      "finance@example.com",
-      "Alert when a large invoice is overdue",
-      "No alert",
-      "Alert when webhooks fail",
-      "Send a daily summary",
-      "Alert when someone gives a large amount of free credit",
-      "Settings > Credits",
-      "Save"
-    ],
-    "groups": [
-      {
-        "title": null,
-        "controls": [
-          "Team member",
-          "Confirmed",
-          "Waiting for confirmation",
-          "Recipients",
-          "Overdue invoices",
-          "Failed webhooks",
-          "Daily summary",
-          "Large free credit"
-        ]
-      },
-      {
-        "title": "Recipient status",
-        "controls": ["Send again"]
-      },
-      {
-        "title": "Recipients",
-        "controls": ["Send alerts to", "finance@example.com"]
-      },
-      {
-        "title": "Overdue invoices",
-        "controls": ["Alert when a large invoice is overdue", "No alert"]
-      },
-      {
-        "title": "Webhooks",
-        "controls": ["Alert when webhooks fail"]
-      },
-      {
-        "title": "Daily summary",
-        "controls": ["Send a daily summary"]
-      },
-      {
-        "title": "Large free credit",
-        "controls": ["Alert when someone gives a large amount of free credit", "Settings > Credits"]
-      },
-      {
-        "title": "Action bar",
-        "controls": ["Save"]
-      }
-    ],
-    "headings": [
-      "Recipient status",
-      "Recipients",
-      "Overdue invoices",
-      "Webhooks",
-      "Daily summary",
-      "Large free credit"
-    ]
-  },
-  {
     "route": "/businesses/{business}/settings/usage-controls",
     "scope": "biz",
     "label": "Usage controls",
@@ -12433,6 +13913,7 @@
     "controls": [
       "Create tier",
       "Create limit tier",
+      "Currency",
       "Delete",
       "Delete this limit tier?",
       "Delete tier",
@@ -12462,6 +13943,7 @@
         "controls": [
           "Create tier",
           "Create limit tier",
+          "Currency",
           "Delete",
           "Delete this limit tier?",
           "Delete tier"
@@ -12482,6 +13964,7 @@
           "Watch",
           "Meter",
           "Interval",
+          "Currency",
           "Thresholds in",
           "Thresholds",
           "Send an email to the customer",
@@ -12671,6 +14154,7 @@
     "label": "Create Quick Charge",
     "section": "Subscriptions",
     "controls": [
+      "Cancel",
       "Subtotal",
       "Subscription",
       "Customer",
@@ -12686,8 +14170,7 @@
       "Description",
       "Close",
       "Add",
-      "Add charges",
-      "Cancel"
+      "Add charges"
     ],
     "groups": [
       {
@@ -12716,7 +14199,7 @@
         "controls": ["Add charges", "Cancel"]
       }
     ],
-    "headings": ["Charges", "Invoicing"]
+    "headings": ["Summary", "Charges", "Invoicing"]
   },
   {
     "route": "/businesses/{business}/subscriptions/{sub}/add_charge_price",
@@ -12724,6 +14207,7 @@
     "label": "Add Charge",
     "section": "Subscriptions",
     "controls": [
+      "Cancel",
       "Subtotal",
       "Subscription",
       "Customer",
@@ -12738,8 +14222,7 @@
       "Description",
       "Close",
       "Add",
-      "Add charges",
-      "Cancel"
+      "Add charges"
     ],
     "groups": [
       {
@@ -12767,7 +14250,7 @@
         "controls": ["Add charges", "Cancel"]
       }
     ],
-    "headings": ["Charges", "Invoicing"]
+    "headings": ["Summary", "Charges", "Invoicing"]
   },
   {
     "route": "/businesses/{business}/subscriptions/{sub}/change",
@@ -12810,6 +14293,7 @@
       "All product groups",
       "Add recurring addon",
       "Back to the catalog",
+      "Currency",
       "Select a currency",
       "Billing frequency",
       "Add charge",
@@ -12822,6 +14306,8 @@
       "Apply coupon",
       "Manual discount",
       "Discount type",
+      "Percent off",
+      "Amount off",
       "Duration",
       "Remove discount",
       "Remove coupon",
@@ -12860,12 +14346,13 @@
       "A set number of renewals",
       "Renewals after the current term",
       "End the trial now",
+      "Metadata",
       "Metadata as JSON",
       "None",
       "Not set",
       "True",
       "False",
-      "Percent off",
+      "Suggestions",
       "Fixed amount off",
       "Next invoice only",
       "Forever (until removed)",
@@ -12944,6 +14431,7 @@
           "All product groups",
           "Add recurring addon",
           "Back to the catalog",
+          "Currency",
           "Select a currency",
           "Billing frequency",
           "Add charge",
@@ -12956,6 +14444,8 @@
           "Apply coupon",
           "Manual discount",
           "Discount type",
+          "Percent off",
+          "Amount off",
           "Duration",
           "Price per unit",
           "Amount",
@@ -13004,7 +14494,15 @@
       },
       {
         "title": "JSON metadata",
-        "controls": ["Metadata as JSON", "None", "Not set", "True", "False"]
+        "controls": [
+          "Metadata",
+          "Metadata as JSON",
+          "None",
+          "Not set",
+          "True",
+          "False",
+          "Suggestions"
+        ]
       },
       {
         "title": "Action bar",
@@ -13036,6 +14534,7 @@
       "No entitlements",
       "Timeline",
       "Created on",
+      "Created through",
       "Scheduled start",
       "Started on",
       "Trial started",
@@ -13142,6 +14641,7 @@
       "Discount type",
       "Percent off",
       "Fixed amount off",
+      "Amount off",
       "Duration",
       "Discount duration",
       "Next invoice only",
@@ -13159,6 +14659,11 @@
       "Payment method",
       "Collect",
       "Cancellation scheduled",
+      "Automatic retry",
+      "Last attempt, at the end of the dunning period",
+      "Held for our team: no automatic charges",
+      "Final action",
+      "View earlier on the invoice",
       "Invoice",
       "Cancel the change",
       "Cancel the change?",
@@ -13167,7 +14672,7 @@
       "Cancelled on",
       "Next billing",
       "Term ends",
-      "Revenue to date",
+      "Revenue",
       "Plan",
       "Edit",
       "Plans",
@@ -13215,11 +14720,13 @@
       "Minimum commitment per billing period",
       "Usage billing",
       "Refundable credit",
+      "Refundable credit on this subscription",
       "Follow the business setting",
       "Never auto-apply here",
       "Auto-apply up to a limit",
       "Maximum credit to auto-apply per invoice",
       "Excess payments",
+      "Excess payments on this subscription",
       "Invoice usage early",
       "For this subscription",
       "Invoice early at its own amount",
@@ -13231,9 +14738,11 @@
       "Records",
       "Invoices",
       "Transactions",
+      "Payment intents",
       "Credit notes",
       "Email logs",
       "Events",
+      "No payment intents",
       "View",
       "Type",
       "Cc (contacts)",
@@ -13245,6 +14754,7 @@
       "Sent",
       "No activity yet",
       "Older events",
+      "View all",
       "Details",
       "Add a note for your team…",
       "Comment",
@@ -13266,6 +14776,7 @@
           "No entitlements",
           "Timeline",
           "Created on",
+          "Created through",
           "Scheduled start",
           "Started on",
           "Trial started",
@@ -13327,6 +14838,11 @@
           "View invoice",
           "Automatic: primary, then backups",
           "Cancellation scheduled",
+          "Automatic retry",
+          "Last attempt, at the end of the dunning period",
+          "Held for our team: no automatic charges",
+          "Final action",
+          "View earlier on the invoice",
           "Invoice",
           "Cancel the change",
           "Cancel the change?",
@@ -13335,10 +14851,12 @@
           "Cancelled on",
           "Next billing",
           "Term ends",
-          "Revenue to date",
+          "Revenue",
           "Plan",
           "Charges",
           "Records",
+          "No activity yet",
+          "Older events",
           "Details",
           "Edit",
           "Fixed rate",
@@ -13419,6 +14937,7 @@
           "Discount type",
           "Percent off",
           "Fixed amount off",
+          "Amount off",
           "Duration",
           "Discount duration",
           "Next invoice only",
@@ -13495,11 +15014,13 @@
           "Minimum commitment per billing period",
           "Usage billing",
           "Refundable credit",
+          "Refundable credit on this subscription",
           "Follow the business setting",
           "Never auto-apply here",
           "Auto-apply up to a limit",
           "Maximum credit to auto-apply per invoice",
-          "Excess payments"
+          "Excess payments",
+          "Excess payments on this subscription"
         ]
       },
       {
@@ -13524,9 +15045,11 @@
         "controls": [
           "Invoices",
           "Transactions",
+          "Payment intents",
           "Credit notes",
           "Email logs",
           "Events",
+          "No payment intents",
           "View",
           "Type",
           "To",
@@ -13542,7 +15065,7 @@
       },
       {
         "title": "Activity log",
-        "controls": ["No activity yet", "Older events"]
+        "controls": ["View all"]
       },
       {
         "title": "Comments",
@@ -13562,6 +15085,7 @@
       "Charges",
       "Customer",
       "Collect payment",
+      "What happens next, if each retry fails",
       "Subscription items",
       "Items ( )",
       "Payment method",
@@ -13615,6 +15139,7 @@
       "All product groups",
       "Add plan",
       "Back to the catalog",
+      "Currency",
       "Select a currency",
       "Billing frequency",
       "Add recurring addon",
@@ -13628,6 +15153,8 @@
       "Apply coupon",
       "Manual discount",
       "Discount type",
+      "Amount off",
+      "Percent off",
       "Duration",
       "Remove coupon",
       "Subscription ID",
@@ -13661,7 +15188,6 @@
       "Invoice notes",
       "Bill usage every month",
       "Minimum commitment per billing period",
-      "Percent off",
       "Fixed amount off",
       "Next invoice only",
       "Forever (until removed)",
@@ -13725,6 +15251,7 @@
           "All product groups",
           "Add plan",
           "Back to the catalog",
+          "Currency",
           "Select a currency",
           "Billing frequency",
           "Add recurring addon",
@@ -13738,6 +15265,8 @@
           "Apply coupon",
           "Manual discount",
           "Discount type",
+          "Amount off",
+          "Percent off",
           "Duration",
           "Price per unit",
           "Amount",
@@ -14018,6 +15547,7 @@
       "Status",
       "Date",
       "Amount",
+      "Source",
       "Customer",
       "Subscription",
       "Invoice",
@@ -14038,6 +15568,7 @@
       "Reason",
       "Select a reason",
       "Dispute date",
+      "Evidence due date",
       "Processor reference",
       "Mark as won",
       "Mark as lost"
@@ -14067,6 +15598,7 @@
           "Status",
           "Date",
           "Amount",
+          "Source",
           "Customer",
           "Subscription",
           "Invoice",
@@ -14105,6 +15637,7 @@
           "Reason",
           "Select a reason",
           "Dispute date",
+          "Evidence due date",
           "Processor reference",
           "Record dispute"
         ]
@@ -14149,8 +15682,11 @@
       "View the test business",
       "Copy to",
       "Select a business",
+      "Steps",
+      "Copy route",
       "From",
       "To",
+      "This copy changes a live business",
       "A record that is in both",
       "Keep what is there",
       "Update what is there",
@@ -14160,8 +15696,9 @@
       "Delete its catalog, coupons and taxes first",
       "Invoice prefix",
       "Credit note prefix",
-      "Steps",
-      "Copy route",
+      "Set up",
+      "Review",
+      "Copy",
       "Changes",
       "Blocked",
       "Unchanged",
@@ -14192,9 +15729,7 @@
       "Clear search",
       "Continue the copy",
       "Try the failed items again?",
-      "Set up",
-      "Review",
-      "Copy"
+      "Skipped"
     ],
     "groups": [
       {
@@ -14212,10 +15747,18 @@
           "View the test business",
           "Copy to",
           "Select a business",
-          "From",
-          "To",
           "Steps",
           "Copy route",
+          "From",
+          "To",
+          "This copy changes a live business",
+          "Set up",
+          "Review",
+          "Copy",
+          "Copied",
+          "Stopped",
+          "Failed",
+          "Partly copied",
           "Changes",
           "Blocked",
           "Unchanged",
@@ -14236,20 +15779,18 @@
           "Start the copy",
           "A newer check replaced this plan",
           "Start a new copy",
+          "Not started",
+          "Waiting",
+          "Copying",
+          "Replaced",
           "Stop the copy",
           "Try the failed items again",
           "Added",
           "Updated",
           "Deleted",
           "Not changed",
-          "Failed",
           "Try the failed items again?",
-          "Set up",
-          "Review",
-          "Copy",
-          "Copied",
-          "Stopped",
-          "Partly copied"
+          "Skipped"
         ]
       },
       {
@@ -14265,7 +15806,12 @@
           "Stopped",
           "Replaced",
           "View",
-          "Repeat"
+          "Repeat",
+          "Catalog",
+          "Coupons",
+          "Taxes",
+          "Company profile",
+          "Email sending"
         ]
       },
       {
@@ -14523,12 +16069,13 @@
       "Endpoint URL",
       "Name",
       "Analytics sync",
-      "Scope",
-      "Business scope",
-      "All businesses",
       "Mode",
       "Test",
       "Live",
+      "Scope",
+      "Business scope",
+      "All live businesses",
+      "All test businesses",
       "No endpoints",
       "Deliveries",
       "Disable this endpoint?",
@@ -14551,12 +16098,13 @@
           "Endpoint URL",
           "Name",
           "Analytics sync",
-          "Scope",
-          "Business scope",
-          "All businesses",
           "Mode",
           "Test",
-          "Live"
+          "Live",
+          "Scope",
+          "Business scope",
+          "All live businesses",
+          "All test businesses"
         ]
       },
       {
@@ -14758,7 +16306,14 @@
       "Attempts",
       "Created",
       "Last attempt",
-      "No deliveries"
+      "Inspect",
+      "No deliveries",
+      "Delivery",
+      "Event",
+      "Status code",
+      "Error",
+      "Next retry",
+      "Payload"
     ],
     "groups": [
       {
@@ -14791,7 +16346,14 @@
           "Attempts",
           "Created",
           "Last attempt",
-          "No deliveries"
+          "Inspect",
+          "No deliveries",
+          "Delivery",
+          "Event",
+          "Status code",
+          "Error",
+          "Next retry",
+          "Payload"
         ]
       }
     ],
@@ -14924,6 +16486,82 @@
     "headings": []
   },
   {
+    "route": "/notifications",
+    "scope": "org",
+    "label": "Notifications",
+    "section": "Account",
+    "controls": [
+      "Notification settings",
+      "Mark all as read",
+      "Show",
+      "All",
+      "Unread",
+      "Business",
+      "All businesses",
+      "Loading notifications",
+      "We could not load notifications",
+      "No unread notifications.",
+      "Show all",
+      "No notifications",
+      "Set up notifications",
+      "No notifications in the last 90 days.",
+      "Show more"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Notification settings",
+          "Mark all as read",
+          "Show",
+          "All",
+          "Unread",
+          "Business",
+          "All businesses",
+          "Loading notifications",
+          "We could not load notifications",
+          "No unread notifications.",
+          "Show all",
+          "No notifications",
+          "Set up notifications",
+          "No notifications in the last 90 days.",
+          "Show more"
+        ]
+      }
+    ],
+    "headings": ["Notifications"]
+  },
+  {
+    "route": "/notifications/summaries/{id}",
+    "scope": "org",
+    "label": "Summary",
+    "section": "Notifications",
+    "controls": [
+      "Collected",
+      "Failed",
+      "Recovered by retries",
+      "Refunded",
+      "New subscriptions",
+      "Cancelled",
+      "MRR change"
+    ],
+    "groups": [
+      {
+        "title": "Coming up in 7 days",
+        "controls": [
+          "Collected",
+          "Failed",
+          "Recovered by retries",
+          "Refunded",
+          "New subscriptions",
+          "Cancelled",
+          "MRR change"
+        ]
+      }
+    ],
+    "headings": ["Coming up in 7 days"]
+  },
+  {
     "route": "/oauth/consent/{id}",
     "scope": "org",
     "label": "Consent",
@@ -15046,6 +16684,7 @@
       "General",
       "Reporting",
       "Security",
+      "Team notifications",
       "AI",
       "Model prices",
       "Account",
@@ -15055,11 +16694,14 @@
       "Legal entity name",
       "Tax registration number",
       "Not set",
+      "City",
+      "Place for this postal code",
+      "Select a place…",
       "Country",
       "Select a country…",
+      "Retry",
       "Address line 3",
       "+ Add address line 3",
-      "Retry",
       "Save"
     ],
     "groups": [
@@ -15071,6 +16713,7 @@
           "General",
           "Reporting",
           "Security",
+          "Team notifications",
           "AI",
           "Model prices",
           "Account",
@@ -15088,11 +16731,14 @@
         "title": "Registered address",
         "controls": [
           "Not set",
+          "City",
+          "Place for this postal code",
+          "Select a place…",
           "Country",
           "Select a country…",
+          "Retry",
           "Address line 3",
-          "+ Add address line 3",
-          "Retry"
+          "+ Add address line 3"
         ]
       }
     ],
@@ -15125,6 +16771,7 @@
       "Resolution",
       "Cost",
       "Per",
+      "Currency",
       "Note",
       "Save cost",
       "End cost",
@@ -15168,6 +16815,7 @@
           "Resolution",
           "Cost",
           "Per",
+          "Currency",
           "Starts",
           "Note",
           "Save cost"
@@ -15194,6 +16842,144 @@
     ]
   },
   {
+    "route": "/settings/notifications/{id}",
+    "scope": "org",
+    "label": "Notification",
+    "section": "Settings",
+    "controls": [
+      "We could not load this destination",
+      "Not working",
+      "Name",
+      "New webhook URL",
+      "https://chat.googleapis.com/v1/spaces/…",
+      "Send about",
+      "Selected businesses",
+      "Hide customer names and email addresses",
+      "Daily summary",
+      "Weekly summary"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": ["We could not load this destination"]
+      },
+      {
+        "title": "Space",
+        "controls": [
+          "Not working",
+          "Name",
+          "New webhook URL",
+          "https://chat.googleapis.com/v1/spaces/…"
+        ]
+      },
+      {
+        "title": "Businesses",
+        "controls": ["Send about", "Selected businesses", "Hide customer names and email addresses"]
+      },
+      {
+        "title": "Summaries",
+        "controls": ["Daily summary", "Weekly summary"]
+      }
+    ],
+    "headings": ["Space", "Businesses", "Events", "Summaries"]
+  },
+  {
+    "route": "/settings/notifications",
+    "scope": "org",
+    "label": "Team notifications",
+    "section": "Settings",
+    "controls": [
+      "Organization",
+      "General",
+      "Legal entity",
+      "Reporting",
+      "Security",
+      "AI",
+      "Model prices",
+      "Account",
+      "Plan and billing",
+      "Your account",
+      "Organization settings",
+      "We could not load team notifications",
+      "Add space",
+      "Add a Google Chat space",
+      "Add address",
+      "Add an outside email address",
+      "Change webhook URL",
+      "Edit",
+      "Send a test message",
+      "Send the confirmation email again",
+      "Send a test email",
+      "Remove",
+      "All businesses",
+      "Name",
+      "Billing team",
+      "Webhook URL",
+      "https://chat.googleapis.com/v1/spaces/…",
+      "Businesses",
+      "Hide customer names and email addresses",
+      "Send test and add",
+      "Email address",
+      "finance@example.com"
+    ],
+    "groups": [
+      {
+        "title": null,
+        "controls": [
+          "Organization",
+          "General",
+          "Legal entity",
+          "Reporting",
+          "Security",
+          "AI",
+          "Model prices",
+          "Account",
+          "Plan and billing",
+          "Your account",
+          "Organization settings",
+          "We could not load team notifications",
+          "Change webhook URL",
+          "Edit",
+          "Send a test message",
+          "Send the confirmation email again",
+          "Send a test email",
+          "Remove",
+          "All businesses"
+        ]
+      },
+      {
+        "title": "Google Chat spaces",
+        "controls": ["Add space", "Add a Google Chat space"]
+      },
+      {
+        "title": "Outside email addresses",
+        "controls": ["Add address", "Add an outside email address"]
+      },
+      {
+        "title": "Add a Google Chat space",
+        "controls": [
+          "Name",
+          "Billing team",
+          "Webhook URL",
+          "https://chat.googleapis.com/v1/spaces/…",
+          "Businesses",
+          "Hide customer names and email addresses",
+          "Send test and add"
+        ]
+      },
+      {
+        "title": "Add an outside email address",
+        "controls": ["Email address", "finance@example.com", "Businesses", "Add address"]
+      }
+    ],
+    "headings": [
+      "Google Chat spaces",
+      "Outside email addresses",
+      "Add a Google Chat space",
+      "Add an outside email address"
+    ]
+  },
+  {
     "route": "/settings",
     "scope": "org",
     "label": "Settings",
@@ -15205,6 +16991,7 @@
       "Legal entity",
       "Reporting",
       "Security",
+      "Team notifications",
       "AI",
       "Model prices",
       "Account",
@@ -15230,6 +17017,7 @@
           "Legal entity",
           "Reporting",
           "Security",
+          "Team notifications",
           "AI",
           "Model prices",
           "Account",
@@ -15268,6 +17056,7 @@
       "General",
       "Legal entity",
       "Security",
+      "Team notifications",
       "AI",
       "Model prices",
       "Account",
@@ -15287,6 +17076,7 @@
           "General",
           "Legal entity",
           "Security",
+          "Team notifications",
           "AI",
           "Model prices",
           "Account",
@@ -15314,6 +17104,7 @@
       "General",
       "Legal entity",
       "Reporting",
+      "Team notifications",
       "AI",
       "Model prices",
       "Account",
@@ -15341,6 +17132,7 @@
           "General",
           "Legal entity",
           "Reporting",
+          "Team notifications",
           "AI",
           "Model prices",
           "Account",

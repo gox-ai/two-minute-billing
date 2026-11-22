@@ -236,9 +236,38 @@ const types = (evs: NormalizedProviderEvent[]) => evs.map((e) => e.type).join(",
     pi[0]!.type === "intent.authorized" && pi[0]!.providerIntentId === "PSPXXXXXXXXXXX01",
   );
   ok(
-    "a refused payment intent → intent.failed",
+    "a refused stored-card intent (no session) → intent.failed",
     map({ merchantReference: "tmp:pi_X", success: "false", reason: "Refused" })[0]!.type ===
       "intent.failed",
+  );
+  const inSession = map({
+    merchantReference: "tmp:pi_XXXXXXXXXXXX03",
+    success: "false",
+    reason: "Not enough balance",
+    additionalData: { checkoutSessionId: "CSXXXXXXXXXXXX01", refusalReasonRaw: "51 : NSF" },
+  })[0]!;
+  ok(
+    "a refusal in a Drop-in session → charge.failed on adyses_<session>, attempt kept open",
+    inSession.type === "charge.failed" &&
+      inSession.providerIntentId === "adyses_CSXXXXXXXXXXXX01" &&
+      inSession.providerChargeId === "PSPXXXXXXXXXXX01" &&
+      inSession.ownershipRef === "pi_XXXXXXXXXXXX03" &&
+      inSession.failureCode === "insufficient_funds" &&
+      /51 : NSF/.test(inSession.failureMessage ?? ""),
+    JSON.stringify(inSession),
+  );
+  const setupRefused = map({
+    merchantReference: "tms:pi_XXXXXXXXXXXX04",
+    success: "false",
+    reason: "Expired Card",
+    additionalData: { checkoutSessionId: "CSXXXXXXXXXXXX02" },
+  })[0]!;
+  ok(
+    "a refused card save in a session → charge.failed with the reason",
+    setupRefused.type === "charge.failed" &&
+      setupRefused.providerIntentId === "adyses_CSXXXXXXXXXXXX02" &&
+      setupRefused.failureCode === "expired_card",
+    JSON.stringify(setupRefused),
   );
   const setup = map({
     merchantReference: "tms:pi_XXXXXXXXXXXX02",
@@ -588,7 +617,10 @@ const types = (evs: NormalizedProviderEvent[]) => evs.map((e) => e.type).join(",
       cvc.exposedToPayer === false &&
       declineHiddenFromPayer(cvc.code),
   );
-  ok("an unknown code passes through, retriable", n("99").code === "99" && n("99").retriable);
+  ok(
+    "an unknown code books charge_failed, retriable",
+    n("99").code === "charge_failed" && n("99").retriable,
+  );
   ok(
     "a Mastercard advice code 24 sets a one-hour floor",
     n({ code: "2", cardBrand: "mastercard", recommendationCode: "24" }).retryAfterMs === 3_600_000,
@@ -827,8 +859,13 @@ const types = (evs: NormalizedProviderEvent[]) => evs.map((e) => e.type).join(",
     "evt",
   );
   ok(
-    "payment link: a refused try closes nothing (the link stays open for another try)",
-    refused.length === 1 && refused[0]!.type === "unknown",
+    "payment link: a refused try records its reason on adypl_<link> and closes nothing",
+    refused.length === 1 &&
+      refused[0]!.type === "charge.failed" &&
+      refused[0]!.providerIntentId === "adypl_PLXXXXXXXXXXXXXX01" &&
+      refused[0]!.providerChargeId === "PSPXXXXXXXXXXX01" &&
+      !refused[0]!.lateReversal,
+    JSON.stringify(refused),
   );
 }
 

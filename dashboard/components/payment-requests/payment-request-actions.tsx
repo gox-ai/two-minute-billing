@@ -23,11 +23,22 @@ import { money, toMajor } from "@/lib/format";
 import {
   cancelPaymentRequestAction,
   chargePaymentRequestAction,
+  createPaymentRequestLinkAction,
   recordPaymentRequestPaymentAction,
   sendPaymentRequestAction,
 } from "@/app/(dashboard)/businesses/[biz]/payment_requests/actions";
 import type { PaymentMethod } from "@/lib/api";
+import { SecretLinkButton } from "@/components/patterns/secret-link-button";
 import { pmLabel } from "./request-payment-dialog";
+
+/** Mint a one-time link to the buyer's portal, for the operator to send themselves. */
+export function CopyRequestLinkButton({ biz, cus }: { biz: string; cus: string }) {
+  return (
+    <SecretLinkButton size="default" mint={() => createPaymentRequestLinkAction(biz, cus)}>
+      Copy payment link
+    </SecretLinkButton>
+  );
+}
 
 /** The API's record_payment methods. "Check" is the label; `cheque` is the stored value. */
 const RECORD_METHOD_OPTIONS = [

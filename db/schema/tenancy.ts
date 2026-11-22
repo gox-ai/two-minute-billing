@@ -265,6 +265,9 @@ export const businesses = pgTable(
     // fill) on the STOREFRONT document only; the operator dashboard's identity is
     // ours, not the tenant's.
     brandColor: text("brand_color"),
+    // `#RRGGBB` or NULL (automatic). The label on a `brandColor` button, used as set whatever
+    // its contrast; NULL = automatic (0542, `buttonLabel` in dashboard/lib/brand.ts).
+    buttonTextColor: text("button_text_color"),
     /**
      * May a BUYER type a coupon code on the hosted pages (checkout + portal)? 0238.
      *
@@ -327,7 +330,7 @@ export const businesses = pgTable(
      * the rounding rule. NULL / absent key = today's behaviour. Resolver: resolveTaxSettings.
      */
     taxSettings: jsonb("tax_settings"),
-    /** Staff alerts and the daily digest (0489). NULL = none. Resolver: resolveTeamAlertsConfig. */
+    /** Retired team alerts (0489). Read only by the one-time notice; dropped with the deprecated API. */
     teamAlertsConfig: jsonb("team_alerts_config"),
     // Invoice configuration: prefix + per-business sequential number.
     invoicePrefix: text("invoice_prefix").notNull().default("INV"),

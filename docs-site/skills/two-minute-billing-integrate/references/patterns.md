@@ -17,16 +17,23 @@ export const tmb = new Tmbilling({
 export const BIZ = process.env.TMBILLING_BUSINESS_ID!;
 ```
 
-For a route the SDK does not cover, call the API with the same headers:
+For a route the SDK does not cover, call the API with the same headers. A write that the app
+retries (a queued job, a timeout) must pass the SAME `idempotencyKey` each time, made from the
+action (`seats-${accountId}-${changeId}`); a fresh key per call charges twice on a retry.
 
 ```ts
-export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function api<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<T> {
   const res = await fetch(`${process.env.TMBILLING_URL}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${process.env.TMBILLING_API_KEY}`,
       "Content-Type": "application/json",
-      ...(method === "GET" ? {} : { "Idempotency-Key": crypto.randomUUID() }),
+      ...(method === "GET" ? {} : { "Idempotency-Key": idempotencyKey }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -115,19 +122,37 @@ func Verify(rawBody []byte, header, secret string) bool {
 ### Handle
 
 ```ts
+type BillingEvent = {
+  id: string;
+  event_type: string;
+  occurred_at: string;
+  content: any;
+  imported?: boolean;
+};
+
 app.post("/webhooks/billing", express.raw({ type: "application/json" }), async (req, res) => {
   if (!verify(req.body, req.header("Tmbilling-Signature"), process.env.TMBILLING_WEBHOOK_SECRET!)) {
     return res.sendStatus(401);
   }
-  const event = JSON.parse(req.body.toString("utf8"));
+  const event: BillingEvent = JSON.parse(req.body.toString("utf8"));
 
   // Deduplicate: a delivery can repeat. Store event ids in a table with a unique key.
   if (!(await markEventSeen(event.id))) return res.sendStatus(200);
+  await handleEvent(event);
+  res.sendStatus(200);
+});
 
+export async function handleEvent(event: BillingEvent): Promise<void> {
   switch (event.event_type) {
     case "subscription_created":
     case "subscription_changed":
-    case "subscription_canceled": {
+    case "subscription_activated":
+    case "subscription_cancel_scheduled":
+    case "subscription_scheduled_cancellation_removed":
+    case "subscription_reactivated":
+    case "subscription_canceled":
+    case "subscription_paused":
+    case "subscription_resumed": {
       // content.subscription is { id, status }: fetch the subscription for the rest.
       const sub = await tmb.subscriptions.get(BIZ, event.content.subscription.id);
       await syncSubscription(sub, event.occurred_at);
@@ -142,9 +167,18 @@ app.post("/webhooks/billing", express.raw({ type: "application/json" }), async (
       // content.payment already has amount_minor, currency, invoice, code and message.
       await notifyPaymentProblem(event.content.payment);
       break;
+    case "invoice_dunning_exhausted":
+    case "invoice_not_paid":
+      // Retries ended: ask the customer to pay. Access follows the subscription event
+      // that the business's dunning final action sends, not this one.
+      await notifyPaymentProblem(event.content.invoice);
+      break;
+    case "payment_source_expiring":
+      // content.payment_source has customer, brand and last4: ask for a new card.
+      await notifyPaymentProblem(event.content.payment_source);
+      break;
   }
-  res.sendStatus(200);
-});
+}
 ```
 
 - Answer `2xx` quickly; move slow work to the app's job queue.
@@ -154,7 +188,9 @@ app.post("/webhooks/billing", express.raw({ type: "application/json" }), async (
 - Order is not guaranteed. Compare timestamps (`occurred_at`) before overwriting newer state.
 - `syncSubscription` reads `metadata.app_account_id` (set at checkout) from the fetched
   subscription to find the account, then stores its `customer` (`cus_…`), `id` (`sub_…`) and
-  `status`. The response carries `customer` and `metadata`, but the SDK's `Subscription` type
+  `status`. A subscription with no account (a `tmb trigger` customer, a payment link) is skipped,
+  not an error. Access follows `status`: `in_trial`, `active` and `non_renewing` have it;
+  `paused` and `cancelled` do not. For `non_renewing`, show "Ends on" with `canceled_at`. The response carries `customer` and `metadata`, but the SDK's `Subscription` type
   does not declare them yet: cast them (`sub.metadata as Record<string, string> | null`).
 - `markPaid` acts only on `status: "paid"`. For a one-time purchase, the checkout's `metadata`
   is on the invoice: `invoice.metadata?.order_id` links it to the app's order.
@@ -165,7 +201,12 @@ app.post("/webhooks/billing", express.raw({ type: "application/json" }), async (
 const endpoint = await api<{ id: string; signing_secret: string }>("POST", "/v1/webhook_endpoints", {
   url: "https://app.example.com/webhooks/billing",
   business: BIZ,
-  event_types: ["subscription_created", "subscription_changed", "subscription_canceled", "invoice_paid", "payment_failed"],
+  event_types: [
+    "subscription_created", "subscription_changed", "subscription_canceled", "invoice_paid", "payment_failed",
+    "subscription_activated", "subscription_cancel_scheduled", "subscription_scheduled_cancellation_removed",
+    "subscription_reactivated", "subscription_paused", "subscription_resumed",
+    "invoice_dunning_exhausted", "invoice_not_paid", "payment_source_expiring",
+  ],
 });
 ```
 
@@ -173,6 +214,75 @@ Every name in `event_types` must be a real event type, or the call answers `400`
 to receive every type. `signing_secret` is returned once: have the user store it as
 `TMBILLING_WEBHOOK_SECRET`, and do not print it. Rotate with
 `POST /v1/webhook_endpoints/{id}/rotate_secret`, accepting both secrets until old deliveries drain.
+
+### Catch up on missed events
+
+Run after downtime, or nightly. Same handler, same dedupe, so an event already handled is skipped.
+
+```ts
+type EventPage = { data: BillingEventRow[]; has_more: boolean; next_cursor: string | null };
+type BillingEventRow = { id: string; event_type: string; occurred_at: string; content: any; imported?: boolean };
+
+export async function catchUp(since: Date, handle: (e: BillingEventRow) => Promise<void>) {
+  let after: string | undefined;
+  for (;;) {
+    const q = new URLSearchParams({
+      occurred_after: since.toISOString(),
+      "sort_by[asc]": "occurred_at",
+      limit: "100",
+    });
+    if (after) q.set("starting_after", after);
+    const page = await api<EventPage>("GET", `/v1/businesses/${BIZ}/events?${q}`);
+    for (const event of page.data) {
+      if (event.imported) continue; // history from a migration
+      if (await markEventSeen(event.id)) await handle(event);
+    }
+    if (!page.has_more || page.data.length === 0) return;
+    after = page.next_cursor ?? page.data[page.data.length - 1]!.id;
+  }
+}
+```
+
+Pass `handleEvent` from the webhook module as `handle`.
+
+## Cancel and seats from the app
+
+```ts
+// Cancel at the term end. Preview first; always send cancel_option.
+const sub = account.tmbilling_subscription_id;
+const preview = await api<{ net_collect_minor: number; net_refund_minor: number; warnings: string[] }>(
+  "POST",
+  `/v1/businesses/${BIZ}/subscriptions/${sub}/cancel_estimate`,
+  { cancel_option: "end_of_term" },
+); // show preview to the user, then cancel on their yes
+await api("POST", `/v1/businesses/${BIZ}/subscriptions/${sub}/cancel`, { cancel_option: "end_of_term" });
+// subscription_cancel_scheduled follows; the status is non_renewing until canceled_at.
+
+// Undo it while the term runs.
+await api("POST", `/v1/businesses/${BIZ}/subscriptions/${sub}/reactivate`, {});
+
+// One more seat: preview, show the amount, then apply the same change.
+const current = await api<{ items: Array<{ id: string; price: string; quantity: number }> }>(
+  "GET",
+  `/v1/businesses/${BIZ}/subscriptions/${sub}`,
+);
+const seatItem = current.items.find((i) => i.price === "team-monthly-usd")!;
+const changes = [{ item: seatItem.id, quantity: seatCount + 1 }];
+const est = await api<{ quote: string; priced_at: string }>(
+  "POST",
+  `/v1/businesses/${BIZ}/subscriptions/${sub}/estimate`,
+  { changes },
+);
+await api("POST", `/v1/businesses/${BIZ}/subscriptions/${sub}/change`, {
+  changes,
+  quote: est.quote,
+  priced_at: est.priced_at,
+  invoice_immediately: true,
+});
+```
+
+- A seat add can answer `402` with `pending_change` (`apply_when_paid`): the seat count did not
+  change yet. See "Errors and retries" in SKILL.md.
 
 ## Entitlements
 

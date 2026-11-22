@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/patterns/chip";
 import { money } from "@/lib/format";
 import { creditLegSentences, type CreditDestinationEntry } from "@/lib/credit-legs";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 import { cn } from "@/lib/utils";
 
 /** One diff row in the summary (plan/addon change). */
@@ -389,7 +390,8 @@ export function ChangeSummaryDialog({
   // change that issues a credit note has a second total the lines cannot see. Callers
   // holding an estimate pass `totalMinor` (its `total_minor`, already the difference of
   // the two), which is what keeps this footer and the headline equal by construction.
-  const total = totalMinor ?? lineTotal + (taxMinor ?? 0);
+  // Only ADDED tax: tax inside tax-inclusive prices is already in the lines.
+  const total = totalMinor ?? lineTotal + splitTax(taxMinor, taxLines).addedMinor;
   const hasCredits =
     (creditsMinor ?? 0) > 0 ||
     (balanceCreditsMinor ?? 0) > 0 ||
@@ -401,20 +403,27 @@ export function ChangeSummaryDialog({
     charges.length === 0 && invoiceTotalMinor == null && (creditNoteTotalMinor ?? 0) > 0;
   const immediateLabel = creditNoteOnly ? "Credit note" : chargesLabel;
 
-  /** `taxLines` when the engine named the components, else one plain row. */
+  /** `taxLines` when the engine named the components, else one plain row; then any tax
+   *  already inside tax-inclusive prices. */
   const taxRows = (
     minor: number | undefined,
     lines: Array<{ label: string; amount_minor: number }> | undefined,
-  ): FooterRow[] =>
-    !minor || minor <= 0
-      ? []
-      : lines?.length
+  ): FooterRow[] => {
+    if (!minor || minor <= 0) return [];
+    const { includedMinor } = splitTax(minor, lines);
+    return [
+      ...(lines
         ? lines.map((t) => ({
             label: t.label,
             amountMinor: t.amount_minor,
             kind: "muted" as const,
           }))
-        : [{ label: "Tax", amountMinor: minor, kind: "muted" as const }];
+        : [{ label: "Tax", amountMinor: minor, kind: "muted" as const }]),
+      ...(includedMinor > 0
+        ? [{ label: INCLUDED_TAX_LABEL, amountMinor: includedMinor, kind: "muted" as const }]
+        : []),
+    ];
+  };
 
   // Footer order — subtotal → tax rows → total → credits — with the second document named
   // for what it is rather than folded into a single "Tax" and a single total.

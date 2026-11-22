@@ -597,6 +597,8 @@ export class Tmbilling {
         icon_url?: string | null;
         favicon_url?: string | null;
         brand_color?: string | null;
+        /** Label on brand-color buttons, used as set. Null = automatic. */
+        button_text_color?: string | null;
         timezone?: string | null;
         tax_registration_number?: string | null;
         invoice_prefix?: string;

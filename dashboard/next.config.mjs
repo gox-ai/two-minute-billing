@@ -548,6 +548,12 @@ const nextConfig = {
       // the sign-in guard.
       { source: "/sign-up", destination: "/signup", permanent: true },
       { source: "/sign-up/:rest*", destination: "/signup/:rest*", permanent: true },
+      // Team alerts became notifications (0533): the old settings page opens Team notifications.
+      {
+        source: "/businesses/:biz/settings/team-alerts",
+        destination: "/settings/notifications",
+        permanent: false,
+      },
     ];
   },
   async headers() {
@@ -556,8 +562,22 @@ const nextConfig = {
       { source: "/:path*", headers: securityHeaders },
       ...STOREFRONT_PATHS.map((source) => ({
         source,
-        headers: [{ key: cspHeaderName, value: storefrontCsp }],
+        headers: [
+          { key: cspHeaderName, value: storefrontCsp },
+          // A gateway's bank step runs in a popup that reports back to its sheet on this page.
+          // `same-origin` cuts that link: the money is authorized and the page never hears.
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+        ],
       })),
+      // The service worker: revalidated on every check, or an update waits on the HTTP cache.
+      // CSP needs nothing: worker-src and manifest-src fall back to `'self'`.
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, max-age=0" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
     ];
   },
 };

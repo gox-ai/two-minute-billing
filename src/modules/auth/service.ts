@@ -1,4 +1,5 @@
 import { randomBytes, scrypt, scryptSync, timingSafeEqual, createHash } from "node:crypto";
+import { notPlatformUser } from "@/modules/tenancy/platform-org";
 import { and, desc, eq, gt, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { systemDb, type Tx } from "@/platform/db";
 import { publicId } from "@/platform/ids";
@@ -2344,7 +2345,9 @@ export async function sweepPasswordResetTokens(
  */
 export async function sweepLoginAttempts(now: Date = new Date()): Promise<{ deleted: number }> {
   const cutoff = new Date(now.getTime() - config.LOGIN_ATTEMPT_RETENTION_DAYS * 86_400_000);
-  const res = await systemDb.delete(loginAttempts).where(lt(loginAttempts.at, cutoff));
+  const res = await systemDb
+    .delete(loginAttempts)
+    .where(and(lt(loginAttempts.at, cutoff), notPlatformUser(loginAttempts.userId)));
   return { deleted: (res as unknown as { count?: number }).count ?? 0 };
 }
 

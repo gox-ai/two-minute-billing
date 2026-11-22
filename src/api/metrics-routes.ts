@@ -40,6 +40,15 @@ import {
   MAX_PAGE,
 } from "@/modules/metrics/export/datasets";
 import { computeCancellationAnalytics } from "@/modules/metrics/cancellations";
+import {
+  computeCheckoutReport,
+  computePortalReport,
+  HostedReportError,
+} from "@/modules/metrics/hosted-page-reports";
+import { computeEmailReport } from "@/modules/metrics/email-report";
+import { reportModelGroup } from "@/modules/metrics/measure-models";
+import { billingModelsPresent } from "@/modules/metrics/billing-models";
+import { withTenant } from "@/platform/db";
 import { resolveBusiness, badRequest, requirePerm } from "./helpers";
 import { writeAuditLog } from "@/modules/audit/service";
 
@@ -50,6 +59,53 @@ const mrrBridgeQuery = z.object({
   end: z.string().regex(DAY_RE, "end must be YYYY-MM-DD").optional(),
   currency: z.string().length(3).optional(),
   top: z.coerce.number().int().min(1).max(20).optional(),
+});
+
+const hostedWindow = {
+  start: z.string().regex(DAY_RE, "start must be YYYY-MM-DD"),
+  end: z.string().regex(DAY_RE, "end must be YYYY-MM-DD"),
+  compare: z.enum(["true", "false"]).optional(),
+  currency: z.string().min(3).max(3).optional(),
+};
+/** Visit-tracking filters (storefront-analytics): the visitor's country and device. */
+const visitFilters = {
+  country: z
+    .string()
+    .regex(/^[A-Za-z]{2}$/, "country must be a two-letter country code")
+    .transform((c) => c.toUpperCase())
+    .optional(),
+  device: z.enum(["desktop", "mobile", "tablet"]).optional(),
+};
+const checkoutReportQuery = z.object({
+  ...hostedWindow,
+  ...visitFilters,
+  payment_link: z.string().min(1).max(64).optional(),
+  /** Any product on the checkout: a plan, a one-time charge or a credit pack. */
+  product: z.string().min(1).max(64).optional(),
+  /** The same filter, under its earlier name. */
+  plan: z.string().min(1).max(64).optional(),
+});
+const portalReportQuery = z.object({
+  ...hostedWindow,
+  ...visitFilters,
+  arrived_from: z
+    .string()
+    .regex(/^[a-z_]{1,64}$/, "arrived_from must be an arrival key")
+    .optional(),
+  plan: z.string().min(1).max(64).optional(),
+});
+
+const emailReportQuery = z.object({
+  ...hostedWindow,
+  type: z
+    .string()
+    .regex(/^[a-z_]{1,64}$/, "type must be an email type")
+    .optional(),
+  transport: z
+    .string()
+    .regex(/^[a-z_]{1,32}$/, "transport must be a transport name")
+    .optional(),
+  recent: z.coerce.number().int().min(1).max(500).optional(),
 });
 
 // SaaS metrics (MRR/ARR/ARPU/churn) — read-only, RLS-scoped.
@@ -73,6 +129,24 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
     }),
   );
 
+  /** The billing models this business has data for: the one detector menus and boards share. */
+  app.get(
+    "/v1/businesses/:biz/billing_models",
+    { preHandler: [authenticate, requirePerm("reports:view")] },
+    onReplica(async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const models = await withTenant(req.organization!.id, (tx) =>
+        billingModelsPresent(tx, business.id),
+      );
+      return {
+        object: "billing_models",
+        business: business.publicId,
+        models: [...models].sort(),
+      };
+    }),
+  );
+
   /**
    * The report catalogue (Phase 3a) — what can be asked, before asking it.
    *
@@ -93,6 +167,7 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
           description: r.description,
           category: r.category,
           category_label: CATEGORY_LABELS[r.category],
+          model: reportModelGroup(r.category),
           kind: r.kind,
           shape: r.shape,
           dimensions: r.dimensions,
@@ -171,21 +246,33 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
                 ["period", ...report.table.columns.map((c) => c.label)],
                 ...report.table.rows.map((r) => [r.period, ...r.values.map(String)]),
               ]
-            : report.matrix
+            : report.grid
               ? [
-                  // A cohort exports as its grid: intake month, opening size, then one column
-                  // per month since. An empty cell is a month that has not happened — not a 0,
-                  // which would read as total churn.
-                  ["cohort", "starting", ...report.matrix.columns],
-                  ...report.matrix.rows.map((r) => [
+                  ["group", ...report.grid.columns.map((c) => c.label)],
+                  ...report.grid.rows.map((r) => [
                     r.group,
-                    String(r.base),
-                    ...r.values.map((v) => (v == null ? "" : String(v / 100))),
+                    ...r.values.map((v) => (v == null ? "" : String(v))),
                   ]),
                 ]
-              : report.rows
-                ? [["group", report.name], ...report.rows.map((r) => [r.group, String(r.value)])]
-                : [["period", report.name], ...report.points.map((p) => [p.label, String(p.v)])];
+              : report.matrix
+                ? [
+                    // A cohort exports as its grid: intake month, opening size, then one column
+                    // per month since. An empty cell is a month that has not happened — not a 0,
+                    // which would read as total churn.
+                    ["cohort", "starting", ...report.matrix.columns],
+                    ...report.matrix.rows.map((r) => [
+                      r.group,
+                      String(r.base),
+                      ...r.values.map((v) =>
+                        v == null
+                          ? ""
+                          : String(report.matrix!.value_kind === "money" ? v : v / 100),
+                      ),
+                    ]),
+                  ]
+                : report.rows
+                  ? [["group", report.name], ...report.rows.map((r) => [r.group, String(r.value)])]
+                  : [["period", report.name], ...report.points.map((p) => [p.label, String(p.v)])];
           const csv = rows.map(csvRow).join("\n");
           return reply
             .header("content-type", "text/csv; charset=utf-8")
@@ -398,6 +485,95 @@ export async function registerMetricsRoutes(app: FastifyInstance) {
         end,
         ...analytics,
       };
+    }),
+  );
+
+  /**
+   * The checkout report: hosted checkout sessions over business-zone days, with the window
+   * before it when `compare=true`. Its shared figures equal the Reports library's.
+   */
+  app.get(
+    "/v1/businesses/:biz/checkout_report",
+    { preHandler: [authenticate, requirePerm("reports:view")] },
+    onReplica(async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const parsed = parseRequest(checkoutReportQuery, req.query ?? {});
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const q = parsed.data;
+      try {
+        const report = await computeCheckoutReport(req.organization!.id, business.id, {
+          start: q.start,
+          end: q.end,
+          compare: q.compare === "true",
+          currency: q.currency ?? null,
+          paymentLink: q.payment_link ?? null,
+          plan: q.product ?? q.plan ?? null,
+          country: q.country ?? null,
+          device: q.device ?? null,
+        });
+        return { object: "checkout_report", business: business.publicId, ...report };
+      } catch (e) {
+        if (e instanceof HostedReportError) return badRequest(reply, e.message);
+        throw e;
+      }
+    }),
+  );
+
+  /** The portal report: visits, actions, payments and the cancel flow, over business-zone days. */
+  app.get(
+    "/v1/businesses/:biz/portal_report",
+    { preHandler: [authenticate, requirePerm("reports:view")] },
+    onReplica(async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const parsed = parseRequest(portalReportQuery, req.query ?? {});
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const q = parsed.data;
+      try {
+        const report = await computePortalReport(req.organization!.id, business.id, {
+          start: q.start,
+          end: q.end,
+          compare: q.compare === "true",
+          currency: q.currency ?? null,
+          arrivedFrom: q.arrived_from ?? null,
+          plan: q.plan ?? null,
+          country: q.country ?? null,
+          device: q.device ?? null,
+        });
+        return { object: "portal_report", business: business.publicId, ...report };
+      } catch (e) {
+        if (e instanceof HostedReportError) return badRequest(reply, e.message);
+        throw e;
+      }
+    }),
+  );
+
+  /** The email report: delivery, failures, portal visits from email links and recovery, over business-zone days. */
+  app.get(
+    "/v1/businesses/:biz/email_report",
+    { preHandler: [authenticate, requirePerm("reports:view")] },
+    onReplica(async (req, reply) => {
+      const business = await resolveBusiness(req, reply);
+      if (!business) return;
+      const parsed = parseRequest(emailReportQuery, req.query ?? {});
+      if (!parsed.success) return badRequest(reply, parsed.error);
+      const q = parsed.data;
+      try {
+        const report = await computeEmailReport(req.organization!.id, business.id, {
+          start: q.start,
+          end: q.end,
+          compare: q.compare === "true",
+          currency: q.currency ?? null,
+          type: q.type ?? null,
+          transport: q.transport ?? null,
+          recent: q.recent,
+        });
+        return { object: "email_report", business: business.publicId, ...report };
+      } catch (e) {
+        if (e instanceof HostedReportError) return badRequest(reply, e.message);
+        throw e;
+      }
     }),
   );
 

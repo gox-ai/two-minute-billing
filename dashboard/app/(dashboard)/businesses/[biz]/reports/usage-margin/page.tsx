@@ -8,6 +8,7 @@ import {
   type UsageMarginRow,
 } from "@/lib/api/model-prices";
 import { requirePermission } from "@/lib/session";
+import { modelEmptyState } from "@/components/reports/model-empty-state";
 import { PageHeader } from "@/components/page-header";
 import { RecordCard } from "@/components/patterns/record-page";
 import { Chip } from "@/components/patterns/chip";
@@ -25,6 +26,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { money } from "@/lib/format";
+import { getReport } from "@/lib/api";
+import { queryAnalytics, type BatchEntry } from "@/lib/analytics-api";
+import { pick, slices, Headline } from "@/components/analytics/home/parts";
+import { Grid } from "@/components/analytics/layout";
+import { BarList } from "@/components/analytics/home/parts";
+import { ReportGrid } from "@/components/reports/report-shapes";
+import type { ReportPayload } from "@/components/reports/report-format";
 import { fmtRange } from "@/lib/format-date";
 import { localDate, localMidnightIso, minusDays, percentLabel, plusDays } from "@/lib/model-prices";
 
@@ -39,7 +47,9 @@ const GROUPS: Array<{ value: MarginGroupBy; label: string }> = [
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Reports → Usage margin (design G1b § 3.7), `scope=all`: revenue after discounts and credit
+ * Reports → Usage: units, top consumers, customers who stopped, commitment pacing and the
+ * margin (design G1b § 3.7). The path stays `usage-margin` so saved links keep working.
+ * Margin, `scope=all`: revenue after discounts and credit
  * notes, before tax, minus the cost of usage, billed on a line or not billed (cost only). By
  * customer and plan the revenue is every line; by meter and model, usage lines only.
  */
@@ -52,6 +62,8 @@ export default async function UsageMarginPage({
 }) {
   await requirePermission("usage_margin:view", "manager");
   const { biz } = await params;
+  const empty = await modelEmptyState(biz, "usage", "Usage");
+  if (empty) return empty;
   const sp = await searchParams;
   const businesses = await listBusinesses().catch(() => null);
   const b = businesses?.data.find((x) => x.id === biz);
@@ -63,7 +75,7 @@ export default async function UsageMarginPage({
     ? (sp.group_by as MarginGroupBy)
     : "customer";
   const currency = sp.currency?.toUpperCase() || b?.default_currency?.toUpperCase() || undefined;
-  const crumbs = reportCrumbs(biz, b?.name, "Usage margin");
+  const crumbs = reportCrumbs(biz, b?.name, "Usage");
 
   let report;
   try {
@@ -77,12 +89,37 @@ export default async function UsageMarginPage({
   } catch (e) {
     return (
       <>
-        <PageHeader title="Usage margin" breadcrumbs={crumbs} />
-        <ErrorState title="We could not load the usage margin report." error={e} retry />
+        <PageHeader title="Usage" breadcrumbs={crumbs} />
+        <ErrorState title="We could not load the usage report." error={e} retry />
       </>
     );
   }
   const c = currency ?? report.totals[0]?.currency ?? "USD";
+  // The other Usage sections. A failed read hides its section; it never blocks the margin.
+  const win = { start: from, end: to, grain: "month" as const };
+  const [extra, consumers, pacing] = await Promise.all([
+    queryAnalytics({
+      business: biz,
+      currency: c,
+      queries: [
+        { key: "qty", measure: "usage_quantity", split: "meter", split_limit: 25, ...win },
+        { key: "stopped", measure: "usage_customers_stopped", grain: "day", range: "7d" },
+        { key: "shortfall", measure: "commitment_shortfall", ...win },
+      ],
+    }).catch(() => [] as BatchEntry[]),
+    getReport(biz, "top_usage_consumers", { currency: c }).then(
+      (r) => r as unknown as ReportPayload,
+      () => null,
+    ),
+    getReport(biz, "commitment_pacing", { currency: c }).then(
+      (r) => r as unknown as ReportPayload,
+      () => null,
+    ),
+  ]);
+  const unitsByMeter = slices(pick(extra, "qty"));
+  const stopped = pick(extra, "stopped")?.total ?? null;
+  const shortfall = pick(extra, "shortfall")?.total ?? null;
+  const hasCommitments = (pacing?.grid?.rows.length ?? 0) > 0 || (shortfall ?? 0) > 0;
   const total = report.totals.find((t) => t.currency === c) ?? null;
   const rows = report.data.filter((r) => r.currency === c);
   const currencies = Array.from(
@@ -151,9 +188,9 @@ export default async function UsageMarginPage({
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Usage margin"
+        title="Usage"
         breadcrumbs={crumbs}
-        description="Revenue after discounts and credit notes, before tax, minus the cost of usage. Usage that is not on an invoice shows its cost as not billed."
+        description="What customers use, who uses the most, who stopped, and what usage earns after its cost."
       />
       <RecordCard title="Filters">
         <form method="get" className="flex flex-wrap items-end gap-3">
@@ -201,6 +238,47 @@ export default async function UsageMarginPage({
         </form>
       </RecordCard>
 
+      <Grid className="gap-4">
+        <Headline
+          span={4}
+          label="Customers who stopped"
+          value={stopped == null ? "—" : stopped.toLocaleString("en")}
+          note="No usage in 30 days, after some before"
+          href={`/businesses/${biz}/customers?filter=days_since_last_usage:gte:30`}
+        />
+        {hasCommitments ? (
+          <Headline
+            span={4}
+            label="Commitment shortfall billed"
+            value={shortfall == null ? "—" : money(shortfall, c)}
+            note={`Invoiced in ${fmtRange(from, to, tz)}`}
+          />
+        ) : null}
+      </Grid>
+      {unitsByMeter.length > 0 ? (
+        <RecordCard title="Units by meter" meta={`Received ${fmtRange(from, to, tz)}`}>
+          <BarList
+            rows={unitsByMeter.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
+            format={(n) => n.toLocaleString("en")}
+          />
+        </RecordCard>
+      ) : null}
+      {consumers?.grid && consumers.grid.rows.length > 0 ? (
+        <RecordCard title="Top consumers" meta="The 20 customers with the most usage revenue" flush>
+          <ReportGrid grid={consumers.grid} currency={c} biz={biz} />
+        </RecordCard>
+      ) : null}
+      {hasCommitments && pacing?.grid && pacing.grid.rows.length > 0 ? (
+        <RecordCard title="Commitment pacing" meta="Subscriptions with a minimum commitment" flush>
+          <ReportGrid grid={pacing.grid} currency={c} biz={biz} groupLabel="Customer" />
+        </RecordCard>
+      ) : null}
+
+      <h2 className="text-base font-semibold">Margin</h2>
+      <p className="-mt-3 text-sm text-muted-foreground">
+        Revenue after discounts and credit notes, before tax, minus the cost of usage. Usage that is
+        not on an invoice shows its cost as not billed.
+      </p>
       <RecordCard
         title={`By ${GROUPS.find((g) => g.value === groupBy)!.label.toLowerCase()}`}
         meta={`Invoices and usage dated ${fmtRange(from, to, tz)} · ${c}`}
@@ -212,7 +290,7 @@ export default async function UsageMarginPage({
             description={`${emptyText}, and we found no usage that is not billed. Select a wider date range or another currency. We calculate usage cost each night.`}
           />
         ) : (
-          <Table phone="stack">
+          <Table phone="stack" fit>
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-5">

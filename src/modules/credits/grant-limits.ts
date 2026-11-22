@@ -4,18 +4,16 @@
  * unit with no rate has no money value: `credit_config.unit_grant_limits`, per unit, in units.
  *
  * `max_minor`: a grant above it is refused. `alert_above_minor`: a grant above it is allowed,
- * written to the audit log, and mailed to the team when the `large_grants` alert is on.
+ * written to the audit log, and sent as the "Large free credit grant" notification.
  * Unset means no limit and no alert, which is the behaviour before this setting.
  */
 import { eq } from "drizzle-orm";
 import { businesses, customers, type BusinessCreditConfig } from "@db/schema";
-import { afterCommit, type Tx } from "@/platform/db";
+import { type Tx } from "@/platform/db";
 import { formatMoney } from "@/platform/currency";
 import { formatSteps } from "./units";
-import { createLogger } from "@/platform/logger";
 import { writeAuditLog } from "@/modules/audit/service";
-
-const log = createLogger("credits.grant-limits");
+import { enqueueNotification } from "@/modules/notifications/enqueue";
 
 export type GrantKind = "wallet_topup" | "promotional_credit" | "credit_grant";
 
@@ -127,7 +125,7 @@ export function unitAmountText(
   return `${groupDigits(n)} ${n === "1" ? unit.name : (unit.pluralName ?? unit.name)}`;
 }
 
-/** Audit row in the caller's transaction; the team mail after it commits. */
+/** Audit row and the team notification, both in the caller's transaction. */
 export async function recordLargeGrant(
   tx: Tx,
   input: {
@@ -171,26 +169,21 @@ export async function recordLargeGrant(
     },
     tx,
   );
-  const send = async () => {
-    const { sendLargeGrantAlert } = await import("@/modules/team-alerts/service");
-    await sendLargeGrantAlert({
-      organizationId: input.organizationId,
-      businessId: input.businessId,
-      kindLabel: KIND_LABEL[input.kind],
-      reference: input.reference,
-      customer: c?.publicId ?? null,
-      amountMinor: input.amountMinor,
-      currency: input.currency.toUpperCase(),
-      alertAboveMinor: input.alertAboveMinor,
-      ...(input.units
-        ? { amountText: input.units.amount, alertAboveText: input.units.alertAbove }
-        : {}),
-    }).catch((e) =>
-      log.warn("large grant alert not sent", {
-        event: "large_grant_alert_not_sent",
-        error: (e as Error)?.message,
-      }),
-    );
-  };
-  if (!afterCommit(send)) await send();
+  // The "Large free credit grant" notification, queued in this transaction: a rollback sends nothing.
+  const label = KIND_LABEL[input.kind];
+  await enqueueNotification(tx, {
+    organizationId: input.organizationId,
+    businessId: input.businessId,
+    kinds: ["large_credit_grant"],
+    dedupeKey: `direct:large_credit_grant:${input.businessId}:${input.kind}:${input.reference}`,
+    payload: {
+      record: c ? { type: "customer", id: c.publicId } : null,
+      facts: {
+        amountMinor: Number(input.amountMinor),
+        currency: input.currency.toUpperCase(),
+        ...(input.units ? { amountText: input.units.amount } : {}),
+        reason: `${label.charAt(0).toUpperCase()}${label.slice(1)} ${input.reference}`,
+      },
+    },
+  });
 }

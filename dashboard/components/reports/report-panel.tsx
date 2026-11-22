@@ -18,7 +18,12 @@ import {
   seriesChangeBps,
   type ReportPayload,
 } from "@/components/reports/report-format";
-import { BreakdownTable, CohortGrid, WaterfallTable } from "@/components/reports/report-shapes";
+import {
+  BreakdownTable,
+  CohortGrid,
+  ReportGrid,
+  WaterfallTable,
+} from "@/components/reports/report-shapes";
 
 export const REPORT_RANGES: AnalyticsRange[] = ["daily", "3m", "6m", "12m"];
 const RANGE_LABEL: Record<AnalyticsRange, string> = {
@@ -117,7 +122,8 @@ export function ReportPanel({
   const dimensions = report.dimensions ?? [];
   const granularities = report.granularities ?? [];
   const hasSeries = report.points.length > 0;
-  const breakdown = report.rows && report.rows.length > 0 ? report.rows : null;
+  // A grid carries its own rows; the breakdown beside it would repeat the first column.
+  const breakdown = !report.grid && report.rows && report.rows.length > 0 ? report.rows : null;
   const empty = reportIsEmpty(report);
   const coverage = coverageLabel(report);
   // Off the very points the chart draws, so the number and the shape cannot disagree.
@@ -198,15 +204,18 @@ export function ReportPanel({
     </span>
   );
   // The as-of line closes the LAST card of the answer, so it reads under everything it covers.
-  const hasGrids = !!report.table || !!report.matrix || (showBreakdown && breakdown != null);
+  const hasGrids =
+    !!report.table || !!report.matrix || !!report.grid || (showBreakdown && breakdown != null);
   const lastGrid =
     showBreakdown && breakdown
       ? "breakdown"
-      : report.matrix
-        ? "matrix"
-        : report.table
-          ? "table"
-          : null;
+      : report.grid
+        ? "grid"
+        : report.matrix
+          ? "matrix"
+          : report.table
+            ? "table"
+            : null;
 
   // Edge-to-edge tables get the card's own 20px gutter on their outer columns.
   const flushTable =
@@ -293,6 +302,7 @@ export function ReportPanel({
             <>
               {report.table ? <ReportCardBones /> : null}
               {report.matrix ? <ReportCardBones /> : null}
+              {report.grid ? <ReportCardBones /> : null}
               {showBreakdown && breakdown ? <ReportCardBones /> : null}
             </>
           }
@@ -316,13 +326,32 @@ export function ReportPanel({
 
           {report.matrix ? (
             <RecordCard
-              title="Retention by cohort"
+              title={
+                report.matrix.value_kind === "money"
+                  ? "Revenue per buyer by cohort"
+                  : report.category === "sales"
+                    ? "Repeat purchases by cohort"
+                    : "Retention by cohort"
+              }
               meta={`${report.matrix.rows.length} cohorts`}
               flush
               footer={lastGrid === "matrix" ? asOf : undefined}
             >
               <div className={flushTable}>
                 <CohortGrid matrix={report.matrix} currency={report.currency} />
+              </div>
+            </RecordCard>
+          ) : null}
+
+          {report.grid ? (
+            <RecordCard
+              title={report.name}
+              meta={`${report.grid.rows.length} row${report.grid.rows.length === 1 ? "" : "s"}`}
+              flush
+              footer={lastGrid === "grid" ? asOf : undefined}
+            >
+              <div className={flushTable}>
+                <ReportGrid grid={report.grid} currency={report.currency} biz={biz} />
               </div>
             </RecordCard>
           ) : null}

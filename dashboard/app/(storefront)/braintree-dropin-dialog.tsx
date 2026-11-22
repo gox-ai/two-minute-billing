@@ -5,12 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { braintreeFailure, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import {
-  PaymentDialog,
-  PaymentDialogFooter,
-  PaymentPrivacyNote,
-  RefusalAlert,
-} from "./payment-dialog";
+import { SdkFrame, PaymentDialogFooter, PaymentPrivacyNote, RefusalAlert } from "./payment-dialog";
 import { sdkAmountLabel } from "./storefront-text";
 
 /**
@@ -123,6 +118,7 @@ function loadDropin(): Promise<void> {
 
 function BraintreeDropinDialog({
   open,
+  inline,
   params,
   purpose,
   email,
@@ -131,6 +127,7 @@ function BraintreeDropinDialog({
   onSettle,
 }: {
   open: boolean;
+  inline: boolean;
   params: DropinParams;
   purpose: GatewaySdkContext["purpose"];
   email: string | null;
@@ -229,7 +226,8 @@ function BraintreeDropinDialog({
   };
 
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={
@@ -248,11 +246,13 @@ function BraintreeDropinDialog({
         business={businessName}
         instrument={selected === "card" || cardsOnly ? "card" : "other"}
       />
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} gateway="braintree" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
+            Cancel
+          </Button>
+        )}
         <Button onClick={submit} disabled={!ready || busy}>
           {busy
             ? "Checking…"
@@ -266,7 +266,7 @@ function BraintreeDropinDialog({
                   : "Pay"))}
         </Button>
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -295,14 +295,16 @@ export function openBraintreeDropin(
     billingCountry: str(params.billingCountry),
   };
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
     const render = (open: boolean) =>
       root.render(
         <BraintreeDropinDialog
           open={open}
+          inline={inline}
           params={dropin}
           purpose={context.purpose}
           email={context.prefill?.email ?? null}
@@ -318,7 +320,7 @@ export function openBraintreeDropin(
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
     render(true);

@@ -90,8 +90,8 @@ describe("tax rounding (2.71)", () => {
   it("per line backs inclusive tax out of each line", () => {
     const res = R([{ name: "VAT", rateBps: 2000 }], { rounding: "per_line" });
     const t = tax([line("a", 1001n, res, true), line("b", 1001n, res, true)]);
-    // 1001 × 20/120 = 166.83 → 166 per line.
-    expect(t.inclusiveTaxMinor).toBe(332n);
+    // 1001 × 20/120 = 166.83 → 167 per line (half-up).
+    expect(t.inclusiveTaxMinor).toBe(334n);
     expect(t.additiveTaxMinor).toBe(0n);
   });
 

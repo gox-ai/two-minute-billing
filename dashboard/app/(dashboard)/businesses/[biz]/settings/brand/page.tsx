@@ -47,6 +47,7 @@ export default async function BrandStylesSettings({
     icon_url: b.icon_url ?? null,
     favicon_url: b.favicon_url ?? null,
     brand_color: b.brand_color ?? null,
+    button_text_color: b.button_text_color ?? null,
   };
 
   // The REAL email, rendered by the engine's own template preview — the same branded
@@ -61,7 +62,9 @@ export default async function BrandStylesSettings({
   // than an upload button that would 503 (CLAUDE.md rule 0).
   const upload = await brandImageSupport();
 
-  const res = await previewEmailTemplate(biz, "invoice_issued", {}).catch(() => null);
+  // "Invoice to pay": it carries the brand-coloured "Pay now" button, so the preview shows
+  // the button and its label colour. "Invoice issued" is collected automatically and has none.
+  const res = await previewEmailTemplate(biz, "invoice_to_pay", {}).catch(() => null);
   const email = res?.ok ? (res.data as EmailPreviewPayload) : null;
   const emailHtml = email?.html ?? null;
   const emailSubject = email?.subject;
@@ -102,6 +105,21 @@ export default async function BrandStylesSettings({
                   </span>
                 ) : (
                   "Not set. We use the neutral palette."
+                ),
+              },
+              {
+                label: "Button text color",
+                value: brand.button_text_color ? (
+                  <span className="inline-flex items-center gap-2 font-mono">
+                    <span
+                      aria-hidden
+                      className="size-3.5 rounded-xs border"
+                      style={{ background: brand.button_text_color }}
+                    />
+                    {brand.button_text_color.toLowerCase()}
+                  </span>
+                ) : (
+                  "Automatic"
                 ),
               },
             ]}

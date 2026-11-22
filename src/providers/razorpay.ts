@@ -91,6 +91,8 @@ const TMBILLING_INTENT_REF_NOTE = "tmbilling_intent_ref";
  * 2026-10-29; a card order keeps it), so this note is how `setupAuthChargeFor` knows the order.
  */
 const TMBILLING_SETUP_ORDER_NOTE = "tmbilling_setup";
+/** A pay-and-save order: a real payment that also mints a card token. Never refunded as setup. */
+const TMBILLING_SAVE_PAYMENT_NOTE = "tmbilling_save";
 /** The ref the connectivity probe's throwaway order carries — it is ours, not a stranger's. */
 export const RAZORPAY_HEALTHCHECK_REF = "tmbilling_healthcheck";
 
@@ -232,6 +234,53 @@ const RAZORPAY_METHOD_USED: Readonly<Record<string, string>> = {
 export function razorpayMethodUsed(method: string | null | undefined): { methodUsed?: string } {
   const m = method ? RAZORPAY_METHOD_USED[method] : undefined;
   return m ? { methodUsed: m } : {};
+}
+
+/** Rails where the payer approves each mandate debit in their bank or UPI app, and may stop it. */
+const PAYER_STOPPABLE_METHODS = new Set(["upi", "emandate", "nach"]);
+
+/**
+ * `payment_cancelled` on a debit of an existing mandate means the payer stopped this ONE
+ * debit; the mandate stays active. On a checkout it means the buyer left, so only a
+ * debit on a token (`token_id`) on a mandate rail, or one `charge()` made, is read so.
+ */
+export function razorpayPayerStoppedDebit(
+  providerCode: string | null | undefined,
+  payment?: { token_id?: string | null; method?: string | null },
+): boolean {
+  if (providerCode !== "payment_cancelled") return false;
+  if (!payment) return true;
+  return !!payment.token_id && PAYER_STOPPABLE_METHODS.has(payment.method ?? "");
+}
+
+/** Our code for a debit the payer stopped. Retriable: the next cycle may pay. */
+export const PAYER_STOPPED_DEBIT = "debit_cancelled_by_payer";
+
+/**
+ * A failed payment entity's refusal, read the same way on every path (webhook, poll, order
+ * read): the reason and its words decide the rule; the payer reads our sentence when a rule
+ * wrote one, the operator Razorpay's description otherwise.
+ */
+export function razorpayPaymentFailure(
+  p: Pick<
+    RazorpayPaymentEntity,
+    "error_reason" | "error_code" | "error_description" | "token_id" | "method"
+  >,
+): NonNullable<ChargeResult["failure"]> {
+  const providerCode = p.error_reason ?? p.error_code ?? undefined;
+  const norm = normalizeRazorpayDecline({ code: providerCode, message: p.error_description });
+  return {
+    code: razorpayPayerStoppedDebit(providerCode, p) ? PAYER_STOPPED_DEBIT : norm.code,
+    ...(providerCode ? { providerCode } : {}),
+    message:
+      norm.exposedToPayer && norm.message
+        ? norm.message
+        : (p.error_description ?? "RazorPay reports this payment as failed"),
+    retriable: norm.retriable,
+    ...(norm.ruleId ? { ruleId: norm.ruleId } : {}),
+    ...(norm.exposedToPayer !== undefined ? { exposedToPayer: norm.exposedToPayer } : {}),
+    ...(norm.retryAfterMs ? { retryAfterMs: norm.retryAfterMs } : {}),
+  };
 }
 
 /**
@@ -576,6 +625,10 @@ export class RazorpayProvider implements PaymentProvider {
     // order created with manual capture, authorized by the buyer in Checkout and
     // captured by `consumeIntent`.
     intentPurposes: ["payment", "setup"],
+    // Pay and save: a recurring order for the full amount mints the token while it pays
+    // (card proved in test mode 2026-11-18). Netbanking e-mandates register at ₹0, so they
+    // stay in Add payment method.
+    paymentSavesMethod: ["card", "upi"],
     // ⚠️ RazorPay has NO true void. An authorized payment is either captured or left
     // to lapse — the merchant API exposes no release/cancel call for it — and faking
     // one with a refund would post real money movement for a payment that never
@@ -942,6 +995,12 @@ export class RazorpayProvider implements PaymentProvider {
        * caller that passes none.
        */
       ownershipRef?: string;
+      /**
+       * Pay and save: the order charges this (the invoice) instead of the ₹1 auth amount,
+       * and is NOT a setup order, so the engine never refunds it as a verification charge.
+       * Card and UPI rails.
+       */
+      chargeMinor?: bigint;
     } = {},
   ): Promise<{ id: string }> {
     const expireAt = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
@@ -995,12 +1054,20 @@ export class RazorpayProvider implements PaymentProvider {
     // whose plan outgrows the rail cap finds out at the first renewal (a parked invoice)
     // instead of at registration. Telling them at signup needs the plan price, which this
     // function does not have — see PROGRESS.md 2026-08-19 for the open item.
-    const maxAmount = Number(requestedMaxAmount > maxAmountCap ? maxAmountCap : requestedMaxAmount);
+    // A first payment above the ceiling would be refused: the ceiling covers it.
+    const wanted =
+      opts.chargeMinor != null && opts.chargeMinor > requestedMaxAmount
+        ? opts.chargeMinor
+        : requestedMaxAmount;
+    const maxAmount = Number(wanted > maxAmountCap ? maxAmountCap : wanted);
 
     const body =
       rail === "upi"
         ? {
-            amount: RazorpayProvider.UPI_MANDATE_AUTH_AMOUNT,
+            amount:
+              opts.chargeMinor != null
+                ? Number(opts.chargeMinor)
+                : RazorpayProvider.UPI_MANDATE_AUTH_AMOUNT,
             currency: "INR",
             method: "upi",
             customer_id: customerId,
@@ -1015,7 +1082,10 @@ export class RazorpayProvider implements PaymentProvider {
               // e-mandate, which does register at 0), so this is the 100-minor-unit
               // floor (₹1 / $1 / €1). No `auth_type`: RazorPay answers "The selected
               // auth type is invalid" for `3ds`, it infers the authentication itself.
-              amount: RazorpayProvider.CARD_MANDATE_AUTH_AMOUNT,
+              amount:
+                opts.chargeMinor != null
+                  ? Number(opts.chargeMinor)
+                  : RazorpayProvider.CARD_MANDATE_AUTH_AMOUNT,
               // Cards are RazorPay's international rail — a card mandate order is
               // accepted in USD/EUR (verified live 2026-07-27), so the mandate is
               // registered in the currency the subscription will be charged in.
@@ -1044,7 +1114,9 @@ export class RazorpayProvider implements PaymentProvider {
         ...body,
         notes: {
           ...ownershipNotes(opts.ownershipRef ?? customerId),
-          [TMBILLING_SETUP_ORDER_NOTE]: "1",
+          ...(opts.chargeMinor != null
+            ? { [TMBILLING_SAVE_PAYMENT_NOTE]: "1" }
+            : { [TMBILLING_SETUP_ORDER_NOTE]: "1" }),
         },
       },
     );
@@ -1522,6 +1594,8 @@ export class RazorpayProvider implements PaymentProvider {
     captured: boolean;
     amountMinor: bigint | null;
     errorDescription: string | null;
+    errorReason: string | null;
+    errorCode: string | null;
     method: string | null;
     currency: string | null;
   }> {
@@ -1532,6 +1606,8 @@ export class RazorpayProvider implements PaymentProvider {
       amount?: number;
       currency?: string;
       error_description?: string | null;
+      error_reason?: string | null;
+      error_code?: string | null;
       method?: string | null;
     }>("charge", "GET", `/payments/${paymentId}`);
     return {
@@ -1540,6 +1616,8 @@ export class RazorpayProvider implements PaymentProvider {
       captured: json.captured === true,
       amountMinor: json.amount != null ? BigInt(json.amount) : null,
       errorDescription: json.error_description ?? null,
+      errorReason: json.error_reason ?? null,
+      errorCode: json.error_code ?? null,
       method: json.method ?? null,
       currency: json.currency ? json.currency.toUpperCase() : null,
     };
@@ -1581,19 +1659,17 @@ export class RazorpayProvider implements PaymentProvider {
       };
     }
     if (p.status === "failed") {
-      // `getPayment` surfaces only the human description, not the machine reason,
-      // so normalize from that rather than claim a code we did not read. Unmapped
-      // input yields the liberal `charge_failed`/retriable default — the same
-      // answer the synchronous path gives for a decline it cannot classify.
-      const norm = normalizeRazorpayDecline(undefined);
+      // The reason decides it, as on the webhook: a revoked mandate found by a poll parks.
       return {
         status: "failed",
         providerChargeId: input.providerChargeId,
-        failure: {
-          code: norm.code,
-          message: p.errorDescription ?? "RazorPay reports this payment as failed",
-          retriable: norm.retriable,
-        },
+        failure: razorpayPaymentFailure({
+          error_reason: p.errorReason,
+          error_code: p.errorCode,
+          error_description: p.errorDescription,
+          token_id: p.tokenId,
+          method: p.method,
+        }),
         ...used,
         raw: p,
       };
@@ -1640,17 +1716,10 @@ export class RazorpayProvider implements PaymentProvider {
       };
     }
     if (p.status === "failed") {
-      const providerCode = p.error_reason ?? p.error_code ?? undefined;
-      const norm = normalizeRazorpayDecline(providerCode);
       return {
         status: "failed",
         providerChargeId: p.id,
-        failure: {
-          code: norm.code,
-          ...(providerCode ? { providerCode } : {}),
-          message: p.error_description ?? "RazorPay reports this payment as failed",
-          retriable: norm.retriable,
-        },
+        failure: razorpayPaymentFailure(p),
         ...used,
         raw: p,
       };
@@ -1936,11 +2005,21 @@ export class RazorpayProvider implements PaymentProvider {
    */
   private declineFailure(json: any, httpStatus: number): NonNullable<ChargeResult["failure"]> {
     const providerCode: string | undefined = json?.error?.reason ?? json?.error?.code;
-    const norm = normalizeRazorpayDecline(providerCode);
+    const norm = normalizeRazorpayDecline({
+      code: providerCode,
+      message: json?.error?.description,
+    });
     return {
       code: norm.code,
       ...(providerCode ? { providerCode } : {}),
-      message: json?.error?.description ?? JSON.stringify(json),
+      // A rule written for the payer replaces RazorPay's generic text ("a temporary issue …");
+      // any other keeps RazorPay's description, which is what an operator needs.
+      message:
+        norm.exposedToPayer && norm.message
+          ? norm.message
+          : (json?.error?.description ?? JSON.stringify(json)),
+      ...(norm.ruleId ? { ruleId: norm.ruleId } : {}),
+      ...(norm.exposedToPayer !== undefined ? { exposedToPayer: norm.exposedToPayer } : {}),
       // Gateway 5xx is always retriable regardless of the normalized token.
       retriable: httpStatus >= 500 ? true : norm.retriable,
       ...(norm.retryAfterMs ? { retryAfterMs: norm.retryAfterMs } : {}),
@@ -2090,10 +2169,13 @@ export class RazorpayProvider implements PaymentProvider {
       );
     }
     if (pay.status >= 300) {
+      const failure = this.declineFailure(pay.json, pay.status);
       return {
         status: "failed",
         providerChargeId: "",
-        failure: this.declineFailure(pay.json, pay.status),
+        failure: razorpayPayerStoppedDebit(failure.providerCode)
+          ? { ...failure, code: PAYER_STOPPED_DEBIT, retriable: true }
+          : failure,
         raw: pay.json,
       };
     }
@@ -2209,6 +2291,25 @@ export class RazorpayProvider implements PaymentProvider {
           'order with "Order amount less than minimum amount allowed". Use purpose: "setup" for a ' +
           "zero-amount vault authorization.",
       );
+    }
+    // Pay and save: a recurring order for the full amount, on the rail the buyer picked
+    // (card when none). The buyer pays it in Checkout and RazorPay mints the token in the
+    // same step (card proved in test mode, 2026-11-18: ₹18,499 captured and kept, token
+    // confirmed, later recurring debit captured).
+    if (input.saveForFuture) {
+      const saveRail = input.methodTypes?.includes("upi") ? "upi" : "card";
+      const order = await this.createMandateOrder(customerId, saveRail, {
+        currency: input.currency,
+        ...(input.maxAmountMinor != null ? { maxAmountMinor: input.maxAmountMinor } : {}),
+        ownershipRef: input.ownershipRef ?? input.idempotencyKey,
+        chargeMinor: amountMinor,
+      });
+      return {
+        intentId: order.id,
+        status: "requires_action",
+        authorization: this.checkoutAuthorization(order.id, customerId, true, saveRail),
+        raw: order,
+      };
     }
     // No explicit `methodTypes`? Take the hint from the instrument the engine had in
     // mind. RazorPay's Checkout cannot be pointed at a VAULTED token (that is
@@ -2477,20 +2578,55 @@ export class RazorpayProvider implements PaymentProvider {
       };
     }
 
+    const charge = await this.capturePaymentIntent(input);
+    if (charge.status === "failed" || charge.status === "pending")
+      return { purpose: "payment", charge };
+    const saved = await this.savedFromPaymentOrder(input.intentId);
+    return { purpose: "payment", charge, ...(saved ? { paymentMethod: saved } : {}) };
+  }
+
+  /**
+   * Pay and save: the card token a save order minted, read through the vault path (it
+   * polls for a token that lags the payment). Undefined for an ordinary payment order.
+   */
+  private async savedFromPaymentOrder(
+    orderId: string,
+  ): Promise<ProviderPaymentMethodRef | undefined> {
+    const order = await this.api<{ notes?: Record<string, string> | unknown[] }>(
+      "intent",
+      "GET",
+      `/orders/${orderId}`,
+    );
+    const notes = order.json?.notes;
+    if (!notes || Array.isArray(notes) || notes[TMBILLING_SAVE_PAYMENT_NOTE] !== "1")
+      return undefined;
+    const payment = await this.authorizedPaymentForOrder(orderId);
+    if (!payment?.customer_id) return undefined;
+    const ref = await this.vaultPaymentMethod(
+      {
+        customer: { providerKey: this.key, providerCustomerId: payment.customer_id },
+        token: payment.token_id ?? payment.id,
+      },
+      { registeredIn: payment.currency ?? null },
+    );
+    // This payment IS the invoice's payment: never a verification charge to refund.
+    const { setupAuthCharge: _kept, ...rest } = ref;
+    return { ...rest, providerCustomerId: payment.customer_id };
+  }
+
+  /** `payment` intents: capture the order's authorized payment (or report the capture). */
+  private async capturePaymentIntent(input: ConsumeIntentInput): Promise<ChargeResult> {
     const payment = await this.authorizedPaymentForOrder(input.intentId);
     if (!payment) {
       // NOT an error: the buyer simply has not finished the challenge. Park it the way
       // `charge()` parks an async rail, so the engine keeps waiting on the webhook
       // instead of failing an invoice over a buyer who is still typing their OTP.
       return {
-        purpose: "payment",
-        charge: {
-          status: "pending",
-          // No payment exists at the gateway yet, so there is no id to correlate on —
-          // same as `charge()`'s pre-payment failures. The order id lives in `raw`.
-          providerChargeId: "",
-          raw: { orderId: input.intentId, reason: "no authorized payment on the order yet" },
-        },
+        status: "pending",
+        // No payment exists at the gateway yet, so there is no id to correlate on —
+        // same as `charge()`'s pre-payment failures. The order id lives in `raw`.
+        providerChargeId: "",
+        raw: { orderId: input.intentId, reason: "no authorized payment on the order yet" },
       };
     }
     if (payment.status === "captured") {
@@ -2498,13 +2634,10 @@ export class RazorpayProvider implements PaymentProvider {
       // Report the capture that happened instead of calling /capture again, which
       // RazorPay refuses ("This payment has already been captured").
       return {
-        purpose: "payment",
-        charge: {
-          status: "succeeded",
-          providerChargeId: payment.id,
-          ...razorpayMethodUsed(payment.method),
-          raw: payment,
-        },
+        status: "succeeded",
+        providerChargeId: payment.id,
+        ...razorpayMethodUsed(payment.method),
+        raw: payment,
       };
     }
 
@@ -2523,30 +2656,24 @@ export class RazorpayProvider implements PaymentProvider {
     );
     if (cap.status >= 300) {
       return {
-        purpose: "payment",
-        charge: {
-          status: "failed",
-          // Unlike `charge()`'s pre-payment failures, the payment DOES exist here, and
-          // its id is the only handle a reconcile or a settlement webhook has. Losing
-          // it is what strands a payment as pending forever.
-          providerChargeId: payment.id,
-          failure: this.declineFailure(cap.json, cap.status),
-          ...razorpayMethodUsed(payment.method),
-          raw: cap.json,
-        },
+        status: "failed",
+        // Unlike `charge()`'s pre-payment failures, the payment DOES exist here, and
+        // its id is the only handle a reconcile or a settlement webhook has. Losing
+        // it is what strands a payment as pending forever.
+        providerChargeId: payment.id,
+        failure: this.declineFailure(cap.json, cap.status),
+        ...razorpayMethodUsed(payment.method),
+        raw: cap.json,
       };
     }
     return {
-      purpose: "payment",
-      charge: {
-        // Same rule as `charge()`: only a CAPTURED payment is money in hand. Anything
-        // else (including a capture RazorPay accepted but has not settled on an async
-        // rail) is pending until `payment.captured` says otherwise.
-        status: cap.json?.status === "captured" ? "succeeded" : "pending",
-        providerChargeId: cap.json?.id ?? payment.id,
-        ...razorpayMethodUsed(cap.json?.method ?? payment.method),
-        raw: cap.json,
-      },
+      // Same rule as `charge()`: only a CAPTURED payment is money in hand. Anything
+      // else (including a capture RazorPay accepted but has not settled on an async
+      // rail) is pending until `payment.captured` says otherwise.
+      status: cap.json?.status === "captured" ? "succeeded" : "pending",
+      providerChargeId: cap.json?.id ?? payment.id,
+      ...razorpayMethodUsed(cap.json?.method ?? payment.method),
+      raw: cap.json,
     };
   }
 
@@ -2614,13 +2741,21 @@ export class RazorpayProvider implements PaymentProvider {
       };
     }
     const { status, json } = await this.api<{
-      items?: Array<{
-        id?: string;
-        status?: string;
-        amount?: number;
-        currency?: string;
-        captured?: boolean;
-      }>;
+      items?: Array<
+        Pick<
+          RazorpayPaymentEntity,
+          | "status"
+          | "amount"
+          | "currency"
+          | "captured"
+          | "error_reason"
+          | "error_code"
+          | "error_description"
+          | "token_id"
+          | "method"
+          | "created_at"
+        > & { id?: string }
+      >;
       error?: { description?: string };
     }>("fetch_intent", "GET", `/orders/${intentId}/payments`);
     // A non-2xx is not evidence about the buyer's money — a 500 or a revoked key says
@@ -2653,9 +2788,15 @@ export class RazorpayProvider implements PaymentProvider {
             : // The order exists and nothing has been attempted against it. Not
               // `unknown`: RazorPay answered, and its answer is "nothing yet".
               "inited";
+    // Every attempt failed: the newest one's reason, so a missed webhook keeps its why.
+    const lastFailed =
+      state === "failed"
+        ? [...items].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0]
+        : undefined;
     return {
       intentId,
       status: state,
+      ...(lastFailed ? { failure: razorpayPaymentFailure(lastFailed) } : {}),
       ...(chosen?.id ? { providerChargeId: chosen.id } : {}),
       ...(chosen?.amount != null ? { amountMinor: BigInt(chosen.amount) } : {}),
       ...(chosen?.currency ? { currency: String(chosen.currency).toUpperCase() } : {}),
@@ -2947,6 +3088,7 @@ export class RazorpayProvider implements PaymentProvider {
   async provisionWebhookEndpoint(input: {
     url: string;
     secret?: string;
+    previousUrl?: string;
   }): Promise<ProvisionedWebhook> {
     // `events` must be a MAP of name → 1. Passing the documented-looking array makes
     // RazorPay read the array indices as event names ("Invalid event name: 1").
@@ -2960,7 +3102,13 @@ export class RazorpayProvider implements PaymentProvider {
       "GET",
       "/webhooks",
     );
-    const existing = list.json?.items?.find((w) => w.url === input.url);
+    const items = list.json?.items ?? [];
+    const atUrl = items.find((w) => w.url === input.url);
+    // A move: the PUT below rewrites the URL of the registration at the old address.
+    const atPrevious = input.previousUrl
+      ? items.find((w) => w.url === input.previousUrl)
+      : undefined;
+    const existing = atUrl ?? atPrevious;
     const body = {
       url: input.url,
       ...(input.secret ? { secret: input.secret } : {}),
@@ -3036,6 +3184,7 @@ export class RazorpayProvider implements PaymentProvider {
       // Echo our own secret back so the caller stores the key it just registered.
       ...(input.secret ? { webhookSecret: input.secret } : {}),
       providerEndpointId: res2.json!.id,
+      ...(!atUrl && atPrevious ? { movedFromPreviousUrl: true } : {}),
     };
   }
 
@@ -3413,7 +3562,8 @@ export class RazorpayProvider implements PaymentProvider {
       type === "charge.failed"
         ? (payment?.error_reason ?? payment?.error_code ?? undefined)
         : undefined;
-    const norm = providerFailureCode ? normalizeRazorpayDecline(providerFailureCode) : undefined;
+    const failure =
+      type === "charge.failed" && payment ? razorpayPaymentFailure(payment) : undefined;
     /**
      * CARRY THE ORDER ID ON A CHARGE EVENT TOO (2026-08-31).
      *
@@ -3431,7 +3581,13 @@ export class RazorpayProvider implements PaymentProvider {
      *
      * Additive: every existing consumer keys on `providerChargeId`, which is unchanged.
      */
-    const chargeIntentId = payment?.invoice_id ?? payment?.order_id;
+    const chargeIntentId =
+      payment?.invoice_id ??
+      payment?.order_id ??
+      // An event we do not act on may name only the order or the auth link.
+      (type === "unknown"
+        ? (event.payload?.order?.entity?.id ?? event.payload?.invoice?.entity?.id)
+        : undefined);
     /**
      * THE GATEWAY'S OWN CUT, WHICH NOTHING HAS EVER READ (#18).
      *
@@ -3486,7 +3642,13 @@ export class RazorpayProvider implements PaymentProvider {
         ...(chargeIntentId ? { providerIntentId: chargeIntentId } : {}),
         ...(feeMinor != null ? { feeMinor } : {}),
         ...(feeTaxMinor != null ? { feeTaxMinor } : {}),
-        ...(norm ? { failureCode: norm.code, failureRetriable: norm.retriable } : {}),
+        ...(failure && providerFailureCode
+          ? {
+              failureCode: failure.code,
+              failureRetriable: failure.retriable,
+              failureMessage: failure.message,
+            }
+          : {}),
         ...(providerFailureCode ? { providerFailureCode } : {}),
         ...provenance,
         occurredAt,

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { createdThrough } from "@/modules/events/provenance";
 import { missingReason } from "@/modules/subscriptions/billing-rules-config";
 import { z } from "zod";
 import { LIMITS } from "./limits";
@@ -55,6 +56,10 @@ import { parseRequest } from "./strict-params";
  */
 function creditNoteError(reply: Parameters<typeof badRequest>[0], e: CreditNoteError) {
   if (e.code === "not_found") return notFound(reply, e.message);
+  if (e.code === "possible_duplicate")
+    return reply.code(409).send({
+      error: { type: "invalid_request_error", code: "possible_duplicate", message: e.message },
+    });
   return badRequest(reply, e.message);
 }
 
@@ -182,6 +187,8 @@ export async function registerCreditNoteRoutes(app: FastifyInstance) {
         z.object({
           amount_minor: z.number().int().positive().optional(),
           reason: z.string().max(500).optional(),
+          /** Send a refund that repeats one sent in the last 10 minutes. */
+          confirm_repeat: z.boolean().optional(),
         }),
         req.body ?? {},
       );
@@ -190,6 +197,7 @@ export async function registerCreditNoteRoutes(app: FastifyInstance) {
       if (noReason) return badRequest(reply, noReason);
       try {
         const cn = await refundCreditNote({
+          guardRepeat: !parsed.data.confirm_repeat,
           organizationId: req.organization!.id,
           businessId: business.id,
           creditNotePublicId: (req.params as { cn: string }).cn,
@@ -368,6 +376,7 @@ export async function registerCreditNoteRoutes(app: FastifyInstance) {
       }
       return {
         ...serializeCreditNote({ ...detail.view, biz: business }),
+        created_through: await createdThrough(req.organization!.id, "credit_note", cnId),
         // Cash still reversible through a gateway on this note's invoice. 0 means a
         // gateway refund is impossible (invoice settled by applied credit, or its
         // payments already fully refunded) — the dashboard uses this to offer the

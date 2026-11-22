@@ -256,6 +256,11 @@ export interface EmailConfig {
   linkTarget: EmailLinkTarget;
   /** The merchant's page, http(s). Kept when the target goes back to the portal. */
   merchantUrl: string | null;
+  /**
+   * Record opens and clicks (0548). Unset = off, so a business that existed before the
+   * switch sends exactly what it sent; a business a person creates starts with it on.
+   */
+  trackEngagement: boolean;
 }
 
 export type EmailLinkTarget = "portal" | "merchant_url";
@@ -450,6 +455,7 @@ export function resolveEmailConfig(biz: { emailConfig?: unknown } | null | undef
     attachReceiptPdf?: unknown;
     linkTarget?: unknown;
     merchantUrl?: unknown;
+    trackEngagement?: unknown;
   } | null;
   const types: Partial<Record<EmailType, boolean>> = {};
   if (raw?.types && typeof raw.types === "object") {
@@ -483,6 +489,7 @@ export function resolveEmailConfig(biz: { emailConfig?: unknown } | null | undef
         ? "merchant_url"
         : "portal",
     merchantUrl: httpUrlOrNull(raw?.merchantUrl),
+    trackEngagement: raw?.trackEngagement === true,
   };
 }
 
@@ -538,13 +545,14 @@ export const OPT_IN_EMAIL_TYPES: readonly EmailType[] = [
 ];
 
 /**
- * Written into `email_config` when a person creates a business: the opt-in emails we
+ * Written into `email_config` of every new business: open and click tracking (user decision
+ * 2026-11-19: all new businesses), plus, when a person creates it, the opt-in emails we
  * recommend. Sending stays off (`enabled` unset) until they switch email on, as today.
  */
-export function initialEmailConfig(creator: {
-  hasOperator?: boolean;
-}): Record<string, unknown> | undefined {
-  return creator.hasOperator === true ? { types: { subscription_reactivated: true } } : undefined;
+export function initialEmailConfig(creator: { hasOperator?: boolean }): Record<string, unknown> {
+  return creator.hasOperator === true
+    ? { types: { subscription_reactivated: true }, trackEngagement: true }
+    : { trackEngagement: true };
 }
 
 /** A specific email type is sent only when emails are enabled AND not turned off for that type. */

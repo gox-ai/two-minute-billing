@@ -239,6 +239,7 @@ export async function registerPaymentLinkRoutes(app: FastifyInstance) {
         icon_url: page.business.iconUrl,
         favicon_url: page.business.faviconUrl,
         brand_color: page.business.brandColor,
+        button_text_color: page.business.buttonTextColor,
         support_email: page.business.supportEmail,
         website: page.business.website,
       },

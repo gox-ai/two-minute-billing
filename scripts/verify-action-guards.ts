@@ -115,8 +115,8 @@ const EXEMPT_ACTIONS = new Map<string, string>([
     "authorizes on the emailed portal link, which the API exchange spends once",
   ],
   [
-    "(auth)/team-alerts/confirm/actions.ts::confirmTeamAlertsAction",
-    "authorizes on the emailed single-use team alert token; the reader is often not a member",
+    "(auth)/notifications/confirm/actions.ts::confirmDestinationAction",
+    "authorizes on the emailed single-use destination token; the reader is often not a member",
   ],
 ]);
 
@@ -130,7 +130,8 @@ const EXEMPT_PAGES = new Map<string, string>([
   ["(auth)/signup/page.tsx", "the self-serve sign-up form"],
   ["(auth)/signup/confirm/page.tsx", "reached with the emailed sign-up token"],
   ["(auth)/signup/invite/page.tsx", "reached with the staff-sent sign-up token"],
-  ["(auth)/team-alerts/confirm/page.tsx", "reached with the emailed team alert token"],
+  ["(auth)/team-alerts/confirm/page.tsx", "static: says the old team alert link is not used"],
+  ["(auth)/notifications/confirm/page.tsx", "reached with the emailed destination token"],
   ["(storefront)/buy/unavailable/page.tsx", "public: where a dead payment link lands"],
   ["(storefront)/pricing/[biz]/page.tsx", "public: a business's pricing page (E2)"],
   [
@@ -145,6 +146,14 @@ const EXEMPT_PAGES = new Map<string, string>([
   [
     "(dashboard)/businesses/[biz]/catalog/page.tsx",
     "renders nothing: redirects to the guarded Plans page",
+  ],
+  [
+    "(dashboard)/businesses/[biz]/emails/report/page.tsx",
+    "renders nothing: redirects to the guarded email delivery report",
+  ],
+  [
+    "(dashboard)/businesses/[biz]/settings/hosted-pages/page.tsx",
+    "renders nothing: redirects to the guarded Checkout settings page",
   ],
 ]);
 

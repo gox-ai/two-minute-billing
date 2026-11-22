@@ -2,6 +2,8 @@ import Link from "next/link";
 import { reportCrumbs } from "@/lib/report-crumbs";
 import { getSyncedAt, listMeasures, queryAnalytics, type BatchEntry } from "@/lib/analytics-api";
 import { listBusinesses } from "@/lib/api";
+import { getBillingModels } from "@/lib/api/billing-models";
+import { hasModel, MODEL_GROUP_ORDER, modelSection } from "@/lib/billing-models";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState } from "@/components/states";
@@ -63,10 +65,12 @@ export default async function ExplorePage({
   const syncedAtP = getSyncedAt(biz);
   let measures: MeasureMeta[];
   let businesses;
+  let models: Awaited<ReturnType<typeof getBillingModels>>;
   try {
-    [measures, businesses] = await Promise.all([
+    [measures, businesses, models] = await Promise.all([
       listMeasures() as Promise<MeasureMeta[]>,
       listBusinesses(),
+      getBillingModels(biz),
     ]);
   } catch (e) {
     return (
@@ -90,7 +94,14 @@ export default async function ExplorePage({
       ? [thisBusiness.default_currency]
       : [];
 
-  const query = parseQuery({ searchParams: sp, all: measures, byId, knownCurrencies });
+  const query = parseQuery({
+    searchParams: sp,
+    all: measures,
+    byId,
+    knownCurrencies,
+    // Revenue billed by type is the first question of a business that bills no subscriptions.
+    noSubscriptions: !hasModel(models, "subscriptions"),
+  });
   const selected = query.measures.map((m) => m.id);
 
   if (query.measures.length === 0) {
@@ -143,7 +154,15 @@ export default async function ExplorePage({
   const dimensions = offerDimensions(query.measures, dimensionLabel);
   const grains = offerGrains(query.measures, GRAIN_PHRASE);
 
-  const panelMeasures: PanelMeasure[] = measures.map((m): PanelMeasure => {
+  // Shelf order: the business's own models first, the ones it does not use last.
+  const shelved = measures
+    .map((m) => ({ m, ...modelSection(m.model, models) }))
+    .sort(
+      (a, b) =>
+        Number(a.absent) - Number(b.absent) ||
+        MODEL_GROUP_ORDER.indexOf(a.group) - MODEL_GROUP_ORDER.indexOf(b.group),
+    );
+  const panelMeasures: PanelMeasure[] = shelved.map(({ m, section }): PanelMeasure => {
     const checked = selected.includes(m.id);
     const wouldBreakDimension =
       !!query.dimension && !checked && !m.dimensions.includes(query.dimension);
@@ -152,6 +171,7 @@ export default async function ExplorePage({
       name: m.name,
       description: m.description,
       checked,
+      section,
       // The last measure cannot be unticked: a table with no columns is not a view.
       disabled: checked && selected.length === 1,
       note:

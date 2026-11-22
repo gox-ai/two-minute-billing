@@ -14,7 +14,7 @@ import { meterBillingConflict } from "@/modules/subscriptions/meter-billing";
 import { publicId } from "@/platform/ids";
 import { config } from "@/platform/config";
 import { formatMoney } from "@/platform/currency";
-import { payerRefusal } from "@/providers/decline-codes";
+import { payerFailureText, payerRefusal, PAYER_REASON_WITHHELD } from "@/providers/decline-codes";
 import { gatewayDefinition } from "@/providers/gateway-catalog";
 import {
   checkoutSessions,
@@ -37,6 +37,7 @@ import {
   paymentLinkItems,
   paymentIntents,
   gatewayAccounts,
+  type CheckoutChargeCompletion,
 } from "@db/schema";
 import { OPEN_INVOICE_STATUSES } from "@/modules/invoicing/status";
 import { getPriceByPublicId } from "@/modules/catalog/service";
@@ -1103,7 +1104,7 @@ export async function assertCouponUsableAtCheckout(input: {
     coupon.currency !== input.currency
   ) {
     throw new CheckoutError(
-      `Coupon ${input.code} is ${coupon.currency} but this checkout bills in ${input.currency}`,
+      `The coupon "${input.code}" is in ${coupon.currency}, but this checkout bills in ${input.currency}. You cannot use it here.`,
     );
   }
   // A new-customer page with no email has nothing to count; completion's apply checks.
@@ -1456,6 +1457,165 @@ export async function recordCheckoutPaymentAttempt(
 }
 
 /**
+ * True when the webhook may finish this session.
+ *
+ * Only a session still waiting. `completing` means a browser is mid-flight and holds the
+ * claim; `completed`/`expired` are done with. Checked before the work rather than relying on
+ * the CAS alone, so the ordinary case logs as `skipped` instead of an exception.
+ *
+ * A buyer still on the page posts /complete right after the webhook. Let them claim first:
+ * only their request can show a 3DS challenge, and the loser of the claim is refused. Any
+ * change to the session means the buyer is active, so leave it to them.
+ */
+async function sessionLeftToWebhook(
+  organizationId: string,
+  s: typeof checkoutSessions.$inferSelect,
+  graceMs = BUYER_GRACE_MS,
+): Promise<boolean> {
+  if (s.status !== "open") return false;
+  if (s.expiresAt <= new Date() || s.revokedAt) return false;
+  for (const until = Date.now() + graceMs; Date.now() < until;) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const [now] = await withTenant(organizationId, (tx) =>
+      tx
+        .select({ status: checkoutSessions.status, updatedAt: checkoutSessions.updatedAt })
+        .from(checkoutSessions)
+        .where(eq(checkoutSessions.id, s.id))
+        .limit(1),
+    );
+    if (now?.status !== "open" || now.updatedAt.getTime() !== s.updatedAt.getTime()) return false;
+  }
+  return true;
+}
+
+async function webhookSessionContext(
+  organizationId: string,
+  s: typeof checkoutSessions.$inferSelect,
+): Promise<CheckoutContext> {
+  const itemRows = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ priceId: checkoutSessionItems.priceId, quantity: checkoutSessionItems.quantity })
+      .from(checkoutSessionItems)
+      .where(eq(checkoutSessionItems.checkoutSessionId, s.id))
+      .orderBy(checkoutSessionItems.position),
+  );
+  return contextFromSessionRow(s, itemRows);
+}
+
+/**
+ * Remember the first charge this session waits on (the 402 leg) and what its second post
+ * repeats. Leaves `updated_at` alone: the webhook's grace check reads it as buyer activity.
+ */
+export async function recordCheckoutChargeIntent(
+  ctx: CheckoutContext,
+  intentPublicId: string,
+  input: CheckoutCompleteInput,
+  consent: { answer: CheckoutConsentAnswer; ip: string | null } | null,
+): Promise<void> {
+  const completion: CheckoutChargeCompletion = {
+    ...(input.paymentMethodToken ? { paymentMethodToken: input.paymentMethodToken } : {}),
+    ...(input.paymentMethodId ? { paymentMethodId: input.paymentMethodId } : {}),
+    ...(input.gatewayAccountId ? { gatewayAccountId: input.gatewayAccountId } : {}),
+    ...(input.poNumber ? { poNumber: input.poNumber } : {}),
+    consent: consent ? { ...consent, at: new Date().toISOString() } : null,
+  };
+  await withTenant(ctx.organizationId, (tx) =>
+    tx
+      .update(checkoutSessions)
+      .set({ chargePaymentIntent: intentPublicId, chargeCompletion: completion })
+      .where(eq(checkoutSessions.id, ctx.sessionId)),
+  );
+}
+
+/**
+ * Finish a checkout from its first charge's authorization webhook when the page never posted
+ * the second leg: the gateway's sheet lost its answer, or the buyer closed the tab. Without
+ * it the money stayed authorized at the gateway and the intent expired. Called by the inbound
+ * webhook for a `payment` intent with no invoice. Never throws, for the reason
+ * `completeCheckoutForSetupIntent` gives; the session claim stops a double completion.
+ */
+export async function completeCheckoutForPaymentIntent(input: {
+  organizationId: string;
+  businessId: string;
+  intentPublicId: string;
+  /** 0 when the gateway already captured: there is no challenge left for the buyer to show. */
+  graceMs?: number;
+}): Promise<"completed" | "in_progress" | "skipped" | "no_session" | "failed"> {
+  const [s] = await withTenant(input.organizationId, (tx) =>
+    tx
+      .select()
+      .from(checkoutSessions)
+      .where(
+        and(
+          eq(checkoutSessions.businessId, input.businessId),
+          eq(checkoutSessions.chargePaymentIntent, input.intentPublicId),
+        ),
+      )
+      .limit(1),
+  );
+  const completion = s?.chargeCompletion;
+  if (!s || !completion) return "no_session";
+  // The page's own second leg holds the claim, and its consume books this payment.
+  if (s.status === "completing") return "in_progress";
+  if (!(await sessionLeftToWebhook(input.organizationId, s, input.graceMs))) return "skipped";
+  const ctx = await webhookSessionContext(input.organizationId, s);
+  const fields = { session: s.publicId, intent: input.intentPublicId };
+  let consent: CheckoutConsentRecord;
+  try {
+    consent = await resolveCheckoutConsent(ctx, completion.consent?.answer);
+  } catch (e) {
+    log.warn("checkout not completed from its payment intent: no consent", {
+      event: "checkout_webhook_consent_missing",
+      ...fields,
+      error: (e as Error)?.message,
+    });
+    return "failed";
+  }
+  try {
+    const result = await completeCheckout(ctx, {
+      ...(completion.paymentMethodToken
+        ? { paymentMethodToken: completion.paymentMethodToken }
+        : {}),
+      ...(completion.paymentMethodId ? { paymentMethodId: completion.paymentMethodId } : {}),
+      ...(completion.gatewayAccountId ? { gatewayAccountId: completion.gatewayAccountId } : {}),
+      ...(completion.poNumber ? { poNumber: completion.poNumber } : {}),
+      paymentIntentId: input.intentPublicId,
+    });
+    if (completion.consent)
+      await recordCheckoutConsent(
+        ctx,
+        consent,
+        completion.consent.ip,
+        new Date(completion.consent.at),
+      );
+    log.log("checkout completed from its payment intent — the page never came back", {
+      event: "checkout_completed_by_webhook",
+      ...fields,
+      subscription: result.subscriptionId ?? null,
+      invoice: result.invoiceId ?? null,
+      paymentError: result.paymentError?.message ?? null,
+    });
+    return "completed";
+  } catch (e) {
+    // Lost the claim to the page between the check above and the claim.
+    const [now] = await withTenant(input.organizationId, (tx) =>
+      tx
+        .select({ status: checkoutSessions.status })
+        .from(checkoutSessions)
+        .where(eq(checkoutSessions.id, s.id))
+        .limit(1),
+    );
+    if (now?.status === "completing") return "in_progress";
+    log.warn("checkout could not be completed from its payment intent", {
+      event: "checkout_webhook_completion_failed",
+      ...fields,
+      error: (e as Error)?.message,
+    });
+    return "failed";
+  }
+}
+
+/**
  * Finish a checkout whose buyer is never coming back.
  *
  * Called by `harvestSetupIntent` (webhooks/inbound.ts) once the gateway's own event has been
@@ -1492,36 +1652,8 @@ export async function completeCheckoutForSetupIntent(input: {
       )
       .limit(1),
   );
-  if (!s) return "skipped";
-  // Only a session still waiting. `completing` means a browser is mid-flight and holds the
-  // claim; `completed`/`expired` are done with. Checked before the work rather than relying on
-  // the CAS alone, so the ordinary case logs as `skipped` instead of an exception.
-  if (s.status !== "open") return "skipped";
-  if (s.expiresAt <= new Date() || s.revokedAt) return "skipped";
-  // A buyer still on the page posts /complete right after this harvest. Let them claim
-  // first: only their request can show a 3DS challenge, and the loser of the claim is
-  // refused. Any change to the session means the buyer is active, so leave it to them.
-  for (const until = Date.now() + BUYER_GRACE_MS; Date.now() < until;) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const [now] = await withTenant(input.organizationId, (tx) =>
-      tx
-        .select({ status: checkoutSessions.status, updatedAt: checkoutSessions.updatedAt })
-        .from(checkoutSessions)
-        .where(eq(checkoutSessions.id, s.id))
-        .limit(1),
-    );
-    if (now?.status !== "open" || now.updatedAt.getTime() !== s.updatedAt.getTime())
-      return "skipped";
-  }
-
-  const itemRows = await withTenant(input.organizationId, (tx) =>
-    tx
-      .select({ priceId: checkoutSessionItems.priceId, quantity: checkoutSessionItems.quantity })
-      .from(checkoutSessionItems)
-      .where(eq(checkoutSessionItems.checkoutSessionId, s.id))
-      .orderBy(checkoutSessionItems.position),
-  );
-  const ctx = contextFromSessionRow(s, itemRows);
+  if (!s || !(await sessionLeftToWebhook(input.organizationId, s))) return "skipped";
+  const ctx = await webhookSessionContext(input.organizationId, s);
   // The same consent check `/complete` runs, on the answers the buyer sent with `/setup`.
   let consent: CheckoutConsentRecord;
   try {
@@ -1751,6 +1883,7 @@ export interface CheckoutView {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    button_text_color: string | null;
     /** Contact details the merchant set, for the footer. Null when unset. */
     support_email: string | null;
     website: string | null;
@@ -2047,7 +2180,10 @@ export async function resolveHeldPaymentMethod(
   );
   // Deliberately the same answer for "does not exist" and "belongs to someone else": a
   // public link must not become an oracle for which payment-method ids are real.
-  if (!held) throw new CheckoutError("No such payment method on this account");
+  if (!held)
+    throw new CheckoutError(
+      "We could not find that payment method. Select a different one, or add one.",
+    );
   if (held.status !== "valid") {
     throw new CheckoutError(
       "We can no longer charge that payment method. Select a different one, or add one.",
@@ -2897,6 +3033,10 @@ export interface CheckoutChangePreview {
    * a test that fails the moment they disagree.
    */
   nextRenewalTotalMinor?: number;
+  /** Reactivation only: coupon discount on the fresh term's invoice (its lines are gross). */
+  couponDiscountMinor?: number;
+  /** The same discount, one row per coupon, named as the invoice names it. */
+  couponDiscountLines?: Array<{ label: string; amountMinor: number }>;
   /** When that renewal is raised (ISO), and what it collects after this change's credit. */
   nextRenewalAt?: string;
   nextRenewalAmountDueMinor?: number;
@@ -3663,6 +3803,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         icon_url: biz.iconUrl,
         favicon_url: biz.faviconUrl,
         brand_color: biz.brandColor,
+        button_text_color: biz.buttonTextColor,
         support_email: biz.supportEmail ?? null,
         website: biz.website ?? null,
         timezone: biz.timezone,
@@ -3892,6 +4033,28 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
           ...desired.map((d) => ({ price: d.price, product: d.productName })),
         ],
       );
+      // The fresh term's lines are gross and the subscription's own coupons still apply:
+      // without this the card read Subtotal $271.00 over Due today $243.90.
+      const promo = est.promotional_discount_minor ?? 0;
+      const couponOff = est.discount_minor - promo;
+      if (couponOff > 0) {
+        // Named per coupon; the promotional slice has its own row on the card.
+        const named = (est.discount_lines ?? []).filter(
+          (l) => !(promo > 0 && l.label === "Promotional Credits"),
+        );
+        preview = {
+          ...preview,
+          couponDiscountMinor: couponOff,
+          ...(named.length
+            ? {
+                couponDiscountLines: named.map((l) => ({
+                  label: l.label,
+                  amountMinor: l.amount_minor,
+                })),
+              }
+            : {}),
+        };
+      }
     } catch (e) {
       log.warn("checkout reactivation estimate failed", { error: (e as Error)?.message });
     }
@@ -5341,7 +5504,10 @@ async function applyCheckoutClientResult(
   }
   if (applied?.outcome === "failed")
     throw new CheckoutError(
-      payerRefusal("We could not take your payment.", applied.failure!.message),
+      payerRefusal(
+        "We could not take your payment.",
+        payerFailureText(applied.failure, PAYER_REASON_WITHHELD),
+      ),
     );
   return getPaymentIntent(ctx.organizationId, ctx.businessId, piId);
 }
@@ -5505,7 +5671,7 @@ async function completePurchase(
       );
       if (!consumed) failure = "The payment is no longer available.";
       else if (captureRefused(consumed.charge))
-        failure = consumed.charge?.failure?.message ?? "Your bank refused the payment.";
+        failure = payerFailureText(consumed.charge?.failure, "Your bank refused the payment.");
     } catch (e) {
       if (!(e instanceof PaymentIntentError)) throw e;
       failure = e.message;
@@ -5686,7 +5852,9 @@ async function completeCheckoutInner(
         resultingCustomerId: s.resultingCustomerId,
       });
     }
-    throw new CheckoutError("Another request is already completing this checkout");
+    throw new CheckoutError(
+      "Your payment is already in progress. Wait a moment. Then refresh the page.",
+    );
   }
 
   // Events the auto-collect-ON create path withholds until its first charge lands
@@ -5721,7 +5889,7 @@ async function completeCheckoutInner(
       });
       pmId = pm.id;
     } else if (ctx.mode === "create") {
-      throw new CheckoutError("A payment method token is required to complete this checkout");
+      throw new CheckoutError("Add a payment method. Then try again.");
     }
 
     // API-boundary simulated time (mirror the operator create route).
@@ -5978,7 +6146,10 @@ async function completeCheckoutInner(
             if (captureRefused(consumed?.charge)) {
               consumedPaymentError = {
                 code: consumed.charge.failure?.code ?? "capture_failed",
-                message: consumed.charge.failure?.message ?? "We could not capture the payment.",
+                message: payerFailureText(
+                  consumed.charge.failure,
+                  "We could not capture the payment.",
+                ),
               };
             }
             consumedIntentId = consumed?.intent.publicId;

@@ -369,6 +369,13 @@ const schema = z
     // origin.
     WEBHOOK_BASE_URL: z.string().optional(),
     /**
+     * Base URL for the gateway Notification URLs we register from now on, e.g. a dedicated
+     * `webhooks.` host that forwards only `/v1/gateway_webhooks/`. Accounts registered under
+     * an older base move on their next registration (`provisionWebhookEndpoint`). Unset:
+     * `WEBHOOK_BASE_URL`.
+     */
+    GATEWAY_WEBHOOK_BASE_URL: z.string().url().optional(),
+    /**
      * Public origin of the MCP server and its OAuth (e.g. a dedicated `mcp.` host behind the
      * same API). The connector URL is `{MCP_PUBLIC_URL}/mcp`. Unset: `WEBHOOK_BASE_URL`, else
      * the request's origin.
@@ -678,6 +685,11 @@ const schema = z
     /** Buyer coupon-code tries per FIFTEEN MINUTES, per checkout session and per address. */
     RATE_LIMIT_COUPON_TRIES_PER_SESSION: z.coerce.number().int().nonnegative().default(10),
     RATE_LIMIT_COUPON_TRIES_PER_IP: z.coerce.number().int().nonnegative().default(30),
+    /**
+     * Postal-code lookups per MINUTE per address. The dashboard's address forms call it from
+     * their server, so every buyer shares one address: keep it generous.
+     */
+    RATE_LIMIT_POSTAL_LOOKUP_PER_IP: z.coerce.number().int().nonnegative().default(600),
 
     /**
      * ── Google sign-in for OPERATORS (0194) ────────────────────────────────────
@@ -705,6 +717,16 @@ const schema = z
     GOOGLE_REDIRECT_URI: z.string().optional(),
     /** Where to send the browser once sign-in succeeds or fails. The dashboard's origin. */
     DASHBOARD_BASE_URL: z.string().optional(),
+
+    /**
+     * Web Push identity (notifications, 0533). `pnpm notifications:vapid` prints a pair. Unset:
+     * push is off and the settings page says so; the bell, email and Google Chat still work.
+     * Changing the pair orphans every device subscription.
+     */
+    VAPID_PUBLIC_KEY: z.string().optional(),
+    VAPID_PRIVATE_KEY: z.string().optional(),
+    /** `mailto:` or `https:` contact the push services may use. */
+    VAPID_SUBJECT: z.string().optional(),
 
     /**
      * Passkeys (0330). A passkey is bound to the origin the BROWSER is on — the dashboard,

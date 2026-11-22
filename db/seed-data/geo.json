@@ -1,7 +1,7 @@
 {
   "attribution": {
     "source": "https://github.com/dr5hn/countries-states-cities-database",
-    "version": "v5.1.0-export.1",
+    "version": "v5.2.0-export.1",
     "license": "ODbL-1.0",
     "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
     "note": "Country and subdivision data from the dr5hn database, used under the Open Database License. Taken as-is for every country — no local overrides."
@@ -1002,7 +1002,7 @@
       "dialCode": "1",
       "phonePattern": "(?:[58]\\d\\d|900)\\d{7}",
       "phoneLengths": [10],
-      "regionLabel": "Province",
+      "regionLabel": "Region",
       "postalLabel": "Postal code",
       "hasPostalCode": true,
       "postalRegex": "^(\\d{5})$",
@@ -1407,7 +1407,7 @@
       "dialCode": "240",
       "phonePattern": "222\\d{6}|(?:3\\d|55|[89]0)\\d{7}",
       "phoneLengths": [9],
-      "regionLabel": "Province",
+      "regionLabel": "Region",
       "postalLabel": "Postal code",
       "hasPostalCode": false,
       "postalRegex": null,
@@ -8668,24 +8668,6 @@
     },
     {
       "country": "DO",
-      "code": "02",
-      "name": "Azua",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "03",
-      "name": "Baoruco",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "04",
-      "name": "Barahona",
-      "type": "province"
-    },
-    {
-      "country": "DO",
       "code": "33",
       "name": "Cibao Nordeste",
       "type": "region"
@@ -8710,39 +8692,9 @@
     },
     {
       "country": "DO",
-      "code": "05",
-      "name": "Dajabón",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "01",
-      "name": "Distrito Nacional",
-      "type": "district"
-    },
-    {
-      "country": "DO",
-      "code": "06",
-      "name": "Duarte",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "08",
-      "name": "El Seibo",
-      "type": "province"
-    },
-    {
-      "country": "DO",
       "code": "37",
       "name": "El Valle",
       "type": "region"
-    },
-    {
-      "country": "DO",
-      "code": "07",
-      "name": "Elías Piña",
-      "type": "province"
     },
     {
       "country": "DO",
@@ -8752,75 +8704,9 @@
     },
     {
       "country": "DO",
-      "code": "09",
-      "name": "Espaillat",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "30",
-      "name": "Hato Mayor",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "19",
-      "name": "Hermanas Mirabal",
-      "type": "province"
-    },
-    {
-      "country": "DO",
       "code": "39",
       "name": "Higuamo",
       "type": "region"
-    },
-    {
-      "country": "DO",
-      "code": "10",
-      "name": "Independencia",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "11",
-      "name": "La Altagracia",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "12",
-      "name": "La Romana",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "13",
-      "name": "La Vega",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "14",
-      "name": "María Trinidad Sánchez",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "28",
-      "name": "Monseñor Nouel",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "15",
-      "name": "Monte Cristi",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "29",
-      "name": "Monte Plata",
-      "type": "province"
     },
     {
       "country": "DO",
@@ -8830,87 +8716,9 @@
     },
     {
       "country": "DO",
-      "code": "16",
-      "name": "Pedernales",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "17",
-      "name": "Peravia",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "18",
-      "name": "Puerto Plata",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "20",
-      "name": "Samaná",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "21",
-      "name": "San Cristóbal",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "31",
-      "name": "San José de Ocoa",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "22",
-      "name": "San Juan",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "23",
-      "name": "San Pedro de Macorís",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "24",
-      "name": "Sánchez Ramírez",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "25",
-      "name": "Santiago",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "26",
-      "name": "Santiago Rodríguez",
-      "type": "province"
-    },
-    {
-      "country": "DO",
-      "code": "32",
-      "name": "Santo Domingo",
-      "type": "province"
-    },
-    {
-      "country": "DO",
       "code": "41",
       "name": "Valdesia",
       "type": "region"
-    },
-    {
-      "country": "DO",
-      "code": "27",
-      "name": "Valverde",
-      "type": "province"
     },
     {
       "country": "DO",
@@ -10750,63 +10558,15 @@
     },
     {
       "country": "GQ",
-      "code": "AN",
-      "name": "Annobón",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
-      "code": "BN",
-      "name": "Bioko Norte",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
-      "code": "BS",
-      "name": "Bioko Sur",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
-      "code": "CS",
-      "name": "Centro Sur",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
-      "code": "DJ",
-      "name": "Djibloho",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
       "code": "I",
       "name": "Insular",
       "type": "region"
     },
     {
       "country": "GQ",
-      "code": "KN",
-      "name": "Kié-Ntem",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
-      "code": "LI",
-      "name": "Litoral",
-      "type": "province"
-    },
-    {
-      "country": "GQ",
       "code": "C",
       "name": "Río Muni",
       "type": "region"
-    },
-    {
-      "country": "GQ",
-      "code": "WN",
-      "name": "Wele-Nzas",
-      "type": "province"
     },
     {
       "country": "GR",

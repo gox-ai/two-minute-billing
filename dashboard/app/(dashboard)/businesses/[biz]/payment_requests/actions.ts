@@ -1,7 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { requirePermission } from "@/lib/session";
+import { apiPost } from "@/lib/api";
+import { fmtDateTime } from "@/lib/format-date";
+import { businessTz } from "@/lib/business-tz-server";
+import type { SecretLinkResult } from "@/lib/secret-link";
 import { actionError, actionOk, type ActionResult } from "@/lib/action-result";
 import { money } from "@/lib/format";
 import { isZoneQualified } from "@/lib/tz";
@@ -167,6 +172,34 @@ export async function cancelPaymentRequestAction(
   // 409 while a payment is in progress: the message says so.
   if (!res.ok) return actionError(res.error ?? "We could not cancel the payment request.");
   return actionOk("Payment request canceled.");
+}
+
+/**
+ * A link the operator copies and sends themselves. The emailed link is a one-time portal
+ * sign-in minted at send, so there is no stored link to show: mint a new one that opens
+ * the portal's Invoices tab, where the buyer's open requests are listed with Pay.
+ */
+export async function createPaymentRequestLinkAction(
+  biz: string,
+  cus: string,
+): Promise<SecretLinkResult> {
+  // The portal link route needs customers:manage: the link opens the whole portal, not one request.
+  await requirePermission(["payments:collect", "customers:manage"], "ops");
+  if (!biz || !cus)
+    return { ok: false, error: "The business or customer ID is missing. Reload the page." };
+  const res = await apiPost(`/v1/businesses/${biz}/customers/${cus}/portal_sessions`, {
+    link_kind: "email",
+    forward_url: "/portal?tab=invoices",
+  });
+  if (!res.ok) return { ok: false, error: res.error ?? "We could not create the payment link." };
+  const data = res.data as { token: string; url?: string; access_expires_at: string };
+  const h = await headers();
+  const origin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
+  return {
+    ok: true,
+    label: `Payment link for this request. It works one time only, until ${fmtDateTime(data.access_expires_at, await businessTz(biz))}`,
+    secret: data.url ?? `${origin}/portal/s/${data.token}`,
+  };
 }
 
 export async function sendPaymentRequestAction(

@@ -75,6 +75,7 @@ import {
 } from "./proration";
 import {
   planSubscriptionPeriodInvoice,
+  type PeriodInvoicePlan,
   type PeriodItemRow,
   invoiceOutstanding,
   pendingPaymentsForInvoices,
@@ -111,6 +112,7 @@ import {
   addInterval,
   advancePeriod,
   cadenceMismatch,
+  reactivationTerm,
   cancellationDayProblem,
   cancelOverrideProblem,
   nextBillingBoundary,
@@ -3955,6 +3957,26 @@ export async function estimateRenewal(input: {
   return {
     object: "estimate",
     currency: sub.currency,
+    ...estimateMoneyFromPlan(plan),
+    immediate_charge: false, // a renewal is future-dated by definition
+    term_reset: false,
+    new_period_end: periodEnd.toISOString(),
+    ...(applied ? { scheduled_change: applied } : {}),
+    // The renewal figure is the one a DEFERRED change makes dangerous: a mid-term
+    // proration can sit under the ceiling while every renewal after it is refused.
+    // `estimateChange` cannot see that number — it does not exist until the change
+    // is applied — so this is where that case surfaces.
+    ...(shortfall ? { mandate_shortfall: shortfall } : {}),
+  };
+}
+
+/**
+ * The money of an estimate read off the invoice planner's own finalize plan, so the
+ * preview and the invoice cannot disagree. Shared by the renewal and reactivation estimates.
+ */
+function estimateMoneyFromPlan(plan: Extract<PeriodInvoicePlan, { mode: "finalize" }>) {
+  const { money } = plan;
+  return {
     lines: plan.lines.map((l) => ({
       description: l.description,
       amount_minor: Number(l.amountMinor),
@@ -3993,7 +4015,6 @@ export async function estimateRenewal(input: {
       })),
     ],
     total_minor: Number(money.total - money.promoApplied - money.grantPreTaxApplied),
-    immediate_charge: false, // a renewal is future-dated by definition
     credits_applied_minor: Number(
       money.refundableApplied + money.excessApplied + money.grantPostTaxApplied,
     ),
@@ -4004,14 +4025,6 @@ export async function estimateRenewal(input: {
     refundable_credits_applied_minor: Number(money.refundableApplied),
     excess_payments_applied_minor: Number(money.excessApplied),
     amount_due_minor: Number(money.amountDue),
-    term_reset: false,
-    new_period_end: periodEnd.toISOString(),
-    ...(applied ? { scheduled_change: applied } : {}),
-    // The renewal figure is the one a DEFERRED change makes dangerous: a mid-term
-    // proration can sit under the ceiling while every renewal after it is refused.
-    // `estimateChange` cannot see that number — it does not exist until the change
-    // is applied — so this is where that case surfaces.
-    ...(shortfall ? { mandate_shortfall: shortfall } : {}),
   };
 }
 
@@ -4086,9 +4099,12 @@ async function estimateFreshTermMoney(
      * Only `totalMinor` is consumed here; both helpers return more, and the richer halves
      * belong to the callers that know what they mean.
      */
-    peekDiscount: (
-      lines: DiscountLine[],
-    ) => Promise<{ totalMinor: bigint; lineDiscountByIndex: bigint[] }>;
+    peekDiscount: (lines: DiscountLine[]) => Promise<{
+      totalMinor: bigint;
+      lineDiscountByIndex: bigint[];
+      /** Named rows, when the helper names them (`peekDiscounts`): reported as `discount_lines`. */
+      rows?: Array<{ label: string; discountMinor: bigint }>;
+    }>;
     /**
      * Set when the term opens INTO A TRIAL: nothing is invoiced or collected today, so the
      * composition is reported in full while every money-moves-now field is zero — the same
@@ -4243,6 +4259,20 @@ async function estimateFreshTermMoney(
     // Coupons/manual discount PLUS the promotional slice, so the estimate's own
     // identity `subtotal − discount + tax = total` still holds.
     discount_minor: Number(disc.totalMinor + promotional),
+    // By name, summing to `discount_minor` as `Estimate.discount_lines` promises: the
+    // promotional slice first (as the renewal estimate lists it), then each coupon.
+    ...(disc.rows?.length
+      ? {
+          discount_lines: [
+            ...(promotional > 0n
+              ? [{ label: "Promotional Credits", amount_minor: Number(promotional) }]
+              : []),
+            ...disc.rows
+              .filter((r) => r.discountMinor > 0n)
+              .map((r) => ({ label: r.label, amount_minor: Number(r.discountMinor) })),
+          ],
+        }
+      : {}),
     tax_minor: Number(tax.taxMinor + tax.inclusiveTaxMinor),
     tax_lines: tax.taxLines,
     // `immediate_charge` follows the DOCUMENT total: a term a grant covers outright
@@ -4420,10 +4450,12 @@ export async function estimateNewSubscription(input: {
  *    that added a line the booking will not is the same class of defect as one that drops
  *    the tax.
  *
- * So the money ladder is SHARED — `estimateFreshTermMoney`, one copy of rate → discount →
- * promotional draw → tax → refundable/excess draw → amount due — and only the item
- * resolution is written here, mirroring `reactivateSubscriptionWithOptions` guard for
- * guard. Nothing about tax or credit is computed in this function.
+ * So only the item resolution is written here, mirroring `reactivateSubscriptionWithOptions`
+ * guard for guard. A billed term is then priced by `planSubscriptionPeriodInvoice` itself,
+ * over the rows the booking will write and the term it will open: the first invoice also
+ * bills the subscription's pending charges (a cancel leaves them pending), and a quote that
+ * left them out was charged first and refused at commit. A trial bills nothing today and
+ * keeps `estimateFreshTermMoney`. Nothing about tax or credit is computed in this function.
  *
  * ── WHAT IT DOES NOT COVER, AND WHY THAT IS A REFUSAL RATHER THAN A GUESS ────────
  * `items` is REQUIRED. The plain reactivate (`POST …/reactivate` with an empty body, the
@@ -4444,7 +4476,10 @@ export async function estimateReactivate(input: {
     quantity?: number | null;
     unitPriceMinor?: number | null;
     freeQuantity?: number | null;
+    billingCycles?: number | null;
   }>;
+  /** Price the term's own lines only, without the pending charges its first invoice also bills. */
+  termOnly?: boolean;
   /** Reactivating INTO a trial: nothing is invoiced or collected today. */
   trialEnd?: Date | null;
   now: Date;
@@ -4468,7 +4503,14 @@ export async function estimateReactivate(input: {
       "A reactivation estimate needs the items that it previews. items[] is required.",
     );
   }
-  return withTenant(organizationId, async (tx) => {
+  type Planned = {
+    kind: "plan";
+    sub: typeof subscriptions.$inferSelect;
+    term: ReturnType<typeof reactivationTerm>;
+    rows: PeriodItemRow[];
+    inTermAvailable: boolean;
+  };
+  const prepared = await withTenant(organizationId, async (tx): Promise<Estimate | Planned> => {
     const [sub] = await tx
       .select()
       .from(subscriptions)
@@ -4544,6 +4586,7 @@ export async function estimateReactivate(input: {
       customAmountMinor?: number;
       customTiers?: unknown;
       freeQuantity: number | null;
+      billingCycles: number | null;
     }> = [];
     for (const it of input.items) {
       const [price] = await tx
@@ -4568,6 +4611,7 @@ export async function estimateReactivate(input: {
         quantity: it.quantity ?? 1,
         customAmountMinor: it.unitPriceMinor ?? undefined,
         freeQuantity: it.freeQuantity ?? null,
+        billingCycles: it.billingCycles ?? null,
       });
     }
     // CAT-7, exactly as the booking applies it.
@@ -4598,9 +4642,61 @@ export async function estimateReactivate(input: {
     // The trial end the BOOKING will store, not the one the caller typed: reactivation
     // aligns it through the business's billing mode, and reporting the raw instant would
     // name a date the subscription does not end its trial on.
-    const trialEndIso = input.trialEnd
-      ? alignTrialEnd(input.trialEnd, await billingModeFor(tx, businessId)).toISOString()
-      : null;
+    const mode = await billingModeFor(tx, businessId);
+    const snapshotOf = (i: (typeof resolved)[number]) =>
+      // The snapshot the reactivated `subscription_items` row will freeze, byte for byte.
+      alignSnapshotToCycle(snapshotPrice(i.price, i.customAmountMinor, i.customTiers), cycle);
+
+    // A billed term is priced by the invoice planner itself, over the rows the booking will
+    // write: pending charges, credit grants, rounding and withholding come with it.
+    if (!input.trialEnd) {
+      const names = new Map(
+        (
+          await tx
+            .select({
+              id: products.id,
+              name: products.name,
+              kind: products.kind,
+              publicId: products.publicId,
+            })
+            .from(products)
+            .where(inArray(products.id, [...new Set(resolved.map((i) => i.price.productId))]))
+        ).map((r) => [r.id, r]),
+      );
+      const term = reactivationTerm(input.now, cycle.interval, cycle.intervalCount, mode);
+      const rows: PeriodItemRow[] = resolved.map((i) => {
+        const product = names.get(i.price.productId);
+        return {
+          item: {
+            id: randomUUID(),
+            organizationId,
+            businessId,
+            subscriptionId: sub.id,
+            publicId: "",
+            priceId: i.price.id,
+            quantity: i.quantity,
+            freeQuantity: i.freeQuantity,
+            billingCycles: i.billingCycles,
+            cyclesBilled: 0,
+            metadata: null,
+            priceSnapshot: snapshotOf(i),
+            usageBilledThrough: null,
+            nextCreditResetAt: null,
+            createdAt: term.start,
+          },
+          price: i.price,
+          productName: product?.name ?? "",
+          productKind: product?.kind ?? null,
+          productPublicId: product?.publicId ?? "",
+        };
+      });
+      return { kind: "plan", sub, term, rows, inTermAvailable };
+    }
+
+    // The trial end the BOOKING will store, not the one the caller typed: reactivation
+    // aligns it through the business's billing mode, and reporting the raw instant would
+    // name a date the subscription does not end its trial on.
+    const trialEndIso = alignTrialEnd(input.trialEnd, mode).toISOString();
 
     const fresh = await estimateFreshTermMoney(tx, {
       organizationId,
@@ -4614,12 +4710,7 @@ export async function estimateReactivate(input: {
       items: resolved.map((i) => ({
         price: i.price,
         quantity: i.quantity,
-        // The snapshot the reactivated `subscription_items` row will freeze, byte for
-        // byte — `alignSnapshotToCycle(snapshotPrice(price, override), newCycle)`.
-        snapshot: alignSnapshotToCycle(
-          snapshotPrice(i.price, i.customAmountMinor, i.customTiers),
-          cycle,
-        ),
+        snapshot: snapshotOf(i),
         freeQuantity: i.freeQuantity ?? null,
       })),
       // The subscription's OWN applied discounts. Cancelling does not remove
@@ -4648,6 +4739,81 @@ export async function estimateReactivate(input: {
     });
     return { ...fresh, in_term_available: inTermAvailable };
   });
+  if (!("kind" in prepared)) return prepared;
+
+  const { sub, term, rows, inTermAvailable } = prepared;
+  const pending =
+    input.couponCodes?.length || input.manualDiscount
+      ? {
+          organizationId,
+          businessId,
+          now: input.now,
+          ...(input.couponCodes?.length ? { codes: input.couponCodes } : {}),
+          ...(input.manualDiscount ? { manual: input.manualDiscount } : {}),
+        }
+      : undefined;
+  const plan = await planSubscriptionPeriodInvoice({
+    organizationId,
+    businessId,
+    subscription: {
+      ...sub,
+      status: "active",
+      currentPeriodStart: term.start,
+      currentPeriodEnd: term.end,
+      billingAnchorDay: term.anchorDay,
+    },
+    periodStart: term.start,
+    periodEnd: term.end,
+    items: rows,
+    // The coupons the reactivation applies before it bills, priced in the same stack.
+    preview: {
+      ...(pending ? { pendingDiscounts: pending } : {}),
+      ...(input.termOnly ? { excludePendingCharges: true } : {}),
+    },
+    // Usage past the credits is queued and billed on the real invoice; rated here, not queued.
+    creditOverage: input.termOnly ? "omit" : "preview",
+  });
+  if (plan.mode !== "finalize") throw new Error("a reactivation plans a finalized invoice");
+  const money = estimateMoneyFromPlan(plan);
+  return {
+    object: "estimate",
+    currency: sub.currency,
+    ...money,
+    lines: freshTermLineLabels(plan.lines, rows),
+    // Follows the DOCUMENT total: a term a grant covers outright raises a `paid` invoice.
+    immediate_charge: money.total_minor > 0,
+    term_reset: false,
+    new_period_end: null,
+    in_term_available: inTermAvailable,
+  };
+}
+
+/**
+ * An item line keeps the fresh-term label (`<model> (<price>) ×N`) the review pages name by
+ * product and quantity; every other line (pending charges, adjustments) keeps its own.
+ */
+function freshTermLineLabels(
+  lines: Extract<PeriodInvoicePlan, { mode: "finalize" }>["lines"],
+  rows: PeriodItemRow[],
+): EstimateLine[] {
+  const left = [...rows];
+  return lines.map((l) => {
+    const at = l.adjustment
+      ? -1
+      : left.findIndex(
+          (r) =>
+            r.price.id === l.priceId &&
+            r.item.quantity === l.quantity &&
+            l.description === priceLabel(r.price, { name: r.productName }),
+        );
+    const row = at >= 0 ? left.splice(at, 1)[0]! : null;
+    return {
+      description: row
+        ? `${row.price.model} (${row.price.publicId}) ×${row.item.quantity}`
+        : l.description,
+      amount_minor: Number(l.amountMinor),
+    };
+  });
 }
 
 // ─── Cancellation estimate ─────────────────────────────────────────────────────
@@ -4662,6 +4828,8 @@ export interface UnbilledChargesPreview {
   subtotal_minor: number;
   /** `invoice` only — `delete` and `none` raise no invoice, so they carry no tax. */
   tax_minor: number;
+  /** Added tax by component. Tax inside tax-inclusive prices is in `tax_minor`, not here. */
+  tax_lines?: EstimateTaxLine[];
   /** NET of `promotional_discount_minor`, exactly as `serializeInvoice` reports it. */
   total_minor: number;
   /** POST-tax buckets only (refundable + excess) — see `Estimate.credits_applied_minor`. */
@@ -5132,6 +5300,10 @@ export async function estimateCancel(input: {
     unbilled = {
       ...unbilled,
       tax_minor: Number(p.taxMinor),
+      tax_lines: p.taxLines.map((t) => ({
+        label: t.description,
+        amount_minor: Number(t.amountMinor),
+      })),
       total_minor: Number(p.totalMinor - p.promotionalCreditsAppliedMinor),
       credits_applied_minor: Number(p.creditsAppliedMinor),
       promotional_discount_minor: Number(p.promotionalCreditsAppliedMinor),
@@ -5162,7 +5334,7 @@ export async function estimateCancel(input: {
           ).flatMap((p) => (p.isTaxable ? [] : [p.id]))
         : [],
     );
-    const { taxMinor, inclusiveTaxMinor } = await estimateTax(
+    const { taxMinor, inclusiveTaxMinor, taxLines } = await estimateTax(
       organizationId,
       businessId,
       cus,
@@ -5189,6 +5361,7 @@ export async function estimateCancel(input: {
     unbilled = {
       ...unbilled,
       tax_minor: Number(taxMinor + inclusiveTaxMinor),
+      tax_lines: taxLines,
       total_minor: Number(total),
       credits_applied_minor: Number(creditApplied),
       promotional_discount_minor: Number(promotional),

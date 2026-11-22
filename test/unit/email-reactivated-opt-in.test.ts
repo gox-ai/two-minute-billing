@@ -28,9 +28,10 @@ describe("subscription_reactivated email is opt-in", () => {
 
   it("starts on for a business a person creates, and leaves sending itself off", () => {
     const created = initialEmailConfig({ hasOperator: true });
-    expect(created).toEqual({ types: { subscription_reactivated: true } });
+    expect(created).toEqual({ types: { subscription_reactivated: true }, trackEngagement: true });
     expect(resolveEmailConfig({ emailConfig: created }).enabled).toBe(false);
-    expect(initialEmailConfig({ hasOperator: false })).toBeUndefined();
-    expect(initialEmailConfig({})).toBeUndefined();
+    // A business made through the API gets open and click tracking only, no opt-in emails.
+    expect(initialEmailConfig({ hasOperator: false })).toEqual({ trackEngagement: true });
+    expect(initialEmailConfig({})).toEqual({ trackEngagement: true });
   });
 });

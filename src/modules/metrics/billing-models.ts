@@ -5,6 +5,8 @@ import type { Tx } from "@/platform/db";
  * Which billing models a business has data for, from stored `metric_daily` day rows over the
  * last {@link PRESENCE_DAYS} days. Screens use it to show a model's dashboards and tabs only
  * when there is something to show. Business Home asks the same measures in its batch.
+ * Credit counts in money or, for a unit with no money rate, in its own units: such a unit
+ * has no face value, so its money measures stay at 0.
  */
 export type BillingModel = "subscriptions" | "credits" | "usage" | "one_time";
 
@@ -19,6 +21,7 @@ export async function billingModelsPresent(tx: Tx, businessId: string): Promise<
       and (
         (measure = 'active_subscriptions' and dim = '')
         or (measure in ('credits_outstanding', 'credits_granted') and dim = '')
+        or (measure in ('credit_units_outstanding', 'credit_units_granted') and dim = 'credit_unit')
         or (measure = 'usage_events' and dim = '')
         or (measure = 'orders' and dim = '')
         or (measure = 'revenue_billed' and dim = 'revenue_type' and dim_value = 'usage')
@@ -27,7 +30,8 @@ export async function billingModelsPresent(tx: Tx, businessId: string): Promise<
   const out = new Set<BillingModel>();
   for (const r of rows) {
     if (r.measure === "active_subscriptions") out.add("subscriptions");
-    else if (r.measure.startsWith("credits_")) out.add("credits");
+    else if (r.measure.startsWith("credits_") || r.measure.startsWith("credit_units_"))
+      out.add("credits");
     else if (r.measure === "usage_events") out.add("usage");
     else if (r.measure === "orders") out.add("one_time");
     // A setup fee on a subscription invoice is one-time revenue, not one-time SALES.

@@ -13,7 +13,7 @@ import { metricWindows } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { snapshotMrrCache, type SnapshotMrrCache } from "../snapshots";
 import { computeMetricPeriod } from "./compute";
-import { businessesWithSubscriptions, dayFor } from "./cron";
+import { businessesWithBillingActivity, dayFor } from "./cron";
 import { CURRENT_REFRESH_SECONDS } from "./freshness";
 
 const log = createLogger("metrics.daily.windows");
@@ -62,7 +62,7 @@ export async function refreshRollingWindows(
 ) {
   // Imported here, not at the top: public-query reads this module.
   const { resolveWindow } = await import("./public-query");
-  const all = await businessesWithSubscriptions();
+  const all = await businessesWithBillingActivity();
   const list = opts.businessIds ? all.filter((b) => opts.businessIds!.includes(b.id)) : all;
   let failed = 0;
   const runStart = Date.now();

@@ -6,7 +6,9 @@
 import {
   classifyDecline,
   HOLD_FOR_NEW_CARD,
+  NO_DUNNING_EFFECT,
   PARK_EVEN_IN_FIXED_MODE,
+  PARK_FOR_CYCLE,
   RETRY_THEN_PARK,
   RETRY_THEN_PARK_ATTEMPTS,
   retryNotBefore,
@@ -20,6 +22,7 @@ import {
 } from "./adaptive-schedule";
 import { MANDATE_REVOKED_CODES, type MandateRevokedAction } from "./billing-rules-config";
 import { BANK_DEBIT_METHODS } from "@/providers/method-types";
+import { resolveErrorId } from "@/platform/error-taxonomy";
 
 export const DUNNING_RETRY_DAYS = [1, 3, 5, 7];
 
@@ -110,7 +113,14 @@ export const NETWORK_RETRY_CAP: Readonly<Record<string, number>> = {
   upi: 3,
   emandate: 2,
   nach: 2,
+  // Cashfree names its eNACH rails `enach` / `pnach`: the same NACH rule.
+  enach: 2,
+  pnach: 2,
   bank_transfer: 2,
+  // An India-issued card under RBI's e-mandate: each retry is a new pre-debit notice cycle,
+  // and an invoice gets at most two of them. A known-foreign issuer is not capped
+  // (`networkRetryCap`).
+  card: 2,
 };
 
 /**
@@ -120,7 +130,73 @@ export const NETWORK_RETRY_CAP: Readonly<Record<string, number>> = {
 export const RAIL_MIN_RETRY_GAP_DAYS: Readonly<Record<string, number>> = {
   emandate: 3,
   nach: 3,
+  enach: 3,
+  pnach: 3,
 };
+
+/** The NACH-family rails (Razorpay `emandate`, `nach`; Cashfree `enach`, `pnach`). */
+export const NACH_RAILS: ReadonlySet<string> = new Set(["emandate", "nach", "enach", "pnach"]);
+
+/**
+ * Engine refusals that never reached the bank, so a NACH return rule does not apply to them.
+ * Booked by our own pre-flight or by the rail rules in `representment.ts`.
+ */
+const NACH_NOT_A_RETURN = new Set([
+  "mandate_pending",
+  "pre_debit_notice_failed",
+  "network_retry_limit",
+  "network_retry_too_soon",
+  "pre_debit_not_due",
+  "pre_debit_cycle_open",
+  "retry_too_soon",
+  "try_again_later",
+]);
+
+/**
+ * On a NACH rail only insufficient funds is re-presented: every other return counts against
+ * the business's return rate and a retry does not change it. Failures that never reached
+ * the bank (ours, technical) are not returns and keep the schedule.
+ */
+export function nachMayRetry(code: string | null | undefined): boolean {
+  const c = (code ?? "").toLowerCase();
+  if (!c || c === "insufficient_funds" || NACH_NOT_A_RETURN.has(c)) return true;
+  const id = resolveErrorId(c);
+  return id.namespace === "billing" || id.family === "technical";
+}
+
+/**
+ * Rails where the GATEWAY runs the cycle's retries itself, under its one notice, so an async
+ * failure arrives after they are spent. Razorpay UPI Autopay (coupled flow): "we automatically
+ * try to debit 25 hours after the pre-debit notification is delivered, and retry 3 times if
+ * the debit attempts fail". Cashfree and PayU UPI leave retries to us and are not here.
+ */
+const GATEWAY_RUNS_RETRIES: Readonly<Record<string, readonly string[]>> = {
+  razorpay: ["upi"],
+};
+
+export function gatewayRunsRetries(
+  gatewayKey: string | null | undefined,
+  rail: string | null | undefined,
+): boolean {
+  if (!gatewayKey || !rail) return false;
+  return GATEWAY_RUNS_RETRIES[gatewayKey]?.includes(rail.toLowerCase()) ?? false;
+}
+
+/**
+ * The rail the retry rules key on: the stored mandate rail, else `card` for a card the
+ * gateway says India issued (Stripe India cards carry no mandate rail). Unknown issuer on an
+ * untagged card is not India: we do not guess.
+ */
+export function retryRailOf(
+  pm:
+    | { mandateRail?: string | null; type?: string | null; issuerCountry?: string | null }
+    | null
+    | undefined,
+): string | null {
+  if (!pm) return null;
+  if (pm.mandateRail) return pm.mandateRail;
+  return pm.type === "card" && pm.issuerCountry?.trim().toUpperCase() === "IN" ? "card" : null;
+}
 
 /** The earliest a retry on this rail may land after a failure at `now`, or null. */
 export function railRetryNotBefore(rail: string | null | undefined, now: Date): Date | null {
@@ -128,10 +204,19 @@ export function railRetryNotBefore(rail: string | null | undefined, now: Date): 
   return gap === undefined ? null : addUtcDays(now, gap);
 }
 
-/** The network's retry cap for a rail, or null when the rail has none. */
-export function networkRetryCap(rail: string | null | undefined): number | null {
+/**
+ * The network's retry cap for a rail, or null when the rail has none. A card mandate whose
+ * issuer is known to be outside India is not under RBI's rule.
+ */
+export function networkRetryCap(
+  rail: string | null | undefined,
+  issuerCountry?: string | null,
+): number | null {
   if (!rail) return null;
-  return NETWORK_RETRY_CAP[rail.toLowerCase()] ?? null;
+  const r = rail.toLowerCase();
+  const issuer = issuerCountry?.trim().toUpperCase();
+  if (r === "card" && issuer && issuer !== "IN") return null;
+  return NETWORK_RETRY_CAP[r] ?? null;
 }
 
 /**
@@ -147,8 +232,9 @@ export function networkRetryCap(rail: string | null | undefined): number | null 
 export function capRetryDaysForRail(
   retryDays: number[],
   rail: string | null | undefined,
+  issuerCountry?: string | null,
 ): number[] {
-  const cap = networkRetryCap(rail);
+  const cap = networkRetryCap(rail, issuerCountry);
   return cap == null || retryDays.length <= cap ? retryDays : retryDays.slice(0, cap);
 }
 
@@ -239,7 +325,12 @@ export type FailureRearm =
   | { action: "parked" } // smart mode: hard-recoverable decline — invoice stays open,
   //                          dunning parked, subscription retained; recovered when the
   //                          customer updates their card (collect-on-PM-update).
-  | { action: "exhausted" }; // retries exhausted / non-retriable → final action
+  | { action: "exhausted" } // retries exhausted / non-retriable → final action
+  /**
+   * Not a decline (`NO_DUNNING_EFFECT`): leave the invoice exactly as it is and do not count
+   * the attempt. The payment row is still the record that it happened.
+   */
+  | { action: "unchanged" };
 
 export function planFailureRearm(input: {
   dunningStatus: string | null;
@@ -322,7 +413,30 @@ export function planFailureRearm(input: {
   adaptiveCadence?: AdaptiveCadence;
   /** Instruments of the earlier failed attempts on this invoice, oldest first. */
   priorMethods?: ReadonlyArray<{ type: string | null; rail: string | null }>;
+  /**
+   * The gateway refused OUR request (`isOurRequestFault`). Retried like any decline, but an
+   * end of dunning PARKS for ops instead of running the final action: a customer is never
+   * cancelled over our own setup (user decision 2026-11-17).
+   */
+  requestFault?: boolean;
+  /** `payment_methods.issuer_country` of the failed instrument; a foreign card mandate is uncapped. */
+  issuerCountry?: string | null;
+  /**
+   * This async failure arrived after the gateway ran the cycle's own retries
+   * (`gatewayRunsRetries`). The engine adds none in the cycle: the invoice parks.
+   */
+  gatewayRetriedCycle?: boolean;
+  /**
+   * The same mandate ended its previous cycle with this refusal too
+   * (`refusedLastCycleToo`, `REPEAT_REFUSAL_PARKS_RULES`). Parks in either mode.
+   */
+  repeatedAcrossCycles?: boolean;
 }): FailureRearm {
+  const plan = planFailureRearmInner(input);
+  return plan.action === "exhausted" && input.requestFault ? { action: "parked" } : plan;
+}
+
+function planFailureRearmInner(input: Parameters<typeof planFailureRearm>[0]): FailureRearm {
   // The schedule for this kind of instrument (card / bank debit), else the business's.
   const kind = dunningMethodKind(input.methodType, input.mandateRail);
   const listFor = (k: "card" | "bank_debit" | null) =>
@@ -342,7 +456,7 @@ export function planFailureRearm(input: {
   // What this rail will actually accept, which may be shorter than what the merchant
   // configured. Computed once, up front, so every branch below reasons about the
   // schedule that will really run rather than the one on the settings screen.
-  const cappedRetryDays = capRetryDaysForRail(retryDays, input.mandateRail);
+  const cappedRetryDays = capRetryDaysForRail(retryDays, input.mandateRail, input.issuerCountry);
   const cadence = input.adaptiveCadence ?? DEFAULT_ADAPTIVE_CADENCE;
   // A generic refusal parks after its last adaptive retry; the default is 1 + 3.
   const retryThenParkAttempts =
@@ -390,6 +504,8 @@ export function planFailureRearm(input: {
         })
       : nextRetryAt(slot, input.now, cappedRetryDays, input.dueDate);
 
+  // Not a decline: nothing about dunning moves, whatever its state.
+  if (NO_DUNNING_EFFECT.has(code)) return { action: "unchanged" };
   // Merchant/offline/pause guards run FIRST in BOTH modes — unchanged.
   if (input.dunningStatus === "stopped") return { action: "stopped" };
   // Auto-collect off: leave the invoice exactly as it stands (see `send_invoice` —
@@ -407,6 +523,19 @@ export function planFailureRearm(input: {
     MANDATE_REVOKED_CODES.has(code)
   )
     return { action: input.mandateRevoked === "request_new_mandate" ? "parked" : "exhausted" };
+  // The payer skipped this one debit: no retry in the cycle, in either mode.
+  if (PARK_FOR_CYCLE.has(code)) return { action: "parked" };
+  // Refused again a cycle later: a retry will not clear it, the payer must act.
+  if (input.repeatedAcrossCycles) return { action: "parked" };
+  // The gateway already spent the cycle's retries; ours would break the rail's cap.
+  if (input.gatewayRetriedCycle && input.retriable) return { action: "parked" };
+  // NACH: only insufficient funds is re-presented.
+  if (
+    input.retriable &&
+    NACH_RAILS.has((input.mandateRail ?? "").toLowerCase()) &&
+    !nachMayRetry(input.declineCode)
+  )
+    return { action: "parked" };
   /**
    * A DISPOSITION OUTRANKS A SCHEDULE. Park and terminate are decided here, ahead of the
    * "already scheduled, leave it alone" guard below.
@@ -720,7 +849,7 @@ export function dunningMethodKind(
   rail?: string | null,
 ): "card" | "bank_debit" | null {
   const r = (rail ?? "").toLowerCase();
-  if (r === "emandate" || r === "nach") return "bank_debit";
+  if (NACH_RAILS.has(r)) return "bank_debit";
   const t = (type ?? "").toLowerCase();
   if (t === "card") return "card";
   return BANK_DEBIT_METHODS.has(t) ? "bank_debit" : null;

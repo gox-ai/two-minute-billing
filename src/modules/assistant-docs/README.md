@@ -85,6 +85,18 @@ organization (nullable), inputs, input tokens, `cost_fixed12`; RLS on, system co
   they existed; the note-phrase bonus applies only in hybrid search.
 
 ## Changelog
+- **2026-11-18 (chore/section-notes-audit)** — Every note audited against its section and
+  enriched (1,298 of 1,366; "Related" lists stay empty): 25 contexts corrected, asks 6.1 → 10.3 a
+  note. Each now has a where/take-me-to, how-do-I, can-I, a problem in the user's words and 2–3
+  bare keywords; every original ask kept; new keywords shared by 3+ sections dropped (193). Written
+  by hand-run Claude writers blind to the held-out fixtures, no platform-model calls. Keyword-only
+  verify is unchanged by design (notes are weight D, hybrid only); the hybrid score is unmeasured.
+
+- **2026-11-18 (fix/map-price-card-fields)** — The dashboard map lists the create-plan form's
+  First price fields (Currency, the price amount, Pricing model and the rest). The generator walks
+  three imports deep, as the audit does; reads a field label held in a variable
+  (`label={amountLabel}`); and keeps a field label (`label`/`ariaLabel` on an element with a `name`)
+  past the common-chrome filter. +258 controls on 41 screens; 90 screen notes need a redraft.
 - **2026-11-15 (docs/screen-notes-model-redraft)** — The screen notes are model-drafted again (300 of
   301; one by hand): the hand-written ones from fix/show-me-targets were accurate but too short,
   and § F screen fell to 35% under its 36% keyword floor (now 37%). `docs-section-notes.ts

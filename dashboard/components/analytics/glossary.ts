@@ -38,6 +38,14 @@ export const G = {
     "Paying customers",
     "Accounts with recurring revenue now. Each account counts once, however many subscriptions it has.",
   ),
+  revenueBilled: t(
+    "Revenue, 30 days",
+    "What you invoiced in the last 30 days, before tax, less discounts and credits. It covers subscriptions, one-time sales, usage and credit packs. Businesses with a different currency are converted to the reporting currency.",
+  ),
+  customersWhoPaid: t(
+    "Paying customers",
+    "Customers who paid at least one time in the last 30 days, for any type of revenue. Each customer counts one time.",
+  ),
   arpa: t("ARPC", "Average revenue per paying customer.", "MRR ÷ paying customers"),
   payingSubs: t("Paying subs", "Live subscriptions with MRR above zero, cancelling ones included."),
   renewing: t("Renewing", "Paying subs that will renew.", "Paying subs − cancelling"),
@@ -142,7 +150,7 @@ export const G = {
     "(Churned MRR + Paused MRR) ÷ subscriptions that left",
   ),
   clv: t(
-    "Customer lifetime value",
+    "Subscription lifetime value",
     "What a customer is worth over their life. It shows only after a customer has fully left.",
     "ARPC × average customer lifetime",
   ),
@@ -218,7 +226,7 @@ export const G = {
   ),
   usageRevenue: t(
     "Usage revenue",
-    "What you invoiced for metered usage, before tax and after discounts. Usage is invoiced after it happens, so recent usage shows when its invoice is raised.",
+    "What you invoiced for metered usage, before tax, less discounts and credits. Usage that a credit pack paid for counts in credit packs. Usage is invoiced after it happens, so recent usage shows when its invoice is raised.",
   ),
   usageStopped: t(
     "Usage stopped",
@@ -231,7 +239,7 @@ export const G = {
   ),
   orders: t(
     "Orders",
-    "One-time orders: invoices with no subscription and at least one one-time line that is not a credit pack. Order revenue is before tax and after discounts.",
+    "One-time orders: invoices with no subscription and at least one one-time line that is not a credit pack. Order revenue is before tax, less discounts and promotional credit.",
   ),
   returningBuyers: t(
     "Buyers",
@@ -240,7 +248,16 @@ export const G = {
   ),
   revenueMix: t(
     "Revenue mix",
-    "What you invoiced in the period, by type: subscriptions, usage, one-time sales and credit packs. The amounts are before tax and after discounts. Collected is the money you received for each type.",
+    "What you invoiced in the period, by type, before tax. We subtract discounts, promotional credit, plan credits and credit notes. A credit pack counts when you sell it. Collected is the money you received for each type.",
+  ),
+  grossRevenue: t(
+    "Gross revenue",
+    "What you invoiced in the period before tax, discounts and credits.",
+    "Net revenue = gross revenue − deductions",
+  ),
+  revenueDeductions: t(
+    "Deductions",
+    "Discounts and credits that paid part of an invoice without money. Promotional credit is free credit, so it is not revenue. The plan fee already counts, so we do not count the usage that plan credits pay again. A credit pack counts when you sell it, so usage that the pack pays for counts one time only. A credit note counts in the period you create it.",
   ),
   recoveredByDunning: t("Recovered by dunning", "Invoices paid after they entered dunning."),
   refunds: t("Refunds", "Money returned to customers in the period."),

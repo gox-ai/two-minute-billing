@@ -1,5 +1,5 @@
 /**
- * Gateway conformance (plan 3e): the shared scenarios S1–S14 run against each gateway's fixture
+ * Gateway conformance (plan 3e): the shared scenarios S1–S15 run against each gateway's fixture
  * module, through the real adapter (behind a fake API), the real engine and the real webhook
  * route. PASSES only when the failing rows equal `src/providers/conformance/known-gaps.json`
  * exactly, every catalog gateway has fixtures or a stated exclusion, and every entry of

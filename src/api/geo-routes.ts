@@ -21,7 +21,10 @@
  * countries on every render.
  */
 import type { FastifyInstance } from "fastify";
+import { config } from "@/platform/config";
 import { aliasesFor, allCountries, countryFor, subdivisionsFor } from "@/platform/geo";
+import { lookupPostal } from "@/platform/postal-lookup";
+import { refusedByRateLimit } from "./helpers";
 
 /** A day: long enough to be worth caching, short enough that a correction lands. */
 const CACHE_CONTROL = "public, max-age=86400";
@@ -100,4 +103,45 @@ export async function registerGeoRoutes(app: FastifyInstance) {
       subdivision_strict: country.subdivisionStrict,
     };
   });
+
+  /**
+   * City and state for a postal code, for the address forms' autofill. Postal data is
+   * GeoNames (CC BY 4.0, https://www.geonames.org). Public reference data, rate limited per
+   * address; 404 when the table is not loaded or the code is unknown, and the form then
+   * simply skips the autofill.
+   */
+  app.get<{ Params: { code: string; postal: string } }>(
+    "/v1/countries/:code/postal-codes/:postal",
+    async (req, reply) => {
+      if (
+        await refusedByRateLimit(req, reply, {
+          scope: "postal_lookup",
+          keys: [{ kind: "ip", value: req.ip, limit: config.RATE_LIMIT_POSTAL_LOOKUP_PER_IP }],
+        })
+      )
+        return;
+      const country = countryFor(req.params.code);
+      if (!country) {
+        return reply
+          .code(404)
+          .send({ error: { type: "not_found", message: `No such country: ${req.params.code}` } });
+      }
+      const place =
+        req.params.postal.length > 20 ? null : await lookupPostal(country.code, req.params.postal);
+      if (!place) {
+        return reply
+          .code(404)
+          .send({ error: { type: "not_found", message: "No such postal code" } });
+      }
+      reply.header("cache-control", CACHE_CONTROL);
+      return {
+        object: "postal_code",
+        country: country.code,
+        postal_code: req.params.postal,
+        state_code: place.stateCode,
+        state_name: place.stateName,
+        cities: place.cities,
+      };
+    },
+  );
 }

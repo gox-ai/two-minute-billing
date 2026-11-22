@@ -47,10 +47,10 @@ export function MainGestures() {
   const router = useRouter();
   const [routing, startRouting] = React.useTransition();
   const routingRef = React.useRef(false);
-  const indicator = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     routingRef.current = routing;
   });
+  const indicator = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const main = document.querySelector<HTMLElement>("main");
     if (!main) return;

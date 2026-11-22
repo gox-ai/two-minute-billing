@@ -472,7 +472,6 @@ const dsp = (status: string, expect: DocumentedStatus["expect"]): DocumentedStat
   doc: "events",
   expect,
 });
-const APM_ONLY = "An alternative-payment-method event; this account takes cards only.";
 
 /** The buyer pays the hosted page with Apple Pay: a held card payment carrying its reference. */
 function payHostedPage(w: World, intentAtGateway: string) {
@@ -510,7 +509,7 @@ export const checkoutcomFixture: GatewayFixture = {
       none: "We never increment an authorization.",
     }),
     gw("payment_authorization_incremented", { none: "We never increment an authorization." }),
-    gw("payment_canceled", { none: APM_ONLY }),
+    gw("payment_canceled", ["charge.failed"]),
     gw("payment_capture_declined", ["charge.failed"]),
     gw("payment_capture_pending", ["charge.pending"]),
     gw("payment_captured", ["charge.succeeded"]),
@@ -518,7 +517,7 @@ export const checkoutcomFixture: GatewayFixture = {
       none: "A review notice; the payment's approved or declined event carries the verdict.",
     }),
     gw("payment_declined", ["charge.failed"]),
-    gw("payment_expired", { none: APM_ONLY }),
+    gw("payment_expired", ["charge.failed"]),
     gw("payment_optimized", { none: "An Intelligent Acceptance report; no money moves." }),
     gw("payment_paid", { none: "A bank payout event; we make no payouts." }),
     gw("payment_pending", ["charge.pending"]),

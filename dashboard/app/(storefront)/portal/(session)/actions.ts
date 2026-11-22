@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { addMethodOutcome, outcomeIsEmpty, type AddMethodOutcome } from "./portal-state";
 import {
   portalApplyCoupon,
   portalRemoveCoupon,
@@ -23,6 +24,9 @@ import {
   type PortalLifecycleAction,
   portalBeginSetup,
   portalCompleteVault,
+  portalListInvoices,
+  portalPayOptions,
+  type PortalPayOptions,
   portalRemove,
   portalSetDefault,
   portalSetRole,
@@ -113,22 +117,6 @@ export async function portalSetBackupAction(
     : actionError(res.error ?? "We could not change your backup payment method.");
 }
 
-/** Take a backup out of automatic collection; the card stays saved. */
-export async function portalRemoveBackupAction(
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
-  const pm = String(formData.get("pm") ?? "");
-  if (!token) return actionError(NO_SESSION);
-  if (!pm) return actionError("The payment method ID is missing. Reload the page.");
-  const res = await portalSetRole(token, pm, "none");
-  revalidatePath(PORTAL_PATH);
-  return res.ok
-    ? actionOk("Backup removed")
-    : actionError(res.error ?? "We could not remove the backup payment method.");
-}
-
 export async function portalRemoveAction(
   _prev: ActionResult | null,
   formData: FormData,
@@ -137,7 +125,15 @@ export async function portalRemoveAction(
   const pm = String(formData.get("pm") ?? "");
   if (!token) return actionError(NO_SESSION);
   if (!pm) return actionError("The payment method ID is missing. Reload the page.");
-  const res = await portalRemove(token, pm);
+  const reason = String(formData.get("reason") ?? "");
+  const reasonText = String(formData.get("reason_text") ?? "")
+    .trim()
+    .slice(0, 500);
+  const res = await portalRemove(
+    token,
+    pm,
+    reason ? { reason, ...(reasonText ? { reason_text: reasonText } : {}) } : undefined,
+  );
   revalidatePath(PORTAL_PATH);
   return res.ok
     ? actionOk("Payment method deleted.")
@@ -199,7 +195,12 @@ export async function portalCompleteVaultAction(
     achAuthorizationVersion?: string;
   },
   gatewayAccount?: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  /** What adding it did to the open invoices; null when there is nothing to report. */
+  outcome?: AddMethodOutcome | null;
+}> {
   const token = await readStorefrontToken("portal");
   if (!token) return { ok: false, error: NO_SESSION };
   if (!(completion.paymentIntent ?? completion.providerToken)) {
@@ -207,9 +208,17 @@ export async function portalCompleteVaultAction(
   }
   const res = await portalCompleteVault(token, completion, gatewayAccount);
   revalidatePath(PORTAL_PATH);
-  return res.ok
-    ? { ok: true }
-    : { ok: false, error: res.error ?? "We could not save your payment method." };
+  if (!res.ok) return { ok: false, error: res.error ?? "We could not save your payment method." };
+  // Read the invoices AFTER the charges: their status and refusal reason are the truth.
+  // The method is saved either way, so a failed read only loses the report.
+  const list = await portalListInvoices(token, 100);
+  if (!list.ok || !list.data) return { ok: true, outcome: null };
+  const outcome = addMethodOutcome(
+    res.data?.collected ?? [],
+    list.data.data,
+    res.data?.collection_enabled === false,
+  );
+  return { ok: true, outcome: outcomeIsEmpty(outcome) ? null : outcome };
 }
 
 /**
@@ -226,6 +235,12 @@ export async function portalPayInvoiceAction(
   clientResult?: Record<string, string>,
   /** Pay with Apple Pay on the gateway's own page. */
   wallet?: "apple_pay",
+  /** pm_… — pay with a saved method. */
+  paymentMethod?: string,
+  /** Pay and save: keep the new method; the consent text version the buyer saw. */
+  save?: { keep: boolean; textVersion: string },
+  /** The rail of the new-method row the buyer selected: the gateway's form is pinned to it. */
+  methodType?: string,
 ): Promise<{ ok: true; result: PortalInvoiceCollection } | { ok: false; error: string }> {
   const token = await readStorefrontToken("portal");
   if (!token) return { ok: false, error: NO_SESSION };
@@ -236,6 +251,14 @@ export async function portalPayInvoiceAction(
     ...(paymentIntent && clientResult ? { client_result: clientResult } : {}),
     ...(gatewayAccount ? { gateway_account: gatewayAccount } : {}),
     ...(wallet && !paymentIntent ? { wallet } : {}),
+    ...(paymentMethod && !paymentIntent ? { payment_method: paymentMethod } : {}),
+    ...(save && !paymentIntent && !paymentMethod
+      ? {
+          save_method: save.keep,
+          save_text_version: save.textVersion,
+        }
+      : {}),
+    ...(methodType && !paymentIntent && !paymentMethod ? { method_type: methodType } : {}),
     return_url: `${base}?pay=return`,
     cancel_url: `${base}?pay=cancel`,
   });
@@ -243,6 +266,20 @@ export async function portalPayInvoiceAction(
     return { ok: false, error: res.error ?? "We could not take the payment." };
   revalidatePath(PORTAL_PATH);
   return { ok: true, result: res.data };
+}
+
+/** Pay now's step 1 for one invoice. Read-only, so no revalidate. */
+export async function portalPayOptionsAction(
+  invoice: string,
+  /** Try again after a gateway-side failure: gwa_… to route the rails around. */
+  avoidGateway?: string,
+): Promise<{ ok: true; options: PortalPayOptions } | { ok: false; error: string }> {
+  const token = await readStorefrontToken("portal");
+  if (!token) return { ok: false, error: NO_SESSION };
+  const res = await portalPayOptions(token, invoice, avoidGateway);
+  if (!res.ok || !res.data)
+    return { ok: false, error: res.error ?? "We could not load the payment options." };
+  return { ok: true, options: res.data };
 }
 
 /** Where a just-approved payment stands. Read-only, so no revalidate. */
@@ -442,7 +479,7 @@ export async function portalPayRequestAction(
   revalidatePath(PORTAL_PATH);
   if (!res.ok || !res.data) return actionError(res.error ?? "We could not take the payment.");
   const r = res.data;
-  if (r.status === "paid") return actionOk("Payment received. Thank you.");
+  if (r.status === "paid") return actionOk("Payment received.");
   if (r.status === "processing")
     return actionOk("Payment started. It can take some time to complete.");
   return actionError(
@@ -650,7 +687,7 @@ export async function portalRestartAction(
   );
   return res.ok && res.data?.url
     ? { ok: true, url: res.data.url }
-    : { ok: false, error: res.error ?? "We could not open the restart page." };
+    : { ok: false, error: res.error ?? "We could not open the reactivation page." };
 }
 
 export async function portalCancelFlowAction(

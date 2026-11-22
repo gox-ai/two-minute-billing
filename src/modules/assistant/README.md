@@ -129,6 +129,31 @@ Self-hosted, every support route is 404, `status.support` is null and the model 
   paths and camelCase identifiers found in that source. API examples from the docs stay.
 
 ## Changelog
+- **2026-11-18 (fix/excess-credit-and-billy, part 2)** — Answer links for imported ids:
+  `recordRoutes` maps each record a turn read to its folder by the API `object` it came in (and
+  the page record and mentions by type); `recordPaths` uses it, and the `figures` event carries
+  `record_links` (unprefixed ids in the answer → folder) that `AnswerMarkdown` links.
+  `tool-data`'s `IdLink` takes the card's folder. The `show_in_app` scope text says a question
+  about the record the member is on is `one_record`.
+- **2026-11-18 (fix/excess-credit-and-billy)** — Three fixes from one production conversation.
+  (1) The page's record is the URL segment as-is (`pageContextOf`), so an imported record with no
+  `cus_`/`inv_` prefix is anchored; it used to be `null` and a tool guessed a prefix. Only
+  `RECORD_FOLDER_PAGES` (`new`) are not ids; a unit test keeps that list in step with the
+  route folders. (2) A figure the member states is a claim to check in the records. A disputed
+  figure: the prompt says to read the records again in that turn,
+  keep or change the answer only on what they show, and describe a screenshot only when one is
+  attached. (3) `show_in_app` takes a required `scope` (`one_record` | `whole_business`);
+  `resolveGuide` refuses a business-wide screen for a one-record question, so Show me opens the
+  record's own control or does not appear. The prompt also says to use ids exactly as given.
+- **2026-11-17 (feat/customer-payment-intents)** — Payment intent context. `get_customer` adds
+  `recent_payment_intents` (10, lean: status, last attempt status, last error).
+  `get_payment_attempts` now reads the intent detail and returns `payment_intent`, every attempt
+  (`data`, the card's shape) with its error code and text and `reported_by_browser`,
+  `gateway_calls` per newest-5 attempt (`gateway_requests` by `span_id[is]`, else `trace_id[is]`;
+  no headers or bodies) and `webhooks` (`gateway_webhooks?payment_intent[is]=pi_…`). The page
+  record read for a `payment` (an intent page or a `pi_` anchor) is now `get_payment_attempts`,
+  not `read_api payment_intents/pi_…`. `read_api`'s description names the customer filter and
+  the gateway-log filters. Tests: `test/unit/assistant-payment-intents.test.ts`.
 - **2026-11-15 (fix/show-me-targets)** — A Show me step names only a control: `resolveGuide`
   refuses the page title, a breadcrumb and a heading (a heading may still be `within`, and gets
   its own error), and takes an option a screen lists from a catalogue (each provider on Add a

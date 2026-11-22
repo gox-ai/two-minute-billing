@@ -222,6 +222,7 @@ Escalation ladder, cheapest first — take a step only when a measurement says t
 | `computePaymentsAnalytics(orgId, businessId, { range, currency, gateway, paymentMethod, now })` | payments dashboard: volume/refunds/chargebacks/failures + breakdowns |
 | `resolveCalendarRange(tx, businessId, range, now)` | a calendar range + its comparable previous period, in the business tz |
 | `resolveBuckets(tx, period, tz, granularity)` / `bucketKeySql(col, tz, granularity)` | chart buckets + the matching `GROUP BY` expression |
+| `billedRevenueForRecord(orgId, businessId, { customerId | subscriptionId })` | lifetime net billed revenue for a record page, per currency, including credit-note deductions |
 
 ## API routes
 | Method · Path | Purpose |
@@ -271,6 +272,46 @@ None.
   intent**; `failed_amount`/`failure_rate` are transaction-level, which is the only honest reading.
 - Payments analytics weeks start on the business's `week_start` (0293, default **Sunday**):
   `date_trunc('week', t + 1 day) − 1 day` for a Sunday week (`weekTruncShift`).
+
+## Revenue: gross to net
+`revenue_billed` is NET: before tax, less coupons, promotional credit (balance, promotional
+grants, a pack's bonus), plan credits, usage paid by a paid pack (at the pack's cost — the pack
+counted when sold) and credit notes (dated by the note; a period can be negative). Overpayments,
+paid top-ups and refundable credit are money, so not deducted. One helper decides it per line:
+`billedRevenueByInvoice` → `revenuePartsOf` (`payments/attribution.ts`); every billed-revenue
+reader goes through it (orders, `revenue-totals.ts`, usage, segments, model grids, usage margin).
+- `revenue_billed_gross` (same dims) and `revenue_deductions` (dims `revenue_deduction`,
+  `revenue_type`, `product`). Identity, per currency, type and product: gross − deductions = net.
+  Gate: `verify:metric-revenue-net` (cases A–H, hand-worked in its header).
+- Draws are stored per invoice, not per line: placement over lines is derived (grant
+  applicability, then pro rata to value after coupons). Per-invoice totals are exact; a meter
+  split under a multi-meter grant can differ from the planner's line order.
+- Credit notes are NOT in the per-invoice net (`revenue-totals.ts` memo, orders, lifetime,
+  retention, top-10, segments): they hang off their own date. `revenue_billed` /
+  `revenue_deductions` / `revenue_per_customer` and record-page totals subtract them through
+  `daily/credit-note-revenue.ts`.
+- Cash weights (`lineWeightsFor`) take the same credits off, so `revenue_collected` and the cash
+  buckets split a promo invoice's cash as net revenue + tax (case A: 700 / 126, was 734 / 92).
+- `billing_gross`, `billing_net`, `taxable_base` read the PRINTED total (`total − promo −
+  pre-tax grants`), as the invoice shows it. MRR is unchanged: credit is not a price term.
+- Usage margin keeps a pack's cost as revenue (the pack's money earned the usage) and takes off
+  promotional and plan credit and the bonus (`freeCreditByLine`).
+
+### Restating history after deploy
+The nightly pass restates only 35 days. Dry run first (no `--write`; prints rows per day), read
+it, then write under `setsid nohup` at a quiet hour:
+```
+pnpm tsx scripts/backfill-metric-daily.ts --biz <biz_…> --days <since first invoice, ≤ 3660> \
+  --fast --cache-rows 300000 --slice 30 --measures revenue_billed,revenue_billed_gross,\
+revenue_deductions,revenue_per_customer,revenue_collected,cash_collected,cash_recurring,\
+cash_non_recurring,cash_usage,cash_recurring_net,order_revenue,order_refund_rate,\
+average_order_value,buyer_lifetime_revenue,customer_revenue_lifetime,revenue_retention_all,\
+revenue_top10_share,usage_revenue_retention,billing_gross,billing_net,taxable_base
+```
+Add `--write` for the real run. Coarse grains are included by default (needed by the per-grain
+measures). Imported invoices carry no promo columns, so their net does not move. Local timing
+(small demo snapshot, one business, 400 days): dry run 97 s, write 99 s, 12,989 rows, RSS ~490 MB;
+not yet measured on a production-size dump.
 
 ## MRR movement ledger (`mrr_movements`, 0254)
 
@@ -651,6 +692,49 @@ catalogue moves before it lands. The report's own description says so — a figu
 measured and is not is worse than a missing one.
 
 ## Changelog
+- **2026-11-20 (feat/detail-revenue-metrics)** — `record-revenue.ts` reads lifetime
+  `revenue_billed` for one customer or subscription, per currency. It reuses
+  `revenueTotalsByInvoice` and the credit-note rule now exposed as `creditNoteRevenueFor`; unlike
+  daily reports, record pages include customers excluded from reporting. Customer and subscription
+  detail APIs expose the total beside the unchanged cash fields. Gate:
+  `verify:metric-revenue-net` (record cases P/K/O/S).
+- **2026-11-20 (fix/reports-model-gaps)** — **Report gaps from the real-data check.**
+  Follow-up: `ReportGrid` stacks (`phone="stack" fit`); cohort matrices still scroll. Reports → Usage and
+  Credits links now open filtered lists (`days_since_last_usage`, `credit_runway_days` filter fields).
+  (1) `chooseCurrency` (`public-query.ts`): a measure without money halves ignores an asked
+  `currency` and answers `across_currencies` with `currency: null`. Counts are stored under
+  `XXX`, so filtering them by `USD` read null (`usage_customers_stopped`, `customers_new`, …).
+  Money measures are unchanged. Gate: `verify:analytics-api` (count with/without `currency=USD`).
+  (2) Credit in a unit with no money rate (face value 0) has its own measures, in the unit's
+  smallest step, under `XXX`: `credit_units_granted` / `_used` / `_expired` / `_outstanding` and
+  the reading `credit_units_expiring`. Always split by `credit_unit`; the total and the
+  `credit_source` / `horizon` splits are written only while the business has ONE such unit (a
+  total across units adds unlike things). `credits_outstanding`'s `credit_unit` split now holds
+  rated units only. `credit_customers` counts holders of units too. `credit_runway_customers`
+  and the customer field `credit_runway_days` share one rule (`daily/credit-runway.ts`): a pool
+  per currency for rated credit (face value) and per rateless unit (units); the customer's runway
+  is the pool that runs out first. `billingModelsPresent` and Home's PRESENCE also read the unit
+  measures. Gate: `verify:metric-credits` (35 checks; own unit, two units, billing models).
+  (3) `commitment_pacing` (D11): fees = invoiced for the term (`countedCommitmentFees`) + usage
+  rated so far and not invoiced, from `currentUsage` (the invoice's own rating path), for a
+  usage window that starts in the term. A volume or stairstep usage price depends on the
+  closing total: the row counts invoiced fees only, its status is "Pace shown at term end" and
+  it is in no pace band (rows gain `term_end`; grid gains "Usage not invoiced yet"). Gate:
+  `verify:metric-usage` (over, mixed and term-end cases). Golden files for the four reports of
+  #583 added (`report.buyer_revenue_cohort`, `commitment_pacing`, `repeat_purchase_cohort`,
+  `top_usage_consumers`).
+- **2026-11-20** — **Revenue is net of promotional credit** (§ Revenue: gross to net).
+  `revenue_billed` keeps its id and dims and now subtracts promotional credit, plan credits,
+  pack-paid usage at cost and credit notes; new `revenue_billed_gross` and `revenue_deductions`
+  (dim `revenue_deduction`). Cash weights, `billing_gross`/`billing_net`/`taxable_base` (printed
+  total), order refund pre-tax basis and usage margin follow. History needs the restate above.
+  Gates: `verify:metric-revenue-net` (new), `verify:orders-list` (order revenue = list totals).
+- **2026-11-19** — **`metric_daily` covers every billing model.** The cron, maintenance and
+  rolling-window passes walked only businesses with a subscription (`businessesWithSubscriptions`),
+  so a business selling only one-time orders, usage or credits never got a row: Home read 0
+  orders, kept the subscription layout and hid the One-time sales tab. They now walk
+  `businessesWithBillingActivity` — any subscription, invoice, usage event or credit grant.
+  Cover: `verify:metric-orders` (one-time-only business written, idle business skipped).
 - **2026-11-15** — **An organization reads every business at its own local day.** Org scope read
   every business as of the lowest of their todays, so whenever the zones straddled midnight
   (Asia/Kolkata and America/New_York at 20:00 UTC) the business ahead was read at yesterday: org
@@ -1438,3 +1522,9 @@ measured and is not is worse than a missing one.
 - **2026-11-11** — Bulk fill: the cached transaction answered the forward book's item read (`recurringAmountsForSubs`, joins `products`) with the old plan superset, so a fill through today on a live book threw (`reading 'businessId'`) — the timezone recompute and `restateMetricsFrom` both fill through today. The plan shortcut is removed (its read has been one raw `= any(...)` statement since D4.5), and the re-rating shortcut now matches its exact SQL, not the tables it names. Gate: `verify:metric-daily-tz` §10 runs `recomputeMetricDailyForBusiness` on a live book and compares today's forward rows to a plain compute.
 - **2026-11-11** — Payments analytics: an offline transaction has no vaulted method, so its payment-method key is its gateway key (`offline_wire` → "Offline wire"), the row the gateway breakdown shows, not "Unknown". The method filter uses the same key. `verify:payments-analytics` checks both.
 - **2026-11-13** — Usage margin `scope=all` and `group_by=plan` (`usage-margin.ts`; `scope=billed` is the default and its query is unchanged). Cost only = `usage_cost_daily` rows (metering's daily cost fold) that (a) no usage line of a non-voided invoice of the customer covers for that meter (line window overlaps the day) and (b) no live subscription will bill (the meter's `customer_meter_billing` owner is not cancelled, has a price on the meter from an item created before the day ended, and `usage_through` is before the day's end). Both are read at query time, so a void or a new invoice moves a day by itself. A partly covered day counts as billed. By customer and plan `total_revenue_minor` is every revenue line (`recurring`, `proration`, `usage`, `one_time`; the line rule the report always used: amount − discount − credit notes − inclusive tax, on finalized non-voided invoices by `finalized_at`; `revenue_billed`'s line set, also net of credit notes); by meter and model it is every usage line. `plan_fee_minor` (recurring and proration lines of plan products) and `subscribers` (customers with a subscription on the plan live in the range). Plan = `plan-of.ts` rule, now also a lateral join (`planProductJoin`). `metric_daily_restate` also restates the cost fold. Cover: `verify:cost-margin`.
+- **2026-11-19** — Checkout and portal report pages (`hosted-page-reports.ts`, `GET /v1/businesses/:biz/checkout_report` and `/portal_report`, `verify:hosted-page-reports`). Business-zone days, inclusive, at most 366; `compare=true` adds the same number of days before. The shared definitions moved to `hosted-page-figures.ts` and the Reports library reads them too: funnel steps (`checkoutSteps`), the revenue invoice (`checkoutInvoiceJoin`), reminder recovery (`checkoutRecoveredSql`) and `cancellationSaves`, so conversion, recovered and save rate equal `checkout_conversion`, `checkout_reminders`/`checkout_recovered_revenue` and `cancellation_saves` (checked by the suite). Checkout cohort = sessions first opened in the window, modes `create` and `purchase`; recovery keeps the Reports cohort (created in the window). Abandoned = details entered, not paid, idle `FIRST_REMINDER_AFTER_MS`. Portal: a visit is a session signed in during the window; actions are the events whose actor is the `psess_…` id; arrival = `access_kind`, the email type that shares the link's `created_at` (same transaction), a sign-in code spent within 5 s before the mint, else the API. No new tracking: devices, browsers, referrers, visitor countries, sections viewed and PDF downloads have no data yet.
+- **2026-11-19** — Email report page (`email-report.ts`, `GET /v1/businesses/:biz/email_report`, `verify:email-report-page`). Same window, previous window and `HostedReportError` as the checkout and portal reports. One definition per figure: status counts from the emails module; link visits use the portal report's `arrivalSql`; `recovered_minor` calls `computePortalReport`, so it equals the portal figure (null under a `transport` filter). "Paid afterwards" = an invoice paid within `PAID_AFTER_DAYS` (14) after a delivered email that asks for payment (`PAYMENT_ASK_EMAILS`). Reasons drop every address; domains show domain only. `emailLinkMatch` moved to `hosted-page-figures.ts`; `resolveWindow`, `moneyContext`, `arrivalSql`, `pct`, `dayKey` and `days` are now exported from `hosted-page-reports.ts`.
+- **2026-11-19** — Email report opens and clicks (`email-report.ts`). Rates are taken over delivered emails sent with tracking on (`email_messages.engagement_tracked_at`), once per email; a person's click counts as an open; machine opens are counted apart (`machine_opened`) and never reach a rate. New fields: `totals.tracked|opened|clicked|machine_opened|open_bps|click_bps` (also in `by_type` and `series.open_bps|click_bps`), `tracking` (`enabled`, `since`, `covers_period`), `top_links` and `recent[].opened|clicked`. The funnel gains `email_opened` and `email_clicked` only when the window has tracked emails. Cover: `verify:email-engagement`.
+- **2026-11-19** — Reports follow the billing models a business has: `GET /v1/businesses/:biz/billing_models` (the `billingModelsPresent` detector), a `model` shelf on every `/v1/analytics/measures` and `/v1/businesses/:biz/reports` entry (`measure-models.ts`: derived from the measure's `source`, so a new measure lands in a group with no edit), and the Reports menu, Stats and Explore group by it.
+- **2026-11-20** — Checkout report filter: `?product=` (the old `?plan=` still works) matches a checkout with any item of that product (plan, addon, one-time charge, credit pack), not only a plan-first checkout (`hosted-page-reports.ts`). `customer_lifetime_value` is now named "Subscription lifetime value" (registry measure and report); `customer_revenue_lifetime` is the all-revenue figure. The Revenue preset gains `paying_customers_all` and `customer_revenue_lifetime`. Report payloads carry `grid` (top consumers, commitment pacing) and cohort `matrix.value_kind`.
+- **2026-11-20** — `acrossBusinesses: "sum"` (measures.ts): a distinct count of customers (`billed_customers`, `usage_customers`, `buyers`, `returning_buyers`, `paying_customers_all`, `customers_new`, `customers_churned`, `customers_moved`, `customers_reactivated`) combines across businesses at day or month grain. A customer belongs to one business, so the organization's window total is the sum of each business's own window total (`combinesAcrossBusinesses`); never across periods. Every other bare non-additive measure still refuses. Fixes Home "Paying customers" showing "—" for an organization with several businesses.

@@ -190,7 +190,12 @@ export async function registerSegmentRoutes(app: FastifyInstance) {
           ...serializeCustomer(c),
           segment_facts: facts[c.id] ?? { statuses: {}, mrr: {}, last_order_at: null },
         }));
-        return { ...body, segment: found.publicId, mrr_by_currency: totals.mrrByCurrency };
+        return {
+          ...body,
+          segment: found.publicId,
+          mrr_by_currency: totals.mrrByCurrency,
+          revenue_billed_by_currency: totals.revenueBilledByCurrency,
+        };
       } catch (e) {
         return fail(reply, e);
       }
@@ -247,7 +252,12 @@ export async function registerSegmentRoutes(app: FastifyInstance) {
           ...serializeCustomer(c),
           segment_facts: facts[c.id] ?? { statuses: {}, mrr: {}, last_order_at: null },
         }));
-        return { ...body, segment: null, mrr_by_currency: totals.mrrByCurrency };
+        return {
+          ...body,
+          segment: null,
+          mrr_by_currency: totals.mrrByCurrency,
+          revenue_billed_by_currency: totals.revenueBilledByCurrency,
+        };
       } catch (e) {
         return fail(reply, e);
       }

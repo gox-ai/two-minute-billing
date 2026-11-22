@@ -93,7 +93,8 @@ import { recordOfflinePayment as recordOfflinePaymentGuarded } from "@/modules/i
 import { paidTotals } from "@/modules/invoicing/service";
 import { bucketBalance, EXCESS_PAYMENT } from "@/modules/customers/balances-read";
 import { invoices, payments, paymentMethods, refunds, transactions } from "@db/schema";
-import { ledgerEntries } from "@db/schema";
+import { ledgerEntries, gatewayRequestLogs } from "@db/schema";
+import { orphanedIntents } from "@/modules/payments/orphaned-intents";
 import { refundPayment } from "@/modules/refunds/service";
 import { estimateChange } from "@/modules/subscriptions/estimate";
 import { subscriptions as subsTable, subscriptionItems } from "@db/schema";
@@ -1074,6 +1075,83 @@ const excessOf = (orgId: string, customerId: string, currency: string) =>
     refs.length === 1 && refs[0]!.status === "succeeded",
     refs.map((r) => r.status).join(",") || "none",
   );
+}
+
+// ── P2: the capture event lands while its own consume is booking it ──────────
+// Production, 2026-11-17: a checkout claimed its intent (`consumed`) and captured; the
+// capture event arrived before the consume booked, was booked as stray money, the
+// consume's own booking then hit `payments_provider_charge_uq` and rolled back, and the
+// buyer's purchase was refunded. Twice. The event must wait for the consume instead.
+{
+  const s = await scenario("P2 consume in flight", "card", 5_671_500);
+  const { inv } = await state(s.orgId, s.invoiceId);
+  const [pm] = await withTenant(s.orgId, (tx) =>
+    tx.select().from(pmTable).where(eq(pmTable.id, s.pmId)),
+  );
+  const { intent, attempt } = await createPaymentIntent({
+    organizationId: s.orgId,
+    businessId: s.bizId,
+    paymentMethodPublicId: pm!.publicId,
+    amountMinor: Number(inv.totalMinor),
+    currency: inv.currency,
+    invoicePublicId: inv.publicId,
+  });
+  const gatewayIntentId = intent.intentAtGateway!;
+  const chargeId = attempt.idAtGateway ?? gatewayIntentId;
+  // The consume's claim, committed before its capture call.
+  await withTenant(s.orgId, (tx) =>
+    tx.update(paymentIntents).set({ status: "consumed" }).where(eq(paymentIntents.id, intent.id)),
+  );
+  await setChargeStatus(chargeId, "succeeded");
+  const provider = new TmtestProvider(s.bizId);
+  const deliverCapture = async () => {
+    await provider.triggerSyntheticEvent("charge.succeeded", {
+      charge_id: chargeId,
+      provider_intent_id: gatewayIntentId,
+    });
+    await advanceTmtest(s.orgId, new Date());
+  };
+  const bookedFor = async () =>
+    (
+      await withTenant(s.orgId, (tx) =>
+        tx.select().from(payments).where(eq(payments.providerChargeId, chargeId)),
+      )
+    )[0];
+
+  await deliverCapture();
+  ok("P2: a capture whose consume is in flight is NOT booked as stray money", !(await bookedFor()));
+
+  // Past the window the consume is taken to have crashed: the capture is booked as before.
+  await backdateIntent(s.orgId, intent.id, 1);
+  await deliverCapture();
+  const late = await bookedFor();
+  ok("P2: past the window, the capture is booked", late?.status === "succeeded", late?.status);
+  const { inv: after } = await state(s.orgId, s.invoiceId);
+  ok("P2: …and pays the open invoice it was for", after.status === "paid", after.status);
+  const refs = late ? await refundsFor(s.orgId, late.id) : [];
+  ok("P2: …with nothing refunded", refs.length === 0, refs.map((r) => r.status).join(","));
+
+  // The orphan alert: a logged capture whose payment is booked (and has no transaction,
+  // as the webhook books it) is recorded; an unbooked one is still an orphan.
+  const logCapture = (id: string) =>
+    systemDb.insert(gatewayRequestLogs).values({
+      businessId: s.bizId,
+      gatewayKey: "tmtest",
+      method: "POST",
+      url: `https://tmtest.invalid/payments/${id}/capture`,
+      status: 200,
+      operation: "charge",
+      source: "api",
+      responseBody: { id },
+      traceId: `trace_p2_${id}`,
+      createdAt: new Date(Date.now() - HOUR),
+    });
+  const stray = `pay_p2_stray_${Date.now()}`;
+  await logCapture(chargeId);
+  await logCapture(stray);
+  const orphanIds = (await orphanedIntents(new Date(), 500)).map((o) => o.intentId);
+  ok("P2: a logged capture with a booked payment is not an orphan", !orphanIds.includes(chargeId));
+  ok("P2: …while one with nothing booked still is", orphanIds.includes(stray));
 }
 
 // ── Q: a debit still LIVE at the rail against an invoice that owes NOTHING ────

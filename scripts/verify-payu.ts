@@ -588,7 +588,7 @@ async function main() {
     "money taken with no mandate (payment_source payu) is a setup failure",
     refused.purpose === "setup" &&
       !refused.paymentMethod &&
-      refused.failure?.code === "recurring_not_enabled" &&
+      refused.failure?.code === "card_restricted" &&
       refused.failure.retriable === false,
   );
   ok(
@@ -922,11 +922,57 @@ async function main() {
   );
   reset({
     verify_payment: (v: string) => notFound(v),
+    si_transaction: { status: 0, msg: "Merchant is not enabled for this mandate type" },
+  });
+  const siRefused = await payu.charge(chargeInput);
+  ok(
+    "a status-0 refusal PayU then reports Not Found is failed at once, hidden from the payer",
+    siRefused.status === "failed" &&
+      siRefused.failure?.code === "gateway_error" &&
+      declineHiddenFromPayer(siRefused.failure.code) &&
+      calls.filter((c) => c.command === "verify_payment").length === 2,
+  );
+  reset({
+    verify_payment: (v: string) => notFound(v),
+    si_transaction: { status: 0, message: "Missing mandatory field: zipcode" },
+  });
+  ok(
+    "a documented status-0 request fault is gateway_request_rejected",
+    (await payu.charge(chargeInput)).failure?.code === "gateway_request_rejected",
+  );
+  reset({
+    verify_payment: (v: string) => notFound(v),
     si_transaction: { status: 0, msg: "Something went wrong" },
   });
   ok(
-    "an answer with no outcome and no known refusal is indeterminate",
+    "a status-0 internal fault at PayU stays indeterminate",
     await rejects(payu.charge(chargeInput), ProviderIndeterminateError),
+  );
+  reset({
+    verify_payment: (v: string) => notFound(v),
+    si_transaction: { status: 1, msg: "Something went wrong" },
+  });
+  ok(
+    "an answer with no outcome and no refusal is indeterminate",
+    await rejects(payu.charge(chargeInput), ProviderIndeterminateError),
+  );
+  let failReads = 0;
+  reset({
+    verify_payment: (v: string) =>
+      ++failReads === 1
+        ? notFound(v)
+        : found(v, {
+            status: "failure",
+            unmappedstatus: "failed",
+            error_code: "E4359",
+            error_Message: "Transaction failed due to lost or stolen card from customer's bank",
+          }),
+    si_transaction: siAnswer("failed", "Declined"),
+  });
+  const stolen = await payu.charge(chargeInput);
+  ok(
+    "a synchronous failed debit keeps the transaction's E-code",
+    stolen.failure?.code === "stolen_card" && stolen.failure.providerCode === "E4359",
   );
   for (const http of [409, 429, 502]) {
     reset({ verify_payment: (v: string) => notFound(v) });
@@ -1758,8 +1804,8 @@ async function main() {
   );
   ok("E324 → fraudulent, terminal", d("E324").code === "fraudulent" && !d("E324").retriable);
   ok(
-    "E755 → recurring_not_enabled, terminal, told to the payer",
-    d("E755").code === "recurring_not_enabled" &&
+    "E755 → card_restricted, terminal, told to the payer",
+    d("E755").code === "card_restricted" &&
       !d("E755").retriable &&
       d("E755").exposedToPayer === true,
   );
@@ -1774,8 +1820,8 @@ async function main() {
     d(null, "entry not found in si_txn").code === "payment_method_not_found",
   );
   ok(
-    "an unmapped code passes through, retriable",
-    d("E9999").code === "E9999" && d("E9999").retriable,
+    "an unmapped code books charge_failed, retriable",
+    d("E9999").code === "charge_failed" && d("E9999").retriable,
   );
   ok("no code and no message → charge_failed", d(null).code === "charge_failed");
   ok(

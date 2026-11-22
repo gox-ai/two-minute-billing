@@ -17,7 +17,8 @@
  * the adapter resolves one to the other server-side (see
  * `src/providers/razorpay.ts:tokenIdForMandatePayment`).
  */
-import { contactBusiness } from "./gateway-errors";
+import { contactBusiness, razorpayClientReason, type RazorpayClientError } from "./gateway-errors";
+import { clearActiveIntent, reportBuyerError, setActiveGateway } from "./buyer-error-report";
 
 /** `checkout` block of a vault_setup response (mode: 'checkout'). */
 export interface RazorpayCheckoutDescriptor {
@@ -31,7 +32,8 @@ export interface RazorpayCheckoutDescriptor {
 }
 
 export type RazorpayResult =
-  | { status: "authorized"; paymentId: string }
+  /** `clientResult`: the TM Test dialog's answer, sent back with the next call. */
+  | { status: "authorized"; paymentId: string; clientResult?: Record<string, string> }
   /** A payment RazorPay reported done without naming it: the engine reads it from the order. */
   | { status: "unconfirmed" }
   | { status: "dismissed" }
@@ -39,7 +41,7 @@ export type RazorpayResult =
 
 interface RazorpayInstance {
   open(): void;
-  on(event: string, handler: (payload: { error?: { description?: string } }) => void): void;
+  on(event: string, handler: (payload: { error?: RazorpayClientError }) => void): void;
 }
 declare global {
   interface Window {
@@ -98,6 +100,19 @@ export async function openRazorpayCheckout(
     prefill?: { name?: string | null; email?: string | null; contact?: string | null };
   },
 ): Promise<RazorpayResult> {
+  // TM Test simulates this rail. Its own dialog answers; the real sheet would open with a
+  // key that does not exist and always fail.
+  if (descriptor.provider === "tmtest") {
+    const { openGatewaySdk } = await import("./gateway-sdk");
+    const r = await openGatewaySdk(
+      { provider: "tmtest", params: { intent: descriptor.orderId } },
+      { businessName: context.businessName, purpose: context.purpose ?? "setup" },
+    );
+    return r.status === "completed"
+      ? { status: "authorized", paymentId: descriptor.orderId, clientResult: r.clientResult }
+      : r;
+  }
+  setActiveGateway("razorpay");
   try {
     await loadCheckoutScript();
   } catch (e) {
@@ -118,6 +133,8 @@ export async function openRazorpayCheckout(
     const done = (r: RazorpayResult) => {
       if (settled) return;
       settled = true;
+      // Authorized or closed: the flow is over. A failure keeps the intent for its report.
+      if (r.status !== "failed") clearActiveIntent();
       resolve(r);
     };
     /**
@@ -142,7 +159,10 @@ export async function openRazorpayCheckout(
     const rzp = new Razorpay({
       key: descriptor.keyId,
       order_id: descriptor.orderId,
-      customer_id: descriptor.customerId,
+      // Only a mandate needs the customer. On a one-off payment it makes Checkout list the
+      // customer's auto-debit cards under "Saved Cards", and a mandate token cannot pay
+      // on-session: RazorPay refuses it with "Invalid Token" (sandbox, 2026-11-18).
+      ...(descriptor.recurring ? { customer_id: descriptor.customerId } : {}),
       // Registers a mandate instead of a one-off charge. Without it RazorPay
       // authorizes the small auth amount and mints NO recurring token — which
       // reads as a success that vaulted nothing.
@@ -175,7 +195,10 @@ export async function openRazorpayCheckout(
       },
     });
     rzp.on("payment.failed", (e) => {
-      lastFailure = e?.error?.description ?? "The authorization did not finish.";
+      lastFailure = razorpayClientReason(e?.error);
+      // Every refusal is reported as it happens: the sheet stays open for a retry, and a
+      // later success or dismissal must not hide the refusals before it.
+      reportBuyerError(lastFailure, { gateway: "razorpay", step: "sheet_failed" });
     });
     rzp.open();
   });

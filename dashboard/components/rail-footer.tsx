@@ -3,7 +3,16 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Check, ChevronsUpDown, LogOut, MailOpen, Sparkles, UserRound } from "lucide-react";
+import {
+  Bell,
+  Check,
+  ChevronsUpDown,
+  LogOut,
+  MailOpen,
+  MonitorDown,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -20,6 +29,7 @@ import { NAV_FOCUS, RailTip } from "@/components/rail-tip";
 import { logoutAction, switchOrganizationAction } from "@/app/auth-actions";
 import { setThemeAction } from "@/app/(dashboard)/account/actions";
 import { useThemeWipe, wipeOrigin } from "@/lib/theme-wipe";
+import { IosInstallDialog, useInstallApp } from "@/components/app-install/install-app";
 
 /**
  * The rail's two menus open as wide as the rail's own row, so nothing hangs over the page.
@@ -109,6 +119,8 @@ export function AccountMenu({
   React.useEffect(() => setMounted(true), []);
   const current = orgs.find((o) => o.current);
   const { triggerRef, onOpenChange, content } = useRailMenu("top", "end");
+  const { mode: installMode, install } = useInstallApp();
+  const [iosHelp, setIosHelp] = React.useState(false);
 
   return (
     <DropdownMenu onOpenChange={onOpenChange}>
@@ -164,6 +176,12 @@ export function AccountMenu({
             Your account
           </Link>
         </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/account/notifications">
+            <Bell className="size-4" />
+            Notifications
+          </Link>
+        </DropdownMenuItem>
         {pendingInvites > 0 ? (
           <DropdownMenuItem asChild>
             <Link href="/invitations">
@@ -171,6 +189,15 @@ export function AccountMenu({
               <span className="flex-1">Invites</span>
               <NavBadge count={pendingInvites} />
             </Link>
+          </DropdownMenuItem>
+        ) : null}
+        {/* Only where this browser can install the app, and not inside the installed app. */}
+        {installMode ? (
+          <DropdownMenuItem
+            onSelect={() => (installMode === "prompt" ? install() : setIosHelp(true))}
+          >
+            <MonitorDown className="size-4" />
+            Install the app
           </DropdownMenuItem>
         ) : null}
         {/* Only for someone in more than one organization: a switch with one choice does nothing.
@@ -232,6 +259,8 @@ export function AccountMenu({
           </DropdownMenuItem>
         </form>
       </DropdownMenuContent>
+      {/* Outside the menu content, which unmounts when the row closes the menu. */}
+      <IosInstallDialog open={iosHelp} onOpenChange={setIosHelp} />
     </DropdownMenu>
   );
 }

@@ -35,6 +35,7 @@ import {
 import { GatewayRouterError } from "@/modules/gateway/router";
 import { ProviderIndeterminateError, ProviderRefusalError } from "@/providers/types";
 import { parseRequest } from "./strict-params";
+import { attributeIntents } from "@/modules/invoicing/dunning-journey";
 
 /**
  * The intent vocabulary, in full. `voided` is NOT decorative: `voidPaymentIntent`
@@ -165,7 +166,15 @@ const createBody = z
  * checked against the vocabulary it belongs to.
  */
 // `offset` is `starting_after` under the list contract's second name (`next_offset`).
-const LIST_PARAMS = ["limit", "starting_after", "offset", "status", "purpose", "invoice"] as const;
+const LIST_PARAMS = [
+  "limit",
+  "starting_after",
+  "offset",
+  "status",
+  "purpose",
+  "invoice",
+  "customer",
+] as const;
 
 export async function registerPaymentIntentRoutes(app: FastifyInstance) {
   /**
@@ -216,8 +225,17 @@ export async function registerPaymentIntentRoutes(app: FastifyInstance) {
         purpose: q.purpose,
         // Resolved inside the service, like `createPaymentIntent`'s own invoice id.
         invoicePublicId: q.invoice,
+        customerPublicId: q.customer,
       });
-      return listResponse(page, serializePaymentIntentRow);
+      // One event query for the whole page, not one per row.
+      const by = await attributeIntents(
+        req.organization!.id,
+        page.data.map((r) => ({ publicId: r.intent.publicId, gatewayKey: r.gatewayKey })),
+      );
+      return listResponse(page, (r) => {
+        const a = by.get(r.intent.publicId);
+        return { ...serializePaymentIntentRow(r), initiated_by: a?.trigger ? a : null };
+      });
     },
   );
 
@@ -301,8 +319,14 @@ export async function registerPaymentIntentRoutes(app: FastifyInstance) {
       const reversal = row.intent.voidedAt
         ? await getPaymentIntentReversal(req.organization!.id, row.intent.id)
         : null;
+      const by = (
+        await attributeIntents(req.organization!.id, [
+          { publicId: row.intent.publicId, gatewayKey: row.gatewayKey },
+        ])
+      ).get(row.intent.publicId);
       return {
         ...serializePaymentIntentRow(row),
+        initiated_by: by?.trigger ? by : null,
         attempts: attempts.map((a) => serializePaymentAttempt(a, a.method)),
         voided_transaction: reversal
           ? { id: reversal.publicId, created_at: reversal.createdAt }

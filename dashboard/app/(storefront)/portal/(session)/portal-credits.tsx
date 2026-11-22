@@ -1,4 +1,3 @@
-import { Coins, RefreshCw } from "lucide-react";
 import { money } from "@/lib/format";
 import { fmtDate } from "@/lib/format-date";
 import { packCreditLabel } from "@/lib/credits";
@@ -10,7 +9,7 @@ import {
   historyLabel,
   unitPartLines,
 } from "@/lib/portal-credits-view";
-import { Glyph, Row, RowList, StorefrontSection } from "../../chrome";
+import { Row, RowList, StorefrontSection } from "../../chrome";
 import { BuyCreditsForm } from "./buy-credits";
 import { AutoTopupSwitch } from "./portal-auto-topup";
 
@@ -55,9 +54,6 @@ export function PortalCreditsSection({
                   return (
                     <Row key={b.currency} className="flex-row items-center gap-3">
                       <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <Glyph>
-                          <Coins />
-                        </Glyph>
                         <div className="min-w-0">
                           <div className="text-sm font-medium">Available in {b.currency}</div>
                           {b.units
@@ -84,9 +80,6 @@ export function PortalCreditsSection({
                       className="flex-row items-center gap-3"
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <Glyph>
-                          <Coins />
-                        </Glyph>
                         <div className="min-w-0">
                           <div className="text-sm font-medium">Available {u.plural_name}</div>
                           {unitPartLines(u).map((line) => (
@@ -143,9 +136,6 @@ export function PortalCreditsSection({
                 // button wraps under it where the column is narrow.
                 <Row key={t.unit} className="items-start sm:flex-wrap sm:items-center">
                   <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-[1_1_14rem]">
-                    <Glyph>
-                      <RefreshCw />
-                    </Glyph>
                     <div className="min-w-0">
                       <div className="text-sm font-medium">{lines.title}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">{lines.detail}</div>

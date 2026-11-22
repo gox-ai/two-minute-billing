@@ -19,6 +19,8 @@ or a log event (see `deploy/README.md` § What to alert on).
 | `due-work.ts` | The `due_work` index: what the clock owes and when, maintained by triggers; `refreshDueWork` reconciles it with its sources (`dueWorkSources`). |
 | `http-stats.ts` | Per-minute request counts and latency histograms per route, buffered in-process and flushed to `ops_http_stats`; `sweepHttpStats` enforces retention. |
 | `buyer-rejections.ts` | `recordBuyerRejection`: one `buyer_request_rejections` row per request body `badRequest` refuses on the portal or hosted checkout, values redacted, fire-and-forget; `sweepBuyerRejections` keeps 30 days. |
+| `buyer-client-errors.ts` | `recordBuyerClientError`: one `buyer_client_errors` row per payment error the storefront showed a buyer (reported by the browser), `leak` computed on write, a repeat of the session's text inside 5 s dropped; `sweepBuyerClientErrors` keeps 30 days (in the `sweep_buyer_rejections` pass). |
+| `buyer-error-leak.ts` | Pure. `buyerTextLeaks`: is a shown text made only of our payer wording? Sentence by sentence against the sentences of `providers/decline-codes.ts` (`payerWordingTexts`) and `providers/payer-wording.ts`, plus our shapes ("We could not …", "Contact …", "Select … to try again."). A field error is never a leak. |
 | `retention.ts` | The nightly retention sweep (D17, cron `retention_sweep` 02:30 UTC). Per organization: events, finished webhook deliveries, gateway calls, gateway webhooks' contents, sent emails' bodies, finished idempotency keys; platform: clock ticks, invariant results, gateway logs with no business. Mode and periods from `retention_defaults` + `organization_retention` (0357), set in the back-office. |
 | `api-errors.ts` | `recordApiServerError`: one `api_server_errors` row per 5xx from `setErrorHandler` — route pattern, error name/code, credential-redacted message + 15 stack frames, tenant refs, trace id; capped at 120 rows/min per process. `sweepApiServerErrors` keeps 30 days. |
 
@@ -46,6 +48,15 @@ or a log event (see `deploy/README.md` § What to alert on).
   job counters on the heartbeat row stay 0.
 
 ## Changelog
+- **2026-11-17** — `buyer-client-errors.ts` + `buyer_client_errors` (0539, RLS, no app-role grant) and
+  `buyer-error-leak.ts`: the browser reports each payment error a buyer reads
+  (`POST /checkout/v1/client_errors`, `/portal/v1/client_errors`, `api/buyer-client-error-routes.ts`,
+  30 per session per minute), `leak` = not only our wording. The back-office posts new leaks and
+  decline spikes. Proof: `verify:buyer-client-errors`, `test/unit/buyer-error-leak.test.ts`.
+  A report that names the page's intent (`payment_intent`) also books the gateway's refusal on
+  that intent's open attempt (payment-intents module).
+- **2026-11-17** — `buyerRejectionRecorded(req)`: one `buyer_request_rejections` row per refused request,
+  so the buyer error-text net (`api/buyer-error-text.ts`) records only what `badRequest` did not.
 - **2026-10-13** — Reduced to the writer side. The read models, the alert evaluator, the
   invariant checks and the HTTP routes that sat on top of these tables are no longer part of the
   engine; `dueWorkSources`, `INF` and `minuteFloor` are exported for readers outside it.

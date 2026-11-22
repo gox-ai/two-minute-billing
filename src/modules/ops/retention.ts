@@ -213,7 +213,9 @@ export const USAGE_DEDUP_DAYS = 35;
 export const USAGE_DEDUP_BATCH = 10_000;
 
 export function usageDedupDataset(now: Date): Dataset {
-  const where = sql`u.created_at < ${new Date(now.getTime() - USAGE_DEDUP_DAYS * DAY_MS).toISOString()}::timestamptz`;
+  const where = sql`u.created_at < ${new Date(now.getTime() - USAGE_DEDUP_DAYS * DAY_MS).toISOString()}::timestamptz
+    and u.business_id not in (select b.id from businesses b
+      join organizations o on o.id = b.organization_id where o.is_platform)`;
   return {
     key: "usage_event_dedup",
     count: sql`select count(*)::int as n from usage_event_dedup u where ${where}`,
@@ -343,7 +345,9 @@ export async function runRetentionSweep(
            r.api_log_writes_days, r.api_log_reads_days
     from organizations o
     left join organization_retention r on r.organization_id = o.id
-    ${opts.onlyOrganizationId ? sql`where o.id = ${opts.onlyOrganizationId}` : sql``}
+    -- A platform organization's data is never deleted, whatever its retention settings.
+    where not o.is_platform
+    ${opts.onlyOrganizationId ? sql`and o.id = ${opts.onlyOrganizationId}` : sql``}
     order by r.last_run_at asc nulls first, o.id`)) as unknown as Array<{
     id: string;
     mode: string | null;

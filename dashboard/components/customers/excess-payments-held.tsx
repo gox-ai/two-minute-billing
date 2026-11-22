@@ -7,6 +7,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
+import { RepeatRefundNotice, useRepeatRefund } from "@/components/form/repeat-refund";
 import { SubmitButton } from "@/components/form/submit-button";
 import { MoneyInput } from "@/components/form/money-input";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,8 @@ import { refundExcessPaymentAction } from "@/app/(dashboard)/businesses/[biz]/cu
 /**
  * The payments behind the customer's excess credit, each refundable on its own — the way
  * money charged for a voided invoice, or an overpayment, goes back to the card it came from.
- * Renders nothing when no payment holds any.
+ * "Still held" is what is left after invoices used the credit, oldest payment first, so the
+ * rows add up to the excess balance. Renders nothing when no payment holds any.
  */
 export function ExcessPaymentsHeld({
   biz,
@@ -55,9 +57,10 @@ export function ExcessPaymentsHeld({
           <thead className="max-sm:hidden">
             <tr className="border-b text-xs text-muted-foreground">
               <th className="pr-4 pb-2 text-left font-medium">Payment</th>
-              <th className="pr-4 pb-2 text-left font-medium">Received</th>
-              <th className="pr-4 pb-2 text-right font-medium">Held</th>
-              <th className="pr-4 pb-2 text-right font-medium">Refundable</th>
+              <th className="pr-4 pb-2 text-right font-medium whitespace-nowrap">
+                Excess received
+              </th>
+              <th className="pr-4 pb-2 text-right font-medium whitespace-nowrap">Still held</th>
               <th className="pb-2" />
             </tr>
           </thead>
@@ -81,19 +84,17 @@ export function ExcessPaymentsHeld({
                       "No invoice"
                     )}
                     {r.gateway ? ` · ${r.gateway}` : ""}
+                    {" · "}
+                    <span className="whitespace-nowrap">{fmtDate(r.created_at, tz)}</span>
                   </span>
                 </td>
-                <td className="py-2 pr-4 text-muted-foreground tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
-                  <span className="text-xs text-muted-foreground sm:hidden">Received</span>
-                  {fmtDate(r.created_at, tz)}
-                </td>
-                <td className="py-2 pr-4 text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
-                  <span className="text-xs text-muted-foreground sm:hidden">Held</span>
+                <td className="py-2 pr-4 text-right whitespace-nowrap tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
+                  <span className="text-xs text-muted-foreground sm:hidden">Excess received</span>
                   {money(r.held_minor, r.currency)}
                 </td>
-                <td className="py-2 pr-4 text-right font-medium tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
-                  <span className="text-xs text-muted-foreground sm:hidden">Refundable</span>
-                  {money(r.refundable_minor, r.currency)}
+                <td className="py-2 pr-4 text-right font-medium whitespace-nowrap tabular-nums max-sm:flex max-sm:justify-between max-sm:gap-3 max-sm:p-0 max-sm:py-0.5">
+                  <span className="text-xs text-muted-foreground sm:hidden">Still held</span>
+                  {money(r.remaining_minor, r.currency)}
                 </td>
                 <td className="py-2 text-right max-sm:block max-sm:p-0 max-sm:pt-1.5 max-sm:text-left">
                   {r.refundable_minor > 0 ? (
@@ -107,9 +108,9 @@ export function ExcessPaymentsHeld({
           </tbody>
         </table>
       </div>
-      {rows.some((r) => r.refundable_minor < r.held_minor) ? (
+      {rows.some((r) => r.remaining_minor < r.held_minor) ? (
         <p className="text-xs text-muted-foreground">
-          The refundable amount is lower when part of the credit paid an invoice.
+          Invoices use excess credit from the oldest payment first. Still held is what is left.
         </p>
       ) : null}
       {refunding ? (
@@ -144,6 +145,7 @@ function RefundExcessDialog({
   onDone: () => void;
   reasonRequired: boolean;
 }) {
+  const repeat = useRepeatRefund();
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="md">
@@ -158,6 +160,7 @@ function RefundExcessDialog({
         <ActionForm
           action={refundExcessPaymentAction}
           onSuccess={onDone}
+          onRefused={repeat.onRefused}
           className="flex flex-col gap-4"
         >
           <input type="hidden" name="biz" value={biz} />
@@ -166,7 +169,11 @@ function RefundExcessDialog({
           <Field
             name="amount_minor"
             label="Amount"
-            help={`Up to ${money(row.refundable_minor, row.currency)}. This is the credit that this payment still holds.`}
+            help={
+              row.refundable_minor === row.remaining_minor
+                ? `Up to ${money(row.refundable_minor, row.currency)}. This is the credit that this payment still holds.`
+                : `Up to ${money(row.refundable_minor, row.currency)}.`
+            }
           >
             <MoneyInput
               name="amount_minor"
@@ -189,6 +196,7 @@ function RefundExcessDialog({
               placeholder="e.g. Charged twice for the same period"
             />
           </Field>
+          <RepeatRefundNotice message={repeat.message} onClear={repeat.clear} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel

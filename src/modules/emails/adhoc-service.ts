@@ -213,6 +213,7 @@ async function composeAdhocEmail(
       logoUrl: biz.logoUrl ?? undefined,
       iconUrl: biz.iconUrl ?? undefined,
       brandColor: biz.brandColor ?? undefined,
+      buttonTextColor: biz.buttonTextColor ?? undefined,
       // Same treatment as the outbox: the portal button appears only when the deployment
       // has a portal to point at. `portalEntryUrl()`, not the bare `PORTAL_BASE_URL` this
       // used to read — that is the deployment ROOT, so the button skipped `/portal`

@@ -6,7 +6,8 @@ import type {
   PortalFieldState,
 } from "@/lib/api";
 
-// Shared by the page, its form and its action. Mirrors src/modules/checkout/field-config.ts.
+// Shared by the page, its form and its action. Mirrors src/modules/checkout/field-config.ts;
+// test/unit/field-matrix-mirror.test.ts fails when the defaults below drift from the engine.
 
 /** Mirrors `DEFAULT_CHECKOUT_FIELD_CONFIG`. */
 export const CHECKOUT_DEFAULTS: Record<CheckoutFieldKey, CheckoutFieldState> = {
@@ -16,10 +17,10 @@ export const CHECKOUT_DEFAULTS: Record<CheckoutFieldKey, CheckoutFieldState> = {
   "customer.phone": "show",
   "customer.company": "show",
   "customer.tax_registration_number": "show",
-  "billing.line1": "mandatory",
+  "billing.line1": "show",
   "billing.line2": "show",
   "billing.line3": "show",
-  "billing.city": "mandatory",
+  "billing.city": "show",
   "billing.state": "show",
   "billing.state_code": "mandatory",
   "billing.postal_code": "mandatory",
@@ -30,15 +31,15 @@ export const CHECKOUT_DEFAULTS: Record<CheckoutFieldKey, CheckoutFieldState> = {
 
 /** Mirrors the engine's portal defaults. */
 export const PORTAL_DEFAULTS: Record<PortalFieldKey, PortalFieldState> = {
-  "customer.first_name": "show",
+  "customer.first_name": "mandatory",
   "customer.last_name": "show",
-  "customer.phone": "mandatory",
+  "customer.phone": "show",
   "customer.company": "show",
   "customer.tax_registration_number": "show",
-  "billing.line1": "mandatory",
+  "billing.line1": "show",
   "billing.line2": "show",
   "billing.line3": "show",
-  "billing.city": "mandatory",
+  "billing.city": "show",
   "billing.state": "show",
   "billing.state_code": "mandatory",
   "billing.postal_code": "mandatory",

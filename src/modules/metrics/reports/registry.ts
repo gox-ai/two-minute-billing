@@ -35,7 +35,11 @@ export type ReportSource =
   | "subscription"
   | "payment_method"
   | "payment"
-  | "checkout";
+  | "checkout"
+  /** One-time orders (`daily/order-predicate.ts`), read per buyer. */
+  | "order"
+  /** Metered usage and minimum commitments, read per customer. */
+  | "usage";
 
 /**
  * How the window applies.
@@ -86,7 +90,9 @@ export type ReportCategory =
   | "acquisitions"
   | "churn"
   | "transactions"
-  | "receivables";
+  | "receivables"
+  | "sales"
+  | "usage";
 
 /**
  * What a report may be cut by. A small closed set on purpose: every entry costs stored rows
@@ -174,8 +180,11 @@ export interface ReportDef {
    * `churn_rate` divides by.
    */
   customers?: "new" | "churned" | "any" | "churn_rate";
-  /** `cohort` reports: what is being retained — money or subscriptions. */
-  cohort?: "mrr" | "subscriptions";
+  /**
+   * `cohort` reports: what is being retained — money or subscriptions; or, for buyers grouped
+   * by their first order month, the share who ordered again or the revenue per buyer.
+   */
+  cohort?: "mrr" | "subscriptions" | "repeat_purchase" | "buyer_revenue";
   /** `scheduled` reports: which scheduled-change measure. */
   scheduled?:
     | "upgrade_mrr"
@@ -279,7 +288,9 @@ export interface ReportDef {
     | "checkout_recovered_revenue"
     | "checkout_conversion"
     | "checkout_payment_failures"
-    | "cancellation_saves";
+    | "cancellation_saves"
+    | "top_usage_consumers"
+    | "commitment_pacing";
   /**
    * Multiply the answer. ARR is MRR × 12 and nothing else — a separate resolver for the
    * annual family would be a second definition of every one of them.
@@ -1313,6 +1324,60 @@ export const REPORTS: readonly ReportDef[] = [
     cohort: "subscriptions",
     dimensions: [],
   },
+  {
+    key: "repeat_purchase_cohort",
+    tags: ["cohorts", "customers"],
+    name: "Repeat Purchase Cohort",
+    description:
+      "Buyers grouped by the month of their first order. Each cell is the share of the group that placed a second order by that month.",
+    category: "sales",
+    kind: "rate",
+    source: "order",
+    shape: "cohort",
+    cohort: "repeat_purchase",
+    dimensions: [],
+    variants: [{ key: "buyer_revenue_cohort", name: "Revenue per Buyer Cohort" }],
+  },
+  {
+    key: "buyer_revenue_cohort",
+    tags: ["cohorts", "customers"],
+    name: "Revenue per Buyer Cohort",
+    description:
+      "Buyers grouped by the month of their first order. Each cell is the order revenue of the group up to that month, divided by the number of buyers in it.",
+    category: "sales",
+    kind: "money",
+    source: "order",
+    shape: "cohort",
+    cohort: "buyer_revenue",
+    dimensions: [],
+  },
+  // ── Usage ──────────────────────────────────────────────────────────────────
+  {
+    key: "top_usage_consumers",
+    tags: ["customers"],
+    name: "Top Usage Consumers",
+    description:
+      "The 20 customers billed the most usage revenue in the period, with the units each sent per meter.",
+    category: "usage",
+    kind: "money",
+    source: "usage",
+    shape: "buckets",
+    bucketing: "top_usage_consumers",
+    dimensions: [],
+  },
+  {
+    key: "commitment_pacing",
+    tags: ["committed"],
+    name: "Minimum Commitment Pacing",
+    description:
+      "Subscriptions with a minimum commitment, by how their fees compare with the commitment due so far in the current term. On pace is 80% to 110%. Fees are what is invoiced for the term plus the usage so far that is not invoiced yet, at the subscription's prices. A subscription with a volume or stairstep usage price counts invoiced fees only and shows its pace at term end.",
+    category: "usage",
+    kind: "count",
+    source: "usage",
+    shape: "buckets",
+    bucketing: "commitment_pacing",
+    dimensions: [],
+  },
   // ── The waterfall ──────────────────────────────────────────────────────────
   {
     key: "mrr_movement_summary",
@@ -1667,7 +1732,7 @@ export const REPORTS: readonly ReportDef[] = [
     shape: "stock",
     formula: "arpc",
     dimensions: [],
-    variants: [{ key: "lifetime_value_of_a_customer", name: "Lifetime Value of a Customer" }],
+    variants: [{ key: "lifetime_value_of_a_customer", name: "Subscription Lifetime Value" }],
   },
   {
     key: "average_customer_lifetime",
@@ -1688,7 +1753,7 @@ export const REPORTS: readonly ReportDef[] = [
   {
     key: "lifetime_value_of_a_customer",
     tags: ["customers"],
-    name: "Lifetime Value of a Customer",
+    name: "Subscription Lifetime Value",
     description:
       "What an account is worth over its life: its average monthly recurring revenue times the average life of an account that ended.",
     category: "subscriptions",
@@ -1783,4 +1848,6 @@ export const CATEGORY_LABELS: Record<ReportCategory, string> = {
   churn: "Churn",
   transactions: "Transactions",
   receivables: "Receivables",
+  sales: "One-time Sales",
+  usage: "Usage",
 };

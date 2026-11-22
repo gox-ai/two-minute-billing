@@ -6,7 +6,9 @@ import { IdText, MiddleEllipsis } from "@/components/patterns/id-text";
 import { listBusinesses, isApiNotFound } from "@/lib/api";
 import { getEventForBusiness } from "@/lib/api/developer";
 import type { EventDetail } from "@/lib/api/developer";
-import { requirePermission } from "@/lib/session";
+import { allows, requirePermission } from "@/lib/session";
+import { getBusinessAuditRecord, listAuditLogsForResource } from "@/components/audit/api";
+import { RecordBlock } from "@/components/audit/record-block";
 import { ErrorState, EmptyState } from "@/components/states";
 import { CopyButton } from "@/components/patterns/copy-button";
 import { Chip, IdChip } from "@/components/patterns/chip";
@@ -79,7 +81,7 @@ export default async function BusinessEventDetailPage({
   params: Promise<{ biz: string; evt: string }>;
 }) {
   const { biz, evt } = await params;
-  await requirePermission("events:view", "developer");
+  const me = await requirePermission("events:view", "developer");
 
   let event, businesses;
   try {
@@ -99,6 +101,9 @@ export default async function BusinessEventDetailPage({
   // Dates render in the business timezone, not UTC — the engine's term
   // boundaries are midnight in this zone (see components/business-tz).
   const tz = businesses.data.find((b) => b.id === biz)?.timezone ?? null;
+
+  // The diff is an audit record, so only a reader of the audit log sees it here.
+  const change = allows(me, "audit_logs:view", "manager") ? await auditChange(biz, event) : null;
 
   const contentEntries =
     event.content && typeof event.content === "object"
@@ -188,33 +193,40 @@ export default async function BusinessEventDetailPage({
       <AttentionCard items={attention} columns={false} />
 
       <Row span="8/4">
-        {/* Full-snapshot payload, one collapsible section per top-level resource key. */}
-        <RecordCard title="Content" flush>
-          {contentEntries.length === 0 ? (
-            <div className="px-5 py-4">
-              <EmptyState title="No content" description="This event has no payload." />
-            </div>
-          ) : (
-            <div className="divide-y">
-              {contentEntries.map(([key, value]) => {
-                const json = JSON.stringify(value, null, 2);
-                return (
-                  <details key={key} className="px-5 py-3" open={contentEntries.length === 1}>
-                    <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium">
-                      <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
-                        {key}
-                      </code>
-                      <CopyButton value={json} className="shrink-0" />
-                    </summary>
-                    <pre className="mt-2 max-h-[520px] overflow-auto rounded-md bg-muted p-4 text-xs leading-relaxed">
-                      {json}
-                    </pre>
-                  </details>
-                );
-              })}
-            </div>
-          )}
-        </RecordCard>
+        <div className="flex min-w-0 flex-col gap-4">
+          {/* What moved, from the audit row of the same act; the payload below is only
+              the state after. */}
+          {change ? (
+            <RecordBlock block={change.block} href={resourceHref} isSource defaultOpen={false} />
+          ) : null}
+          {/* Full-snapshot payload, one collapsible section per top-level resource key. */}
+          <RecordCard title="Content" flush>
+            {contentEntries.length === 0 ? (
+              <div className="px-5 py-4">
+                <EmptyState title="No content" description="This event has no payload." />
+              </div>
+            ) : (
+              <div className="divide-y">
+                {contentEntries.map(([key, value]) => {
+                  const json = JSON.stringify(value, null, 2);
+                  return (
+                    <details key={key} className="px-5 py-3" open={contentEntries.length === 1}>
+                      <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium">
+                        <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
+                          {key}
+                        </code>
+                        <CopyButton value={json} className="shrink-0" />
+                      </summary>
+                      <pre className="mt-2 max-h-[520px] overflow-auto rounded-md bg-muted p-4 text-xs leading-relaxed">
+                        {json}
+                      </pre>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
+          </RecordCard>
+        </div>
 
         <RecordCard title="Details">
           <Facts
@@ -226,7 +238,9 @@ export default async function BusinessEventDetailPage({
               },
               {
                 label: "Event type",
-                value: <Chip className="font-mono whitespace-nowrap">{event.event_type}</Chip>,
+                value: (
+                  <Chip className="max-w-full font-mono wrap-anywhere">{event.event_type}</Chip>
+                ),
               },
               { label: "Source", value: event.source ? enumLabel(event.source) : "—" },
               {
@@ -242,6 +256,16 @@ export default async function BusinessEventDetailPage({
               { label: "API version", value: event.api_version ?? "—" },
               resource ? { label: "Resource", value: resource } : null,
               { label: "Occurred at", value: fmtDateTime(event.occurred_at, tz) },
+              change
+                ? {
+                    label: "Audit record",
+                    value: (
+                      <Link href={change.href} className="text-primary hover:underline">
+                        View audit record
+                      </Link>
+                    ),
+                  }
+                : null,
               event.webhook_status
                 ? {
                     label: "Webhook status",
@@ -385,4 +409,33 @@ export default async function BusinessEventDetailPage({
       </Zone>
     </div>
   );
+}
+
+/**
+ * The audit row written by the same act as this event, with its before/after.
+ * Paired on `trace_id` over the resource's latest 200 audit rows, as the Activity log
+ * does. No time window: an event can carry a test clock's time, the audit row the wall's.
+ * Null when nothing audited the act (an invoice the clock generated, a payment event).
+ */
+async function auditChange(biz: string, event: EventDetail) {
+  const type = event.resource?.type;
+  const id = event.resource?.id;
+  if (!event.trace_id || !type || !id) return null;
+  try {
+    const rows = await listAuditLogsForResource(biz, type, id, { limit: 200 });
+    const row = rows.data.find((a) => a.trace_id === event.trace_id);
+    if (!row) return null;
+    const record = await getBusinessAuditRecord(biz, row.id, type);
+    const block =
+      record.blocks.find((b) => b.resource_type === type && b.resource_id === id) ??
+      record.blocks[0];
+    if (!block) return null;
+    return {
+      block,
+      href: `/businesses/${biz}/audit/${row.id}?source=${encodeURIComponent(type)}`,
+    };
+  } catch {
+    // The diff is extra; a failed read leaves the event page as it was.
+    return null;
+  }
 }

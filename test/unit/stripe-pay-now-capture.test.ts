@@ -97,6 +97,45 @@ describe("createIntent(payment)", () => {
     );
   });
 
+  it("pay and save on a bank debit: one method, kept off-session, taken at confirm", async () => {
+    const { fake, calls } = fakeStripe({
+      create: () => ({ id: "pi_1", status: "requires_payment_method", client_secret: "cs" }),
+    });
+    await provider(fake).createIntent({
+      purpose: "payment",
+      amountMinor: 5000n,
+      currency: "USD",
+      customer,
+      idempotencyKey: "ik",
+      saveForFuture: true,
+      methodTypes: ["us_bank_account"],
+      captureOnConfirm: true,
+    });
+    const params = calls[0]!.args[0] as Record<string, unknown>;
+    expect(params.setup_future_usage).toBe("off_session");
+    expect(params.payment_method_types).toEqual(["us_bank_account"]);
+    expect(params.capture_method).toBe("automatic");
+    expect(params.payment_method_options).toBeUndefined();
+  });
+
+  it("pay and save on a card stays held for capture", async () => {
+    const { fake, calls } = fakeStripe({
+      create: () => ({ id: "pi_1", status: "requires_payment_method", client_secret: "cs" }),
+    });
+    await provider(fake).createIntent({
+      purpose: "payment",
+      amountMinor: 5000n,
+      currency: "USD",
+      customer,
+      idempotencyKey: "ik",
+      saveForFuture: true,
+      captureOnConfirm: true,
+    });
+    const params = calls[0]!.args[0] as Record<string, unknown>;
+    expect(params.payment_method_types).toEqual(["card"]);
+    expect(params.capture_method).toBe("manual");
+  });
+
   it("keeps manual capture when the engine does not ask (no invoice yet)", async () => {
     const { fake, calls } = fakeStripe({
       create: () => ({ id: "pi_1", status: "requires_payment_method", client_secret: "cs" }),
@@ -182,6 +221,54 @@ describe("consumeIntent(payment)", () => {
     });
     expect(calls.map((c) => c.op)).toEqual(["capture", "retrieve"]);
     expect(calls[1]!.args[1]).toEqual({ expand: ["latest_charge"] });
+  });
+
+  it("keeps a pay-and-save bank debit while it settles, with its mandate", async () => {
+    const calls: string[] = [];
+    const pm = {
+      id: "pm_sepa",
+      object: "payment_method",
+      type: "sepa_debit",
+      customer: "cus_1",
+      sepa_debit: { last4: "3000", bank_code: "37040044", country: "DE" },
+    };
+    const base = pi("processing", "sepa_debit", {
+      setup_future_usage: "off_session",
+      payment_method: "pm_sepa",
+      latest_charge: {
+        id: "ch_1",
+        payment_method_details: { type: "sepa_debit", sepa_debit: { mandate: "mandate_1" } },
+      },
+    });
+    const fake = {
+      paymentIntents: {
+        capture: async () => (calls.push("capture"), unexpectedState()),
+        retrieve: async (_id: string, o: { expand: string[] }) => {
+          calls.push(`retrieve:${o.expand.join(",")}`);
+          return o.expand.includes("payment_method") ? { ...base, payment_method: pm } : base;
+        },
+      },
+      mandates: {
+        retrieve: async () => (
+          calls.push("mandate"),
+          { id: "mandate_1", status: "active", type: "multi_use", multi_use: {} }
+        ),
+      },
+    };
+    const r = await provider(fake).consumeIntent({
+      intentId: "pi_1",
+      idempotencyKey: "k",
+      purpose: "payment",
+      amountMinor: 5000n,
+    });
+    expect(r.purpose === "payment" && r.charge.status).toBe("pending");
+    expect(r.purpose === "payment" && r.paymentMethod?.providerPaymentMethodId).toBe("pm_sepa");
+    expect(calls).toEqual([
+      "capture",
+      "retrieve:latest_charge",
+      "retrieve:payment_method,latest_charge",
+      "mandate",
+    ]);
   });
 
   it("books a debit still in flight as pending", async () => {

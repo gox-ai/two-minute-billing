@@ -1055,7 +1055,7 @@ export class GoCardlessProvider implements PaymentProvider {
     }
     if (res.ok) return gocardlessPaymentResult(res.resource, undefined, res.resource);
     const reason = firstReason(res.error) ?? res.error?.type ?? `http_${res.status}`;
-    const norm = normalizeGocardlessDecline(reason);
+    const norm = normalizeGocardlessDecline({ code: reason, category: res.error?.type ?? null });
     return {
       status: "failed",
       providerChargeId: "",
@@ -1358,7 +1358,7 @@ export class GoCardlessProvider implements PaymentProvider {
         return this.mapRefundEvent(base, action, links.refund, links.payment);
       case "mandates":
         return links.mandate
-          ? [await this.mapMandateEvent(base, action, links.mandate, links.new_mandate)]
+          ? [await this.mapMandateEvent(base, action, links.mandate, links.new_mandate, ev.details)]
           : [base];
       case "billing_requests":
         return [mapBillingRequestEvent(ev, base, action, links)];
@@ -1538,6 +1538,7 @@ export class GoCardlessProvider implements PaymentProvider {
     action: string,
     mandateId: string,
     newMandateId: string | undefined,
+    details?: GcEvent["details"],
   ): Promise<NormalizedProviderEvent> {
     const ev = { ...base, providerPaymentMethodId: mandateId };
     if (action === "replaced") {
@@ -1558,12 +1559,42 @@ export class GoCardlessProvider implements PaymentProvider {
       ...ev,
       type: "payment_method.mandate_updated",
       mandate: { status },
+      ...(MANDATE_DEAD_ACTIONS.has(action) ? mandateCause(details) : {}),
     };
     if (action !== "transferred") return out;
     const { mandateCustomerId: _c, ...now } = await this.describeMandate(mandateId);
     return { ...out, paymentMethodDisplay: now.display };
   }
 }
+
+/** Mandate actions that end it, whose cause says why. */
+const MANDATE_DEAD_ACTIONS = new Set(["failed", "cancelled", "expired", "blocked"]);
+
+/** A dead mandate's cause, normalized; the scheme reason code rides along for operators. */
+function mandateCause(
+  details: GcEvent["details"],
+): Pick<NormalizedProviderEvent, "failureCode" | "providerFailureCode" | "failureMessage"> {
+  const cause = details?.cause;
+  if (!cause) return {};
+  const raw = details?.reason_code ? `${cause} (${details.reason_code})` : cause;
+  return {
+    failureCode: normalizeGocardlessDecline(cause).code,
+    providerFailureCode: raw,
+    ...(details?.description ? { failureMessage: details.description } : {}),
+  };
+}
+
+/**
+ * Billing request actions while the request stays open: the payer may still finish the
+ * flow, so the reason is kept on the open attempt (`charge.failed` with no charge id).
+ */
+const BRQ_OPEN_REFUSALS = new Set([
+  "flow_exited",
+  "bank_authorisation_denied",
+  "bank_authorisation_expired",
+  "bank_authorisation_failed",
+  "payer_geo_blocked",
+]);
 
 function mapBillingRequestEvent(
   ev: GcEvent,
@@ -1592,5 +1623,19 @@ function mapBillingRequestEvent(
       failureMessage: ev.details?.description ?? `billing request ${action}`,
       failureRetriable: true,
     };
+  if (BRQ_OPEN_REFUSALS.has(action)) {
+    const cause =
+      ev.details?.cause ?? (action === "payer_geo_blocked" ? action : `billing_request_${action}`);
+    const norm = normalizeGocardlessDecline(cause);
+    return {
+      ...base,
+      type: "charge.failed",
+      providerIntentId: brq,
+      failureCode: norm.code,
+      providerFailureCode: cause,
+      failureMessage: ev.details?.description ?? `billing request ${action}`,
+      failureRetriable: norm.retriable,
+    };
+  }
   return { ...base, providerIntentId: brq };
 }

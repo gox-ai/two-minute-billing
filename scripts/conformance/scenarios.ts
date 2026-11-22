@@ -1,5 +1,5 @@
 /**
- * S1–S14, written once and run against every gateway's fixture module through the real
+ * S1–S15, written once and run against every gateway's fixture module through the real
  * engine and the real webhook route. Each check is a ROW (`S2.exact-total`); the suite
  * compares the failing rows with `known-gaps.json`.
  */
@@ -12,8 +12,17 @@ import { collectInvoice } from "@/modules/invoicing/service";
 import { sweepStalePendingCharges } from "@/modules/payments/stale-pending";
 import { cancelPendingDebit } from "@/modules/payments/pending-debit";
 import { resolveAdapter } from "@/providers/registry";
-import type { ProviderKey } from "@/providers/types";
-import { gatewayAccounts, paymentMethods, payments } from "@db/schema";
+import type { NormalizedProviderEvent, ProviderKey } from "@/providers/types";
+import { listGatewayWebhooksPage } from "@/modules/gateway/inbound";
+import {
+  gatewayAccounts,
+  paymentAttempts,
+  paymentIntents,
+  paymentMethods,
+  payments,
+  providerEvents,
+} from "@db/schema";
+import { publicId } from "@/platform/ids";
 import { installFake } from "./fake-http";
 import {
   AMOUNT,
@@ -30,6 +39,7 @@ import {
   SCENARIO_IDS,
   SCENARIOS,
   type Billed,
+  type Body,
   type FaultBody,
   type GatewayDriver,
   type GatewayFixture,
@@ -684,6 +694,157 @@ async function s14(c: Ctx) {
   }
 }
 
+// ── S15 ─────────────────────────────────────────────────────────────────────
+/**
+ * Seed an open intent addressed by the id the delivery's `pick` event names, as the attempt
+ * of a buyer-present payment holds it. Null when no such event names an id.
+ */
+async function seedIntentFor(
+  c: Ctx,
+  w: World,
+  bodies: Body[],
+  pick: (e: NormalizedProviderEvent) => boolean,
+) {
+  const adapter = await adapterOf(w);
+  const evs: NormalizedProviderEvent[] = [];
+  for (const body of bodies) {
+    const payload = c.driver.signBody ? c.driver.signBody(w, body.body, w.secret) : body.body;
+    evs.push(
+      ...(await adapter.normalizeWebhook({
+        payload,
+        headers: c.driver.sign(w, payload, w.secret),
+        notificationUrl: w.notificationUrl,
+      })),
+    );
+  }
+  const ev = evs.find(pick);
+  const atGateway = ev?.providerIntentId ?? ev?.providerChargeId;
+  if (!ev || !atGateway) return { evs };
+  const attempt = await withTenant(w.org.id, async (tx) => {
+    const [pi] = await tx
+      .insert(paymentIntents)
+      .values({
+        organizationId: w.org.id,
+        businessId: w.biz.id,
+        publicId: publicId("pi"),
+        status: "requires_action",
+        purpose: "payment",
+        amountMinor: AMOUNT,
+        currency: c.fixture.currency,
+        gatewayAccountId: w.account.id,
+        intentAtGateway: atGateway,
+        attemptCount: 1,
+      })
+      .returning();
+    const [a] = await tx
+      .insert(paymentAttempts)
+      .values({
+        organizationId: w.org.id,
+        businessId: w.biz.id,
+        paymentIntentId: pi!.id,
+        publicId: publicId("pia"),
+        attemptNumber: 1,
+        status: "requires_action",
+        idAtGateway: atGateway,
+      })
+      .returning();
+    return a!;
+  });
+  return { evs, ev, atGateway, attempt };
+}
+
+/** The rows of `type` this world's business received (its only deliveries). */
+async function rowsOf(w: World, type: string) {
+  const rows = await systemDb
+    .select({
+      type: providerEvents.type,
+      paymentIntentId: providerEvents.paymentIntentId,
+      paymentAttemptId: providerEvents.paymentAttemptId,
+    })
+    .from(providerEvents)
+    .where(eq(providerEvents.businessId, w.biz.id));
+  return rows.filter((r) => r.type === type);
+}
+
+/**
+ * The gateway's own deliveries for an intent the buyer is still completing. The charges are
+ * made in one world, so the fake holds them; the deliveries go to worlds with no transaction
+ * for them and an open intent addressed by the id the event names.
+ */
+async function s15(c: Ctx) {
+  if (!c.applies("S15.attempt-error")) return;
+  const made = await c.world("s15-charges");
+  const b = await made.bill("pays");
+  if (!b.chargeId) {
+    c.row("S15.attempt-error", false, `setup: no charge id (${outcomeOf(b)})`);
+    return;
+  }
+  const w = await c.world("s15-failure");
+  const bodies = c.driver.paymentFailed(w, b.chargeId, false);
+  const seeded = await seedIntentFor(
+    c,
+    w,
+    bodies,
+    (e) => e.type === "charge.failed" || e.type === "intent.failed",
+  );
+  if (!seeded.attempt) {
+    c.row("S15.attempt-error", false, `setup: no failure event naming an id (${s(seeded.evs)})`);
+  } else {
+    const res = await w.deliver(bodies);
+    const [after] = await withTenant(w.org.id, (tx) =>
+      tx.select().from(paymentAttempts).where(eq(paymentAttempts.id, seeded.attempt.id)),
+    );
+    c.row(
+      "S15.attempt-error",
+      !!after?.errorCode && !!after.errorText,
+      `attempt ${after?.status} ${after?.errorCode} "${after?.errorText}" webhook ${res.status} ${res.results} (${seeded.ev.type} at ${seeded.atGateway})`,
+    );
+    const rows = await rowsOf(w, seeded.ev.type);
+    c.row(
+      "S15.linked",
+      rows.length > 0 &&
+        rows.every(
+          (r) =>
+            r.paymentIntentId === seeded.attempt.paymentIntentId &&
+            r.paymentAttemptId === seeded.attempt.id,
+        ),
+      `rows ${s(rows)}`,
+    );
+  }
+
+  // A documented status we do not act on is linked too, so the attempt lists it.
+  const unacted = c.fixture.statuses.find(
+    (st) =>
+      !Array.isArray(st.expect) &&
+      !/refund|dispute|mandate|payout|settle|payment_method|customer/i.test(st.object),
+  );
+  if (!unacted) return;
+  const u = await c.world("s15-unacted");
+  const collected = await made.collected();
+  const uBodies = c.driver.statusEvent(u, unacted, collected.chargeId);
+  const uSeeded = await seedIntentFor(c, u, uBodies, (e) => e.type === "unknown");
+  if (!uSeeded.attempt) {
+    c.row(
+      "S15.unacted-linked",
+      false,
+      `${unacted.object} ${unacted.status}: the event names no id (${s(uSeeded.evs)})`,
+    );
+    return;
+  }
+  await u.deliver(uBodies);
+  const uRows = await rowsOf(u, "unknown");
+  const listed = await listGatewayWebhooksPage(u.org.id, u.biz.id, {
+    filters: [{ field: "payment_attempt", op: "is", value: uSeeded.attempt.publicId }],
+  });
+  c.row(
+    "S15.unacted-linked",
+    uRows.length > 0 &&
+      uRows.every((r) => r.paymentAttemptId === uSeeded.attempt.id) &&
+      listed.data.some((x) => x.type === "unknown"),
+    `${unacted.object} ${unacted.status} at ${uSeeded.atGateway}: rows ${s(uRows)} listed ${listed.data.length}`,
+  );
+}
+
 const RUNNERS: Partial<Record<ScenarioId, (c: Ctx) => Promise<void>>> = {
   S1: s1,
   S2: s2,
@@ -699,6 +860,7 @@ const RUNNERS: Partial<Record<ScenarioId, (c: Ctx) => Promise<void>>> = {
   S12: s12,
   // S13 has no generic body: an alternate version is gateway-specific (extra rows).
   S14: s14,
+  S15: s15,
 };
 
 /** Run every scenario of one fixture module. */

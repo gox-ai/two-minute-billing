@@ -1354,6 +1354,7 @@ export class CashfreeProvider implements PaymentProvider {
       execution_status?: string;
       payment_status?: string;
       payment_amount?: number | string;
+      failure_details?: { failure_reason?: string | null } | null;
     }>(
       "charge",
       "/subscriptions/pay/controlled/execute-mandate",
@@ -1395,13 +1396,19 @@ export class CashfreeProvider implements PaymentProvider {
     }
     const s = (json.execution_status ?? json.payment_status ?? "").toUpperCase();
     if (s === "SUCCESS") return { status: "succeeded", providerChargeId: chargeId, raw: json };
-    if (s === "FAILED")
+    if (s === "FAILED") {
+      // The bank's reason decides the retry. The answer may omit it; the payment row has it.
+      const reason =
+        json.failure_details?.failure_reason ??
+        (await this.readPayment(subscriptionId, paymentId).catch(() => null))?.failure_details
+          ?.failure_reason;
       return {
         status: "failed",
         providerChargeId: chargeId,
-        failure: failureFrom({ message: "Cashfree reports the debit as failed." }),
+        failure: failureFrom({ message: reason || "Cashfree reports the debit as failed." }),
         raw: json,
       };
+    }
     return { status: "pending", providerChargeId: chargeId, raw: json };
   }
 
@@ -2494,9 +2501,13 @@ export function normalizeCashfreeEvent(type: string, d: any): Mapped {
     }
     // Kept as `unknown`, persisted for the record: Cashfree's own PDN in the default flow,
     // a dropped checkout (the order stays payable), the fee breakdown and the card-expiry
-    // reminder.
-    default:
-      return { type: "unknown" };
+    // reminder. The order or subscription id lets the attempt find it.
+    default: {
+      const intent = nonBlank(
+        d.order?.order_id ?? d.subscription_id ?? d.subscription_details?.subscription_id,
+      );
+      return { type: "unknown", ...(intent ? { providerIntentId: intent } : {}) };
+    }
   }
 }
 
@@ -2626,9 +2637,22 @@ function authEvent(d: any): Mapped {
     ["ACTIVE", "BANK_APPROVAL_PENDING"].includes(
       (d.subscription_details?.subscription_status ?? "").toUpperCase(),
     );
+  // A refused authorization keeps the bank's reason; without it the attempt reads `setup_failed`.
+  const reason = ok
+    ? undefined
+    : (d.failure_details?.failure_reason ?? d.failureDetails?.failureReason ?? undefined);
+  const f = reason ? failureFrom({ message: reason }) : undefined;
   return {
     type: ok ? "intent.setup_succeeded" : "intent.setup_failed",
     ...(sid ? { providerIntentId: sid } : {}),
+    ...(f
+      ? {
+          failureCode: f.code,
+          failureRetriable: f.retriable,
+          failureMessage: f.message,
+          providerFailureCode: String(reason).slice(0, 200),
+        }
+      : {}),
     ...subOwnership(d),
   };
 }

@@ -107,10 +107,17 @@ export const PALETTE_PAGES: PalettePage[] = [
   },
   {
     scope: "biz",
-    path: "/settings/hosted-pages",
-    label: "Hosted pages",
+    path: "/settings/checkout",
+    label: "Checkout",
     section: SETTINGS,
-    keywords: ["checkout", "portal", "self-serve", "coupon codes"],
+    keywords: ["hosted pages", "layout", "consent", "terms", "coupon codes", "one-time purchases"],
+  },
+  {
+    scope: "biz",
+    path: "/settings/portal",
+    label: "Customer portal",
+    section: SETTINGS,
+    keywords: ["hosted pages", "self-serve", "plan changes", "cancel", "portal links", "invoices"],
   },
   {
     scope: "biz",
@@ -406,6 +413,27 @@ export const PALETTE_PAGES: PalettePage[] = [
     label: "Trusted browsers",
     section: "Your account",
     keywords: ["remembered", "forget browser"],
+  },
+  {
+    scope: "org",
+    path: "/account/notifications",
+    label: "Your notifications",
+    section: "Your account",
+    keywords: ["push", "alerts", "daily summary", "quiet hours", "devices"],
+  },
+  {
+    scope: "org",
+    path: "/notifications",
+    label: "Notifications",
+    section: "Account",
+    keywords: ["bell", "unread", "alerts"],
+  },
+  {
+    scope: "org",
+    path: "/settings/notifications",
+    label: "Team notifications",
+    section: SETTINGS,
+    keywords: ["google chat", "outside email", "team alerts", "accountant"],
   },
   {
     scope: "org",

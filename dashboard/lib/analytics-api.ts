@@ -35,6 +35,8 @@ export interface AnalyticsMeasure {
    * engine would refuse.
    */
   segmentable?: boolean;
+  /** The shelf the measure sits on (`lib/billing-models`). Absent on an engine that predates it. */
+  model?: string;
 }
 
 export interface SeriesPoint {

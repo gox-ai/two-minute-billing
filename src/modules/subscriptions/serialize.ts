@@ -375,6 +375,8 @@ export function serializeSubscription(
     dues?: { due_invoices_count: number; total_dues_minor: number; due_since: Date | null };
     /** `collectedRevenue` for this subscription's invoices; detail GET only. */
     revenue?: { amount_minor: number; paid_invoices_count: number; first_paid_at: Date | null };
+    /** Net billed revenue less credit notes, before tax; detail GET only. */
+    revenueBilled?: number;
     /** `computeRecurringAmount` (service.ts); omitted when the caller did not load it. */
     recurring_amount_minor?: bigint | null;
     /** `renewalSkipViews`; omitted when the subscription has no scheduled skip. */
@@ -509,6 +511,7 @@ export function serializeSubscription(
           due_since: extra.dues.due_since,
         }
       : {}),
+    ...(extra?.revenueBilled !== undefined ? { revenue_billed_minor: extra.revenueBilled } : {}),
     ...(extra?.revenue
       ? {
           revenue_to_date_minor: extra.revenue.amount_minor,

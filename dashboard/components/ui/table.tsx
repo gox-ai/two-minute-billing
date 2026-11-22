@@ -10,12 +10,15 @@ import {
   type PhoneHead,
   type PhonePlace,
 } from "@/lib/phone-table";
+import { useFitStack } from "@/lib/use-fit-stack";
 import { installRowPress } from "./row-press";
 
 /**
  * Below 640px: `stack` turns each row into a block (lib/phone-table.ts), `scroll` keeps the
  * grid and scrolls it inside its container with the first column frozen and a fade at the
- * edge. Unset: the table scrolls as it does on a desktop.
+ * edge. Unset: the table scrolls as it does on a desktop. `stack` with `fit` also stacks at
+ * any width where the grid is wider than its card, instead of scrolling (lib/use-fit-stack.ts).
+ * `fit` alone switches only the caller's own `stacked:` / `unstacked:` classes.
  */
 type PhoneMode = "stack" | "scroll";
 
@@ -36,12 +39,16 @@ const TableLayout = React.createContext<Layout>({
 });
 const InHead = React.createContext(false);
 
-/** Cells wrap in a fixed layout unless the caller truncates or keeps the line whole. */
+/**
+ * Cells wrap in a fixed layout unless the caller truncates or keeps the line whole. In an
+ * auto layout a cell keeps one line, but a value that asks to wrap (`wrap-anywhere`,
+ * `wrap-break-word`) still wraps at its own max width instead of running into the next column.
+ */
 function useCellWrap(className: string | undefined) {
   const { fixed } = React.useContext(TableLayout);
   return fixed && !/\b(truncate|whitespace-(nowrap|pre))/.test(className ?? "")
     ? "whitespace-normal wrap-break-word"
-    : "whitespace-nowrap";
+    : "whitespace-nowrap [&_.wrap-anywhere]:whitespace-normal [&_.wrap-break-word]:whitespace-normal";
 }
 
 // The frozen first column paints the card (the head cell keeps its band), with a hairline edge.
@@ -55,9 +62,12 @@ const SCROLL_FADE =
 function Table({
   className,
   phone,
+  fit,
   ...props
-}: React.ComponentProps<"table"> & { phone?: PhoneMode }) {
+}: React.ComponentProps<"table"> & { phone?: PhoneMode; fit?: boolean }) {
   const fixed = !!className?.includes("table-fixed");
+  const box = React.useRef<HTMLDivElement>(null);
+  useFitStack(box, !!fit);
   const heads = React.useRef<PhoneHead[]>([]);
   const layout = React.useMemo<Layout>(
     () => ({
@@ -73,6 +83,7 @@ function Table({
   return (
     <TableLayout.Provider value={layout}>
       <div
+        ref={box}
         data-slot="table-container"
         data-phone={phone}
         className={cn("relative w-full overflow-x-auto", phone === "scroll" && SCROLL_FADE)}
@@ -89,7 +100,7 @@ function Table({
             phone === "stack" && "[--phone-row-x:1.25rem]",
             className,
             phone === "stack" &&
-              "max-sm:block max-sm:min-w-0 max-sm:[&>colgroup]:hidden max-sm:[&>tbody]:block max-sm:[&>tfoot]:block max-sm:[&>thead]:hidden",
+              "stacked:block stacked:min-w-0 stacked:[&>colgroup]:hidden stacked:[&>tbody]:block stacked:[&>tfoot]:block stacked:[&>thead]:hidden",
             phone === "scroll" && SCROLL_TABLE,
           )}
           {...props}
@@ -175,7 +186,7 @@ function TableRow({ className, children, ...props }: React.ComponentProps<"tr">)
       className={cn(
         "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
         phone === "stack" &&
-          "max-sm:grid max-sm:grid-cols-[fit-content(40%)_minmax(0,1fr)_auto] max-sm:items-baseline max-sm:gap-x-3 max-sm:gap-y-1 max-sm:px-(--phone-row-x) max-sm:py-3",
+          "stacked:grid stacked:grid-cols-[fit-content(40%)_minmax(0,1fr)_auto] stacked:items-baseline stacked:gap-x-3 stacked:gap-y-1 stacked:px-(--phone-row-x) stacked:py-3",
         className,
       )}
       {...props}
@@ -218,14 +229,14 @@ function TableHead({
 
 // A stacked cell is `contents`: its label (::before) and its value box are the row grid's items.
 const STACK_LABEL =
-  "max-sm:before:col-start-1 max-sm:before:text-left max-sm:before:text-xs max-sm:before:font-normal max-sm:before:whitespace-normal max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]";
+  "stacked:before:col-start-1 stacked:before:text-left stacked:before:text-xs stacked:before:font-normal stacked:before:whitespace-normal stacked:before:text-muted-foreground stacked:before:content-[attr(data-label)]";
 // The value box is `contents` from 640px up, so the desktop cell is unchanged. A detail
 // without a label (an actions column) takes the full width.
 const STACK_VALUE = {
-  title: "max-sm:col-[1/3] max-sm:row-start-1 max-sm:text-left",
-  aside: "max-sm:col-start-3 max-sm:row-start-1 max-sm:text-right max-sm:whitespace-nowrap",
-  labelled: "max-sm:col-[2/-1] max-sm:text-left",
-  unlabelled: "max-sm:col-[1/-1] max-sm:text-left",
+  title: "stacked:col-[1/3] stacked:row-start-1 stacked:text-left",
+  aside: "stacked:col-start-3 stacked:row-start-1 stacked:text-right stacked:whitespace-nowrap",
+  labelled: "stacked:col-[2/-1] stacked:text-left",
+  unlabelled: "stacked:col-[1/-1] stacked:text-left",
 };
 
 function TableCell({
@@ -264,14 +275,14 @@ function TableCell({
       data-label={label}
       className={cn(
         base,
-        hidden ? "max-sm:hidden" : "max-sm:contents",
+        hidden ? "stacked:hidden" : "stacked:contents",
         !hidden && label && STACK_LABEL,
       )}
       {...props}
     >
       <div
         className={cn(
-          "max-sm:min-w-0 max-sm:wrap-break-word max-sm:whitespace-normal sm:contents",
+          "stacked:min-w-0 stacked:wrap-break-word stacked:whitespace-normal unstacked:contents",
           place === "title" || place === "aside"
             ? STACK_VALUE[place]
             : STACK_VALUE[label ? "labelled" : "unlabelled"],

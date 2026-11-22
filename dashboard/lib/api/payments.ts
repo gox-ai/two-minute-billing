@@ -1,3 +1,4 @@
+import type { PaymentInitiator } from "@/lib/payment-trigger";
 // Typed fetchers for the Payments surface. Server-only — imports the frozen
 // api client ({ apiGet, apiWrite }); never pull this into a client component
 // (it would ship the API key). Route shapes mirror the backend serializers:
@@ -61,6 +62,8 @@ export interface Transaction {
    * platform-global with no FK. Null on rows written before it existed.
    */
   trace_id: string | null;
+  /** What started it (same values as the invoice's payment timeline). Null when not recorded. */
+  initiated_by?: PaymentInitiator | null;
   /** The collection inside that trace; narrows the gateway log to this charge. Null on older rows. */
   span_id: string | null;
   error_code: string | null;
@@ -86,9 +89,15 @@ export interface Transaction {
    * Set on the single read of a succeeded payment whose gateway sends no dispute events:
    * a person may record a chargeback on `payment`, up to `available_minor`.
    */
-  dispute_recording?: { payment: string; available_minor: number } | null;
+  dispute_recording?: {
+    payment: string;
+    available_minor: number;
+    reported_daily?: boolean;
+  } | null;
   /** Set on the single read of an in-progress debit its gateway can cancel. */
   pending_debit_cancel?: { payment: string } | null;
+  /** The gateway's own code on the single read of a failed row (`invalid_account`). */
+  gateway_code?: string | null;
   settled_refund?: {
     charge_at_gateway: string;
     payment: string | null;
@@ -186,6 +195,8 @@ export type PaymentIntentPurpose = "payment" | "setup";
  */
 export interface PaymentIntentRow {
   object: "payment_intent";
+  /** What created the intent. Null when not recorded. */
+  initiated_by?: PaymentInitiator | null;
   id: string;
   status: PaymentIntentStatusValue;
   purpose: PaymentIntentPurpose;
@@ -231,6 +242,8 @@ export function listPaymentIntents(
     purpose?: string;
     /** Public invoice id — the invoice page shows the intents open against it. */
     invoice?: string;
+    /** Public customer id — the customer page's Payment intents tab. */
+    customer?: string;
   },
 ) {
   const q = new URLSearchParams();
@@ -239,6 +252,7 @@ export function listPaymentIntents(
   if (opts?.status) q.set("status", opts.status);
   if (opts?.purpose) q.set("purpose", opts.purpose);
   if (opts?.invoice) q.set("invoice", opts.invoice);
+  if (opts?.customer) q.set("customer", opts.customer);
   const qs = q.toString();
   return apiGet<PagedList<PaymentIntentRow>>(
     `/v1/businesses/${biz}/payment_intents${qs ? `?${qs}` : ""}`,

@@ -10,7 +10,7 @@ import { money } from "@/lib/format";
 import { fmtDate, fmtDateTime, fmtRange } from "@/lib/format-date";
 import { useSubscriptionRefresh } from "@/components/subscriptions/subscription-refresh-context";
 import * as React from "react";
-import { CalendarClock, CalendarX2, CircleDollarSign, FileText, TrendingUp } from "lucide-react";
+
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { CollectInvoiceDialog } from "@/components/invoices/collect-invoice-dialog";
@@ -336,18 +336,11 @@ export function SubscriptionFigures({
   const renews =
     (state.status === "active" || state.status === "in_trial") && !state.cancel_at_period_end;
   const cancelledOn = state.canceled_at ?? state.current_period_end;
-  const paid = state.revenue_paid_invoices_count;
   return (
     <FigureTiles>
-      <FigureTile
-        label="MRR"
-        icon={CircleDollarSign}
-        value={money(state.mrr, currency)}
-        note="After discounts"
-      />
+      <FigureTile label="MRR" value={money(state.mrr, currency)} note="After discounts" />
       <FigureTile
         label="Total due"
-        icon={FileText}
         value={money(state.total_dues_minor, currency)}
         note={
           state.due_invoices_count
@@ -360,7 +353,6 @@ export function SubscriptionFigures({
       {state.status === "cancelled" ? (
         <FigureTile
           label="Cancelled on"
-          icon={CalendarX2}
           value={cancelledOn ? fmtDate(cancelledOn, tz) : "—"}
           note={
             state.current_period_start &&
@@ -378,7 +370,6 @@ export function SubscriptionFigures({
       ) : renews && state.next_billing_at ? (
         <FigureTile
           label="Next billing"
-          icon={CalendarClock}
           value={
             state.next_billing_amount_minor != null
               ? money(state.next_billing_amount_minor, currency)
@@ -395,25 +386,21 @@ export function SubscriptionFigures({
       ) : (
         <FigureTile
           label="Term ends"
-          icon={CalendarX2}
           value={state.current_period_end ? fmtDate(state.current_period_end, tz) : "—"}
           note={["Does not renew", daysLeft(state.current_period_end)].filter(Boolean).join(" · ")}
         />
       )}
       <FigureTile
-        label="Revenue to date"
-        icon={TrendingUp}
-        featured={state.revenue_to_date_minor > 0}
-        value={money(state.revenue_to_date_minor, currency)}
+        label="Revenue"
+        featured={state.revenue_billed_minor > 0}
+        value={money(state.revenue_billed_minor, currency)}
         note={
-          paid && state.revenue_since ? (
-            <>
-              {paid} invoice{paid === 1 ? "" : "s"} paid · since{" "}
-              <span className="whitespace-nowrap">{fmtDate(state.revenue_since, tz)}</span>
-            </>
-          ) : (
-            "Nothing collected yet"
-          )
+          <>
+            <span className="block">Net billed revenue · before tax · credit notes deducted</span>
+            <span className="block">
+              Cash collected {money(state.revenue_to_date_minor, currency)} · net of refunds
+            </span>
+          </>
         }
       />
     </FigureTiles>

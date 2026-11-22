@@ -103,7 +103,9 @@ async def billing_webhook(request: Request, tmbilling_signature: Annotated[str |
 # content is a short summary (ids, status, a few fields); fetch the resource for the rest.
 async def apply(db, event: dict) -> None:
     kind, content = event["event_type"], event["content"]
-    if kind in ("subscription_created", "subscription_changed", "subscription_canceled"):
+    if kind in ("subscription_created", "subscription_changed", "subscription_canceled",
+                "subscription_activated", "subscription_cancel_scheduled", "subscription_scheduled_cancellation_removed",
+                "subscription_reactivated", "subscription_paused", "subscription_resumed"):
         sub = await api("GET", f"/v1/businesses/{BIZ}/subscriptions/{content['subscription']['id']}")
         account_id = (sub.get("metadata") or {}).get("app_account_id")  # set at checkout
         if not account_id:

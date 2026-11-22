@@ -12,6 +12,9 @@ import { newTraceId, traceIdFromHeaders, withTraceContext } from "./trace";
  *                      accompanied the request). Carries the operator's `ip`.
  *  - `scheduled_job` — the billing clock / background jobs (actor = 'billing_clock')
  *  - `migration`     — the JSON importer
+ *  - `portal` / `checkout` — the buyer, on a /portal/v1 or /checkout/v1 route
+ *  - `webhook`       — an inbound gateway or email-provider notification
+ *  - `mcp`           — an OAuth access token (an AI agent), not an API key
  *  - `system`        — no human and no request: seeds, verify runs, programmatic
  *                      contexts (actor = 'system').
  *
@@ -29,7 +32,15 @@ export type EventSource =
   | "system"
   | "hubspot"
   /** A change the member confirmed in the assistant (actor = the member). */
-  | "assistant";
+  | "assistant"
+  /** The buyer, in the customer portal (actor = the portal session). */
+  | "portal"
+  /** The buyer, on hosted checkout (actor = the checkout session). */
+  | "checkout"
+  /** A gateway or email-provider notification (actor = the gateway key, e.g. "stripe"). */
+  | "webhook"
+  /** An AI agent connected over OAuth/MCP (actor = the grant's API key id). */
+  | "mcp";
 
 export interface EventContext {
   source: EventSource;
@@ -101,6 +112,12 @@ export function currentChannel(): Channel | null {
     case "api":
     // An integration calling us on the merchant's behalf.
     case "hubspot":
+    // The buyer in the portal or checkout, a gateway notification, an AI agent: API
+    // requests, as before these sources existed. Stored channel values do not change.
+    case "portal":
+    case "checkout":
+    case "webhook":
+    case "mcp":
       return "api";
     case "dashboard":
     // A change the member confirmed in the assistant: still a person in our UI.
@@ -183,7 +200,7 @@ function isIpAddress(value: string): boolean {
 
 /**
  * Fastify onRequest hook: run the entire request lifecycle inside a fresh event
- * context (source='api', actor filled in by `authenticate`) AND a fresh trace
+ * context (source by route family, `api` by default; actor filled in by `authenticate`) AND a fresh trace
  * context, so every log line of the request shares one traceId. Uses `run(store,
  * done)` — the reliable propagation pattern — rather than `enterWith`, which does
  * not consistently reach the route handler from a preHandler.
@@ -194,6 +211,21 @@ function isIpAddress(value: string): boolean {
  * fresh `api-` id is minted. It's echoed back as `x-trace-id` so a caller (or a
  * human with curl) can find the request in the logs.
  */
+/**
+ * The source a request starts with, by route family. Set here, once, so every route of a
+ * family gets it: authenticated requests (API key, dashboard, OAuth) refine it later.
+ * A webhook's actor is the gateway key from the path.
+ */
+export function initialContextFor(url: unknown): Pick<EventContext, "source" | "actor"> {
+  const path = typeof url === "string" ? (url.split("?")[0] ?? "") : "";
+  if (path.startsWith("/portal/v1/")) return { source: "portal", actor: null };
+  if (path.startsWith("/checkout/v1/")) return { source: "checkout", actor: null };
+  const gw = /^\/v1\/gateway_webhooks\/([a-z0-9_-]{1,40})(?:\/|$)/.exec(path)?.[1];
+  if (gw) return { source: "webhook", actor: gw };
+  if (path.startsWith("/v1/email_webhooks/ses")) return { source: "webhook", actor: "ses" };
+  return { source: "api", actor: null };
+}
+
 export function eventContextHook(req: unknown, reply: unknown, done: () => void): void {
   const headers = (req as { headers?: Record<string, unknown> } | undefined)?.headers;
   const inbound = traceIdFromHeaders(headers);
@@ -209,7 +241,8 @@ export function eventContextHook(req: unknown, reply: unknown, done: () => void)
   }
   // The IP is resolved ONCE here, not per audit write: one request is one origin,
   // and `req` is not reachable from the service layer.
-  storage.run({ source: "api", actor: null, ip: clientIp(req) }, () => {
+  const initial = initialContextFor((req as { url?: unknown } | undefined)?.url);
+  storage.run({ ...initial, ip: clientIp(req) }, () => {
     withTraceContext({ traceId, ...(inbound ? { inherited: true } : {}) }, done);
   });
 }

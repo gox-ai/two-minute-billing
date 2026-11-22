@@ -1,17 +1,40 @@
 import { shipToSnapshot } from "@/modules/customers/addresses";
-import { presentationBlock, RAIL_LIMIT_CODE, RAIL_SPACING_CODE } from "./representment";
+import {
+  CARD_ATTEMPT_LIMIT_CODE,
+  INVOICE_ATTEMPT_LIMIT_CODE,
+  invoicePresentations,
+  MAX_PRESENTATIONS_PER_INVOICE,
+  presentationBlock,
+  RAIL_LIMIT_CODE,
+  RAIL_SPACING_CODE,
+} from "./representment";
 import { CARD_LIMIT_CODE, CARD_LIMIT_MESSAGE, isCardInstrument, overCardLimit } from "./card-limit";
 import {
   loadEffectiveDunningConfig,
   planPolicyConfigSql,
   priorFailedMethods,
+  refusedLastCycleToo,
 } from "@/modules/dunning-policies/effective";
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 import { afterCommit, withTenant, type Tx } from "@/platform/db";
 import { requestInvoiceNumbering } from "./number-queue";
 import {
   clampLimit,
   documentNumberSortKey,
+  existsFieldCondition,
   filterConditions,
   keysetCondition,
   kindsFromSpecs,
@@ -20,9 +43,11 @@ import {
   parseCursor,
   searchCondition,
   toPage,
+  type FilterKind,
   type FilterSpec,
   type ListFilter,
   type ListPage,
+  type VirtualFilter,
   cappedTotal,
 } from "@/platform/list-query";
 import { businessTimezone } from "@/platform/business-tz";
@@ -60,6 +85,7 @@ import {
 import { accountHolderName } from "@/modules/customers/names";
 import { accountHolderNameSql } from "@/modules/customers/name-sql";
 import { arAgingBucketCondition, arAgingBucketSql } from "./ar-aging";
+import { orderRuleOn } from "@/modules/metrics/daily/order-predicate";
 import {
   computeLineAmount,
   snapshotPrice,
@@ -91,6 +117,7 @@ import {
 import {
   nextRetryAt,
   planFailureRearm,
+  retryRailOf,
   heldRetry,
   nextParkedReminderAt,
   retryDaysForMethod,
@@ -172,6 +199,7 @@ import {
   loadChargeContact,
   markPaymentMethodInvalid,
   resolveChargeCandidates,
+  PAYMENT_METHOD_UNUSABLE_CODE,
   chargeOrder,
   tmtestOutcome,
   type ChargeAttempt,
@@ -213,7 +241,7 @@ import {
 } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { dunningFieldsOnSettle } from "@/modules/invoicing/status";
-import { payerDeclineMessage } from "@/providers/decline-codes";
+import { isOurRequestFault, payerDeclineMessage } from "@/providers/decline-codes";
 import { formatMoney, minorScale } from "@/platform/currency";
 import {
   billedOnInterims,
@@ -823,7 +851,12 @@ export interface BillSubscriptionPeriodInput {
    *  - `excludePendingCharges`: leave queued unbilled charges off the plan;
    *  - `ignoreCreditBalances`: plan as though every credit bucket were empty.
    */
-  preview?: { excludePendingCharges?: boolean; ignoreCreditBalances?: boolean };
+  preview?: {
+    excludePendingCharges?: boolean;
+    ignoreCreditBalances?: boolean;
+    /** Coupons / a manual discount the caller applies before the real invoice: priced, not redeemed. */
+    pendingDiscounts?: Parameters<typeof peekDiscounts>[4];
+  };
   /**
    * Usage beyond the credits (0530). Unset: queue it as charges and bill it (a real period
    * invoice; a preview leaves it out). `preview`: rate it as those charges would be and add
@@ -2147,7 +2180,7 @@ export async function planSubscriptionPeriodInvoice(
               pricePublicId: l.pricePublicId,
             })),
             subscription.currency,
-            undefined,
+            input.preview?.pendingDiscounts,
             // 0247. The period this invoice bills, so a fixed amount is clamped to what that
             // period's allowance has left. The READ and the settle below must always agree on
             // the period — clamping here without recording there would under-discount.
@@ -5665,18 +5698,89 @@ async function collectClaimedInvoice(input: {
   const liveIntent = await liveIntentForInvoice(organizationId, invoice.id, new Date());
   if (liveIntent) throw new CollectionInFlightError(invoice.publicId);
 
+  // The clock or a renewal, not a person and not a method the customer just added.
+  const automatic = !input.manualAttempt && !input.paymentMethodOverrideId;
+  // Our per-invoice cap: an automatic attempt past it is booked without a charge and the
+  // schedule goes on to its end.
+  const presentedSoFar = automatic ? await invoicePresentations(organizationId, invoice.id) : 0;
+  if (automatic && presentedSoFar >= MAX_PRESENTATIONS_PER_INVOICE) {
+    return recordFailedPayment({
+      organizationId,
+      businessId,
+      invoice,
+      paymentMethodId: null,
+      methodType: null,
+      providerKey: "none",
+      amountMinor: due,
+      failureCode: INVOICE_ATTEMPT_LIMIT_CODE,
+      failureMessage: `We tried to collect this invoice ${MAX_PRESENTATIONS_PER_INVOICE} times, so we will not try again automatically. Pay the invoice now, or update your payment method.`,
+      exposedToPayer: true,
+      retriable: true,
+      autoCollectOn,
+      subscriptionStatus: input.subscription?.status ?? null,
+      manualAttempt: input.manualAttempt,
+    });
+  }
+
   // Resolve the ordered collection candidates (C6): the subscription PM (or the
   // customer's primary) first, then each backup in turn on a decline. No saved card →
-  // dunning.
-  const candidates = chargeOrder(
-    await resolveChargeCandidates({
+  // dunning. Automatic collection holds a hard-declined primary (`skipUnusable`).
+  const resolved = await resolveChargeCandidates({
+    organizationId,
+    customerId: invoice.customerId,
+    subscription: input.subscription,
+    paymentMethodOverrideId: input.paymentMethodOverrideId,
+    currency: invoice.currency,
+    skipUnusable: automatic,
+  });
+  const candidates = chargeOrder(resolved);
+  // Refused without a gateway call under the revocation code, so dunning reaches the
+  // `billing_rules_config.mandate_revoked` disposition rather than the generic schedule.
+  const refuseRevoked = (pm: Pm) =>
+    recordFailedPayment({
       organizationId,
-      customerId: invoice.customerId,
-      subscription: input.subscription,
-      paymentMethodOverrideId: input.paymentMethodOverrideId,
-      currency: invoice.currency,
-    }),
-  );
+      businessId,
+      invoice,
+      paymentMethodId: pm.id,
+      methodType: methodTypeOf(null, pm),
+      providerKey: "none",
+      amountMinor: due,
+      failureCode: "revocation_of_authorization",
+      failureMessage:
+        "The customer cancelled the authorization for this payment method. Add a new payment method to pay this invoice.",
+      retriable: false,
+      autoCollectOn,
+      subscriptionStatus: input.subscription?.status ?? null,
+      manualAttempt: input.manualAttempt,
+    });
+  // A held method and nothing else to charge: book the rung without a charge, keep the
+  // schedule and its emails, and collect when the method is updated or another is added.
+  // A revoked mandate is held too (marked invalid), but its rule decides, not the schedule.
+  if (candidates.length === 0 && resolved.held) {
+    const block = await presentationBlock({
+      organizationId,
+      pm: resolved.held,
+      now: new Date(),
+    });
+    if (block?.reason === "mandate_revoked") return refuseRevoked(resolved.held);
+    return recordFailedPayment({
+      organizationId,
+      businessId,
+      invoice,
+      paymentMethodId: resolved.held.id,
+      methodType: methodTypeOf(null, resolved.held),
+      providerKey: "none",
+      amountMinor: due,
+      failureCode: PAYMENT_METHOD_UNUSABLE_CODE,
+      failureMessage:
+        "We cannot charge your saved payment method. Update your payment method to pay this invoice.",
+      exposedToPayer: true,
+      retriable: true,
+      autoCollectOn,
+      subscriptionStatus: input.subscription?.status ?? null,
+      manualAttempt: input.manualAttempt,
+    });
+  }
 
   // NPCI rail rules bind every path; a blocked mandate is skipped for the next candidate.
   // Automatic attempts also respect the per-card caps, but never when that would leave
@@ -5697,27 +5801,33 @@ async function collectClaimedInvoice(input: {
     );
     order = candidates.filter((_, i) => !blocks[i] || blocks[i]!.reason === "card_cap");
     const uncapped = order.filter((pm) => !blocks[candidates.indexOf(pm)]);
+    // Every card left is at its network cap: an automatic attempt is not sent.
+    if (automatic && uncapped.length === 0 && order.length > 0) {
+      const capped = order[0]!;
+      return recordFailedPayment({
+        organizationId,
+        businessId,
+        invoice,
+        paymentMethodId: capped.id,
+        methodType: methodTypeOf(null, capped),
+        providerKey: "none",
+        amountMinor: due,
+        failureCode: CARD_ATTEMPT_LIMIT_CODE,
+        failureMessage:
+          "This card had too many payment attempts recently, so we did not try it again now. Pay the invoice now, or use a different payment method.",
+        exposedToPayer: true,
+        retriable: true,
+        autoCollectOn,
+        subscriptionStatus: input.subscription?.status ?? null,
+        manualAttempt: input.manualAttempt,
+      });
+    }
     if (uncapped.length > 0) order = uncapped;
     const railRefusal = blocks[0];
     // Every candidate is a revoked mandate: refuse without a gateway call, under the same
     // code, so dunning reaches the same disposition (billing_rules_config.mandate_revoked).
     if (order.length === 0 && railRefusal?.reason === "mandate_revoked") {
-      return recordFailedPayment({
-        organizationId,
-        businessId,
-        invoice,
-        paymentMethodId: candidates[0]!.id,
-        methodType: methodTypeOf(null, candidates[0]),
-        providerKey: "none",
-        amountMinor: due,
-        failureCode: "revocation_of_authorization",
-        failureMessage:
-          "The customer cancelled the authorization for this payment method. Add a new payment method to pay this invoice.",
-        retriable: false,
-        autoCollectOn,
-        subscriptionStatus: input.subscription?.status ?? null,
-        manualAttempt: input.manualAttempt,
-      });
+      return refuseRevoked(candidates[0]!);
     }
     if (order.length === 0 && railRefusal && railRefusal.reason !== "card_cap") {
       return recordFailedPayment({
@@ -5774,6 +5884,8 @@ async function collectClaimedInvoice(input: {
       }
     }
   }
+  // Never more presentations in this pass than the invoice has left.
+  if (automatic) order = order.slice(0, MAX_PRESENTATIONS_PER_INVOICE - presentedSoFar);
   const primary = order[0];
 
   // No saved card → record a failed attempt; invoice stays open for dunning.
@@ -6122,7 +6234,22 @@ async function collectClaimedInvoice(input: {
     });
   };
 
-  const markInvalid = async (pm: Pm) => markPaymentMethodInvalid(organizationId, pm.id);
+  /**
+   * Hard-declined methods, marked `invalid` once the pass knows its outcome, so the
+   * customer's email (sent at once) can say that the backup paid.
+   */
+  const toInvalidate: Pm[] = [];
+  let paidByBackup = false;
+  const done = async <T>(v: T): Promise<T> => {
+    for (const pm of toInvalidate.splice(0))
+      await markPaymentMethodInvalid(organizationId, pm.id, undefined, {
+        backupPaid: paidByBackup,
+      });
+    return v;
+  };
+  const markInvalid = (pm: Pm) => {
+    toInvalidate.push(pm);
+  };
 
   // Record a superseded declined attempt (plan: 1 attempt → 1 transaction).
   // The primary can decline and then a backup card succeed; without this the
@@ -6238,6 +6365,7 @@ async function collectClaimedInvoice(input: {
     } catch (e) {
       await flushDeclined();
       if (e instanceof GatewayRouterError) {
+        await done(null);
         /**
          * The PM's gateway account is disabled / mode-mismatched.
          *
@@ -6289,6 +6417,7 @@ async function collectClaimedInvoice(input: {
           gateway: pm.providerKey,
         });
         const lost = lostChargeHandle(e);
+        await done(null);
         return bookPending(
           pm,
           {
@@ -6325,7 +6454,8 @@ async function collectClaimedInvoice(input: {
        * the worse error.
        *
        * A recognised refusal never reaches here — the adapter books it from its own rule
-       * table, so `gateway_request_rejected` still means what it says and still parks.
+       * table as `gateway_request_rejected`, which since 2026-11-17 also retries, and the
+       * `gateway_request_faults` ops alert names it.
        * The `log.error` stays: the stack belongs in the error feed, it is just no longer
        * the ONLY place the failure exists, and a rising `gateway_error` rate is the signal
        * that something systematic is wrong.
@@ -6336,6 +6466,7 @@ async function collectClaimedInvoice(input: {
         payment_method: pm.publicId,
         gateway: pm.providerKey,
       });
+      await done(null);
       return recordFailedPayment({
         organizationId,
         businessId,
@@ -6380,7 +6511,10 @@ async function collectClaimedInvoice(input: {
     }
     if (a.result.status !== "failed") await flushDeclined();
     const outcome = tmtestOutcome(a.result);
-    if (a.result.status === "succeeded") return bookSuccess(pm, a);
+    if (a.result.status === "succeeded") {
+      paidByBackup = toInvalidate.length > 0;
+      return done(await bookSuccess(pm, a));
+    }
     // Unknown-outcome paths → pending + reconcile (not dunning).
     // A gateway `pending` is a LIVE attempt that will settle by webhook (async rails:
     // UPI Autopay, a card mandate debit, ACH/SEPA) — that is `in_progress`, not
@@ -6392,9 +6526,9 @@ async function collectClaimedInvoice(input: {
     // (with raw.tmtest_outcome='timeout'), so the explicit outcome must be tested
     // first or the timeout simulation — and the reconcile path it exercises —
     // silently becomes in_progress.
-    if (outcome === "timeout") return bookPending(pm, a, "timeout");
-    if (a.result.status === "pending") return bookPending(pm, a, "in_progress");
-    if (outcome === "needs_attention") return bookPending(pm, a, "needs_attention");
+    if (outcome === "timeout") return done(await bookPending(pm, a, "timeout"));
+    if (a.result.status === "pending") return done(await bookPending(pm, a, "in_progress"));
+    if (outcome === "needs_attention") return done(await bookPending(pm, a, "needs_attention"));
     /**
      * AN INDIA AFA DEBIT IS PENDING, NOT FAILED — and this is where the two gateways
      * stopped agreeing.
@@ -6448,7 +6582,7 @@ async function collectClaimedInvoice(input: {
      * alone would have converted a wrong failure into a permanently stuck invoice.
      */
     if (input.session !== "on_session" && a.result.status === "requires_action")
-      return bookPending(pm, a, "in_progress");
+      return done(await bookPending(pm, a, "in_progress"));
     last = { pm, a };
     if (isDeadMandateDecline(a.result, pm))
       await markPaymentMethodInvalid(organizationId, pm.id, "mandate");
@@ -6456,11 +6590,11 @@ async function collectClaimedInvoice(input: {
       // A decline with a backup still to try. `isHardDecline` (not `shouldTryBackup`)
       // gates the INVALID marking: a soft decline or a mandate-ceiling refusal moves on
       // without blaming this card.
-      if (isHardDecline(a.result)) await markInvalid(pm);
+      if (isHardDecline(a.result)) markInvalid(pm);
       declined.push({ pm, a });
       continue;
     }
-    if (isHardDecline(a.result)) await markInvalid(pm);
+    if (isHardDecline(a.result)) markInvalid(pm);
     break; // decline on the last candidate, or no fallback allowed → dunning path
   }
 
@@ -6479,6 +6613,7 @@ async function collectClaimedInvoice(input: {
     last = governing;
   }
   await flushDeclined();
+  await done(null);
 
   const { pm: failedPm, a } = last!;
   // ON-SESSION 3DS: the buyer is present, so the challenge is completable —
@@ -6623,6 +6758,21 @@ async function requestNewMandate(
   }
 }
 
+/** One open invoice the new method was charged for, and how that charge ended. */
+export interface CollectedOnNewMethod {
+  invoice: string;
+  /**
+   * The payment's status (`succeeded` | `pending` | `requires_action` | `failed`),
+   * `paid_with_credit`, or `scheduled` (a pre-debit notice went out; the debit follows).
+   */
+  status: string;
+  /** What the charge was for; 0 when credit settled the invoice. */
+  amount_minor: number;
+  currency: string;
+  /** `scheduled` only: when the debit is due. */
+  scheduled_at?: string;
+}
+
 /**
  * Billing LogIQ — "Collect Invoice on Payment Method Update".
  * When a customer adds/updates a payment method, immediately attempt to collect
@@ -6642,7 +6792,7 @@ export async function collectOutstandingForNewPaymentMethod(input: {
   paymentMethodPublicId: string;
   /** Per-call override of `collectOnPaymentMethodUpdate`. */
   collectOpenInvoices?: boolean;
-}): Promise<{ enabled: boolean; collected: Array<{ invoice: string; status: string }> }> {
+}): Promise<{ enabled: boolean; collected: CollectedOnNewMethod[] }> {
   const { organizationId, businessId, customerId } = input;
 
   const enabled =
@@ -6663,7 +6813,7 @@ export async function collectOutstandingForNewPaymentMethod(input: {
       .orderBy(invoices.createdAt),
   );
 
-  const collected: Array<{ invoice: string; status: string }> = [];
+  const collected: CollectedOnNewMethod[] = [];
   for (const inv of due) {
     try {
       const sub = inv.subscriptionId
@@ -6693,7 +6843,12 @@ export async function collectOutstandingForNewPaymentMethod(input: {
       const { applyCreditBeforeCharge } = await import("@/modules/customers/collect");
       const credit = await applyCreditBeforeCharge({ organizationId, businessId, invoice: inv });
       if (credit.settled) {
-        collected.push({ invoice: inv.publicId, status: "paid_with_credit" });
+        collected.push({
+          invoice: inv.publicId,
+          status: "paid_with_credit",
+          amount_minor: 0,
+          currency: inv.currency,
+        });
         continue;
       }
       const payment = await collectInvoice({
@@ -6703,8 +6858,25 @@ export async function collectOutstandingForNewPaymentMethod(input: {
         subscription: sub,
         paymentMethodOverrideId: input.paymentMethodPublicId,
       });
-      collected.push({ invoice: inv.publicId, status: payment.status });
+      collected.push({
+        invoice: inv.publicId,
+        status: payment.status,
+        amount_minor: Number(payment.amountMinor),
+        currency: payment.currency,
+      });
     } catch (e) {
+      // A mandate that needs a pre-debit notice: the notice is sent and the debit is
+      // scheduled. That is the expected outcome, not a failure.
+      if (e instanceof CollectionDeferredError) {
+        collected.push({
+          invoice: inv.publicId,
+          status: "scheduled",
+          amount_minor: Number(inv.amountDueMinor),
+          currency: inv.currency,
+          scheduled_at: e.until.toISOString(),
+        });
+        continue;
+      }
       // Isolate: one invoice's collection failure must not abort the rest / the vault.
       log.error(e, {
         event: "post_vault_collect_failed",
@@ -6890,6 +7062,7 @@ async function recordFailedPayment(input: {
           .select({
             rail: paymentMethods.mandateRail,
             type: paymentMethods.type,
+            issuerCountry: paymentMethods.issuerCountry,
             issuerZones: countries.timezones,
           })
           .from(paymentMethods)
@@ -6897,7 +7070,10 @@ async function recordFailedPayment(input: {
           .where(eq(paymentMethods.id, input.paymentMethodId))
           .limit(1)
       : [];
-    const failedRail = failedRailRow?.rail ?? null;
+    // An India-issued card with no stored rail still follows the India card rule.
+    const failedRail = retryRailOf(
+      failedRailRow ? { ...failedRailRow, mandateRail: failedRailRow.rail } : null,
+    );
     const failedIssuerZones = failedRailRow?.issuerZones ?? null;
     const plan = planFailureRearm({
       dunningStatus: live?.dunningStatus ?? invoice.dunningStatus,
@@ -6912,6 +7088,8 @@ async function recordFailedPayment(input: {
       parkHardDeclines: dunningCfg.parkHardDeclines,
       // Normalized decline code from the charge failure at THIS site.
       declineCode: input.failureCode,
+      // Our own refused request parks for ops at the end, never a final action.
+      requestFault: isOurRequestFault({ code: input.failureCode, message: input.failureMessage }),
       // Master switch + the trial/future and one-time-invoice scope toggles.
       dunningApplies:
         !startHeld &&
@@ -6929,6 +7107,7 @@ async function recordFailedPayment(input: {
       // decides how much of that schedule can actually run. Null for a card or a
       // non-mandate instrument — those are uncapped.
       mandateRail: failedRail,
+      issuerCountry: failedRailRow?.issuerCountry ?? null,
       adaptiveTiming: dunningCfg.adaptiveTiming,
       timezone: bizDunning?.timezone ?? null,
       issuerZones: failedIssuerZones,
@@ -6938,6 +7117,11 @@ async function recordFailedPayment(input: {
       retriesByMethod: dunningCfg.retriesByMethod,
       adaptiveCadence: dunningCfg.adaptiveCadence,
       priorMethods: await priorFailedMethods(tx, invoice.id, pay!.id),
+      repeatedAcrossCycles: await refusedLastCycleToo(tx, {
+        paymentMethodId: input.paymentMethodId ?? null,
+        invoiceId: invoice.id,
+        message: input.failureMessage,
+      }),
     });
 
     /**
@@ -6952,7 +7136,7 @@ async function recordFailedPayment(input: {
      * two offline invoices on one customer report different states.
      */
     const set: Partial<typeof invoices.$inferInsert> =
-      holdCount || mandateDeferral || plan.action === "send_invoice"
+      holdCount || mandateDeferral || plan.action === "send_invoice" || plan.action === "unchanged"
         ? {}
         : { attemptCount: newAttemptCount };
     // The next retry as written (deferral or hold included), for the events below.
@@ -7476,7 +7660,89 @@ const LIST_SORTS = {
 export type InvoiceSortField = keyof typeof LIST_SORTS;
 export const INVOICE_SORT_FIELDS = Object.keys(LIST_SORTS) as InvoiceSortField[];
 
+/**
+ * Extra filter fields of the Orders list, on top of the invoice ones. `order_status` is the
+ * status the list prints (paid, due, refunded, partly refunded); `product` and `coupon` match
+ * a one-time line's product id and a discount's coupon code.
+ */
+const ORDER_PAID: SQL = sql`coalesce((SELECT sum(op.amount_minor) FROM payments op WHERE op.invoice_id = ${invoices.id} AND op.status = 'succeeded'), 0)`;
+const ORDER_REFUNDED: SQL = sql`coalesce((SELECT sum(orf.amount_minor) FROM refunds orf JOIN payments orp ON orp.id = orf.payment_id WHERE orp.invoice_id = ${invoices.id} AND orf.status = 'succeeded'), 0)`;
+const ORDER_TAX: SQL = sql`coalesce((SELECT sum(ot.amount_minor) FROM applied_taxes ot WHERE ot.invoice_id = ${invoices.id}), 0)`;
+const ORDER_DISCOUNT: SQL = sql`coalesce((SELECT sum(odl.amount_minor) FROM invoice_line_discounts odl WHERE odl.invoice_id = ${invoices.id}), 0)`;
+const ORDER_SPECS: Record<string, FilterSpec> = {
+  refunded_minor: { column: ORDER_REFUNDED, kind: "number" },
+  tax_minor: { column: ORDER_TAX, kind: "number" },
+  discount_minor: { column: ORDER_DISCOUNT, kind: "number" },
+  // The billing country on the customer record, as the Orders list prints it.
+  customer_country: { column: customers.country, kind: "enum" },
+  order_status: {
+    column: sql`CASE WHEN ${ORDER_REFUNDED} > 0 AND ${ORDER_REFUNDED} >= ${ORDER_PAID} THEN 'refunded'
+      WHEN ${ORDER_REFUNDED} > 0 THEN 'partly_refunded'
+      WHEN ${invoices.status} = 'paid' THEN 'paid' ELSE 'due' END`,
+    kind: "enum",
+  },
+};
+const orderLineExists = (inner: SQL) =>
+  sql`EXISTS (SELECT 1 FROM invoice_line_items ol
+    LEFT JOIN prices opr ON opr.id = ol.price_id
+    LEFT JOIN products opd ON opd.id = opr.product_id
+    WHERE ol.invoice_id = ${invoices.id} AND ol.kind = 'one_time'
+      AND coalesce(opr.grants_credit ->> 'kind', '') <> 'pack' AND ${inner})`;
+const orderCouponExists = (inner: SQL) =>
+  sql`EXISTS (SELECT 1 FROM invoice_line_discounts od
+    JOIN applied_coupons oac ON oac.id = od.applied_coupon_id
+    JOIN coupons ocp ON ocp.id = oac.coupon_id
+    WHERE od.invoice_id = ${invoices.id} AND od.amount_minor <> 0 AND ${inner})`;
+const orderPaymentExists = (inner: SQL) =>
+  sql`EXISTS (SELECT 1 FROM payments opy
+    LEFT JOIN payment_methods opm ON opm.id = opy.payment_method_id
+    WHERE opy.invoice_id = ${invoices.id} AND opy.status = 'succeeded' AND ${inner})`;
+const ORDER_VIRTUAL: Record<string, VirtualFilter> = {
+  gateway: {
+    kind: "enum",
+    condition: (op, v) =>
+      existsFieldCondition(orderPaymentExists, sql`opy.provider_key` as unknown as Column, op, v),
+  },
+  payment_method_type: {
+    kind: "enum",
+    condition: (op, v) =>
+      existsFieldCondition(orderPaymentExists, sql`opm.type` as unknown as Column, op, v),
+  },
+  product: {
+    kind: "enum",
+    condition: (op, v) =>
+      existsFieldCondition(orderLineExists, sql`opd.public_id` as unknown as Column, op, v),
+  },
+  // Text, not enum: a partial code is the usual search, so contains and its family work too.
+  coupon: {
+    kind: "text",
+    condition: (op, v) => {
+      const code = sql`ocp.code`;
+      if (op === "contains") return orderCouponExists(sql`${code} ILIKE ${"%" + v + "%"}`);
+      if (op === "not_contains")
+        return sql`NOT ${orderCouponExists(sql`${code} ILIKE ${"%" + v + "%"}`)}`;
+      if (op === "starts_with") return orderCouponExists(sql`${code} ILIKE ${v + "%"}`);
+      if (op === "ends_with") return orderCouponExists(sql`${code} ILIKE ${"%" + v}`);
+      return existsFieldCondition(orderCouponExists, code as unknown as Column, op, v);
+    },
+  },
+};
+export const ORDER_FILTER_OPS: Record<string, readonly string[]> = {
+  ...INVOICE_FILTER_OPS,
+  ...opsFromSpecs(ORDER_SPECS),
+  ...opsFromSpecs(ORDER_VIRTUAL),
+};
+export const ORDER_FILTER_KINDS: Record<string, FilterKind> = {
+  ...INVOICE_FILTER_KINDS,
+  ...kindsFromSpecs(ORDER_SPECS),
+  ...kindsFromSpecs(ORDER_VIRTUAL),
+};
+
 export interface InvoiceListFilters {
+  /** The Orders list: only invoices that meet the order rule (`order-predicate.ts`). */
+  ordersOnly?: boolean;
+  /** Orders only: the customer custom-field filter specs (`cf_*`) of this business. */
+  extraSpecs?: Record<string, FilterSpec>;
   customerId?: string;
   /** Tenant-scoped internal id — resolve `?subscription=sub_…` before calling in. */
   subscriptionId?: string;
@@ -7539,9 +7805,19 @@ export async function listInvoicesPage(
       const c = arAgingBucketCondition(bucket.op, bucket.value);
       if (c) conds.push(c);
     }
+    const specs = listFilters(mode.anchor === "day" ? tz : null);
+    if (f.ordersOnly) {
+      conds.push(orderRuleOn("invoices"));
+      Object.assign(specs, ORDER_SPECS, f.extraSpecs ?? {});
+      for (const x of filters) {
+        const v = Object.hasOwn(ORDER_VIRTUAL, x.field) ? ORDER_VIRTUAL[x.field] : undefined;
+        const c = v?.condition(x.op, x.value, tz);
+        if (c) conds.push(c);
+      }
+    }
     conds.push(
       ...filterConditions(
-        listFilters(mode.anchor === "day" ? tz : null),
+        specs,
         filters.filter((x) => x.field !== "ar_bucket"),
         tz,
       ),

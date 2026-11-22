@@ -87,7 +87,9 @@ func (c *Client) ProcessOnce(ctx context.Context, db *sql.DB, ev Event) error {
 func (c *Client) apply(ctx context.Context, tx *sql.Tx, ev Event) error {
 	var ref struct{ ID string `json:"id"` }
 	switch ev.EventType {
-	case "subscription_created", "subscription_changed", "subscription_canceled":
+	case "subscription_created", "subscription_changed", "subscription_canceled",
+		"subscription_activated", "subscription_cancel_scheduled", "subscription_scheduled_cancellation_removed",
+		"subscription_reactivated", "subscription_paused", "subscription_resumed":
 		if err := json.Unmarshal(ev.Content["subscription"], &ref); err != nil { return err }
 		var sub struct {
 			ID, Status, Customer string

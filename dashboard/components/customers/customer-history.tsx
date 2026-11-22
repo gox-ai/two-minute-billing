@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { plural } from "@/lib/labels";
+import { sourceLabel } from "@/components/audit/labels";
 import * as React from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -17,7 +19,7 @@ import { creditNoteChipStatus } from "@/lib/credit-note-status";
 import { money } from "@/lib/format";
 import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import type { Invoice, CreditNote } from "@/lib/api";
-import type { Transaction } from "@/lib/api/payments";
+import type { PaymentIntentRow, Transaction } from "@/lib/api/payments";
 import type { EventRecord } from "@/lib/api/developer";
 import type { EmailMessage } from "@/lib/api/emails";
 import { useBusinessTz } from "@/components/business-tz";
@@ -25,6 +27,10 @@ import { Button } from "@/components/ui/button";
 import { EmailDetailDialog } from "@/components/emails/email-detail-dialog";
 import { Pager, useCursorPages, type CursorSource } from "@/components/patterns/pager";
 import { HISTORY_PAGE as PAGE } from "@/lib/cursor-source";
+import { EmptyState } from "@/components/states";
+import { MiddleEllipsis } from "@/components/patterns/id-text";
+import { displayIntentStatus } from "@/lib/payment-intent-status";
+import { IntentLastError, IntentPurposeChip } from "@/components/payments/payment-intents-table";
 
 const NO_EVENTS: CursorSource<EventRecord> = {
   rows: [],
@@ -32,22 +38,47 @@ const NO_EVENTS: CursorSource<EventRecord> = {
   nextCursor: null,
   total: 0,
 };
+const NO_INTENTS: CursorSource<PaymentIntentRow> = { ...NO_EVENTS, rows: [] };
 
-// "History" panel: a single tabbed widget spanning Invoices,
-// Transactions, Credit Notes, Email Logs and Events. Each tab's first page is
+export type HistoryTab =
+  | "invoices"
+  | "transactions"
+  | "payment-intents"
+  | "credit-notes"
+  | "emails"
+  | "events";
+
+const VIEW_ALL_LABEL: Record<HistoryTab, string> = {
+  invoices: "View all invoices",
+  transactions: "View all transactions",
+  "payment-intents": "View all payment intents",
+  "credit-notes": "View all credit notes",
+  emails: "View all emails",
+  events: "View all events",
+};
+
+// "History" panel: a single tabbed widget spanning Invoices, Transactions,
+// Payment intents, Credit Notes, Email Logs and Events. Each tab's first page is
 // server-rendered (fetched with `limit: HISTORY_PAGE`); later pages come through
 // `/api/lists`, so the key stays server-side.
 export function CustomerHistory({
   biz,
   invoices,
   transactions,
+  paymentIntents,
   creditNotes,
   events,
   emails,
+  viewAll,
 }: {
   biz: string;
   invoices: CursorSource<Invoice>;
   transactions: CursorSource<Transaction>;
+  /**
+   * The customer's payment intents, open ones included (they write no transaction).
+   * OPTIONAL: only the customer page passes it.
+   */
+  paymentIntents?: CursorSource<PaymentIntentRow>;
   creditNotes: CursorSource<CreditNote>;
   /**
    * Raw event stream — type, source, and the record each event names. OPTIONAL
@@ -57,9 +88,13 @@ export function CustomerHistory({
   events?: CursorSource<EventRecord>;
   /** Email Logs tab — billing emails addressed to this customer. */
   emails: CursorSource<EmailMessage>;
+  /** Per tab, the full list narrowed to this record. A tab without one shows no link. */
+  viewAll?: Partial<Record<HistoryTab, string>>;
 }) {
   const inv = useCursorPages(biz, invoices, PAGE);
   const txn = useCursorPages(biz, transactions, PAGE);
+  const pis = useCursorPages(biz, paymentIntents ?? NO_INTENTS, PAGE);
+  const router = useRouter();
   const cns = useCursorPages(biz, creditNotes, PAGE);
   const mail = useCursorPages(biz, emails, PAGE);
   const evt = useCursorPages(biz, events ?? NO_EVENTS, PAGE);
@@ -67,29 +102,54 @@ export function CustomerHistory({
   const tz = useBusinessTz();
   const [openEmail, setOpenEmail] = React.useState<EmailMessage | null>(null);
   const multiResource = new Set(evt.rows.map((e) => e.resource?.id ?? "")).size > 1;
+  const [tab, setTab] = React.useState<HistoryTab>("invoices");
+  const rowsIn: Record<HistoryTab, number> = {
+    invoices: invoices.rows.length,
+    transactions: transactions.rows.length,
+    "payment-intents": paymentIntents?.rows.length ?? 0,
+    "credit-notes": creditNotes.rows.length,
+    emails: emails.rows.length,
+    events: events?.rows.length ?? 0,
+  };
+  const viewAllHref = rowsIn[tab] > 0 ? viewAll?.[tab] : undefined;
   return (
-    <Tabs defaultValue="invoices">
-      <TabsList className="flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
-        <TabsTrigger value="invoices">Invoices{count(invoices)}</TabsTrigger>
-        <TabsTrigger value="transactions">Transactions{count(transactions)}</TabsTrigger>
-        <TabsTrigger value="credit-notes">Credit notes{count(creditNotes)}</TabsTrigger>
-        <TabsTrigger value="emails">Email logs{count(emails)}</TabsTrigger>
-        {events ? <TabsTrigger value="events">Events{count(events)}</TabsTrigger> : null}
-      </TabsList>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as HistoryTab)}>
+      {/* The link follows the active tab; on a phone it wraps under the tabs. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <TabsList className="flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
+          <TabsTrigger value="invoices">Invoices{count(invoices)}</TabsTrigger>
+          <TabsTrigger value="transactions">Transactions{count(transactions)}</TabsTrigger>
+          {paymentIntents ? (
+            <TabsTrigger value="payment-intents">
+              Payment intents{count(paymentIntents)}
+            </TabsTrigger>
+          ) : null}
+          <TabsTrigger value="credit-notes">Credit notes{count(creditNotes)}</TabsTrigger>
+          <TabsTrigger value="emails">Email logs{count(emails)}</TabsTrigger>
+          {events ? <TabsTrigger value="events">Events{count(events)}</TabsTrigger> : null}
+        </TabsList>
+        {viewAllHref ? (
+          <Link href={viewAllHref} className="text-sm text-primary hover:underline sm:ml-auto">
+            {VIEW_ALL_LABEL[tab]}
+          </Link>
+        ) : null}
+      </div>
 
       <TabsContent value="invoices" className="pt-3">
         {invoices.rows.length === 0 ? (
           <Empty>No invoice history.</Empty>
         ) : (
           <>
-            {/* Fixed widths, like Transactions: the id truncates instead of scrolling. */}
-            <Table phone="stack" className="table-fixed [--phone-row-x:0] max-lg:min-w-2xl">
+            {/* Auto layout with colgroup widths: the id truncates, and an amount wider than
+                its column widens it instead of breaking or drawing over the next one. */}
+            <Table phone="stack" fit className="[--phone-row-x:0]">
+              {/* The id takes no room of its own, so its column holds a width. */}
               <colgroup>
+                <col className="w-[28%]" />
                 <col />
-                <col className="w-[20%]" />
-                <col className="w-[15%]" />
-                <col className="w-[21%]" />
-                <col className="w-[17%]" />
+                <col />
+                <col />
+                <col />
               </colgroup>
               <TableHeader>
                 <TableRow>
@@ -105,11 +165,11 @@ export function CustomerHistory({
               <TableBody>
                 {inv.rows.map((i) => (
                   <TableRow key={i.id}>
-                    <TableCell>
+                    <TableCell className="min-w-28">
                       <Link
                         href={`/businesses/${biz}/invoices/${i.id}`}
                         title={i.id}
-                        className="block truncate font-mono text-xs text-primary hover:underline"
+                        className="block w-0 min-w-full truncate font-mono text-xs text-primary hover:underline"
                       >
                         {i.number ?? i.id}
                       </Link>
@@ -136,16 +196,15 @@ export function CustomerHistory({
           <Empty>No transaction history.</Empty>
         ) : (
           <>
-            {/* Fixed widths, like Email Logs: long ids truncate and dates wrap inside
-                their column; the gateway sits under the type. */}
-            <Table phone="stack" className="table-fixed [--phone-row-x:0] max-lg:min-w-2xl">
+            {/* As Invoices: long ids truncate and dates wrap inside their column, an amount
+                widens its own; the gateway sits under the type. */}
+            <Table phone="stack" fit className="[--phone-row-x:0]">
               <colgroup>
+                <col className="w-[24%]" />
                 <col />
-                <col className="w-[17%]" />
-                {/* Fits "needs attention" whole. */}
-                <col className="w-[22%]" />
-                <col className="w-[15%]" />
-                <col className="w-[17%]" />
+                <col />
+                <col />
+                <col />
               </colgroup>
               <TableHeader>
                 <TableRow>
@@ -161,11 +220,11 @@ export function CustomerHistory({
               <TableBody>
                 {txn.rows.map((t) => (
                   <TableRow key={t.id}>
-                    <TableCell>
+                    <TableCell className="min-w-28">
                       <Link
                         href={`/businesses/${biz}/transactions/${t.id}`}
                         title={t.id}
-                        className="block truncate font-mono text-xs text-primary hover:underline"
+                        className="block w-0 min-w-full truncate font-mono text-xs text-primary hover:underline"
                       >
                         {t.id}
                       </Link>
@@ -182,7 +241,7 @@ export function CustomerHistory({
                       <div className="capitalize">{t.type.replace(/_/g, " ")}</div>
                       {t.gateway_key ? (
                         <div
-                          className="truncate text-xs text-muted-foreground"
+                          className="w-0 min-w-full truncate text-xs text-muted-foreground"
                           title={t.gateway_key}
                         >
                           {t.gateway_key}
@@ -201,12 +260,93 @@ export function CustomerHistory({
         )}
       </TabsContent>
 
+      {!paymentIntents ? null : (
+        <TabsContent value="payment-intents" className="pt-3">
+          {pis.rows.length === 0 ? (
+            <EmptyState
+              compact
+              title="No payment intents"
+              description="We create a payment intent when this customer pays on a payment page or saves a payment method."
+            />
+          ) : (
+            <>
+              {/* Last error takes the spare width; the rest hold their widths, like the tabs above. */}
+              <Table phone="stack" fit className="[--phone-row-x:0]">
+                <colgroup>
+                  <col />
+                  <col className="w-[16%]" />
+                  <col />
+                  <col />
+                  <col />
+                  <col />
+                </colgroup>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Created</TableHead>
+                    <TableHead phone="title">Payment intent</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last error</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead phone="aside" className="text-right">
+                      Amount
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pis.rows.map((p) => {
+                    const href = `/businesses/${biz}/payment_intents/${p.id}`;
+                    return (
+                      <TableRow
+                        key={p.id}
+                        className="cursor-pointer"
+                        // The row opens the intent; a link inside it wins.
+                        onClick={(e) => {
+                          if ((e.target as HTMLElement).closest("a,button")) return;
+                          router.push(href);
+                        }}
+                      >
+                        <TableCell className="whitespace-normal">
+                          {fmtDateTime(p.created_at, tz)}
+                        </TableCell>
+                        <TableCell>
+                          <Link
+                            href={href}
+                            className="flex w-0 min-w-full text-muted-foreground hover:text-primary hover:underline"
+                          >
+                            <MiddleEllipsis value={p.id} className="text-xs" />
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <StatusChip status={displayIntentStatus(p)} />
+                        </TableCell>
+                        <TableCell className="py-2.5 whitespace-normal">
+                          <IntentLastError error={p.last_error} />
+                        </TableCell>
+                        <TableCell>
+                          <IntentPurposeChip purpose={p.purpose} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {p.amount_minor != null && p.currency
+                            ? money(p.amount_minor, p.currency)
+                            : null}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              <Pager pager={pis.pager} className="px-0" />
+            </>
+          )}
+        </TabsContent>
+      )}
+
       <TabsContent value="credit-notes" className="pt-3">
         {creditNotes.rows.length === 0 ? (
           <Empty>No credit note history.</Empty>
         ) : (
           <>
-            <Table phone="stack" className="[--phone-row-x:0]">
+            <Table phone="stack" fit className="[--phone-row-x:0]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Credit note</TableHead>
@@ -391,8 +531,8 @@ export function CustomerHistory({
                           {e.resource?.id ?? "—"}
                         </TableCell>
                       ) : null}
-                      <TableCell className="truncate" title={e.source ?? undefined}>
-                        {e.source ?? "—"}
+                      <TableCell className="truncate">
+                        {e.source ? sourceLabel(e.source) : "—"}
                       </TableCell>
                       <TableCell className="whitespace-normal">
                         {fmtDateTime(e.occurred_at, tz)}

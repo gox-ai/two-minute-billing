@@ -1,4 +1,5 @@
-import { exchangeTokenForCookie } from '@/lib/storefront-session'
+import { exchangeTokenForCookie } from "@/lib/storefront-session";
+import { recordCheckoutEntry } from "@/lib/storefront-visit";
 
 /**
  * Hosted-checkout entry (W1) — the portal's twin. See
@@ -8,9 +9,10 @@ import { exchangeTokenForCookie } from '@/lib/storefront-session'
  * gateway SDK from a third-party host, so with the token in the path it travelled to
  * that host as a `Referer` on the very request that loads the payment form.
  */
-export const dynamic = 'force-dynamic'
+export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params
-  await exchangeTokenForCookie('checkout', token)
+export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
+  const { token } = await params;
+  recordCheckoutEntry(req, token);
+  await exchangeTokenForCookie("checkout", token);
 }

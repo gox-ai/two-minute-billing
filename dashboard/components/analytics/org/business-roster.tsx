@@ -4,6 +4,14 @@ import { EmptyState } from "@/components/states";
 import { pctFromBps } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+/** Biggest 30-day revenue first, then name: the order of the cards and the list. */
+export function byRevenue<T extends Pick<RosterRow, "name" | "revenueMinor" | "mrrMinor">>(
+  rows: readonly T[],
+): T[] {
+  const size = (r: T) => r.revenueMinor ?? r.mrrMinor ?? -1;
+  return [...rows].sort((a, z) => size(z) - size(a) || a.name.localeCompare(z.name));
+}
+
 export interface RosterRow {
   id: string;
   name: string;
@@ -14,6 +22,18 @@ export interface RosterRow {
   mrrLabel: string | null;
   /** The same figure as a number, for ordering. */
   mrrMinor?: number | null;
+  /** Revenue billed in 30 days, converted like the MRR; null when nothing was measured. */
+  revenueLabel?: string | null;
+  revenueMinor?: number | null;
+  /** The part of it that is not subscriptions; null when not read (only the top cards ask). */
+  otherRevenueMinor?: number | null;
+  /** Which billing models the business sold in the 30 days. One rule for every screen. */
+  models?: { subscriptions: boolean; oneTime: boolean; usage: boolean; credits: boolean };
+  /** One-time orders, their average, usage events and credit used, over the 30 days. */
+  orders?: number | null;
+  averageOrderMinor?: number | null;
+  usageEvents?: number | null;
+  creditsUsedMinor?: number | null;
   /** Movement across the window, in basis points. Null where the engine had no base to move from. */
   changeBps: number | null;
   payingSubscriptions: number | null;
@@ -44,12 +64,11 @@ export interface RosterRow {
 export function BusinessRoster({ rows, mode }: { rows: RosterRow[]; mode: "live" | "test" }) {
   const title = mode === "test" ? "Test businesses" : "Businesses";
   // Biggest first: which business carries the book is the question a roster answers, and
-  // creation order put the one real business below ten fixtures. Businesses with no MRR yet
-  // are named once at the foot instead of each taking a row of dashes.
-  const earning = rows
-    .filter((r) => r.mrrMinor != null && r.mrrMinor !== 0)
-    .sort((a, z) => (z.mrrMinor ?? 0) - (a.mrrMinor ?? 0));
-  const idle = rows.filter((r) => r.mrrMinor == null || r.mrrMinor === 0);
+  // creation order put the one real business below ten fixtures. Businesses with no revenue
+  // yet are named once at the foot instead of each taking a row of dashes.
+  const sells = (r: RosterRow) => (r.revenueMinor ?? 0) > 0 || (r.mrrMinor ?? 0) !== 0;
+  const earning = byRevenue(rows.filter(sells));
+  const idle = rows.filter((r) => !sells(r));
 
   if (rows.length === 0) {
     return (
@@ -69,6 +88,7 @@ export function BusinessRoster({ rows, mode }: { rows: RosterRow[]; mode: "live"
       {earning.length > 0 ? (
         <Head>
           <span className="min-w-0 flex-1">Business</span>
+          <span className={LADDER.amount}>Revenue, 30 days</span>
           <span className={LADDER.amount}>MRR</span>
           {/* Narrow screens keep business, MRR and paying; the movement and the dunning
               count come back as the row has room for them. */}
@@ -96,6 +116,7 @@ export function BusinessRoster({ rows, mode }: { rows: RosterRow[]; mode: "live"
               ) : null}
             </span>
           </div>
+          <span className={LADDER.amount}>{r.revenueLabel ?? "—"}</span>
           <span className={LADDER.amount}>{r.mrrLabel ?? "—"}</span>
           <span className={cn(LADDER.secondary, "hidden sm:inline")}>
             {r.changeBps == null ? (
@@ -126,7 +147,7 @@ export function BusinessRoster({ rows, mode }: { rows: RosterRow[]; mode: "live"
       ))}
       {idle.length > 0 ? (
         <p className={cn("text-sm text-muted-foreground", earning.length > 0 && "pt-3")}>
-          {idle.length} with no recurring revenue yet:{" "}
+          {idle.length} with no revenue yet:{" "}
           {idle.map((r, i) => (
             <span key={r.id}>
               {i > 0 ? ", " : null}

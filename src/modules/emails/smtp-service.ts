@@ -329,6 +329,7 @@ export async function sendTestEmail(
     logoUrl: biz.logoUrl ?? undefined,
     iconUrl: biz.iconUrl ?? undefined,
     brandColor: biz.brandColor ?? undefined,
+    buttonTextColor: biz.buttonTextColor ?? undefined,
     ...(emailCfg.footerNote ? { footerNote: emailCfg.footerNote } : {}),
   };
   const rendered = renderEmail(

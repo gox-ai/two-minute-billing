@@ -1,5 +1,10 @@
 import { notFound } from "next/navigation";
-import { listBusinesses, PUBLIC_API_URL, publicApiReachable, isApiNotFound } from "@/lib/api";
+import {
+  listBusinesses,
+  GATEWAY_WEBHOOK_BASE_URL,
+  gatewayWebhookBaseReachable,
+  isApiNotFound,
+} from "@/lib/api";
 import { businessCurrencyOptions } from "@/lib/business-currencies";
 import {
   getGatewayAccount,
@@ -108,10 +113,10 @@ export default async function GatewayDetailPage({
   const credentialFields = entry?.credential_fields ?? [];
   const hasCredentialFields = credentialFields.length > 0;
   // FALLBACK only — must match `gatewayNotificationUrl` in src/providers/notification-url.ts:
-  // the PUBLIC base (never the internal API_URL), the account in `?id=` or, for a gateway
-  // that refuses a query string, in the path.
+  // the gateway webhook base (never the internal API_URL), the account in `?id=` or, for a
+  // gateway that refuses a query string, in the path.
   const notificationUrl =
-    `${PUBLIC_API_URL}/v1/gateway_webhooks/${encodeURIComponent(account.gateway_key)}` +
+    `${GATEWAY_WEBHOOK_BASE_URL}/v1/gateway_webhooks/${encodeURIComponent(account.gateway_key)}` +
     (entry?.webhook_account_id_in_path
       ? `/${encodeURIComponent(account.id)}`
       : `?id=${encodeURIComponent(account.id)}`);
@@ -349,7 +354,7 @@ export default async function GatewayDetailPage({
               />
             ) : (
               <div className="flex flex-col gap-4">
-                {publicApiReachable ? (
+                {gatewayWebhookBaseReachable ? (
                   <div className="flex flex-col gap-1.5">
                     <label htmlFor="notification_url" className="text-sm font-semibold">
                       Notification URL

@@ -9,8 +9,9 @@ import {
   redeliverLatest,
   testSendWebhook,
   redeliverFailed,
+  getEvent,
 } from "@/lib/api/developer";
-import type { RedeliveryAttempt, RedeliveryResponse } from "@/lib/api/developer";
+import type { EventDetail, RedeliveryAttempt, RedeliveryResponse } from "@/lib/api/developer";
 import { requirePermission } from "@/lib/session";
 
 /** Update description and/or event_types subscription for a webhook endpoint. */
@@ -170,4 +171,16 @@ export async function redeliverAction(
     ? `receiver answered HTTP ${attempt.response.status} in ${attempt.latency_ms}ms`
     : `no response: ${attempt.error ?? "the request failed"}`;
   return { ...actionOk(`Resent · ${what}`), attempt };
+}
+
+/** The event a delivery carried, for the delivery log's Inspect drawer. */
+export async function inspectDeliveryEventAction(
+  eventId: string,
+): Promise<{ ok: true; event: EventDetail } | { ok: false; message: string }> {
+  await requirePermission("webhooks:view", "developer");
+  try {
+    return { ok: true, event: await getEvent(eventId) };
+  } catch {
+    return { ok: false, message: "We could not load the event. Try again." };
+  }
 }

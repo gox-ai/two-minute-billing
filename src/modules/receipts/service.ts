@@ -54,6 +54,12 @@ export interface ReceiptSnapshot {
     tax_registration_number: string | null;
     email: string | null;
     timezone: string;
+    /**
+     * Brand marks at creation. Absent on receipts created before 2026-11-18: their PDF
+     * prints the business's CURRENT logo (`receiptBranding` in `./pdf.ts`).
+     */
+    logo_url?: string | null;
+    icon_url?: string | null;
   };
   payer: {
     id: string;
@@ -117,17 +123,26 @@ async function methodWords(
   return TYPE_WORDS[pm.type] ?? capitalize(pm.type.replace(/_/g, " "));
 }
 
+/** The business half of a new receipt's snapshot. */
+export function businessSnapshot(
+  biz: typeof businesses.$inferSelect | undefined,
+): ReceiptSnapshot["business"] {
+  return {
+    name: biz?.name ?? "",
+    address: (biz?.address as Record<string, unknown> | null) ?? null,
+    tax_registration_number: biz?.taxRegistrationNumber ?? null,
+    email: biz?.supportEmail ?? biz?.contactEmail ?? null,
+    timezone: biz?.timezone ?? "UTC",
+    logo_url: biz?.logoUrl ?? null,
+    icon_url: biz?.iconUrl ?? null,
+  };
+}
+
 async function partySnapshot(tx: Tx, businessId: string, customerId: string) {
   const [biz] = await tx.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
   const [cus] = await tx.select().from(customers).where(eq(customers.id, customerId)).limit(1);
   return {
-    business: {
-      name: biz?.name ?? "",
-      address: (biz?.address as Record<string, unknown> | null) ?? null,
-      tax_registration_number: biz?.taxRegistrationNumber ?? null,
-      email: biz?.supportEmail ?? biz?.contactEmail ?? null,
-      timezone: biz?.timezone ?? "UTC",
-    },
+    business: businessSnapshot(biz),
     payer: {
       id: cus?.publicId ?? "",
       name: cus ? (holderName(cus) ?? cus.email ?? null) : null,

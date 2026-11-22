@@ -91,6 +91,28 @@ every module's events via `emitEvent`, but those are owned by the emitting modul
 
 ## Changelog
 
+- **2026-11-18 (portal pay-and-save)** — `reconcileUnmatchedCapture`: a capture with OUR tag and
+  no row, on a gateway in `CAPTURE_MAY_BEAT_OUR_ROW` (RazorPay, where it was measured), younger than `UNBOOKED_OWN_CHARGE_WAIT_MS` (15 min), throws `OwnChargeNotBookedYetError`
+  so the retry job applies it once the charging request commits (measured: Razorpay's event 0.5 s
+  ahead of the commit). Older ones keep the lost-money path and its alert.
+- **2026-11-17** — Every applied event stores the payment intent and attempt it is about
+  (`provider_events.payment_intent_id` / `payment_attempt_id`, 0540), whatever its type,
+  `unknown` included. `resolveEventLink` (`event-link.ts`): an attempt addressed by an id the
+  event names, else `intent_at_gateway`, else `ownershipRef`, scoped to the delivering business;
+  the attempt is the latest one created by `received_at`. Display only: no handler reads it, and
+  a failed lookup leaves the columns null. `backfillEventLinks` links older rows
+  (`scripts/backfill-provider-event-links.ts`, dry run by default). Cover: `verify:gateway` C7-link.
+
+- **2026-11-17** — `reconcileUnmatchedCapture` completes the checkout a still-open `payment` intent
+  with no invoice belongs to (`completeCheckoutForPaymentIntent`, no grace), instead of refunding
+  the buyer's one payment as a duplicate. Only `no_session`, `skipped` and `failed` fall through to
+  the unmatched-capture refund. Gate: `verify:gateway-sdk-modes` (h).
+- **2026-11-17** — `reconcileUnmatchedCapture` waits for a consume in flight: an intent
+  claimed (`consumed`) within `CONSUME_IN_FLIGHT_MS` (2 min) with no payment for the charge
+  throws `CaptureInFlightError`, so the event errors (logged at info) and is retried until the
+  consume's own booking exists. It used to book the capture as stray money, which made the
+  consume's insert fail on `payments_provider_charge_uq` and refunded the buyer's purchase.
+  Past the window it books as before. Gate: `verify:stale-pending` § P2.
 - **2026-11-05** — `applyMandateStatus` passes the method's stored `collect_open_invoices`
   (0502) to `collectOutstandingForNewPaymentMethod` when a mandate goes live; null keeps
   `collect_on_payment_method_update`. Gate: `verify:gateway` (OCA).
@@ -739,3 +761,21 @@ every module's events via `emitEvent`, but those are owned by the emitting modul
   delivery's `hook-` trace, for every gateway. A delivery of one event also hands its span-less
   calls (signature check, the adapter's object read) to that span (`adoptTraceLogsIntoSpan`).
   No match, or two spans for one id: nothing changes. Gate: `verify:gateway` (span-hook).
+- **2026-11-17** — Gateway failures, engine-wide. An async decline stores operator text
+  (`operatorFailureText`: the gateway's or our rule's sentence, else the code's label with the
+  gateway code beside it) instead of the raw `providerFailureCode`, so `E308` or
+  `payment_cancelled` no longer reaches `payment_failed.message`. `charge.failed` on an open
+  intent is kept without a `failureCode` (booked `charge_failed`) and also matched by
+  `ownershipRef`. `intent.failed`/`intent.setup_failed` under an id we do not hold (Adyen
+  pspReference) find the intent by `ownershipRef` (never `foreign`; on attempt #2+ only when the
+  attempt carries an id the event names) and fail the attempt as before. A refused request of
+  ours (`gateway_request_rejected`) settles retriable. Cover: `verify:gateway` C7-widen.
+- **2026-11-17** — A card-updater `payment_method.updated` that revives an `invalid` or `expired`
+  method collects the customer's open invoices on it at once (`collectOutstandingForNewPaymentMethod`,
+  best-effort). The reversal writer passes the retry rail and issuer country. Cover:
+  `verify:dunning` DA.
+- **2026-11-17** — `applyMandateUpdate` stores a dead mandate's cause on the payment method
+  (`mandate_failure_code` / `mandate_failure_text`, 0538: our code and the operator text); a live
+  mandate clears them. `applyMandateStatus` takes the failure as an optional fourth argument.
+  Cover: `verify:gocardless-engine` §6.
+- **2026-11-21** — Inbound gateway webhooks (`/v1/gateway_webhooks/:gateway`) and SES notices run with event source `webhook`, actor = the gateway key (`ses` for email). The queued `process_gateway_webhook` job uses the same context, so an answer-first gateway reads the same as an inline one. Cover: `verify:webhook-inbound`.

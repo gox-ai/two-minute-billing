@@ -355,3 +355,10 @@ None (audit-logged instead).
   no live business is refused: there is no live business to copy, and engine defaults would
   silently drop the operator's branding and addresses. `insertTestTwin` now uses `twinSettings`.
   `verify:test-reset`.
+- **2026-11-16 (0534)** — Team alerts removed (`modules/notifications` replaces them).
+  `updateBusiness` no longer takes `teamAlertsConfig`; the column stays (read by the one-time
+  notice, reset on a test twin) until the deprecated API is removed.
+- **2026-11-17 (0542)** — `businesses.button_text_color` (`#RRGGBB` or null = automatic):
+  the label on brand-color buttons. `updateBusiness` takes `buttonTextColor`; the test twin
+  copies it through `twinSettings`. Hosted pages and billing emails use it as set, whatever
+  its contrast (Brand Styles warns below 4.5:1); null = automatic (`buttonLabel`).

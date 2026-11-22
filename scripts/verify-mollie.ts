@@ -532,8 +532,8 @@ function declines() {
   );
   const pp = n("method_not_recurring");
   ok(
-    "decline: PayPal without reference transactions → ours, terminal, hidden",
-    pp.code === "gateway_request_rejected" && !pp.retriable && declineHiddenFromPayer(pp.code),
+    "decline: PayPal without reference transactions → ours, retried, hidden",
+    pp.code === "gateway_request_rejected" && pp.retriable && declineHiddenFromPayer(pp.code),
   );
 }
 

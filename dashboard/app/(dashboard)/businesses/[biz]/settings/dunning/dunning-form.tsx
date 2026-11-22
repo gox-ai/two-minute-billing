@@ -1054,6 +1054,7 @@ function MethodSchedules({ d, days }: { d: DunningDefaults; days: number[] }) {
 function RailCapNote({ days }: { days: number[] }) {
   const upi = days.slice(0, NETWORK_RETRY_CAP.upi);
   const emandate = days.slice(0, NETWORK_RETRY_CAP.emandate);
+  const indiaCard = days.slice(0, NETWORK_RETRY_CAP.card);
   const upiCut = days.length > NETWORK_RETRY_CAP.upi;
   return (
     <Alert tone="neutral">
@@ -1062,12 +1063,16 @@ function RailCapNote({ days }: { days: number[] }) {
         re-presentations: UPI Autopay gets{" "}
         {upiCut ? `the first ${upi.length} (days ${listDays(upi)})` : `all ${days.length}`},
         netbanking e-mandate the first {emandate.length} (days {listDays(emandate)}), at least 3
-        days after the previous return. Cards and every other rail get all {days.length}.
+        days after the previous return, cards issued in India the first {indiaCard.length} (days{" "}
+        {listDays(indiaCard)}). Other cards and every other rail get all {days.length}.
         <More>
           We stop at that limit. We do not present a debit that the network rejects (UPI) or that
-          counts against the return rate (e-mandate). After the limit, we make no extra attempt on
-          the last day of the dunning period. The invoice waits for that day, and then the final
-          actions apply.
+          counts against the return rate (e-mandate). We retry an e-mandate debit only when the bank
+          returned it for insufficient money. When the gateway retries a UPI Autopay debit itself,
+          we add no retries in that cycle. Each retry on a card issued in India starts a new advance
+          notice to the bank. After the limit, we make no extra attempt on the last day of the
+          dunning period. The invoice waits for that day, and then the final actions apply. On every
+          rail, we present an invoice automatically at most 8 times.
         </More>
       </div>
     </Alert>

@@ -54,7 +54,15 @@ export function ReceiptsTable({
   const columns = React.useMemo<ColumnDef<Receipt>[]>(
     () => [
       {
+        id: "paid_at",
+        header: "Paid",
+        enableSorting: false,
+        accessorFn: (r) => r.paid_at,
+        cell: ({ row }) => <TextCell>{fmtDate(row.original.paid_at, tz)}</TextCell>,
+      },
+      {
         id: "number",
+        meta: { phone: "title" },
         header: "Number",
         enableSorting: false,
         accessorFn: (r) => r.number ?? "",
@@ -129,13 +137,6 @@ export function ReceiptsTable({
             </span>
           );
         },
-      },
-      {
-        id: "paid_at",
-        header: "Paid",
-        enableSorting: false,
-        accessorFn: (r) => r.paid_at,
-        cell: ({ row }) => <TextCell>{fmtDate(row.original.paid_at, tz)}</TextCell>,
       },
       {
         id: "created_at",

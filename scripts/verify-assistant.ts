@@ -97,6 +97,7 @@ const toolCalls = (...calls: Array<[string, unknown]>): Part[] => [
 ];
 const COUPON_GUIDE = {
   screen: "/businesses/{business}/catalog/coupons/new",
+  scope: "whole_business",
   steps: [{ control: "Code", do: "enter", say: "Enter the code in Code." }],
 };
 function previewTurn(q: string): Part[] | null {

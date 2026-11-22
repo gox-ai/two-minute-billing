@@ -34,6 +34,8 @@ import {
   paymentMethods,
   tmtestCharges,
   buyerRequestRejections,
+  paymentMethodAuthorizations,
+  events,
 } from "@db/schema";
 import { createPortalSession } from "@/modules/customer-portal/service";
 import { recordExcessPayment } from "@/modules/customers/balances";
@@ -473,6 +475,28 @@ const removed = await http(`/portal/v1/payment_methods/${pm1}`, {
   token: ptoken,
 });
 ok("remove: pm1 detached", removed.status === 200 && removed.json.deleted === true);
+
+// Provenance: the portal vault and remove are the BUYER's acts (`portal`), the operator's
+// own /v1 writes keep their own source.
+const apiEvents = await systemDb
+  .select({ source: events.source, type: events.type })
+  .from(events)
+  .where(eq(events.organizationId, org.organization.id));
+ok(
+  "provenance: the operator's own /v1 writes (customer create) are never labelled portal",
+  apiEvents.some((r) => r.type === "customer_created" && r.source !== "portal"),
+);
+const portalEvents = await systemDb
+  .select({ source: events.source })
+  .from(events)
+  .where(
+    and(
+      eq(events.organizationId, org.organization.id),
+      sql`${events.type} like 'payment_source_%'`,
+      eq(events.source, "portal"),
+    ),
+  );
+ok("provenance: portal card events carry source=portal", portalEvents.length >= 2);
 const afterRemove = await http("/portal/v1/payment_methods", { token: ptoken });
 ok("list: one card after remove", afterRemove.json.data?.length === 1);
 
@@ -1099,10 +1123,11 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
       firstClick.nextAction != null,
     );
 
+    // The first click named the saved card; the second click names it again.
     const secondClick = await http(`/portal/v1/invoices/${dcInv.id}/collect`, {
       method: "POST",
       token: xToken,
-      body: {},
+      body: { payment_method: pmX.publicId },
     });
     if (secondClick.status !== 200)
       console.log("    ↳ second click:", secondClick.status, JSON.stringify(secondClick.json));
@@ -1229,6 +1254,7 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
       currency: stuckInv.currency!,
       invoicePublicId: stuckInv.id,
       session: "on_session",
+      letBuyerChooseMethod: true,
       methodTypes: ["upi"],
     });
     // The buyer finishes at the gateway; no callback reaches us.
@@ -1274,6 +1300,7 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
       currency: goneInv.currency!,
       invoicePublicId: goneInv.id,
       session: "on_session",
+      letBuyerChooseMethod: true,
       methodTypes: ["upi"],
     });
     await setTmtestChargeStatus(gone.intentAtGateway!, "voided");
@@ -1293,6 +1320,145 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
         "voided",
     );
     ok("…and a new attempt was started", (await intentsOn(goneInv.id)).length === 2);
+
+    /** A saved-card attempt still open, as Pay now's saved-method row leaves it. */
+    const plantSaved = async (description: string, amount: number) => {
+      const inv = await tmb.invoices.create(biz.id, {
+        customer: cusX.id,
+        lines: [{ description, amount_minor: amount, quantity: 1 }],
+      });
+      const { intent } = await createPaymentIntent({
+        organizationId: org.organization.id,
+        businessId: bizRowX!.id,
+        purpose: "payment",
+        paymentMethodPublicId: pmX.publicId,
+        customerPublicId: cusX.id,
+        amountMinor: inv.amount_due_minor!,
+        currency: inv.currency!,
+        invoicePublicId: inv.id,
+        session: "on_session",
+        methodTypes: ["upi"],
+      });
+      return { inv, intent };
+    };
+
+    // The same saved card again resumes its open bank check.
+    const again = await plantSaved("Saved card clicked twice", 640_00);
+    ok(
+      "a saved-card attempt records that the buyer named it",
+      again.intent.savedMethodChosen === true,
+    );
+    const againRes = await http(`/portal/v1/invoices/${again.inv.id}/collect`, {
+      method: "POST",
+      token: xToken,
+      body: { payment_method: pmX.publicId },
+    });
+    ok(
+      "the same saved card again resumes its open attempt",
+      againRes.status === 200 &&
+        (againRes.json.payment_intent as { id?: string } | undefined)?.id === again.intent.publicId,
+    );
+
+    // "New card" after a saved-card attempt: close it, open the gateway's form.
+    const toNew = await plantSaved("Saved card, then new card", 650_00);
+    const toNewRes = await http(`/portal/v1/invoices/${toNew.inv.id}/collect`, {
+      method: "POST",
+      token: xToken,
+      body: {},
+    });
+    if (toNewRes.status !== 200)
+      console.log("    ↳ new card after saved:", toNewRes.status, JSON.stringify(toNewRes.json));
+    ok(
+      "a new card after a saved-card attempt does not resume the saved one",
+      toNewRes.status === 200 &&
+        (toNewRes.json.payment_intent as { id?: string } | undefined)?.id !== toNew.intent.publicId,
+    );
+    ok(
+      "…the saved-card attempt is voided",
+      (await getPaymentIntent(org.organization.id, bizRowX!.id, toNew.intent.publicId))?.status ===
+        "voided",
+    );
+
+    /**
+     * A hold whose capture the gateway refused. The same choice retries it; another
+     * method releases the hold and charges what the buyer selected, once.
+     */
+    const pmRetry = await vaultPaymentMethod({
+      organizationId: org.organization.id,
+      businessId: bizRowX!.id,
+      customer: cusRowX!,
+      token: "tok_4000000000002008",
+    });
+    const plantRefused = async (description: string, amount: number) => {
+      const inv = await tmb.invoices.create(biz.id, {
+        customer: cusX.id,
+        lines: [{ description, amount_minor: amount, quantity: 1 }],
+      });
+      const { intent } = await createPaymentIntent({
+        organizationId: org.organization.id,
+        businessId: bizRowX!.id,
+        purpose: "payment",
+        paymentMethodPublicId: pmRetry.publicId,
+        customerPublicId: cusX.id,
+        amountMinor: inv.amount_due_minor!,
+        currency: inv.currency!,
+        invoicePublicId: inv.id,
+        session: "on_session",
+      });
+      const first = await consumePaymentIntent(
+        org.organization.id,
+        bizRowX!.id,
+        intent.publicId,
+        inv.id,
+      );
+      const after = await getPaymentIntent(org.organization.id, bizRowX!.id, intent.publicId);
+      return { inv, intent, refused: first?.charge?.status === "failed", after };
+    };
+
+    const retry = await plantRefused("Refused capture, same card", 660_00);
+    ok(
+      "the planted capture was refused and the hold stays",
+      retry.refused &&
+        retry.after?.status === "authorized" &&
+        retry.after.lastAttemptStatus === "failed",
+    );
+    const retryRes = await http(`/portal/v1/invoices/${retry.inv.id}/collect`, {
+      method: "POST",
+      token: xToken,
+      body: { payment_method: pmRetry.publicId },
+    });
+    // The test card refuses the first capture of every payment, so the fresh one is refused
+    // too: what matters is a new answer from the gateway, not the old refusal replayed.
+    ok(
+      "the same card after a refused capture starts a fresh payment",
+      retryRes.status === 200 && (await intentsOn(retry.inv.id)).length === 2,
+    );
+    ok(
+      "…the refused hold is released, not replayed",
+      (await getPaymentIntent(org.organization.id, bizRowX!.id, retry.intent.publicId))?.status ===
+        "voided",
+    );
+    ok("…and nothing is charged twice", (await paymentsOn(retry.inv.id)) <= 1);
+
+    const moved = await plantRefused("Refused capture, other card", 670_00);
+    const movedRes = await http(`/portal/v1/invoices/${moved.inv.id}/collect`, {
+      method: "POST",
+      token: xToken,
+      body: { payment_method: pmX.publicId },
+    });
+    if (movedRes.json.status !== "paid")
+      console.log(
+        "    ↳ other card after refusal:",
+        movedRes.status,
+        JSON.stringify(movedRes.json),
+      );
+    ok("another card after a refused capture is charged → paid", movedRes.json.status === "paid");
+    ok(
+      "…the refused hold is released",
+      (await getPaymentIntent(org.organization.id, bizRowX!.id, moved.intent.publicId))?.status ===
+        "voided",
+    );
+    ok("…and the invoice is paid once", (await paymentsOn(moved.inv.id)) === 1);
   }
 
   /**
@@ -3305,9 +3471,12 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
 
   const blocked = await http(`${path}/${homeId}/archive`, { method: "POST", token: tok });
   ok(
-    "shipping: archive refused (409) while a live subscription ships to it, naming it",
+    "shipping: archive refused (409) while a live subscription ships to it, with no id",
     blocked.status === 409 &&
-      String((blocked.json.error as { message?: string })?.message).includes(sub.publicId),
+      /A live subscription ships to it/.test(
+        String((blocked.json.error as { message?: string })?.message),
+      ) &&
+      !String((blocked.json.error as { message?: string })?.message).includes(sub.publicId),
   );
 
   // The next invoice snapshots the assigned ship-to, not the default.
@@ -3434,6 +3603,191 @@ ok("audit: consumed_at marks the link spent", Boolean(audited?.consumedAt));
       Date.parse(c.next_payment_unpriced.at) ===
         yearlySwitch.subscription.currentPeriodEnd!.getTime(),
   );
+}
+
+// ── Phase C: pay with a new method and save it, in one step ─────────────────────
+{
+  // Unset is `offer`; stored explicitly here so the check does not lean on the default.
+  await systemDb.execute(
+    sql`update businesses set storefront_config = coalesce(storefront_config, '{}'::jsonb) || '{"portal_save_new_method":"offer"}'::jsonb where public_id = ${biz.id}`,
+  );
+  const cusS = await tmb.customers.create(biz.id, {
+    email: "portal-save@example.com",
+    first_name: "Save",
+    last_name: "Buyer",
+  });
+  const sMint = await tmb.paymentMethods.createPortalSession(biz.id, cusS.id);
+  const sToken = (await exchange(sMint.token)).token;
+  const [bizRowS] = await systemDb
+    .select({ id: businesses.id })
+    .from(businesses)
+    .where(eq(businesses.publicId, biz.id))
+    .limit(1);
+  const collectSaving = async (invId: string, body: Record<string, unknown>) => {
+    let res = await http(`/portal/v1/invoices/${invId}/collect`, {
+      method: "POST",
+      token: sToken,
+      body,
+    });
+    // A challenge (an account in sdk / form mode): the buyer approves, then leg 2.
+    const pi = (res.json.payment_intent as { id?: string } | undefined)?.id;
+    if (res.json.object === "invoice_collection" && pi) {
+      const row = await getPaymentIntent(org.organization.id, bizRowS!.id, pi);
+      await TmtestProvider.resolveChallenge(row!.intentAtGateway!, true);
+      res = await http(`/portal/v1/invoices/${invId}/collect`, {
+        method: "POST",
+        token: sToken,
+        body: { payment_intent: pi },
+      });
+    }
+    return res;
+  };
+
+  const invS = await tmb.invoices.create(biz.id, {
+    customer: cusS.id,
+    lines: [{ description: "Pay and save", amount_minor: 410_00, quantity: 1 }],
+  });
+  const optsS = await http(`/portal/v1/invoices/${invS.id}/pay_options`, { token: sToken });
+  const rowS = (optsS.json.new_methods as Array<Record<string, any>> | undefined)?.find(
+    (n) => n.method === "card",
+  );
+  ok(
+    "pay and save: the new-card row offers saving, ticked when nothing works yet",
+    rowS?.save?.mode === "offer" &&
+      rowS.save.checked === true &&
+      typeof rowS.save.text === "string" &&
+      typeof rowS.save.text_version === "string",
+  );
+  const stale = await http(`/portal/v1/invoices/${invS.id}/collect`, {
+    method: "POST",
+    token: sToken,
+    body: { gateway_account: rowS?.gateway_account, save_method: true, save_text_version: "old" },
+  });
+  ok("pay and save: a consent text the buyer no longer sees → 400", stale.status === 400);
+  const paidS = await collectSaving(invS.id, {
+    gateway_account: rowS?.gateway_account,
+    save_method: true,
+    save_text_version: rowS?.save?.text_version,
+  });
+  if (paidS.json.status !== "paid" || !paidS.json.saved_payment_method)
+    console.log("    ↳ pay and save:", paidS.status, JSON.stringify(paidS.json).slice(0, 400));
+  const savedId = (paidS.json.saved_payment_method as { id?: string } | undefined)?.id;
+  ok(
+    "pay and save: the invoice is paid and the method saved",
+    paidS.json.status === "paid" && !!savedId,
+  );
+  const [savedRow] = savedId
+    ? await systemDb
+        .select()
+        .from(paymentMethods)
+        .where(eq(paymentMethods.publicId, savedId))
+        .limit(1)
+    : [];
+  ok("…as the buyer's primary (they had no working method)", savedRow?.role === "primary");
+  const consent = savedRow
+    ? await systemDb
+        .select()
+        .from(paymentMethodAuthorizations)
+        .where(eq(paymentMethodAuthorizations.paymentMethodId, savedRow.id))
+    : [];
+  ok(
+    "…with the consent text the buyer saw, stored beside it",
+    consent.length === 1 && consent[0]!.textVersion === rowS?.save?.text_version,
+  );
+  ok(
+    "…and one payment",
+    (
+      await systemDb
+        .select()
+        .from(payments)
+        .where(
+          eq(
+            payments.invoiceId,
+            (
+              await systemDb
+                .select({ id: invoices.id })
+                .from(invoices)
+                .where(eq(invoices.publicId, invS.id))
+            )[0]!.id,
+          ),
+        )
+    ).length === 1,
+  );
+
+  // A second invoice: the box is offered, not ticked, now that a method works.
+  const invS2 = await tmb.invoices.create(biz.id, {
+    customer: cusS.id,
+    lines: [{ description: "Pay and save, second", amount_minor: 420_00, quantity: 1 }],
+  });
+  const optsS2 = await http(`/portal/v1/invoices/${invS2.id}/pay_options`, { token: sToken });
+  const rowS2 = (optsS2.json.new_methods as Array<Record<string, any>> | undefined)?.find(
+    (n) => n.method === "card",
+  );
+  ok(
+    "pay and save: with a working method the box is offered unticked",
+    rowS2?.save?.mode === "offer" && rowS2.save.checked === false,
+  );
+  // Paying without ticking saves nothing.
+  const [cusRowS] = await systemDb
+    .select({ id: customers.id })
+    .from(customers)
+    .where(eq(customers.publicId, cusS.id))
+    .limit(1);
+  const before = (
+    await systemDb.select().from(paymentMethods).where(eq(paymentMethods.customerId, cusRowS!.id))
+  ).length;
+  const plain = await collectSaving(invS2.id, { gateway_account: rowS2?.gateway_account });
+  const after = (
+    await systemDb.select().from(paymentMethods).where(eq(paymentMethods.customerId, cusRowS!.id))
+  ).length;
+  ok(
+    "pay and save: unticked → paid, nothing saved",
+    plain.json.status === "paid" && !plain.json.saved_payment_method && after === before,
+  );
+
+  // The gateway takes the money but keeps no method (test gateway: minor units ending 19).
+  const invS3 = await tmb.invoices.create(biz.id, {
+    customer: cusS.id,
+    lines: [{ description: "Pay and save, not kept", amount_minor: 430_19, quantity: 1 }],
+  });
+  const optsS3 = await http(`/portal/v1/invoices/${invS3.id}/pay_options`, { token: sToken });
+  const rowS3 = (optsS3.json.new_methods as Array<Record<string, any>> | undefined)?.find(
+    (n) => n.method === "card",
+  );
+  const lost = await collectSaving(invS3.id, {
+    gateway_account: rowS3?.gateway_account,
+    save_method: true,
+    save_text_version: rowS3?.save?.text_version,
+  });
+  const afterLost = (
+    await systemDb.select().from(paymentMethods).where(eq(paymentMethods.customerId, cusRowS!.id))
+  ).length;
+  ok(
+    "pay and save: a method the gateway did not keep → paid, save_failed, nothing saved",
+    lost.json.status === "paid" &&
+      lost.json.save_failed === true &&
+      !lost.json.saved_payment_method &&
+      afterLost === after,
+  );
+
+  // The engine never saves without the consent it records.
+  let code: string | undefined;
+  try {
+    await createPaymentIntent({
+      organizationId: org.organization.id,
+      businessId: bizRowS!.id,
+      purpose: "payment",
+      customerPublicId: cusS.id,
+      amountMinor: 100,
+      currency: "USD",
+      session: "on_session",
+      letBuyerChooseMethod: true,
+      saveForFuture: true,
+    });
+  } catch (e) {
+    code = (e as { code?: string }).code;
+  }
+  ok("pay and save: no consent → refused (save_not_supported)", code === "save_not_supported");
 }
 
 // Garbage token never resolves.

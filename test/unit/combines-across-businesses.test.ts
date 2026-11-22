@@ -21,8 +21,11 @@ describe("combinesAcrossBusinesses", () => {
     }
   });
 
-  it("refuses a bare distinct count, which has no denominator to weight it", () => {
-    expect(combinesAcrossBusinesses(m("customers_new"), "month")).toBe(false);
-    expect(combinesAcrossBusinesses(m("customers_churned"), "month")).toBe(false);
+  it("sums a distinct count of customers across businesses by day and month only", () => {
+    for (const id of ["customers_new", "customers_churned", "paying_customers_all", "buyers"]) {
+      expect(combinesAcrossBusinesses(m(id), "month")).toBe(true);
+      expect(combinesAcrossBusinesses(m(id), "day")).toBe(true);
+      expect(combinesAcrossBusinesses(m(id), "week")).toBe(false);
+    }
   });
 });

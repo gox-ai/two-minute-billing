@@ -257,14 +257,15 @@ export function SettingRow({
   return (
     <div className={cn("flex flex-col gap-3 px-5 py-4", className)}>
       {placement === "end" ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
+        // Wraps, never squeezes: the control drops under the label once the label would get
+        // less than 14rem. A viewport breakpoint cannot tell, because the card is narrower
+        // than the window (an app window, Billy's docked panel).
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-2">
+          <div className="flex min-w-0 flex-[1_1_14rem] flex-col gap-1">
             {title}
             {helpLine}
           </div>
-          {control ? (
-            <div className="flex max-w-full min-w-0 shrink-0 sm:justify-end">{control}</div>
-          ) : null}
+          {control ? <div className="flex max-w-full min-w-0">{control}</div> : null}
         </div>
       ) : (
         <div className="flex min-w-0 flex-col gap-1.5">

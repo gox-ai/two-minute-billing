@@ -30,16 +30,20 @@ const PORTAL_FIELD_STATES: readonly PortalFieldState[] = ["show", "hide", "manda
 
 export type PortalFieldConfig = Record<PortalFieldKey, PortalFieldState>;
 
-/** What the portal form required before 0334 (its `requireCore`: first name and phone included). */
+/**
+ * What the portal form requires when a business has stored nothing: the contact name, the
+ * country and the postal code (tax needs the last two). Line 1, city and phone are optional;
+ * the state is derived from the postal code, and stays required under a GST lock.
+ */
 export const DEFAULT_PORTAL_FIELD_CONFIG: PortalFieldConfig = {
   "customer.first_name": "mandatory",
   "customer.last_name": "show",
-  "customer.phone": "mandatory",
+  "customer.phone": "show",
   "customer.company": "show",
-  "billing.line1": "mandatory",
+  "billing.line1": "show",
   "billing.line2": "show",
   "billing.line3": "show",
-  "billing.city": "mandatory",
+  "billing.city": "show",
   "billing.state": "show",
   "billing.state_code": "mandatory",
   "billing.postal_code": "mandatory",
@@ -116,19 +120,28 @@ export function mergePortalAddress(
 }
 
 /**
- * The add-card gate (`billing_details_complete`): a billing name, plus line1 and country
- * only where this surface's effective config makes them mandatory.
+ * The add-card gate (`billing_details_complete`) and the inline form behind it: the fields
+ * still missing before a payment method can be saved. A billing name is always needed (any
+ * usable one counts: `hasName`); everything else follows this surface's effective config
+ * through `addressRequirementIssues`, so the gate and the save check cannot disagree.
  */
+export function billingDetailsMissing(
+  cfg: Partial<Record<AddressMatrixKey, string>>,
+  hasName: boolean,
+  address: RequirementAddress,
+): AddressMatrixField[] {
+  const missing = addressRequirementIssues(cfg, address)
+    .map((i) => i.field)
+    .filter((f) => f !== "first_name");
+  return hasName ? missing : ["first_name", ...missing];
+}
+
 export function billingDetailsComplete(
   cfg: Partial<Record<AddressMatrixKey, string>>,
   hasName: boolean,
-  a: { line1: string | null | undefined; country: string | null | undefined },
+  address: RequirementAddress,
 ): boolean {
-  return (
-    hasName &&
-    (cfg["billing.line1"] !== "mandatory" || !blank(a.line1)) &&
-    (cfg["billing.country"] !== "mandatory" || !blank(a.country))
-  );
+  return billingDetailsMissing(cfg, hasName, address).length === 0;
 }
 
 // ── Tax guard ─────────────────────────────────────────────────────────────────

@@ -88,7 +88,9 @@
     "GET /v1/businesses/:biz/applicable_plans": "any",
     "GET /v1/businesses/:biz/audit_logs": "any",
     "GET /v1/businesses/:biz/audit_logs/:id": "any",
+    "GET /v1/businesses/:biz/billing_models": "any",
     "GET /v1/businesses/:biz/cancellation_analytics": "any",
+    "GET /v1/businesses/:biz/checkout_report": "any",
     "GET /v1/businesses/:biz/checkout_sessions/:id": "ops",
     "GET /v1/businesses/:biz/comments": "any",
     "GET /v1/businesses/:biz/comments/:id": "any",
@@ -177,6 +179,7 @@
     "GET /v1/businesses/:biz/disputes/:id": "any",
     "GET /v1/businesses/:biz/dunning_policies": "any",
     "GET /v1/businesses/:biz/dunning_policies/:dpol": "any",
+    "GET /v1/businesses/:biz/email_report": "any",
     "GET /v1/businesses/:biz/emails": "any",
     "GET /v1/businesses/:biz/emails/:id": "any",
     "GET /v1/businesses/:biz/emails/activity": "any",
@@ -230,6 +233,12 @@
       "key": "catalog:view"
     },
     "GET /v1/businesses/:biz/metrics": "any",
+    "GET /v1/businesses/:biz/orders": {
+      "key": "invoices:view"
+    },
+    "GET /v1/businesses/:biz/orders/:id": {
+      "key": "invoices:view"
+    },
     "GET /v1/businesses/:biz/payment_instructions": "any",
     "GET /v1/businesses/:biz/payment_instructions/:id": "any",
     "GET /v1/businesses/:biz/payment_intents": "any",
@@ -240,6 +249,7 @@
     "GET /v1/businesses/:biz/payment_requests": "any",
     "GET /v1/businesses/:biz/payment_requests/:preq": "any",
     "GET /v1/businesses/:biz/payments_analytics": "any",
+    "GET /v1/businesses/:biz/portal_report": "any",
     "GET /v1/businesses/:biz/prices": "any",
     "GET /v1/businesses/:biz/prices/:price": "any",
     "GET /v1/businesses/:biz/prices/:price/applicable_addons": "any",

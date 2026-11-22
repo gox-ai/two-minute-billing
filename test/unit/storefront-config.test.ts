@@ -3,6 +3,7 @@ import {
   resolveStorefrontConfig,
   resolveCheckoutRedirect,
   DEFAULT_STOREFRONT_CONFIG,
+  NEW_BUSINESS_STOREFRONT_CONFIG,
   type StorefrontConfig,
 } from "@/modules/checkout/storefront-config";
 
@@ -43,6 +44,10 @@ describe("resolveStorefrontConfig — defaults (0243)", () => {
       // No custom copy: the portal shows its built-in "link can't be used" message.
       portalLinkErrorHtml: null,
       oneTimeSavePaymentMethod: "ask",
+      // Portal Pay now never saved a new card before Phase C.
+      portalSaveNewMethod: "offer",
+      paymentRouting: {},
+      portalAskDeleteReason: false,
       // Usage on (it is what the buyer is billed for), the projection off (it reads as a promise).
       portalShowUsage: true,
       portalShowUsageProjection: false,
@@ -395,5 +400,43 @@ describe("pause / resume / reactivate (2026-09-09)", () => {
     expect(c.allowCancelSubscription).toBe(false);
     // ...and the three permissions that default ON are untouched.
     expect(c.allowInvoicePayment).toBe(true);
+  });
+});
+
+describe("portal_save_new_method", () => {
+  const read = (v: unknown) =>
+    resolveStorefrontConfig({ storefrontConfig: { portal_save_new_method: v } } as never)
+      .portalSaveNewMethod;
+  it("reads each stored value, and anything else as offer", () => {
+    expect(read("offer")).toBe("offer");
+    expect(read("always")).toBe("always");
+    expect(read("never")).toBe("never");
+    expect(read(undefined)).toBe("offer");
+    expect(read("sometimes")).toBe("offer");
+  });
+  it("a new business starts with offer", () => {
+    expect(NEW_BUSINESS_STOREFRONT_CONFIG.portal_save_new_method).toBe("offer");
+  });
+});
+
+describe("payment_routing and portal_ask_delete_reason", () => {
+  const cfg = (raw: Record<string, unknown>) =>
+    resolveStorefrontConfig({ storefrontConfig: raw } as never);
+  it("keeps well-formed routing per currency and drops the rest", () => {
+    const r = cfg({
+      payment_routing: {
+        INR: { order: ["upi", "card", 7], gateways: { card: "gwa_a", upi: "gwa_b", wallet: "x" } },
+        usd: { order: ["card"] },
+        EUR: "nope",
+      },
+    }).paymentRouting;
+    expect(r).toEqual({
+      INR: { order: ["upi", "card"], gateways: { card: "gwa_a", upi: "gwa_b" } },
+    });
+  });
+  it("routing unset is empty; asking why is off unless turned on", () => {
+    expect(cfg({}).paymentRouting).toEqual({});
+    expect(cfg({}).portalAskDeleteReason).toBe(false);
+    expect(cfg({ portal_ask_delete_reason: true }).portalAskDeleteReason).toBe(true);
   });
 });

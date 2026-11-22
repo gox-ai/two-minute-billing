@@ -70,6 +70,7 @@ const DELEGATED_SOURCES = new Set([
   "credits",
   "usage",
   "orders",
+  "revenue",
 ]);
 
 /** Dimensions fixtured by `verify:metric-dimensions`. */
@@ -729,6 +730,7 @@ for (const [grain, periodEnd] of SAMPLED) {
     [["credits"], "scripts/verify-metric-credits.ts"],
     [["usage"], "scripts/verify-metric-usage.ts"],
     [["orders"], "scripts/verify-metric-orders.ts"],
+    [["revenue"], "scripts/verify-metric-revenue-all.ts"],
   ];
   const delegatedSources = new Set(DELEGATED.flatMap(([sources]) => sources));
   ok(
@@ -738,11 +740,12 @@ for (const [grain, periodEnd] of SAMPLED) {
   );
   for (const [sources, path] of DELEGATED) {
     const delegated = MEASURES.filter((m) => sources.includes(m.source)).map((m) => m.id);
-    // The headline measures and the revenue mix are fixtured in gates of their own.
+    // The headline measures, the revenue mix and gross to net are fixtured in gates of their own.
     const sibling =
       (await readFile(path, "utf8")) +
       (await readFile("scripts/verify-metric-new-measures.ts", "utf8")) +
-      (await readFile("scripts/verify-revenue-mix.ts", "utf8"));
+      (await readFile("scripts/verify-revenue-mix.ts", "utf8")) +
+      (await readFile("scripts/verify-metric-revenue-net.ts", "utf8"));
     const orphaned = delegated.filter((id) => !sibling.includes(`"${id}"`));
     ok(
       `coverage: the ${delegated.length} ${sources.join("/")} measures are exercised by ${path.replace("scripts/verify-", "verify:").replace(".ts", "")}`,

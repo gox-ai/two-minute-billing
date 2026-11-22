@@ -387,9 +387,9 @@ describe("RazorPay decline normalization", () => {
     ).not.toBe("mandate_ceiling_exceeded");
   });
 
-  it("passes an unmapped code through so sync and async classify identically", () => {
+  it("books an unmapped code as charge_failed, never as its raw value", () => {
     const n = normalizeRazorpayDecline("brand_new_reason");
-    expect(n.code).toBe("brand_new_reason");
+    expect(n.code).toBe("charge_failed");
     expect(n.retriable).toBe(true);
   });
 });
@@ -818,7 +818,9 @@ describe("a debit the buyer never authenticated", () => {
     // immortality, and 35 subscriptions sat parked on one of these for 13 months. The
     // remedy is now an ops alert that reaches a human while the window is still open.
     for (const code of MERCHANT_SIDE_PARK) expect(PARK.has(code)).toBe(true);
-    expect(MERCHANT_SIDE_PARK.size).toBe(4); // vacuity guard: an empty set proves nothing
+    expect(MERCHANT_SIDE_PARK.size).toBe(3); // vacuity guard: an empty set proves nothing
+    // 4 → 3 on 2026-11-17: `gateway_request_rejected` retries now; its alert is
+    // `gateway_request_faults`.
     // 2 → 3 on 2026-09-05: `gateway_request_rejected` (#63). The number is asserted
     // exactly, not as a minimum, so adding a code stays a decision — a merchant-side
     // park now ends in the configured final action, so what lands here can cancel.

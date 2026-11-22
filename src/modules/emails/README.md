@@ -290,6 +290,39 @@ transports — `smtp_config` + `smtp_credentials_enc`, and `ses_config` + `ses_c
 pair splits non-secret from secret so a settings read is never a decrypt.
 `businesses_mail_transport_ck` forbids both transports being enabled at once.
 
+### Open and click tracking (0548)
+Per business, `email_config.trackEngagement` ("Track opens and clicks"). Unset = off, so a business
+that existed before it sends what it sent; `initialEmailConfig` sets it on for a business a person
+creates. API-created businesses start with tracking on too (2026-11-19), without the opt-in emails. When on, `deliverPendingEmails` calls
+`trackedHtmlFor` (`tracking-service.ts`): a 1x1 pixel goes before `</body>` in the HTML part only,
+and each http(s) link becomes `/e/c/<token>` on `ADVERTISED_API_URL` (else `WEBHOOK_BASE_URL`; with
+neither, nothing is added). `mailto:`, `tel:`, in-page anchors and any link with `unsubscribe` in it
+are never rewritten. The stored `body_html` and the text part stay as rendered, so a resend and the
+preview are clean. System mail (`SYSTEM_EMAIL_TYPES`) is never tracked.
+
+- Public routes (`email-tracking-routes.ts`): `GET /e/o/<token>.gif` and `GET /e/c/<token>`. The token
+  is an HMAC of the email id (and link position), keyed from `API_KEY_SECRET`. A bad token, or a link
+  we no longer hold, is a plain 404. The redirect target comes from `email_links.url`, never from
+  the request, so it is not an open redirect. The portal link in a tracked email still works: it is
+  the stored URL, and the portal report's match on the email row's `created_at` is unaffected.
+- Tables: `email_links` (the original URL per email and position), `email_engagements` (one row per
+  open or click), and on `email_messages`: `engagement_tracked_at`, `first_opened_at`,
+  `first_clicked_at`. Both new tables have RLS and a `bump_row_version` trigger on engagements.
+- **We store** the time, `machine`, the device, browser and OS family, and for a click the link's
+  host, a masked path (a segment that is not a plain word shows as `:id`; no query string, no
+  fragment) and the anchor text (not kept when it holds an `@`). **We never store** the IP address,
+  the full user agent, the recipient address or a query string. The IP and the user agent are read
+  once to decide `machine` and to take the families.
+- Machine rules (`classifyEngagement`): a HEAD request; a scanner user agent; a bot or empty user
+  agent; an open from an address in 17.0.0.0/8 (Apple Mail Privacy Protection); a Google image proxy
+  fetch within 10 s of the send; a click within 5 s of the send. Machine events never set
+  `first_opened_at` or `first_clicked_at` and never reach a rate. A person's click counts as an open.
+- If the business turns tracking off later, old pixels and links still work and record nothing.
+  One email keeps at most 200 events.
+- Retention: `sweepEmailEngagement` (clock pass `sweep_buyer_rejections`) deletes events and link
+  rows older than 13 months, never for a platform organization (`notPlatformOrg`).
+- Cover: `verify:email-engagement`, `test/unit/email-tracking.test.ts`.
+
 ## Routes
 Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
 
@@ -339,6 +372,14 @@ Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
   path. It is what caught the unescaped-template-body hole.
 
 ## Changelog
+- **2026-11-17** — The branded CTA label is `emailButtonLabel(brand, buttonTextColor)` (`button-label.ts`),
+  not fixed white: the business's `button_text_color` when set, else white, near-black or black, whichever
+  reaches 4.5:1. Same rule as the hosted pages' `buttonLabel`; a unit test holds them equal.
+- **2026-11-17** — `payment_failed`: a missing `message` falls back to `PAYER_REASON_WITHHELD`, never the
+  raw decline code.
+- **2026-11-16** — `subscription_restart` defaults say "Reactivate" (subject, heading, body, button), as do the
+  `subscriptionEnded` lines of `payment_method_invalid` and `mandate_expired`, to match the portal and checkout.
+  Template ids are unchanged.
 - **2026-11-10** — `payment_method_invalid` and `mandate_expired` get `subscriptionEnded` (set when
   the customer has no subscription that is not cancelled, resolved in `resolveCard`). Their default
   bodies branch on it with `{{#if}}`: a refused restart's hard decline invalidates the card of a
@@ -976,3 +1017,19 @@ Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
   payment mails. The `invoice_payment_due` event and its webhook are unchanged. With
   `payment_failed` switched off, a decline mails nothing: `invoice_overdue` is not a fallback.
   Gate: `verify:emails` cases 12–14, `verify:email-events`.
+- **2026-11-17** — `enqueueEmails` drops the payer's dunning mail (`payment_failed`,
+  `dunning_action_required`, `payment_due_reminder`, `invoice_overdue`) for an invoice parked
+  because a gateway refused OUR request (`invoiceParkedOnOurRequest`). Mail resumes once the
+  invoice is paid or parks for a reason the payer can clear. Cover: `verify:dunning` Case R.
+- **2026-11-17** — `payment_method_invalid` says when the backup paid in the same collection
+  (`backupPaid`, from `payment_source_invalidated.backup_paid`). `payment_failed` with
+  `payment_abandoned` sends no mail: the payer left the page. Cover: `verify:dunning` DB,
+  `test/unit/dunning-dead-cards-caps.test.ts`.
+- **2026-11-18** — The branded shell sets `overflow-wrap: break-word`, so an unbroken email address
+  or id wraps on a 320 px phone instead of scrolling the message sideways. An amount still never
+  breaks.
+- **2026-11-19** — Email report page (`modules/metrics/email-report.ts`, `GET /v1/businesses/:biz/email_report`, `verify:email-report-page`; the dashboard page is Reports, Emails, and the old `/emails/report` page redirects to it). Status counts keep this module's definitions (`delivered` = sent on `DELIVERING_TRANSPORTS`; a complaint counts only as `complained`). A portal link's email uses `emailLinkMatch` (`hosted-page-figures.ts`), shared with the portal report's arrival key. We do not track opens or clicks. `GET /emails/report` stays.
+- **2026-11-19** — Open and click tracking (0548): `email_config.trackEngagement`, pixel and link
+  redirects added at send time, `/e/o/<token>.gif` and `/e/c/<token>`, `email_links`,
+  `email_engagements`, machine classification, 13-month sweep. The Email report shows open and click
+  rates. See "Open and click tracking". Cover: `verify:email-engagement`.

@@ -20,6 +20,8 @@ const KEEP = [
   "countries",
   "country_subdivisions",
   "country_subdivision_aliases",
+  // GeoNames postal codes (`pnpm postal:seed`, ~1.8M rows): reloading them is slow.
+  "postal_codes",
   // The AI model price list: filled by its sync, append-only. Its source row is reset, so the
   // next sync fetches in full and diffs against these rows.
   "model_price_models",

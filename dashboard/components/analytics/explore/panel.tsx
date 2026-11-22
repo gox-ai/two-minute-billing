@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Search } from "lucide-react";
+import { ChevronDown, Loader2, Search } from "lucide-react";
 import { useNavPending } from "@/components/navigation/nav-pending";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,6 +12,7 @@ import { Chip } from "@/components/patterns/chip";
 import { KPI_LABEL } from "@/components/analytics/layout";
 import { exploreHref, PERIOD_ROWS, type Offer } from "./query";
 import type { Grain } from "@/lib/analytics-api";
+import { ABSENT_MODELS_LABEL } from "@/lib/billing-models";
 
 /**
  * The control panel: measures, rows, period, currency — the body of the page's Query card.
@@ -33,6 +34,8 @@ export interface PanelMeasure {
   /** Why this one cannot be unticked, or what ticking it would cost. */
   note?: string;
   disabled?: boolean;
+  /** The heading it sits under: its model, or "Not used by this business". */
+  section: string;
 }
 
 export interface PanelProps {
@@ -90,6 +93,7 @@ export function ControlPanel(props: PanelProps) {
   const { navigate, pending, pendingFrom } = useNavPending();
   const busy = (k: SectionKey) => pendingFrom(`explore-${k}`);
   const [needle, setNeedle] = React.useState("");
+  const [showAbsent, setShowAbsent] = React.useState(false);
 
   const go = (
     from: SectionKey,
@@ -125,6 +129,13 @@ export function ControlPanel(props: PanelProps) {
     return props.measures.filter((m) => `${m.name} ${m.description}`.toLowerCase().includes(q));
   }, [props.measures, needle]);
 
+  // The page sends measures in shelf order, so a heading is the first of its run.
+  const sections = React.useMemo(() => {
+    const by = new Map<string, PanelMeasure[]>();
+    for (const m of shown) by.set(m.section, [...(by.get(m.section) ?? []), m]);
+    return [...by.entries()];
+  }, [shown]);
+
   return (
     <div
       className={cn("flex flex-col transition-opacity", pending && "opacity-60")}
@@ -156,28 +167,61 @@ export function ControlPanel(props: PanelProps) {
               No measure has the name “{needle.trim()}”.
             </p>
           ) : (
-            shown.map((m) => (
-              <div key={m.id} className="flex items-start gap-2.5">
-                <Checkbox
-                  id={`measure-${m.id}`}
-                  className="mt-2"
-                  checked={m.checked}
-                  disabled={m.disabled}
-                  onCheckedChange={(next) => toggle(m.id, next === true)}
-                />
-                {/* The whole text column is the hit area: 32px at least, for a thumb. */}
-                <label
-                  htmlFor={`measure-${m.id}`}
-                  className={cn(
-                    "flex min-h-8 min-w-0 flex-1 flex-col justify-center gap-0.5 py-1",
-                    m.disabled ? "opacity-50" : "cursor-pointer",
+            sections.map(([section, items]) => {
+              const folded = section === ABSENT_MODELS_LABEL;
+              // A search or a ticked measure inside holds the fold open.
+              const open =
+                !folded || showAbsent || needle.trim() !== "" || items.some((m) => m.checked);
+              return (
+                <div key={section} className="flex flex-col gap-1">
+                  {folded ? (
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setShowAbsent((v) => !v)}
+                      className="flex items-center gap-1.5 py-1 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown
+                        aria-hidden
+                        className={cn("size-3.5 transition-transform", !open && "-rotate-90")}
+                      />
+                      {section}
+                      <span className="tabular-nums">{items.length}</span>
+                    </button>
+                  ) : (
+                    <span className="py-1 text-xs font-medium text-muted-foreground">
+                      {section}
+                    </span>
                   )}
-                >
-                  <span className="text-sm font-medium">{m.name}</span>
-                  {m.note ? <span className="text-xs text-muted-foreground">{m.note}</span> : null}
-                </label>
-              </div>
-            ))
+                  {open
+                    ? items.map((m) => (
+                        <div key={m.id} className="flex items-start gap-2.5">
+                          <Checkbox
+                            id={`measure-${m.id}`}
+                            className="mt-2"
+                            checked={m.checked}
+                            disabled={m.disabled}
+                            onCheckedChange={(next) => toggle(m.id, next === true)}
+                          />
+                          {/* The whole text column is the hit area: 32px at least, for a thumb. */}
+                          <label
+                            htmlFor={`measure-${m.id}`}
+                            className={cn(
+                              "flex min-h-8 min-w-0 flex-1 flex-col justify-center gap-0.5 py-1",
+                              m.disabled ? "opacity-50" : "cursor-pointer",
+                            )}
+                          >
+                            <span className="text-sm font-medium">{m.name}</span>
+                            {m.note ? (
+                              <span className="text-xs text-muted-foreground">{m.note}</span>
+                            ) : null}
+                          </label>
+                        </div>
+                      ))
+                    : null}
+                </div>
+              );
+            })
           )}
         </div>
       </Section>

@@ -51,6 +51,7 @@ import { differentialAmount, type DifferentialRule } from "@/lib/differential";
 import { SelectField } from "@/components/ui/select-field";
 import { RadioField } from "@/components/ui/radio-group";
 import { makeEstimateLineFormatter } from "@/lib/estimate-lines";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 import {
   CouponPickerModal,
   DISCOUNT_DURATION_OPTIONS,
@@ -93,6 +94,8 @@ interface EstimateView {
   lines: Array<{ description: string; amount_minor: number }>;
   subtotal_minor: number;
   tax_minor: number;
+  /** Added tax by component; tax inside tax-inclusive prices is not a row. */
+  tax_lines?: Array<{ label: string; amount_minor: number }>;
   total_minor: number;
   /** POST-tax buckets only (refundable + excess) — the promotional slice is pre-tax and
    *  arrives as `promotional_discount_minor`, already netted out of `total_minor`. */
@@ -1055,10 +1058,29 @@ export function SubscriptionCreateForm({
                     "text-success",
                   )
                 : null}
-              {estimate.tax_minor > 0
+              {estimate.tax_minor > 0 && !estimate.tax_lines
                 ? amountRow(
                     "Tax",
                     money(estimate.tax_minor, estimate.currency),
+                    "text-muted-foreground",
+                  )
+                : null}
+              {(estimate.tax_lines ?? []).map((t) => (
+                <React.Fragment key={t.label}>
+                  {amountRow(
+                    t.label,
+                    money(t.amount_minor, estimate.currency),
+                    "text-muted-foreground",
+                  )}
+                </React.Fragment>
+              ))}
+              {splitTax(estimate.tax_minor, estimate.tax_lines).includedMinor > 0
+                ? amountRow(
+                    INCLUDED_TAX_LABEL,
+                    money(
+                      splitTax(estimate.tax_minor, estimate.tax_lines).includedMinor,
+                      estimate.currency,
+                    ),
                     "text-muted-foreground",
                   )
                 : null}
@@ -1129,6 +1151,7 @@ export function SubscriptionCreateForm({
                 : "Immediate charges"
         }
         taxMinor={estimate?.tax_minor}
+        taxLines={estimate?.tax_lines}
         loading={estimating}
         emptyNote="No immediate charge. Add a plan to preview charges."
         proceedDisabled={!cus || !hasPlan}

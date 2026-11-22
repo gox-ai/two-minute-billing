@@ -56,11 +56,18 @@ import { autoCollectionOffSql } from "./service";
  * have cleared today's and the next void would have re-created them; this predicate
  * is the fix. `paid` deliberately STAYS: a recovered invoice IS a successful retry,
  * and it is the outcome the screen exists to report.
+ *
+ * Except where dunning GAVE UP (2026-11-17, user decision): a voided invoice whose retries ran
+ * out or were stopped is the record of what dunning failed to collect, and it was on no list
+ * at all (35 such rows on the real book). It shows under "Given up" only; "Needs attention"
+ * and the nav badge still leave every voided invoice out.
  */
+const GAVE_UP: SQL = sql`${invoices.dunningStatus} in ('exhausted', 'stopped')`;
+
 const UNDER_RETRY: SQL = sql`(
   (${inArray(invoices.status, ["payment_due", "not_paid"])}
     and (${invoices.attemptCount} > 0 or ${invoices.nextAttemptAt} is not null))
-  or (${isNotNull(invoices.dunningStatus)} and ${invoices.status} <> 'voided')
+  or (${isNotNull(invoices.dunningStatus)} and (${invoices.status} <> 'voided' or ${GAVE_UP}))
 )`;
 
 /**
@@ -118,14 +125,22 @@ const ACTIVE_RETRY: SQL = sql`(
 export type RetryState = "attention" | "recovered" | "given_up" | "all";
 
 const PAID = sql`${invoices.status} = 'paid'`;
+/**
+ * A write-off settles the invoice with a credit note, so it reads `paid`: without this it was
+ * listed as "Recovered", bad debt counted as money collected.
+ */
+const WRITTEN_OFF = sql`${invoices.writtenOff}`;
 
 const RETRY_STATE: Record<Exclude<RetryState, "all">, SQL> = {
   /** Dunning is working it, or a charge failed before any pass ran — and it is unpaid. */
-  attention: sql`(not ${PAID} and ${ACTIVE_RETRY})`,
+  attention: sql`(not ${PAID} and not ${WRITTEN_OFF} and ${ACTIVE_RETRY})`,
   /** Collected. The outcome the screen reports, whatever dunning still calls it. */
-  recovered: sql`${PAID}`,
-  /** Dunning gave up, or an operator stopped it. Needs a decision; nothing will move it. */
-  given_up: sql`(not ${PAID} and ${invoices.dunningStatus} in ('exhausted', 'stopped'))`,
+  recovered: sql`(${PAID} and not ${WRITTEN_OFF})`,
+  /**
+   * Dunning gave up, or an operator stopped it; voided afterwards too. Or written off: the
+   * money is not coming. Nothing will move these.
+   */
+  given_up: sql`(${WRITTEN_OFF} or (not ${PAID} and ${GAVE_UP}))`,
 };
 
 /**
@@ -370,6 +385,8 @@ export function serializeRetry(r: RetryRow) {
     status: inv.status,
     /** in_progress | success | exhausted | stopped — the retry status. */
     dunning_status: inv.dunningStatus,
+    /** Settled by a write-off credit note: `status` reads `paid`, but nothing was collected. */
+    written_off: inv.writtenOff,
     currency: inv.currency,
     amount_due_minor: Number(inv.amountDueMinor ?? inv.totalMinor),
     /** charge | reminder — see {@link RetryCollection}. */

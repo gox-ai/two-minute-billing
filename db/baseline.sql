@@ -11,7 +11,7 @@
 -- graphile_worker.add_job()), apply this file once, record the cut below in
 -- drizzle.__drizzle_migrations, then apply the migrations newer than the cut.
 --
--- baseline-cut: 0532_payment_attempt_gateway_idx 1795100000000
+-- baseline-cut: 0549_postal_codes 1796200700000
 --
 
 -- withTenant switches to this role; the grants below are what it may touch.
@@ -99,6 +99,25 @@ BEGIN
     'integration_outbox_nudge',
     max_attempts => 1,
     job_key => 'integration_outbox_nudge'
+  );
+END
+$$;
+
+
+--
+-- Name: app_nudge_notifications(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION "public"."app_nudge_notifications"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  PERFORM graphile_worker.add_job(
+    'notification_queue_nudge',
+    queue_name => 'notifications',
+    max_attempts => 1,
+    job_key => 'notification_queue_nudge'
   );
 END
 $$;
@@ -979,8 +998,10 @@ CREATE TABLE "public"."businesses" (
     "tax_settings" "jsonb",
     "team_alerts_config" "jsonb",
     "max_customer_coupon_codes" smallint DEFAULT 1 NOT NULL,
+    "button_text_color" "text",
     CONSTRAINT "businesses_billing_mode_ck" CHECK ((((("anchor_granularity" = 'instant'::"text") AND ("proration_granularity" = 'exact'::"text")) OR (("anchor_granularity" = 'instant'::"text") AND ("proration_granularity" = 'whole_day'::"text"))) OR (("anchor_granularity" = 'day'::"text") AND ("proration_granularity" = 'whole_day'::"text")))),
     CONSTRAINT "businesses_brand_color_hex" CHECK ((("brand_color" IS NULL) OR ("brand_color" ~ '^#[0-9A-Fa-f]{6}$'::"text"))),
+    CONSTRAINT "businesses_button_text_color_hex" CHECK ((("button_text_color" IS NULL) OR ("button_text_color" ~ '^#[0-9A-Fa-f]{6}$'::"text"))),
     CONSTRAINT "businesses_credit_config_ck" CHECK ((("credit_config" IS NULL) OR ("jsonb_typeof"("credit_config") = 'object'::"text"))),
     CONSTRAINT "businesses_fiscal_year_start_month_check" CHECK ((("fiscal_year_start_month" >= 1) AND ("fiscal_year_start_month" <= 12))),
     CONSTRAINT "businesses_invoice_issuer_ck" CHECK (("invoice_issuer" = ANY (ARRAY['business'::"text", 'organization'::"text"]))),
@@ -1014,6 +1035,31 @@ COMMENT ON COLUMN "public"."businesses"."exchange_rate_sources" IS 'Per-currency
 --
 
 COMMENT ON COLUMN "public"."businesses"."invoice_customization" IS 'What the printed invoice/credit note shows: field toggles, titles, address format, signature, credit-note note, dynamic number prefix. NULL = pre-0239 rendering. Resolved by resolveInvoiceCustomization; governs documents only, never the API resource.';
+
+
+--
+-- Name: buyer_client_errors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."buyer_client_errors" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "surface" "text" NOT NULL,
+    "session_public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "customer_id" "uuid",
+    "step" "text",
+    "page" "text",
+    "gateway" "text",
+    "gateway_type" "text",
+    "gateway_code" "text",
+    "decline_code" "text",
+    "gateway_message" "text",
+    "text" "text" NOT NULL,
+    "field_error" boolean DEFAULT false NOT NULL,
+    "leak" boolean NOT NULL
+);
 
 
 --
@@ -1106,6 +1152,8 @@ CREATE TABLE "public"."checkout_sessions" (
     "consent_ip" "text",
     "setup_consent" "jsonb",
     "customer_coupon_codes" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "charge_payment_intent" "text",
+    "charge_completion" "jsonb",
     CONSTRAINT "checkout_sessions_device_class_ck" CHECK ((("device_class" IS NULL) OR ("device_class" = ANY (ARRAY['mobile'::"text", 'tablet'::"text", 'desktop'::"text"])))),
     CONSTRAINT "checkout_sessions_layout_ck" CHECK ((("layout" IS NULL) OR ("layout" = ANY (ARRAY['steps'::"text", 'one_page'::"text"])))),
     CONSTRAINT "checkout_sessions_mode_target_ck" CHECK (((("mode" = ANY (ARRAY['create'::"text", 'purchase'::"text"])) AND ("subscription_id" IS NULL)) OR (("mode" = 'change'::"text") AND ("subscription_id" IS NOT NULL))))
@@ -2068,6 +2116,7 @@ CREATE TABLE "public"."customers" (
     "billing_cc_emails" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     "billing_bcc_emails" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     "tax_behavior" "text",
+    "new_method_gateway_account" "text",
     CONSTRAINT "customers_credit_settings_ck" CHECK ((("credit_settings" IS NULL) OR ("jsonb_typeof"("credit_settings") = 'object'::"text"))),
     CONSTRAINT "customers_tax_behavior_ck" CHECK ((("tax_behavior" IS NULL) OR ("tax_behavior" = ANY (ARRAY['inclusive'::"text", 'exclusive'::"text"]))))
 );
@@ -2199,6 +2248,47 @@ CREATE TABLE "public"."dunning_policies" (
 
 
 --
+-- Name: email_engagements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."email_engagements" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "email_message_id" "uuid" NOT NULL,
+    "kind" "text" NOT NULL,
+    "machine" boolean DEFAULT false NOT NULL,
+    "link_position" smallint,
+    "link_label" "text",
+    "link_host" "text",
+    "link_path" "text",
+    "device_category" "text",
+    "browser" "text",
+    "os" "text",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "email_engagements_device_ck" CHECK ((("device_category" IS NULL) OR ("device_category" = ANY (ARRAY['desktop'::"text", 'mobile'::"text", 'tablet'::"text"])))),
+    CONSTRAINT "email_engagements_kind_ck" CHECK (("kind" = ANY (ARRAY['open'::"text", 'click'::"text"])))
+);
+
+
+--
+-- Name: email_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."email_links" (
+    "email_message_id" "uuid" NOT NULL,
+    "position" smallint NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "url" "text" NOT NULL,
+    "label" "text",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
 -- Name: email_messages; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2230,6 +2320,9 @@ CREATE TABLE "public"."email_messages" (
     "cc_addresses" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     "body_removed_at" timestamp with time zone,
     "bcc_addresses" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "engagement_tracked_at" timestamp with time zone,
+    "first_opened_at" timestamp with time zone,
+    "first_clicked_at" timestamp with time zone,
     CONSTRAINT "email_messages_bounce_type_ck" CHECK ((("bounce_type" IS NULL) OR ("bounce_type" = ANY (ARRAY['permanent'::"text", 'transient'::"text", 'undetermined'::"text", 'complaint'::"text"])))),
     CONSTRAINT "email_messages_one_document_ck" CHECK ((("invoice_id" IS NULL) OR ("credit_note_id" IS NULL))),
     CONSTRAINT "email_messages_transport_ck" CHECK ((("transport" IS NULL) OR ("transport" = ANY (ARRAY['console'::"text", 'smtp'::"text", 'esp'::"text", 'ses'::"text", 'unconfigured'::"text"]))))
@@ -3429,6 +3522,208 @@ CREATE VIEW "public"."mrr_movement_summary" AS
 
 
 --
+-- Name: notification_deliveries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_deliveries" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid",
+    "channel" "text" NOT NULL,
+    "user_id" "uuid",
+    "destination_id" "uuid",
+    "push_subscription_id" "uuid",
+    "kind" "text" NOT NULL,
+    "notification_id" "uuid",
+    "group_key" "text",
+    "payload" "jsonb" NOT NULL,
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "attempts" integer DEFAULT 0 NOT NULL,
+    "next_attempt_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "last_error" "text",
+    "sent_at" timestamp with time zone,
+    "dedupe_key" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notification_deliveries_channel_ck" CHECK (("channel" = ANY (ARRAY['push'::"text", 'email'::"text", 'chat'::"text", 'outside_email'::"text"]))),
+    CONSTRAINT "notification_deliveries_status_ck" CHECK (("status" = ANY (ARRAY['pending'::"text", 'sent'::"text", 'failed'::"text", 'skipped'::"text", 'held'::"text"])))
+);
+
+
+--
+-- Name: notification_destinations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_destinations" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "type" "text" NOT NULL,
+    "name" "text" NOT NULL,
+    "url_enc" "text",
+    "url_hint" "text",
+    "email" "text",
+    "status" "text" NOT NULL,
+    "token_hash" "text",
+    "token_expires_at" timestamp with time zone,
+    "send_count" integer DEFAULT 0 NOT NULL,
+    "send_window_start" timestamp with time zone,
+    "last_sent_at" timestamp with time zone,
+    "business_filter" "jsonb" DEFAULT '{"mode": "all"}'::"jsonb" NOT NULL,
+    "kinds" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "daily" boolean DEFAULT false NOT NULL,
+    "weekly" boolean DEFAULT false NOT NULL,
+    "hide_names" boolean DEFAULT false NOT NULL,
+    "failure_streak" integer DEFAULT 0 NOT NULL,
+    "last_error" "text",
+    "legacy_business_id" "uuid",
+    "created_by_user_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notification_destinations_status_ck" CHECK (("status" = ANY (ARRAY['active'::"text", 'pending'::"text", 'not_working'::"text", 'removed'::"text"]))),
+    CONSTRAINT "notification_destinations_target_ck" CHECK (((("type" = 'chat'::"text") AND ("url_enc" IS NOT NULL)) OR (("type" = 'email'::"text") AND ("email" IS NOT NULL)))),
+    CONSTRAINT "notification_destinations_type_ck" CHECK (("type" = ANY (ARRAY['chat'::"text", 'email'::"text"])))
+);
+
+
+--
+-- Name: notification_digests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_digests" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "period" "text" NOT NULL,
+    "period_start" "date" NOT NULL,
+    "parts" "jsonb" NOT NULL,
+    "built_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notification_digests_period_ck" CHECK (("period" = ANY (ARRAY['daily'::"text", 'weekly'::"text"])))
+);
+
+
+--
+-- Name: notification_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_groups" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid",
+    "key" "text" NOT NULL,
+    "kind" "text" NOT NULL,
+    "opened_at" timestamp with time zone NOT NULL,
+    "count" integer DEFAULT 1 NOT NULL,
+    "totals" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "first_notification_ids" "uuid"[] DEFAULT '{}'::"uuid"[] NOT NULL,
+    "closed_at" timestamp with time zone,
+    "items" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL
+);
+
+
+--
+-- Name: notification_preferences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_preferences" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "business_id" "uuid",
+    "kinds" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: notification_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_queue" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid",
+    "event_id" "uuid",
+    "dedupe_key" "text" NOT NULL,
+    "kinds" "text"[] NOT NULL,
+    "payload" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "attempts" integer DEFAULT 0 NOT NULL,
+    "next_attempt_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "last_error" "text",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notification_queue_status_ck" CHECK (("status" = ANY (ARRAY['pending'::"text", 'done'::"text", 'failed'::"text"])))
+);
+
+
+--
+-- Name: notification_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_settings" (
+    "user_id" "uuid" NOT NULL,
+    "timezone" "text" DEFAULT 'UTC'::"text" NOT NULL,
+    "summary_hour" integer DEFAULT 8 NOT NULL,
+    "weekly_day" integer DEFAULT 1 NOT NULL,
+    "quiet" "jsonb" DEFAULT '{"to": 7, "from": 22, "enabled": false, "disputes_through": true}'::"jsonb" NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notification_settings_day_ck" CHECK ((("weekly_day" >= 1) AND ("weekly_day" <= 7))),
+    CONSTRAINT "notification_settings_hour_ck" CHECK ((("summary_hour" >= 0) AND ("summary_hour" <= 23)))
+);
+
+
+--
+-- Name: notification_settings_org; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notification_settings_org" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "business_filter" "jsonb" DEFAULT '{"mode": "all"}'::"jsonb" NOT NULL,
+    "daily" "jsonb" DEFAULT '{"enabled": true, "channels": ["email"]}'::"jsonb" NOT NULL,
+    "weekly" "jsonb" DEFAULT '{"enabled": false, "channels": ["email"]}'::"jsonb" NOT NULL,
+    "send_empty" boolean DEFAULT false NOT NULL,
+    "notice_dismissed_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: notifications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."notifications" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid",
+    "user_id" "uuid" NOT NULL,
+    "kind" "text" NOT NULL,
+    "tone" "text" NOT NULL,
+    "timing" "text" NOT NULL,
+    "title" "text" NOT NULL,
+    "body" "text" NOT NULL,
+    "url" "text",
+    "record" "jsonb",
+    "amount_minor" bigint,
+    "currency" "text",
+    "facts" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "event_id" "uuid",
+    "group_key" "text",
+    "group_count" integer DEFAULT 1 NOT NULL,
+    "group_totals" "jsonb",
+    "test" boolean DEFAULT false NOT NULL,
+    "read_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "notifications_timing_ck" CHECK (("timing" = ANY (ARRAY['instant'::"text", 'summary'::"text"]))),
+    CONSTRAINT "notifications_tone_ck" CHECK (("tone" = ANY (ARRAY['destructive'::"text", 'warning'::"text", 'neutral'::"text"])))
+);
+
+
+--
 -- Name: oauth_clients; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3548,7 +3843,9 @@ CREATE TABLE "public"."ops_invariant_results" (
     "duration_ms" integer,
     "error" "text",
     "trace_id" "text",
-    "ran_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "ran_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "acknowledged" bigint,
+    "acknowledged_rows" "jsonb"
 );
 
 
@@ -3742,7 +4039,11 @@ CREATE TABLE "public"."payment_intents" (
     "authorized_at" timestamp with time zone,
     "last_attempt_status" "text",
     "first_charge_minor" bigint,
-    "first_charge_claim" "text"
+    "first_charge_claim" "text",
+    "saved_method_chosen" boolean,
+    "save_method" boolean,
+    "save_consent" "jsonb",
+    "method_type" "text"
 );
 
 
@@ -3879,7 +4180,9 @@ CREATE TABLE "public"."payment_methods" (
     "credentials_changed_at" timestamp with time zone,
     "mandate_status_at" timestamp with time zone,
     "authorized_at" timestamp with time zone,
-    "collect_open_invoices" boolean
+    "collect_open_invoices" boolean,
+    "mandate_failure_code" "text",
+    "mandate_failure_text" "text"
 );
 
 
@@ -4090,6 +4393,19 @@ COMMENT ON COLUMN "public"."portal_sessions"."access_token_hash" IS 'SHA-256 of 
 --
 
 COMMENT ON COLUMN "public"."portal_sessions"."access_kind" IS 'Where the entry link was destined: api (1h window, 0193) or email (5d). Chooses access_expires_at at mint; never read afterwards.';
+
+
+--
+-- Name: postal_codes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."postal_codes" (
+    "country" "text" NOT NULL,
+    "postal_code" "text" NOT NULL,
+    "place_name" "text" NOT NULL,
+    "admin1_name" "text",
+    "state_code" "text"
+);
 
 
 --
@@ -4359,7 +4675,9 @@ CREATE TABLE "public"."provider_events" (
     "response_status" integer,
     "request_url" "text",
     "transaction_public_id" "text",
-    "normalized" "jsonb"
+    "normalized" "jsonb",
+    "payment_intent_id" "uuid",
+    "payment_attempt_id" "uuid"
 );
 
 
@@ -4379,6 +4697,27 @@ CREATE TABLE "public"."public_rate_limit_counters" (
 --
 
 COMMENT ON TABLE "public"."public_rate_limit_counters" IS 'Fixed-window request counters for unauthenticated routes, one row per (bucket, minute). Bucket is a namespaced key such as login:ip:<addr> or login:email:<sha256>. Read before tenant context exists, so no RLS. Swept by the billing clock.';
+
+
+--
+-- Name: push_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."push_subscriptions" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "public_id" "text" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "endpoint" "text" NOT NULL,
+    "p256dh" "text" NOT NULL,
+    "auth" "text" NOT NULL,
+    "label" "text",
+    "user_agent" "text",
+    "last_success_at" timestamp with time zone,
+    "last_failure_at" timestamp with time zone,
+    "failure_count" integer DEFAULT 0 NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "push_subscriptions_endpoint_https_ck" CHECK (("endpoint" ~~ 'https://%'::"text"))
+);
 
 
 --
@@ -4858,6 +5197,40 @@ CREATE TABLE "public"."spend_limits" (
     CONSTRAINT "spend_limits_scope_check" CHECK (("scope" = ANY (ARRAY['customer'::"text", 'subscription'::"text", 'property'::"text"]))),
     CONSTRAINT "spend_limits_set_by_check" CHECK (("set_by" = ANY (ARRAY['operator'::"text", 'customer'::"text"]))),
     CONSTRAINT "spend_limits_subscription_ck" CHECK ((("scope" = 'subscription'::"text") = ("subscription_id" IS NOT NULL)))
+);
+
+
+--
+-- Name: storefront_visits; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."storefront_visits" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "surface" "text" NOT NULL,
+    "session_public_id" "text" NOT NULL,
+    "checkout_session_id" "uuid",
+    "portal_session_id" "uuid",
+    "entered_at" timestamp with time zone,
+    "viewed_at" timestamp with time zone,
+    "referrer_host" "text",
+    "utm_source" "text",
+    "utm_medium" "text",
+    "utm_campaign" "text",
+    "device_category" "text",
+    "browser" "text",
+    "os" "text",
+    "country" character(2),
+    "engaged_ms" bigint DEFAULT 0 NOT NULL,
+    "step_ms" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "pdf_downloads" integer DEFAULT 0 NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "resource_version" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "storefront_visits_device_ck" CHECK ((("device_category" IS NULL) OR ("device_category" = ANY (ARRAY['desktop'::"text", 'mobile'::"text", 'tablet'::"text"])))),
+    CONSTRAINT "storefront_visits_session_ck" CHECK (((("surface" = 'checkout'::"text") AND ("checkout_session_id" IS NOT NULL) AND ("portal_session_id" IS NULL)) OR (("surface" = 'portal'::"text") AND ("portal_session_id" IS NOT NULL) AND ("checkout_session_id" IS NULL)))),
+    CONSTRAINT "storefront_visits_surface_ck" CHECK (("surface" = ANY (ARRAY['checkout'::"text", 'portal'::"text"])))
 );
 
 
@@ -6441,6 +6814,14 @@ ALTER TABLE ONLY "public"."businesses"
 
 
 --
+-- Name: buyer_client_errors buyer_client_errors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."buyer_client_errors"
+    ADD CONSTRAINT "buyer_client_errors_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: buyer_request_rejections buyer_request_rejections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6793,6 +7174,22 @@ ALTER TABLE ONLY "public"."dunning_policies"
 
 
 --
+-- Name: email_engagements email_engagements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_engagements"
+    ADD CONSTRAINT "email_engagements_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: email_links email_links_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_links"
+    ADD CONSTRAINT "email_links_pkey" PRIMARY KEY ("email_message_id", "position");
+
+
+--
 -- Name: email_messages email_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7137,6 +7534,78 @@ ALTER TABLE ONLY "public"."mrr_movements"
 
 
 --
+-- Name: notification_deliveries notification_deliveries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_deliveries"
+    ADD CONSTRAINT "notification_deliveries_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_destinations notification_destinations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_destinations"
+    ADD CONSTRAINT "notification_destinations_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_digests notification_digests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_digests"
+    ADD CONSTRAINT "notification_digests_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_groups notification_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_groups"
+    ADD CONSTRAINT "notification_groups_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_preferences notification_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_preferences"
+    ADD CONSTRAINT "notification_preferences_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_queue notification_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_queue"
+    ADD CONSTRAINT "notification_queue_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_settings_org notification_settings_org_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_settings_org"
+    ADD CONSTRAINT "notification_settings_org_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: notification_settings notification_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_settings"
+    ADD CONSTRAINT "notification_settings_pkey" PRIMARY KEY ("user_id");
+
+
+--
+-- Name: notifications notifications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notifications"
+    ADD CONSTRAINT "notifications_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: oauth_clients oauth_clients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7321,6 +7790,14 @@ ALTER TABLE ONLY "public"."portal_sessions"
 
 
 --
+-- Name: postal_codes postal_codes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."postal_codes"
+    ADD CONSTRAINT "postal_codes_pkey" PRIMARY KEY ("country", "postal_code", "place_name");
+
+
+--
 -- Name: pre_debit_notices pre_debit_notices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7406,6 +7883,14 @@ ALTER TABLE ONLY "public"."provider_events"
 
 ALTER TABLE ONLY "public"."public_rate_limit_counters"
     ADD CONSTRAINT "public_rate_limit_counters_pkey" PRIMARY KEY ("bucket", "window_start");
+
+
+--
+-- Name: push_subscriptions push_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."push_subscriptions"
+    ADD CONSTRAINT "push_subscriptions_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -7566,6 +8051,14 @@ ALTER TABLE ONLY "public"."spend_limit_tiers"
 
 ALTER TABLE ONLY "public"."spend_limits"
     ADD CONSTRAINT "spend_limits_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: storefront_visits storefront_visits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."storefront_visits"
+    ADD CONSTRAINT "storefront_visits_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -8318,6 +8811,27 @@ CREATE UNIQUE INDEX "businesses_public_id_uq" ON "public"."businesses" USING "bt
 
 
 --
+-- Name: buyer_client_errors_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "buyer_client_errors_business_idx" ON "public"."buyer_client_errors" USING "btree" ("business_id", "created_at");
+
+
+--
+-- Name: buyer_client_errors_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "buyer_client_errors_created_idx" ON "public"."buyer_client_errors" USING "btree" ("created_at");
+
+
+--
+-- Name: buyer_client_errors_session_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "buyer_client_errors_session_idx" ON "public"."buyer_client_errors" USING "btree" ("session_public_id", "created_at");
+
+
+--
 -- Name: buyer_request_rejections_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8357,6 +8871,13 @@ CREATE UNIQUE INDEX "checkout_session_items_session_price_uq" ON "public"."check
 --
 
 CREATE INDEX "checkout_sessions_business_idx" ON "public"."checkout_sessions" USING "btree" ("business_id");
+
+
+--
+-- Name: checkout_sessions_charge_intent_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "checkout_sessions_charge_intent_uq" ON "public"."checkout_sessions" USING "btree" ("charge_payment_intent") WHERE ("charge_payment_intent" IS NOT NULL);
 
 
 --
@@ -9270,6 +9791,55 @@ CREATE UNIQUE INDEX "dunning_policies_public_id_uq" ON "public"."dunning_policie
 
 
 --
+-- Name: email_engagements_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_engagements_business_idx" ON "public"."email_engagements" USING "btree" ("business_id", "created_at");
+
+
+--
+-- Name: email_engagements_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_engagements_created_idx" ON "public"."email_engagements" USING "btree" ("created_at");
+
+
+--
+-- Name: email_engagements_email_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_engagements_email_idx" ON "public"."email_engagements" USING "btree" ("email_message_id");
+
+
+--
+-- Name: email_engagements_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_engagements_org_idx" ON "public"."email_engagements" USING "btree" ("organization_id");
+
+
+--
+-- Name: email_links_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_links_business_idx" ON "public"."email_links" USING "btree" ("business_id");
+
+
+--
+-- Name: email_links_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_links_created_idx" ON "public"."email_links" USING "btree" ("created_at");
+
+
+--
+-- Name: email_links_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_links_org_idx" ON "public"."email_links" USING "btree" ("organization_id");
+
+
+--
 -- Name: email_messages_biz_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9323,6 +9893,13 @@ CREATE UNIQUE INDEX "email_messages_public_id_uq" ON "public"."email_messages" U
 --
 
 CREATE INDEX "email_messages_status_idx" ON "public"."email_messages" USING "btree" ("status", "next_attempt_at");
+
+
+--
+-- Name: email_messages_tracked_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "email_messages_tracked_idx" ON "public"."email_messages" USING "btree" ("business_id", "engagement_tracked_at") WHERE ("engagement_tracked_at" IS NOT NULL);
 
 
 --
@@ -10145,6 +10722,153 @@ CREATE INDEX "mrr_movements_subscription_idx" ON "public"."mrr_movements" USING 
 
 
 --
+-- Name: notification_deliveries_dedupe_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_deliveries_dedupe_uq" ON "public"."notification_deliveries" USING "btree" ("dedupe_key");
+
+
+--
+-- Name: notification_deliveries_destination_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_deliveries_destination_idx" ON "public"."notification_deliveries" USING "btree" ("destination_id", "created_at");
+
+
+--
+-- Name: notification_deliveries_pending_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_deliveries_pending_idx" ON "public"."notification_deliveries" USING "btree" ("next_attempt_at") WHERE ("status" = ANY (ARRAY['pending'::"text", 'held'::"text"]));
+
+
+--
+-- Name: notification_destinations_email_sent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_destinations_email_sent_idx" ON "public"."notification_destinations" USING "btree" ("email", "last_sent_at");
+
+
+--
+-- Name: notification_destinations_org_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_destinations_org_idx" ON "public"."notification_destinations" USING "btree" ("organization_id", "status");
+
+
+--
+-- Name: notification_destinations_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_destinations_public_id_uq" ON "public"."notification_destinations" USING "btree" ("public_id");
+
+
+--
+-- Name: notification_destinations_token_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_destinations_token_uq" ON "public"."notification_destinations" USING "btree" ("token_hash") WHERE ("token_hash" IS NOT NULL);
+
+
+--
+-- Name: notification_digests_period_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_digests_period_uq" ON "public"."notification_digests" USING "btree" ("business_id", "period", "period_start");
+
+
+--
+-- Name: notification_digests_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_digests_public_id_uq" ON "public"."notification_digests" USING "btree" ("public_id");
+
+
+--
+-- Name: notification_groups_open_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_groups_open_idx" ON "public"."notification_groups" USING "btree" ("opened_at") WHERE ("closed_at" IS NULL);
+
+
+--
+-- Name: notification_groups_open_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_groups_open_uq" ON "public"."notification_groups" USING "btree" ("key") WHERE ("closed_at" IS NULL);
+
+
+--
+-- Name: notification_preferences_business_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_preferences_business_uq" ON "public"."notification_preferences" USING "btree" ("organization_id", "user_id", "business_id") WHERE ("business_id" IS NOT NULL);
+
+
+--
+-- Name: notification_preferences_default_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_preferences_default_uq" ON "public"."notification_preferences" USING "btree" ("organization_id", "user_id") WHERE ("business_id" IS NULL);
+
+
+--
+-- Name: notification_queue_dedupe_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_queue_dedupe_uq" ON "public"."notification_queue" USING "btree" ("dedupe_key");
+
+
+--
+-- Name: notification_queue_pending_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notification_queue_pending_idx" ON "public"."notification_queue" USING "btree" ("next_attempt_at") WHERE ("status" = 'pending'::"text");
+
+
+--
+-- Name: notification_settings_org_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notification_settings_org_uq" ON "public"."notification_settings_org" USING "btree" ("organization_id", "user_id");
+
+
+--
+-- Name: notifications_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notifications_created_idx" ON "public"."notifications" USING "btree" ("created_at");
+
+
+--
+-- Name: notifications_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "notifications_public_id_uq" ON "public"."notifications" USING "btree" ("public_id");
+
+
+--
+-- Name: notifications_summary_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notifications_summary_idx" ON "public"."notifications" USING "btree" ("organization_id", "business_id", "created_at") WHERE ("timing" = 'summary'::"text");
+
+
+--
+-- Name: notifications_unread_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notifications_unread_idx" ON "public"."notifications" USING "btree" ("user_id", "organization_id") WHERE (("read_at" IS NULL) AND ("timing" = 'instant'::"text"));
+
+
+--
+-- Name: notifications_user_feed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "notifications_user_feed_idx" ON "public"."notifications" USING "btree" ("user_id", "organization_id", "created_at");
+
+
+--
 -- Name: oauth_clients_client_id_uq; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10289,6 +11013,13 @@ CREATE INDEX "payment_intents_business_created_idx" ON "public"."payment_intents
 --
 
 CREATE INDEX "payment_intents_business_idx" ON "public"."payment_intents" USING "btree" ("business_id");
+
+
+--
+-- Name: payment_intents_customer_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "payment_intents_customer_created_idx" ON "public"."payment_intents" USING "btree" ("customer_id", "created_at" DESC, "public_id" DESC);
 
 
 --
@@ -10726,10 +11457,45 @@ CREATE INDEX "provider_events_error_received_idx" ON "public"."provider_events" 
 
 
 --
+-- Name: provider_events_payment_attempt_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "provider_events_payment_attempt_idx" ON "public"."provider_events" USING "btree" ("payment_attempt_id") WHERE ("payment_attempt_id" IS NOT NULL);
+
+
+--
+-- Name: provider_events_payment_intent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "provider_events_payment_intent_idx" ON "public"."provider_events" USING "btree" ("payment_intent_id") WHERE ("payment_intent_id" IS NOT NULL);
+
+
+--
 -- Name: public_rate_limit_counters_window_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX "public_rate_limit_counters_window_idx" ON "public"."public_rate_limit_counters" USING "btree" ("window_start");
+
+
+--
+-- Name: push_subscriptions_endpoint_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "push_subscriptions_endpoint_uq" ON "public"."push_subscriptions" USING "btree" ("endpoint");
+
+
+--
+-- Name: push_subscriptions_public_id_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "push_subscriptions_public_id_uq" ON "public"."push_subscriptions" USING "btree" ("public_id");
+
+
+--
+-- Name: push_subscriptions_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "push_subscriptions_user_idx" ON "public"."push_subscriptions" USING "btree" ("user_id");
 
 
 --
@@ -11031,6 +11797,41 @@ CREATE UNIQUE INDEX "spend_limits_public_id_uq" ON "public"."spend_limits" USING
 --
 
 CREATE UNIQUE INDEX "spend_limits_subject_uq" ON "public"."spend_limits" USING "btree" ("customer_id", "scope", COALESCE("subscription_id", '00000000-0000-0000-0000-000000000000'::"uuid"), COALESCE("property_key", ''::"text"), COALESCE("property_value", ''::"text"), (("property_value" IS NULL)), "interval", "mode", "set_by") WHERE "active";
+
+
+--
+-- Name: storefront_visits_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "storefront_visits_business_idx" ON "public"."storefront_visits" USING "btree" ("business_id", "surface", "viewed_at");
+
+
+--
+-- Name: storefront_visits_checkout_session_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "storefront_visits_checkout_session_idx" ON "public"."storefront_visits" USING "btree" ("checkout_session_id") WHERE ("checkout_session_id" IS NOT NULL);
+
+
+--
+-- Name: storefront_visits_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "storefront_visits_created_idx" ON "public"."storefront_visits" USING "btree" ("created_at");
+
+
+--
+-- Name: storefront_visits_portal_session_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "storefront_visits_portal_session_idx" ON "public"."storefront_visits" USING "btree" ("portal_session_id") WHERE ("portal_session_id" IS NOT NULL);
+
+
+--
+-- Name: storefront_visits_session_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "storefront_visits_session_uq" ON "public"."storefront_visits" USING "btree" ("surface", "session_public_id");
 
 
 --
@@ -12392,6 +13193,13 @@ CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."dunning_policies" F
 
 
 --
+-- Name: email_engagements bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."email_engagements" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
 -- Name: gateway_accounts bump_row_version; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -12564,6 +13372,13 @@ CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."spend_limit_tiers" 
 --
 
 CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."spend_limits" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
+
+
+--
+-- Name: storefront_visits bump_row_version; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER "bump_row_version" BEFORE UPDATE ON "public"."storefront_visits" FOR EACH ROW EXECUTE FUNCTION "public"."bump_row_version"();
 
 
 --
@@ -14228,6 +15043,54 @@ ALTER TABLE ONLY "public"."dunning_policies"
 
 
 --
+-- Name: email_engagements email_engagements_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_engagements"
+    ADD CONSTRAINT "email_engagements_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: email_engagements email_engagements_email_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_engagements"
+    ADD CONSTRAINT "email_engagements_email_message_id_fkey" FOREIGN KEY ("email_message_id") REFERENCES "public"."email_messages"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: email_engagements email_engagements_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_engagements"
+    ADD CONSTRAINT "email_engagements_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: email_links email_links_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_links"
+    ADD CONSTRAINT "email_links_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: email_links email_links_email_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_links"
+    ADD CONSTRAINT "email_links_email_message_id_fkey" FOREIGN KEY ("email_message_id") REFERENCES "public"."email_messages"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: email_links email_links_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."email_links"
+    ADD CONSTRAINT "email_links_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: email_messages email_messages_credit_note_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14972,6 +15835,134 @@ ALTER TABLE ONLY "public"."mrr_movements"
 
 
 --
+-- Name: notification_deliveries notification_deliveries_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_deliveries"
+    ADD CONSTRAINT "notification_deliveries_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_destinations notification_destinations_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_destinations"
+    ADD CONSTRAINT "notification_destinations_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_digests notification_digests_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_digests"
+    ADD CONSTRAINT "notification_digests_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_digests notification_digests_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_digests"
+    ADD CONSTRAINT "notification_digests_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_groups notification_groups_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_groups"
+    ADD CONSTRAINT "notification_groups_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_preferences notification_preferences_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_preferences"
+    ADD CONSTRAINT "notification_preferences_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_preferences notification_preferences_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_preferences"
+    ADD CONSTRAINT "notification_preferences_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_preferences notification_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_preferences"
+    ADD CONSTRAINT "notification_preferences_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_queue notification_queue_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_queue"
+    ADD CONSTRAINT "notification_queue_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_queue notification_queue_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_queue"
+    ADD CONSTRAINT "notification_queue_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_settings_org notification_settings_org_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_settings_org"
+    ADD CONSTRAINT "notification_settings_org_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_settings_org notification_settings_org_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_settings_org"
+    ADD CONSTRAINT "notification_settings_org_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notification_settings notification_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notification_settings"
+    ADD CONSTRAINT "notification_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notifications"
+    ADD CONSTRAINT "notifications_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notifications"
+    ADD CONSTRAINT "notifications_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."notifications"
+    ADD CONSTRAINT "notifications_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: oauth_grants oauth_grants_api_key_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15588,6 +16579,14 @@ ALTER TABLE ONLY "public"."provider_customers"
 
 
 --
+-- Name: push_subscriptions push_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."push_subscriptions"
+    ADD CONSTRAINT "push_subscriptions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: rate_limit_counters rate_limit_counters_api_key_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15897,6 +16896,38 @@ ALTER TABLE ONLY "public"."spend_limits"
 
 ALTER TABLE ONLY "public"."spend_limits"
     ADD CONSTRAINT "spend_limits_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: storefront_visits storefront_visits_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."storefront_visits"
+    ADD CONSTRAINT "storefront_visits_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: storefront_visits storefront_visits_checkout_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."storefront_visits"
+    ADD CONSTRAINT "storefront_visits_checkout_session_id_fkey" FOREIGN KEY ("checkout_session_id") REFERENCES "public"."checkout_sessions"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: storefront_visits storefront_visits_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."storefront_visits"
+    ADD CONSTRAINT "storefront_visits_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: storefront_visits storefront_visits_portal_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."storefront_visits"
+    ADD CONSTRAINT "storefront_visits_portal_session_id_fkey" FOREIGN KEY ("portal_session_id") REFERENCES "public"."portal_sessions"("id") ON DELETE CASCADE;
 
 
 --
@@ -16913,6 +17944,12 @@ CREATE POLICY "business_isolation" ON "public"."tmtest_outbound" USING (("busine
 ALTER TABLE "public"."businesses" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: buyer_client_errors; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."buyer_client_errors" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: buyer_request_rejections; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -17148,6 +18185,18 @@ ALTER TABLE "public"."due_work" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."dunning_policies" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: email_engagements; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."email_engagements" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: email_links; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."email_links" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: email_messages; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -17310,6 +18359,28 @@ ALTER TABLE "public"."ledger_entries" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."list_views" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: notification_settings member_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "member_isolation" ON "public"."notification_settings" USING ((EXISTS ( SELECT 1
+   FROM "public"."memberships" "m"
+  WHERE ("m"."user_id" = "notification_settings"."user_id")))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."memberships" "m"
+  WHERE ("m"."user_id" = "notification_settings"."user_id"))));
+
+
+--
+-- Name: push_subscriptions member_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "member_isolation" ON "public"."push_subscriptions" USING ((EXISTS ( SELECT 1
+   FROM "public"."memberships" "m"
+  WHERE ("m"."user_id" = "push_subscriptions"."user_id")))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."memberships" "m"
+  WHERE ("m"."user_id" = "push_subscriptions"."user_id"))));
+
+
+--
 -- Name: user_mfa member_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -17384,6 +18455,60 @@ ALTER TABLE "public"."model_price_notices" ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE "public"."mrr_movements" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_deliveries; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_deliveries" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_destinations; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_destinations" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_digests; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_digests" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_groups; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_groups" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_preferences; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_preferences" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_queue; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_queue" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_settings" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notification_settings_org; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notification_settings_org" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: notifications; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."notifications" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: oauth_grants; Type: ROW SECURITY; Schema: public; Owner: -
@@ -17500,6 +18625,13 @@ CREATE POLICY "org_isolation" ON "public"."audit_logs" USING (("organization_id"
 --
 
 CREATE POLICY "org_isolation" ON "public"."businesses" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: buyer_client_errors org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."buyer_client_errors" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -17762,6 +18894,20 @@ CREATE POLICY "org_isolation" ON "public"."dunning_policies" USING (("organizati
 
 
 --
+-- Name: email_engagements org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."email_engagements" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: email_links org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."email_links" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: email_messages org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -18004,6 +19150,62 @@ CREATE POLICY "org_isolation" ON "public"."model_price_notices" USING (("organiz
 --
 
 CREATE POLICY "org_isolation" ON "public"."mrr_movements" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_deliveries org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_deliveries" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_destinations org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_destinations" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_digests org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_digests" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_groups org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_groups" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_preferences org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_preferences" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_queue org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_queue" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notification_settings_org org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notification_settings_org" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: notifications org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."notifications" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -18270,6 +19472,13 @@ CREATE POLICY "org_isolation" ON "public"."spend_limit_tiers" USING (("organizat
 --
 
 CREATE POLICY "org_isolation" ON "public"."spend_limits" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: storefront_visits org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."storefront_visits" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -18649,6 +19858,12 @@ ALTER TABLE "public"."promotional_credit_movements" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."provider_customers" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: push_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."push_subscriptions" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: reason_codes; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -18738,6 +19953,12 @@ ALTER TABLE "public"."spend_limit_tiers" ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE "public"."spend_limits" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: storefront_visits; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."storefront_visits" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: subscription_charge_log; Type: ROW SECURITY; Schema: public; Owner: -
@@ -18980,6 +20201,14 @@ GRANT USAGE ON SCHEMA "public" TO "tmbilling_app";
 
 REVOKE ALL ON FUNCTION "public"."app_nudge_integration_outbox"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."app_nudge_integration_outbox"() TO "tmbilling_app";
+
+
+--
+-- Name: FUNCTION "app_nudge_notifications"(); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION "public"."app_nudge_notifications"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_nudge_notifications"() TO "tmbilling_app";
 
 
 --
@@ -19392,6 +20621,20 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."dunning_policies" TO "tmbil
 
 
 --
+-- Name: TABLE "email_engagements"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."email_engagements" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "email_links"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."email_links" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "email_messages"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -19693,6 +20936,69 @@ GRANT SELECT ON TABLE "public"."mrr_movement_summary" TO "tmbilling_app";
 
 
 --
+-- Name: TABLE "notification_deliveries"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_deliveries" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_destinations"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_destinations" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_digests"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_digests" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_groups"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_groups" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_preferences"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_preferences" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_queue"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_queue" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_settings"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_settings" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notification_settings_org"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notification_settings_org" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "notifications"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."notifications" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "oauth_grants"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -19861,6 +21167,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."provider_customers" TO "tmb
 
 
 --
+-- Name: TABLE "push_subscriptions"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."push_subscriptions" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "reason_codes"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -19956,6 +21269,13 @@ GRANT SELECT,INSERT,UPDATE ON TABLE "public"."spend_limit_tiers" TO "tmbilling_a
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."spend_limits" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "storefront_visits"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."storefront_visits" TO "tmbilling_app";
 
 
 --

@@ -10,6 +10,7 @@ import { requirePermission } from "@/lib/session";
 import { orgTz } from "@/lib/org-tz-server";
 import { RecordCard } from "@/components/patterns/record-page";
 import { StatusBadge } from "@/components/status-badge";
+import { Chip } from "@/components/patterns/chip";
 import {
   Table,
   TableHeader,
@@ -53,7 +54,11 @@ export default async function DeveloperWebhooksPage() {
       tz={tz}
       actions={
         <CreateEndpointDialog
-          businesses={businesses.data.map((b) => ({ id: b.id, name: b.name }))}
+          businesses={businesses.data.map((b) => ({
+            id: b.id,
+            name: b.name,
+            livemode: b.livemode,
+          }))}
           action={createWebhookEndpoint}
         />
       }
@@ -85,6 +90,7 @@ export default async function DeveloperWebhooksPage() {
                 <TableRow>
                   <TableHead>Endpoint</TableHead>
                   <TableHead>Scope</TableHead>
+                  <TableHead>Mode</TableHead>
                   <TableHead phone="aside">Status</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead />
@@ -109,6 +115,12 @@ export default async function DeveloperWebhooksPage() {
                         {e.business
                           ? (businesses.data.find((b) => b.id === e.business)?.name ?? e.business)
                           : "All businesses"}
+                      </TableCell>
+                      {/* A live business and its test mode share a name; this tells them apart. */}
+                      <TableCell>
+                        <Chip tone={e.livemode === "test" ? "tan" : "gray"}>
+                          {e.livemode === "test" ? "Test" : "Live"}
+                        </Chip>
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={e.enabled ? "enabled" : "disabled"} />

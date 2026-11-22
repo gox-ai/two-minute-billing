@@ -1,6 +1,7 @@
 import * as React from "react";
 import { SettingsPage } from "@/components/settings/settings-layout";
 import { accountBillingEnabled } from "@/lib/account-billing";
+import { currentUser } from "@/lib/session";
 import { OrgSettingsNav, type OrgSettingsPageKey } from "./org-settings-nav";
 
 const TITLES: Record<OrgSettingsPageKey, string> = {
@@ -8,6 +9,7 @@ const TITLES: Record<OrgSettingsPageKey, string> = {
   legal: "Legal entity",
   reporting: "Reporting",
   security: "Security",
+  notifications: "Team notifications",
 };
 
 /**
@@ -15,7 +17,7 @@ const TITLES: Record<OrgSettingsPageKey, string> = {
  * The 2.5rem gap equals the Save bar's start bleed (`md:-mx-10`), so the bar meets the
  * side list's edge instead of running under it.
  */
-export function OrgSettingsFrame({
+export async function OrgSettingsFrame({
   page,
   description,
   liveAccessLocked,
@@ -27,6 +29,8 @@ export function OrgSettingsFrame({
   children: React.ReactNode;
 }) {
   const title = TITLES[page];
+  // Team notifications are for owners and admins only (the API refuses everyone else).
+  const role = (await currentUser())?.role;
   return (
     <SettingsPage
       title={title}
@@ -38,6 +42,7 @@ export function OrgSettingsFrame({
       <div className="grid grow grid-rows-[auto_1fr] gap-5 @min-[52rem]/main:grid-cols-[12rem_minmax(0,1fr)] @min-[52rem]/main:grid-rows-1 @min-[52rem]/main:gap-10">
         <OrgSettingsNav
           active={page}
+          teamNotifications={role === "owner" || role === "admin"}
           billing={
             accountBillingEnabled()
               ? { note: liveAccessLocked ? "Live mode off" : undefined }

@@ -254,7 +254,7 @@ export function recurringZones({
       value: unit("ue_churned"),
       info: G.revenueLostPerChurnedSub,
     },
-    { label: "Customer lifetime value", value: unit("ue_clv"), info: G.clv },
+    { label: "Subscription lifetime value", value: unit("ue_clv"), info: G.clv },
     { label: "Average customer lifetime", value: lifetimeLabel, info: G.customerLifetime },
     {
       label: "Subscriptions per customer",

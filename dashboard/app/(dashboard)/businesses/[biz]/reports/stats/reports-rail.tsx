@@ -7,25 +7,62 @@ import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sentenceCase } from "@/lib/labels";
 import type { ReportSummary } from "@/lib/api";
+import {
+  ABSENT_MODELS_LABEL,
+  MODEL_GROUP_ORDER,
+  modelSection,
+  type ModelGroupId,
+} from "@/lib/billing-models";
+
+const ABSENT_ID = "__absent";
 
 /**
  * Every report, by category, as one card beside the section. Categories fold; the one
  * holding the open report opens on arrival. Variants (ARR beside MRR) stay on the report's
  * own page rather than doubling the list.
  */
-export function ReportsRail({ biz, reports }: { biz: string; reports: ReportSummary[] }) {
+export function ReportsRail({
+  biz,
+  reports,
+  models = null,
+}: {
+  biz: string;
+  reports: ReportSummary[];
+  /** The business's billing models; a report for a model it lacks folds under one heading. */
+  models?: readonly string[] | null;
+}) {
   // The `[key]` segment under `stats`; a route group (the library) matches no key.
   const active = useSelectedLayoutSegment();
 
   const groups = React.useMemo(() => {
-    const by = new Map<string, { id: string; label: string; items: ReportSummary[] }>();
+    const by = new Map<
+      string,
+      { id: string; label: string; items: ReportSummary[]; order: number }
+    >();
+    const absent: ReportSummary[] = [];
     for (const r of reports) {
-      const g = by.get(r.category) ?? { id: r.category, label: r.category_label, items: [] };
+      const sec = modelSection(r.model, models);
+      if (sec.absent) {
+        absent.push(r);
+        continue;
+      }
+      const order = MODEL_GROUP_ORDER.indexOf(sec.group as ModelGroupId);
+      const g = by.get(r.category) ?? {
+        id: r.category,
+        label: r.category_label,
+        items: [],
+        order,
+      };
+      g.order = Math.min(g.order, order);
       g.items.push(r);
       by.set(r.category, g);
     }
-    return [...by.values()];
-  }, [reports]);
+    // A model the business has comes first; the engine's order holds inside a model.
+    const present = [...by.values()].sort((a, b) => a.order - b.order);
+    return absent.length > 0
+      ? [...present, { id: ABSENT_ID, label: ABSENT_MODELS_LABEL, items: absent, order: 99 }]
+      : present;
+  }, [reports, models]);
 
   const activeGroup = groups.find((g) => g.items.some((r) => r.key === active))?.id ?? null;
   const [open, setOpen] = React.useState<Set<string>>(

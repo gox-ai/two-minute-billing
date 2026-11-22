@@ -16,8 +16,11 @@ export const NETWORK_RETRY_CAP: Readonly<Record<string, number>> = {
   upi: 3,
   emandate: 2,
   nach: 2,
+  enach: 2,
+  pnach: 2,
   bank_transfer: 2,
-}
+  card: 2,
+};
 
 /** The smallest cap across the Indian mandate rails — what a shared schedule must meet. */
-export const STRICTEST_NETWORK_RETRY_CAP = Math.min(...Object.values(NETWORK_RETRY_CAP))
+export const STRICTEST_NETWORK_RETRY_CAP = Math.min(...Object.values(NETWORK_RETRY_CAP));

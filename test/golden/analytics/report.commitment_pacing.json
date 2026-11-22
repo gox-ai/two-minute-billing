@@ -1,0 +1,86 @@
+{
+  "aging_interval": "standard",
+  "aging_intervals": [],
+  "as_of": "<timestamp>",
+  "category": "usage",
+  "converted": true,
+  "currency": "USD",
+  "customer_filter": null,
+  "description": "Subscriptions with a minimum commitment, by how their fees compare with the commitment due so far in the current term. On pace is 80% to 110%. Fees are what is invoiced for the term plus the usage so far that is not invoiced yet, at the subscription's prices. A subscription with a volume or stairstep usage price counts invoiced fees only and shows its pace at term end.",
+  "dimensions": [],
+  "granularities": [],
+  "granularity": "month",
+  "grid": {
+    "columns": [
+      {
+        "key": "subscription",
+        "kind": "text",
+        "label": "Subscription"
+      },
+      {
+        "key": "counted",
+        "kind": "money",
+        "label": "Fees so far"
+      },
+      {
+        "key": "due",
+        "kind": "money",
+        "label": "Commitment due so far"
+      },
+      {
+        "key": "commitment",
+        "kind": "money",
+        "label": "Commitment for the term"
+      },
+      {
+        "key": "pace",
+        "kind": "rate",
+        "label": "Pace"
+      },
+      {
+        "key": "band",
+        "kind": "text",
+        "label": "Status"
+      },
+      {
+        "key": "unbilled",
+        "kind": "money",
+        "label": "Usage not invoiced yet"
+      }
+    ],
+    "rows": []
+  },
+  "headline": 0,
+  "key": "commitment_pacing",
+  "kind": "count",
+  "name": "Minimum Commitment Pacing",
+  "object": "report",
+  "points": [],
+  "range": "12m",
+  "rows": [
+    {
+      "group": "Under pace",
+      "group_id": "under",
+      "value": 0
+    },
+    {
+      "group": "On pace",
+      "group_id": "on",
+      "value": 0
+    },
+    {
+      "group": "Over pace",
+      "group_id": "over",
+      "value": 0
+    },
+    {
+      "group": "Pace shown at term end",
+      "group_id": "term_end",
+      "value": 0
+    }
+  ],
+  "shape": "buckets",
+  "tags": [
+    "committed"
+  ]
+}

@@ -10,6 +10,8 @@ export interface RetryRow {
   status: string;
   /** in_progress | success | exhausted | stopped | null — the "Retry Status". */
   dunning_status: string | null;
+  /** Settled by a write-off: `status` is `paid`, nothing was collected. Absent on an older engine. */
+  written_off?: boolean;
   currency: string;
   amount_due_minor: number;
   /**

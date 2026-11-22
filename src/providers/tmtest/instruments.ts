@@ -147,3 +147,11 @@ export function isNeedsAttentionAmount(amountMinor: bigint): boolean {
 export function isPendingRefundAmount(amountMinor: bigint): boolean {
   return amountMinor % 100n === 17n;
 }
+
+/**
+ * Amount ending in 19 → pay and save takes the payment but keeps no method, as a gateway
+ * does when it declines to vault. Drives the buyer's "could not save" path (`saveFailed`).
+ */
+export function isSaveFailsAmount(amountMinor: bigint): boolean {
+  return amountMinor % 100n === 19n;
+}

@@ -4,6 +4,8 @@ import { reportCrumbs } from "@/lib/report-crumbs";
 import Link from "next/link";
 import { listBusinesses, listReports } from "@/lib/api";
 import { listMeasures } from "@/lib/analytics-api";
+import { getBillingModels } from "@/lib/api/billing-models";
+import { MODEL_GROUP_ORDER, modelSection } from "@/lib/billing-models";
 import { requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState } from "@/components/states";
@@ -103,10 +105,12 @@ export default async function WidgetsPage({
 
   let measures: MeasureMeta[];
   let reports: Awaited<ReturnType<typeof listReports>>;
+  let models: Awaited<ReturnType<typeof getBillingModels>>;
   try {
-    [measures, reports] = await Promise.all([
+    [measures, reports, models] = await Promise.all([
       listMeasures() as Promise<MeasureMeta[]>,
       listReports(biz),
+      getBillingModels(biz),
     ]);
   } catch (e) {
     // Two top-level elements, header then body — the section layout places them.
@@ -145,6 +149,7 @@ export default async function WidgetsPage({
       description: m.description,
       source: "measure",
       family: familyOf(unitLabel, basisLabel, false),
+      ...modelSection(m.model, models),
       unitLabel,
       basisLabel,
       dimensions: m.dimensions.map(dimensionLabel),
@@ -180,6 +185,7 @@ export default async function WidgetsPage({
       description: r.description,
       source: "report",
       family: familyOf(unitLabel, basisLabel, gridOnly),
+      ...modelSection(r.model, models),
       unitLabel,
       basisLabel,
       dimensions: r.dimensions.map(dimensionLabel),
@@ -194,6 +200,8 @@ export default async function WidgetsPage({
 
   const widgets = [...fromMeasures, ...fromReports].sort(
     (a, b) =>
+      Number(a.absent) - Number(b.absent) ||
+      MODEL_GROUP_ORDER.indexOf(a.group) - MODEL_GROUP_ORDER.indexOf(b.group) ||
       FAMILY_ORDER.indexOf(a.family) - FAMILY_ORDER.indexOf(b.family) ||
       a.name.localeCompare(b.name),
   );

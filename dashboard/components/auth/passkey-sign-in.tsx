@@ -114,8 +114,12 @@ export function PasskeySecondStep({
           {error}
         </Alert>
       ) : cancelled ? (
-        <Alert tone="info" title="Is your passkey on your phone?">
-          In the browser window, select &ldquo;Use a phone or tablet&rdquo;.
+        // A passkey in one company's password manager (iCloud Keychain) never reaches another
+        // company's phone: the way in is the device that has it.
+        <Alert tone="info" title="Is your passkey on a different device?">
+          If it is on your phone, select &ldquo;Use a phone or tablet&rdquo; in the browser window.
+          If it is on a computer, sign in on that computer. Then, in Your account, add an
+          authenticator app or a passkey for this device.
         </Alert>
       ) : null}
       <CheckboxField

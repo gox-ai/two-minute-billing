@@ -2,7 +2,23 @@
 
 import * as React from "react";
 
+import { cn } from "@/lib/utils";
+import { SegmentIndicator } from "@/components/ui/segment-indicator";
 import { PORTAL_TABS, PORTAL_TAB_LABELS as LABELS, type PortalTab } from "./portal-tabs";
+
+/*
+ * Underlined text tabs (decided 2026-11-17, replacing the ink-filled pill). The label is
+ * `text-primary` — the brand-corrected link colour, which says "this navigates" (the
+ * September review found grey words did not read as a control); the selected one is ink
+ * with a 2px rule. Never `--solid`: on a hosted page that is the merchant's raw fill.
+ */
+const TAB =
+  "-mb-px inline-flex h-10 items-center gap-2 border-b-2 text-sm font-medium whitespace-nowrap transition-colors";
+const TAB_ON = "border-foreground text-foreground";
+const TAB_OFF = "border-transparent text-primary hover:border-border";
+/** The one underline that glides to the selected tab; the tab's own shows until it lands. */
+const UNDERLINE =
+  "rounded-none border-b-2 border-foreground bg-transparent shadow-none ease-(--ease-glide)";
 
 /**
  * How a CROSS-REFERENCE reaches the selection this component owns.
@@ -25,8 +41,8 @@ import { PORTAL_TABS, PORTAL_TAB_LABELS as LABELS, type PortalTab } from "./port
  * Outside the panes there is no provider, the handler bows out, and the anchor behaves
  * like any other link.
  */
-/** The account strip, left to right. The money column owns `invoices`. */
-const ACCOUNT_TABS = ["plan", "methods", "details"] as const;
+/** The strip under the plan, left to right. The plan itself is permanent above it. */
+const ACCOUNT_TABS = ["invoices", "methods", "details"] as const;
 
 export type PortalSelectOpts = {
   hash?: boolean;
@@ -93,25 +109,14 @@ export function PortalPanes({
   );
 
   /**
-   * The account column's selection, resolved HERE and nowhere else.
-   *
-   * `invoices` is a money-column choice, so the account side falls back to its
-   * first available section. That fallback used to be the literal `"plan"`, in two
-   * places that had to agree — this component and a `[data-tab="invoices"] …
-   * [data-pane="plan"]` rule in globals.css, whose own comment said "keep this list
-   * in step with the strip's buttons".
-   *
-   * For a customer with NO subscription there is no plan pane, so both resolved to
-   * a section that does not exist: no button pressed, no pane displayed, and a
-   * strip of controls sitting over an empty column. Seen on the live portal
-   * (invoice-only customer, 2026-09-07).
-   *
-   * Strip order, not pane order, so the pressed button is the leftmost one — the
-   * panes deliberately render details-before-methods for a different reason (see
-   * the note at the pane list).
+   * The strip's selection under the plan, resolved HERE and nowhere else. `plan` is
+   * permanent above the strip on a desktop, so choosing it (a phone tab, or a `?tab=plan`
+   * link) falls back to the strip's first available section — the CSS keys on
+   * `data-account-tab`, never on `data-tab` with a fallback spelled out again. A customer
+   * with no subscription has no plan pane and the strip still resolves to a real section.
    */
   const accountStrip = ACCOUNT_TABS.filter((id) => nodes[id] != null);
-  const accountTab = tab === "invoices" ? accountStrip[0] : tab;
+  const accountTab = tab === "plan" ? accountStrip[0] : tab;
   const navRef = React.useRef<HTMLElement>(null);
 
   const select = React.useCallback((next: PortalTab, opts?: PortalSelectOpts) => {
@@ -186,16 +191,6 @@ export function PortalPanes({
   return (
     <SelectContext.Provider value={select}>
       <div className="portal-panes" data-tab={tab} data-account-tab={accountTab}>
-        <div className="portal-col portal-col-money">
-          <div className="portal-pinned flex flex-col gap-4">
-            {setup}
-            {balance}
-          </div>
-          <div id="portal-invoices" className="portal-pane" data-pane="invoices">
-            {invoices}
-          </div>
-        </div>
-
         {/*
         Deliberately NOT `role="tablist"` / `role="tab"` / `role="tabpanel"`. Above
         1000px this whole element is `display: none` and every section is on screen at
@@ -206,17 +201,14 @@ export function PortalPanes({
       */}
         <nav
           ref={navRef}
-          /* A 2×2 GRID on a phone, a wrapping row from `sm` up.
-             The four pills need 456px in a 348px box, so they cannot share one row at
-             any phone width. `flex-wrap` gave a ragged 3-then-1 slab; a single scrolling
-             row fitted in 46px but put the fourth pill off screen, and a buyer has no
-             reason to suspect a nav strip scrolls. Nothing on a billing portal may be
-             discoverable only by swiping — so the height stays and the raggedness goes.
-             Equal cells, every label on screen, no hidden state. */
-          className="portal-tabs grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-fit sm:flex-wrap"
+          /* Underlined tabs that WRAP on a narrow phone rather than scroll: nothing on a
+             billing portal may be discoverable only by swiping, so every label stays on
+             screen even when the fourth one drops to a second line. */
+          className="portal-tabs relative isolate flex w-full flex-wrap items-end gap-x-5 border-b"
           aria-label="Billing sections"
           onKeyDown={onKeyDown}
         >
+          <SegmentIndicator className={UNDERLINE} />
           {shown.map((id) => {
             const on = id === tab;
             return (
@@ -226,67 +218,7 @@ export function PortalPanes({
                 data-tab-btn={id}
                 aria-pressed={on}
                 onClick={() => select(id)}
-                className={[
-                  "inline-flex h-9 w-full shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold whitespace-nowrap sm:w-auto sm:justify-start sm:px-3.5",
-                  "transition-colors",
-                  /* Reads two ways at once, which is what this control has to do. The rail
-                     plus exactly one FILLED item is the tab-switcher grammar; every item
-                     being a raised pill — rather than a bare word — is what gives each one
-                     the weight of a call to action.
-
-                     The fill is `--foreground` (ink), NOT `--solid`. On the operator
-                     dashboard those are the same near-black, so `--solid` would have looked
-                     right in review — but this is a HOSTED page, and `brandCss` rewrites
-                     `--solid` to the merchant's raw brand colour (`lib/brand.ts`). A
-                     `bg-solid` pill therefore comes out full-strength brand — orange for an
-                     orange merchant — on a control that is navigation, not the page's
-                     primary action. `--foreground` is not in the list `brandCss` overrides,
-                     so this stays ink in every merchant's palette. It is also the app's own
-                     active-tab idiom: `ui/tabs.tsx` draws its active indicator with
-                     `bg-foreground`. `--primary` is unusable here for a second reason — it
-                     is the link/accent colour and is never a fill. */
-                  /*
-                   * THE BUTTON VOCABULARY, not the tab one — and the rail is gone with it.
-                   *
-                   * Reviewed 2026-09-15: "Doesn't feel clickable." The strip was a
-                   * `bg-accent` rail holding borderless `bg-card` pills, which on a phone
-                   * (no hover) left `shadow-xs` as the only affordance; four white boxes
-                   * on lavender read as a legend.
-                   *
-                   * `ui/tabs.tsx` would say the fix is NOT a border — its triggers carry
-                   * `border border-transparent` and show selection by fill alone. But this
-                   * control is documented right below as deliberately NOT a tablist: it is
-                   * a pressed-button group. So the right vocabulary is `ui/button.tsx`,
-                   * whose `outline` variant IS `border … shadow-xs`.
-                   *
-                   * ⚠️ `border-input`, and it took two measurements to get here.
-                   * Inside the old rail, `--border` (#e2e9f2) on `--accent` (#e8eef7) was
-                   * 1.05:1 — an edge in the DOM and nowhere on screen. Dropping the rail
-                   * did not rescue it: on the storefront ground the same token measures
-                   * 1.14:1 border-vs-ground and 1.07:1 fill-vs-ground, i.e. WORSE, because
-                   * the rail had been supplying the separation.
-                   * `--input` is not a borrowed field token here — `ui/button.tsx`'s own
-                   * outline variant carries `dark:border-input` for exactly this reason:
-                   * where `--border` cannot be seen against the surface, the outline button
-                   * uses `--input`. Light mode on a tinted buyer ground is that case.
-                   *
-                   * The LABEL is `text-primary`, and that is a semantic claim rather than a
-                   * decorative one: this design system defines `--primary` as "this links or
-                   * navigates", which is exactly what these do. A grey outline says "I am a
-                   * discrete object"; the accent says "I am interactive", in the vocabulary
-                   * the product already uses for ~96 links. Measuring contrast only ever
-                   * proved the edge was VISIBLE — it never proved the control read as
-                   * pressable, and those are different questions.
-                   * Safe on a hosted page: `brandCss` rewrites `--primary` to the MERCHANT's
-                   * hex contrast-corrected to AA as link text (`readableOn`), unlike
-                   * `--solid`, which keeps the raw hex for fills. So it is on-brand and
-                   * readable by construction, and the note above about `--primary` never
-                   * being a FILL still stands — this is text.
-                   */
-                  on
-                    ? "border border-foreground bg-foreground text-background shadow-sm"
-                    : "border border-input bg-card text-foreground shadow-xs hover:bg-muted active:bg-muted",
-                ].join(" ")}
+                className={cn(TAB, on ? cn(TAB_ON, "segment-on") : TAB_OFF)}
               >
                 {LABELS[id]}
                 {id === "invoices" && dueCount > 0 ? (
@@ -301,49 +233,12 @@ export function PortalPanes({
 
         <div className="portal-col portal-col-account">
           {/*
-          THE ACCOUNT SIDE IS TABBED ON A DESKTOP TOO, and only here.
-
-          Two columns could not hold all four sections: the account column needs plan
-          (299) + billing details (372) + payment methods (578) ≈ 1281px against the
-          ~771px above a 900px fold, so whichever went last was the one below it. Making
-          the WHOLE page tabs would have fixed that and thrown away the reason for two
-          columns — a 1600px screen showing a balance and one card.
-
-          So the money stays put and only the account side takes turns. Invoices is what
-          a buyer opens a billing link for, and it is never behind a click; everything
-          else is one. Below 1000px this strip is hidden and the four-way filter above
-          takes over, because there is no width to keep anything permanent.
+          THE PLAN LEADS (decided 2026-11-17). On a desktop this is the main, wider column:
+          the plan card is permanent at the top, and invoices, billing details and payment
+          methods take turns under it behind one underlined strip. The balance sits in the
+          narrower column beside it. Below 1000px this strip is hidden and the four-way
+          filter above takes over, because there is no width to keep anything permanent.
         */}
-          <nav
-            className="portal-side-tabs flex w-fit flex-wrap items-center gap-2"
-            aria-label="Account sections"
-          >
-            {accountStrip.map((id) => {
-              const on = accountTab === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => select(id)}
-                  className={[
-                    "inline-flex h-9 items-center rounded-md px-3.5 text-sm font-semibold whitespace-nowrap transition-colors",
-                    /* Same idiom as the narrow-screen filter above — see the note there,
-                       including why the fill is `--foreground` and not `--solid`. This
-                       strip needed the weight most: it is the ONLY route to two of the
-                       four sections on a desktop, and as three unfilled grey words it did
-                       not read as a control at all. */
-                    /* Same borders as the narrow-screen filter above — one idiom. */
-                    on
-                      ? "border border-foreground bg-foreground text-background shadow-sm"
-                      : "border border-input bg-card text-foreground shadow-xs hover:bg-muted active:bg-muted",
-                  ].join(" ")}
-                >
-                  {LABELS[id]}
-                </button>
-              );
-            })}
-          </nav>
           {/* Billing details BEFORE payment methods, which also restores the order the
             single-column page had and documented: it is the PREREQUISITE for adding a
             method (`AddCard` refuses to start a setup without an address), so it reads
@@ -353,13 +248,54 @@ export function PortalPanes({
             tallest block here — a mandate-status line per instrument — so with it first,
             billing details started below the fold and the buyer had to scroll to reach
             the thing the section above it depends on. */}
-          {(["plan", "details", "methods"] as const).map((id) =>
+          {nodes.plan == null ? null : (
+            <div id="portal-plan" className="portal-pane" data-pane="plan">
+              {nodes.plan}
+            </div>
+          )}
+          {/* The plan's strip sits between it and its panes on a desktop. */}
+          <nav
+            className="portal-side-tabs relative isolate flex w-full flex-wrap items-end gap-x-5 border-b"
+            aria-label="Account sections"
+          >
+            <SegmentIndicator className={UNDERLINE} />
+            {accountStrip.map((id) => {
+              const on = accountTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => select(id)}
+                  className={cn(TAB, on ? cn(TAB_ON, "segment-on") : TAB_OFF)}
+                >
+                  {LABELS[id]}
+                  {id === "invoices" && dueCount > 0 ? (
+                    <span className="rounded-full bg-warning-soft px-1.5 py-0.5 text-xs leading-none font-semibold text-warning">
+                      {dueCount}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+          {(["invoices", "details", "methods"] as const).map((id) =>
             nodes[id] == null ? null : (
               <div key={id} id={`portal-${id}`} className="portal-pane" data-pane={id}>
                 {nodes[id]}
               </div>
             ),
           )}
+        </div>
+
+        {/* After the plan column in the DOM, so a keyboard or screen reader reaches the plan
+            first on a desktop (WCAG 2.4.3); CSS places it in the right column there, and at
+            the top on a phone (`order: 1`). */}
+        <div className="portal-col portal-col-money">
+          <div className="portal-pinned flex flex-col gap-4">
+            {setup}
+            {balance}
+          </div>
         </div>
       </div>
     </SelectContext.Provider>

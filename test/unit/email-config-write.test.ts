@@ -44,6 +44,7 @@ describe("email_config write path accepts everything the engine reads", () => {
       types: { invoice_issued: false },
       attachReceiptPdf: true,
       linkTarget: "merchant_url",
+      trackEngagement: true,
       merchantUrl: "https://billing.example.com/account",
     };
     // Every engine key must be represented above, or this test cannot police it.

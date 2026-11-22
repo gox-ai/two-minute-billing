@@ -423,8 +423,8 @@ function CodeBlock({
 
   return (
     <div className="bg-card">
-      <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:gap-8">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex flex-wrap items-start gap-x-8 gap-y-3 px-5 py-4">
+        <div className="flex min-w-0 flex-[1_1_14rem] flex-col gap-1">
           <span className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{label}</span>
             {override ? <Chip tone="blue">Set for the code</Chip> : null}
@@ -544,8 +544,8 @@ function RuleRow({
   const eqCode = rule.matches.op === "eq" && title === enumLabel(rule.matches.value);
 
   return (
-    <li className="flex flex-col gap-2 bg-card px-4 py-3 sm:flex-row sm:items-start sm:gap-6">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <li className="flex flex-wrap items-start gap-x-6 gap-y-2 bg-card px-4 py-3">
+      <div className="flex min-w-0 flex-[1_1_14rem] flex-col gap-1">
         <span className="flex flex-wrap items-center gap-2">
           <span className="text-sm">{title}</span>
           {own && !resetting ? <Chip tone="blue">Changed</Chip> : null}

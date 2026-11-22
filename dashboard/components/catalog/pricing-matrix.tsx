@@ -98,11 +98,12 @@ export function PricingMatrix({
   return (
     <Paged size={10} items={rows}>
       {/* A currency × frequency matrix: on a phone it scrolls with the currency frozen. */}
-      <Table phone="scroll" className="table-fixed max-lg:min-w-3xl">
+      <Table phone="scroll" className="min-w-3xl table-fixed max-lg:min-w-3xl">
         <colgroup>
           <col className="w-[14%]" />
           <col className="w-[14%]" />
-          <col className="w-[15%]" />
+          {/* Room for the largest amount the engine takes; a figure never wraps. */}
+          <col className="w-44" />
           <col />
           <col className="w-[12%]" />
           <col className="w-[9%]" />
@@ -143,7 +144,7 @@ function PriceRow({ biz, p, freq }: { biz: string; p: Price; freq: string }) {
     <TableRow className={p.active === false ? "opacity-50" : undefined}>
       <TableCell className="pl-5 font-medium">{p.currency}</TableCell>
       <TableCell className="whitespace-normal text-muted-foreground">{freq}</TableCell>
-      <TableCell className="text-right font-medium tabular-nums">
+      <TableCell className="text-right font-medium whitespace-nowrap tabular-nums">
         <Link
           href={`/businesses/${biz}/catalog/products/${p.product}/prices/${p.id}`}
           className="figure-link"

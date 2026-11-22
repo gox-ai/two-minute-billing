@@ -1,7 +1,7 @@
 /**
  * Dashboard form-validation guard.
  *
- * Two things that are easy to claim and easy to let rot, so both are measured:
+ * Things that are easy to claim and easy to let rot, so both are measured:
  *
  *   § A the two LIMITS tables — `src/api/limits.ts` and `dashboard/lib/limits.ts` —
  *       agree on every number
@@ -9,6 +9,8 @@
  *       not grow (ratcheting budget, like verify:ui and verify:input-bounds)
  *   § C form state re-syncs after a save: no new `useState(prop)` seeds, no raw Radix
  *       control bound to state inside a form (see dashboard/lib/use-default-state.ts)
+ *   § D a save never shows the previous save: a "latest value" ref is updated in a LAYOUT
+ *       effect, and form `reset` listeners live only in reviewed files
  *
  * ── WHY § B COUNTS WHAT IT COUNTS ───────────────────────────────────────────────
  * The dashboard already has a good contract: `parseForm(schema, formData)` returns zod
@@ -210,6 +212,54 @@ const ok = (n: string, c: boolean) => checks.push([n, c]);
   );
   if (seeded.length < SEEDED_BUDGET)
     console.log(`   ↳ lower SEEDED_BUDGET to ${seeded.length} — the ratchet only turns one way.`);
+}
+
+// ── § D · a save never shows the previous save ───────────────────────────────────
+// React 19 resets a form in the commit that brings a save's new defaults. A reset listener
+// that reads a ref updated by a PASSIVE effect sees the render from before the save, and the
+// controls put the previous save's values back (then post them on the next Save). So: the
+// "latest value" ref is updated in `useLayoutEffect`, and a form `reset` listener
+// lives only in the reviewed files below; a control uses `useFormResetSync` instead.
+{
+  const RESET_LISTENERS = new Set([
+    "dashboard/lib/use-default-state.ts", // useFormResetSync: every primitive
+    "dashboard/components/catalog/form-kit.tsx", // restores the submitted values
+    "dashboard/components/customers/customer-form.tsx", // re-reads FormData after reset
+    "dashboard/components/form/metadata-json-field.tsx", // clears its validity message only
+    "dashboard/components/form/action-form.tsx", // puts typed text back after a refused save
+  ]);
+  const walkAll = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir)) {
+      if (entry === "node_modules" || entry === ".next") continue;
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) walkAll(p, out);
+      else if (/\.tsx?$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  // An effect whose whole body is `x.current = …;` assignments, with or without deps.
+  const PASSIVE_LATEST =
+    /useEffect\(\s*\(\)\s*=>\s*\{\s*((?:[\w.]+\.current\s*=\s*[^;{}]+;\s*)+)\}\s*(?:,\s*\[[^\]]*\]\s*)?\)/g;
+  const RESET = /addEventListener\(\s*["']reset["']/;
+  const passive: string[] = [];
+  const listeners: string[] = [];
+  for (const dir of ["dashboard/app", "dashboard/components", "dashboard/lib"]) {
+    for (const file of walkAll(join(ROOT, dir))) {
+      const src = readFileSync(file, "utf8");
+      const rel = file.slice(ROOT.length);
+      for (const m of src.matchAll(PASSIVE_LATEST))
+        passive.push(`${rel}:${src.slice(0, m.index).split("\n").length}`);
+      if (RESET.test(src) && !RESET_LISTENERS.has(rel)) listeners.push(rel);
+    }
+  }
+  console.log(`  passive "latest value" refs ${passive.length} (budget 0)`);
+  for (const o of passive) console.log(`     ↳ ${o}  — update the ref in useLayoutEffect`);
+  for (const o of listeners)
+    console.log(
+      `     ↳ ${o}  — a form reset listener; use useFormResetSync, or review and list it`,
+    );
+  ok("§D no passive-effect latest ref (use useLayoutEffect)", passive.length === 0);
+  ok("§D form reset listeners only in the reviewed files", listeners.length === 0);
 }
 
 console.log("");

@@ -1,14 +1,6 @@
 import * as React from "react";
 import Link from "next/link";
-import {
-  Activity,
-  CircleDollarSign,
-  Coins,
-  Hourglass,
-  ShoppingBag,
-  TrendingDown,
-  Users,
-} from "lucide-react";
+
 import { AreaChart } from "@/components/charts/area-chart";
 import { isBlankSeries } from "@/components/charts/axis";
 import { Alert } from "@/components/ui/alert";
@@ -17,6 +9,7 @@ import { axisLabel, measurePolarity, stockPoints } from "@/components/analytics/
 import { chartKindFor } from "@/components/analytics/format";
 import { Grid, Block, BlockLink, Stack, spanClass } from "@/components/analytics/layout";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
+import { fmtAxisDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { EMPTY_FIGURE, EmptyFigure } from "@/components/patterns/record-page";
 import { InfoTip } from "@/components/analytics/info-tip";
@@ -24,6 +17,7 @@ import { explain, type CardInfo } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
 import type { BatchEntry, AnalyticsResult } from "@/lib/analytics-api";
 import { BucketBars } from "./charts";
+import { CurrentCards } from "./current-cards";
 import {
   AttentionStrip,
   Headline,
@@ -94,6 +88,7 @@ export function overviewZones({
   linkWindow,
   windowLabel,
   modelLed = null,
+  alsoModels = null,
 }: {
   biz: string;
   basis: Basis;
@@ -112,6 +107,8 @@ export function overviewZones({
    * card per model, and the MRR trend and churn are not drawn. Null: today's headline.
    */
   modelLed?: ReadonlyArray<"credits" | "usage" | "sales"> | null;
+  /** Subscriptions AND these models: MRR leads, then one card per other model. */
+  alsoModels?: ReadonlyArray<"credits" | "usage" | "sales"> | null;
 }): { current: React.ReactNode; performance: React.ReactNode } {
   const cur = basis.currency;
   const tz = basis.tz;
@@ -141,12 +138,6 @@ export function overviewZones({
   // Each sparkline is the same 30-day series its card's change is measured across.
   const mrrSpark = (pick(batch, "h_mrr")?.series ?? []).map((p) => p.value ?? null);
   const payingSpark = (pick(batch, "h_paying")?.series ?? []).map((p) => p.value ?? null);
-  const churnOf30 =
-    hCustChurn?.total_basis === "window" &&
-    hCustChurn.total_numerator != null &&
-    hCustChurn.total_denominator != null
-      ? `${count(hCustChurn.total_numerator)} of ${count(hCustChurn.total_denominator)} customers`
-      : null;
 
   // Paying customers holding an expiring card — the list's count, not the measure's card count.
   const cardsExpiring = unchargeable?.expiring ?? null;
@@ -199,9 +190,10 @@ export function overviewZones({
     },
     ...queues,
   ];
-  // MRR at risk and expiring cards on renewing subscriptions mean nothing without subscriptions.
+  // MRR at risk, expiring cards and cards that cannot be charged are about subscriptions.
   const attention = allAttention.filter(
-    (item) => !modelLed || (item.key !== "at_risk" && item.key !== "cards"),
+    (item) =>
+      !modelLed || (item.key !== "at_risk" && item.key !== "cards" && item.key !== "cannot_charge"),
   );
 
   const subsHref = `/businesses/${biz}/subscriptions`;
@@ -211,18 +203,86 @@ export function overviewZones({
     | 4
     | 3;
   const hmRev = pick(batch, "hm_rev");
+  const hmRevSeries = pick(batch, "hm_rev_series")?.series ?? [];
+  // A business that made its first sale inside the window: the figure covers fewer than 30
+  // days, so say where it starts. No day is stored before a currency's first document.
+  const firstSale = hmRevSeries.findIndex((p) => p.value != null);
+  const revSince = firstSale > 0 ? fmtAxisDate(hmRevSeries[firstSale]!.t, tz) : null;
   const tabHref = (t: string) => `/businesses/${biz}?tab=${t}`;
+  /** One card per non-subscription model, each linking to its Home tab. */
+  const modelCards = (
+    models: ReadonlyArray<"credits" | "usage" | "sales">,
+    span: 12 | 6 | 4 | 3,
+  ) => (
+    <>
+      {models.includes("credits") ? (
+        <Headline
+          span={span}
+          wide={span === 12}
+          label="Credit balance"
+          info={explain(G.creditBalance, G.creditLiability)}
+          value={moneyOrDash(total("pr_credit"))}
+          note="face value"
+          stats={[
+            {
+              label: "Liability",
+              value:
+                total("hm_liability") == null ? null : moneyCompact(total("hm_liability")!, cur),
+            },
+            {
+              label: "Used, 30 days",
+              value: total("hm_used") == null ? null : moneyCompact(total("hm_used")!, cur),
+            },
+            { label: "Credits", value: "View", href: tabHref("credits") },
+          ]}
+        />
+      ) : null}
+      {models.includes("usage") ? (
+        <Headline
+          span={span}
+          wide={span === 12}
+          label="Usage revenue, 30 days"
+          info={G.usageRevenue}
+          value={moneyOrDash(slice(hmRev, "usage"))}
+          stats={[
+            {
+              label: "Events",
+              value: total("hm_events") == null ? null : count(total("hm_events")!),
+            },
+            { label: "Usage", value: "View", href: tabHref("usage") },
+          ]}
+        />
+      ) : null}
+      {models.includes("sales") ? (
+        <Headline
+          span={span}
+          wide={span === 12}
+          label="Orders, 30 days"
+          info={G.orders}
+          value={countOrDash(total("hm_orders"))}
+          href={`/businesses/${biz}/orders?filter=created_at:in_last:30`}
+          stats={[
+            {
+              label: "Average order",
+              value: total("hm_aov") == null ? null : moneyCompact(total("hm_aov")!, cur),
+            },
+            { label: "One-time sales", value: "View", href: tabHref("sales") },
+          ]}
+        />
+      ) : null}
+    </>
+  );
   const modelHeadline = modelLed ? (
     <Grid>
       <Headline
         span={modelSpan}
+        wide={modelSpan === 12}
         label="Revenue, 30 days"
-        icon={CircleDollarSign}
         info={explain(G.revenueMix)}
-        spark={(pick(batch, "hm_rev_series")?.series ?? []).map((p) => p.value ?? null)}
+        spark={hmRevSeries.map((p) => p.value ?? null)}
         value={moneyOrDash(hmRev?.total)}
         title={hmRev?.total == null ? undefined : money(hmRev.total, cur)}
-        note="billed, before tax"
+        note={revSince ? `net, before tax · from ${revSince}` : "net, before tax"}
         stats={[
           {
             label: "Collected",
@@ -241,188 +301,49 @@ export function overviewZones({
           },
         ]}
       />
-      {modelLed.includes("credits") ? (
-        <Headline
-          span={modelSpan}
-          label="Credit balance"
-          icon={Coins}
-          info={explain(G.creditBalance, G.creditLiability)}
-          value={moneyOrDash(total("pr_credit"))}
-          note="face value"
-          stats={[
-            {
-              label: "Liability",
-              value:
-                total("hm_liability") == null ? null : moneyCompact(total("hm_liability")!, cur),
-            },
-            {
-              label: "Used, 30 days",
-              value: total("hm_used") == null ? null : moneyCompact(total("hm_used")!, cur),
-            },
-            { label: "Credits", value: "View", href: tabHref("credits") },
-          ]}
-        />
-      ) : null}
-      {modelLed.includes("usage") ? (
-        <Headline
-          span={modelSpan}
-          label="Usage revenue, 30 days"
-          icon={Activity}
-          info={G.usageRevenue}
-          value={moneyOrDash(slice(hmRev, "usage"))}
-          stats={[
-            {
-              label: "Events",
-              value: total("hm_events") == null ? null : count(total("hm_events")!),
-            },
-            { label: "Usage", value: "View", href: tabHref("usage") },
-          ]}
-        />
-      ) : null}
-      {modelLed.includes("sales") ? (
-        <Headline
-          span={modelSpan}
-          label="Orders, 30 days"
-          icon={ShoppingBag}
-          info={G.orders}
-          value={countOrDash(total("hm_orders"))}
-          stats={[
-            {
-              label: "Average order",
-              value: total("hm_aov") == null ? null : moneyCompact(total("hm_aov")!, cur),
-            },
-            { label: "One-time sales", value: "View", href: tabHref("sales") },
-          ]}
-        />
-      ) : null}
+      {modelCards(modelLed, modelSpan)}
     </Grid>
   ) : null;
   const current = (
     <Stack>
       {modelHeadline ?? (
         <Grid>
-          <Headline
-            span={3}
-            label="MRR"
-            icon={CircleDollarSign}
-            info={explain(G.mrr, G.arr, G.cmrr, G.cancelling)}
-            change={mrrChange}
-            spark={mrrSpark}
-            value={moneyOrDash(mrrNow)}
-            title={mrrNow == null ? undefined : money(mrrNow, cur)}
-            stats={[
-              {
-                label: "ARR",
-                value: arr == null ? null : moneyCompact(arr, cur),
-                title: arr == null ? undefined : money(arr, cur),
+          <CurrentCards
+            data={{
+              cur,
+              mrr: mrrNow,
+              mrrChange,
+              mrrSpark,
+              arr,
+              cmrr,
+              cancelling,
+              cancelCur,
+              paying: payingNow,
+              payingChange,
+              payingSpark,
+              arpc: arpa,
+              payingSubs,
+              renewingSubs,
+              custChurn: hCustChurn,
+              mrrChurn: hMrrChurn,
+              mrrLost: hChurned,
+              trial: hTrial,
+              trialConv: hTrialConv,
+              mrrNew: hMrrNew,
+              links: {
+                cancelling: `/businesses/${biz}/subscriptions?status=non_renewing`,
+                payingSubs: `${subsHref}?filter=status:in:active,non_renewing&filter=mrr:gt:0`,
+                renewing: `${subsHref}?filter=status:is:active&filter=mrr:gt:0`,
+                mrrLost: `/businesses/${biz}/reports/cancellations`,
+                newMrr: `/businesses/${biz}?tab=recurring`,
               },
-              {
-                label: "Committed",
-                value: cmrr == null ? null : moneyCompact(cmrr, cur),
-                title: cmrr == null ? undefined : money(cmrr, cur),
-              },
-              {
-                label: "Cancelling",
-                value: cancelling == null ? null : moneyCompact(cancelling, cancelCur),
-                title:
-                  cancelling == null
-                    ? undefined
-                    : `${money(cancelling, cancelCur)} of MRR booked to cancel`,
-                href: `/businesses/${biz}/subscriptions?status=non_renewing`,
-              },
-            ]}
-          />
-          <Headline
-            span={3}
-            label="Paying customers"
-            icon={Users}
-            info={explain(G.payingCustomers, G.arpa, G.payingSubs, G.renewing)}
-            change={payingChange}
-            spark={payingSpark}
-            value={countOrDash(payingNow)}
-            stats={[
-              {
-                label: "ARPC",
-                value:
-                  arpa?.total == null
-                    ? null
-                    : moneyCompact(Math.round(arpa.total), arpa.currency ?? cur),
-                title:
-                  arpa?.total == null
-                    ? undefined
-                    : money(Math.round(arpa.total), arpa.currency ?? cur),
-              },
-              // Paying includes subscriptions booked to stop at term end; renewing excludes them.
-              {
-                label: "Paying subs",
-                value: payingSubs == null ? null : count(payingSubs),
-                href: `${subsHref}?filter=status:in:active,non_renewing&filter=mrr:gt:0`,
-              },
-              {
-                label: "Renewing",
-                value: renewingSubs == null ? null : count(renewingSubs),
-                href: `${subsHref}?filter=status:is:active&filter=mrr:gt:0`,
-              },
-            ]}
-          />
-          <Headline
-            span={3}
-            label="Churn, 30 days"
-            icon={TrendingDown}
-            info={explain(G.customerChurn, G.churned, G.mrrChurnRate, G.mrrLost)}
-            value={hCustChurn?.total == null ? "—" : pctFromBps(hCustChurn.total, 1)}
-            note={churnOf30}
-            stats={[
-              {
-                label: "Churned",
-                value:
-                  hCustChurn?.total_basis === "window" && hCustChurn.total_numerator != null
-                    ? count(hCustChurn.total_numerator)
-                    : null,
-              },
-              {
-                label: "MRR churn",
-                value: hMrrChurn?.total == null ? null : pctFromBps(hMrrChurn.total, 1),
-              },
-              {
-                label: "MRR lost",
-                value: hChurned == null ? null : moneyCompact(hChurned, cur),
-                title: hChurned == null ? undefined : money(hChurned, cur),
-                href: `/businesses/${biz}/reports/cancellations`,
-              },
-            ]}
-          />
-          <Headline
-            span={3}
-            label="Trial conversion, 30 days"
-            icon={Hourglass}
-            featured={!!hTrialConv}
-            info={explain(G.trialConversion, G.trialsConverted, G.trialsEnded, G.newMrr30)}
-            value={hTrialConv == null ? "—" : pctFromBps(hTrialConv, 1)}
-            note={
-              hTrial.converted != null && hTrial.ended
-                ? `${count(hTrial.converted)} of ${count(hTrial.ended)} ended trials converted`
-                : null
-            }
-            stats={[
-              {
-                label: "Converted",
-                value: hTrial.converted == null ? null : count(hTrial.converted),
-              },
-              {
-                label: "Ended",
-                value: hTrial.ended == null ? null : count(hTrial.ended),
-              },
-              {
-                label: "New MRR",
-                value: hMrrNew == null ? null : moneyCompact(hMrrNew, cur),
-                title: hMrrNew == null ? undefined : money(hMrrNew, cur),
-                href: `/businesses/${biz}?tab=recurring`,
-              },
-            ]}
+            }}
           />
         </Grid>
       )}
+      {!modelLed && alsoModels && alsoModels.length > 0 ? (
+        <Grid>{modelCards(alsoModels, ([12, 6, 4] as const)[alsoModels.length - 1]!)}</Grid>
+      ) : null}
       <AttentionStrip items={attention} />
     </Stack>
   );
@@ -547,6 +468,19 @@ export function overviewZones({
   const showMix = mixRows.some((r) => r.key !== "recurring");
   const mixTotal = mixBilled?.total ?? null;
   const mixWidest = Math.max(...mixRows.map((r) => Math.abs(r.billed)), 1);
+  // Gross to net: gross, then each deduction the period has (a zero row is hidden), then net.
+  const mixGross = pick(batch, "rev_mix_gross")?.total ?? null;
+  const DEDUCTIONS = [
+    "coupon",
+    "promotional_credit",
+    "plan_credit",
+    "prepaid_credit",
+    "credit_note",
+  ] as const;
+  const mixDeductions = DEDUCTIONS.map((key) => {
+    const row = slices(pick(batch, "rev_mix_ded")).find((r) => r.key === key);
+    return row && row.total !== 0 ? { key, label: row.label, value: row.total } : null;
+  }).filter((r) => r != null);
 
   const performance = (
     <Stack>
@@ -786,7 +720,7 @@ export function overviewZones({
             <Lead
               value={moneyOrDash(mixTotal)}
               title={mixTotal == null ? undefined : money(mixTotal, cur)}
-              note="billed, before tax"
+              note="net, before tax"
             />
             <div className="mt-4">
               <SegmentBar
@@ -818,6 +752,25 @@ export function overviewZones({
                 </div>
               ))}
             </div>
+            {mixGross != null && mixDeductions.length > 0 ? (
+              <div className="mt-4 flex flex-col border-t pt-3 text-sm tabular-nums">
+                <MixLine
+                  label="Gross revenue"
+                  info={G.grossRevenue}
+                  value={moneyCompact(mixGross, cur)}
+                />
+                {mixDeductions.map((d, i) => (
+                  <MixLine
+                    key={d.key}
+                    label={d.label}
+                    info={i === 0 ? G.revenueDeductions : undefined}
+                    value={signedMoney(-d.value, cur)}
+                    muted
+                  />
+                ))}
+                <MixLine label="Net revenue" value={moneyOrDash(mixTotal)} strong />
+              </div>
+            ) : null}
           </Block>
         </Grid>
       ) : null}
@@ -946,4 +899,35 @@ export function overviewZones({
   );
 
   return { current, performance };
+}
+
+/** One row of the Revenue mix's gross-to-net lines: a label and a figure. */
+function MixLine({
+  label,
+  value,
+  info,
+  muted,
+  strong,
+}: {
+  label: string;
+  value: string;
+  info?: CardInfo;
+  muted?: boolean;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline gap-4 py-1.5">
+      <span className={cn("min-w-0 flex-1", muted ? "text-muted-foreground" : "text-foreground")}>
+        {label}
+        {info ? (
+          <span className="ml-1 inline-flex align-middle">
+            <InfoTip label={label} info={info} />
+          </span>
+        ) : null}
+      </span>
+      <span className={cn("shrink-0 text-right", strong ? "font-semibold" : "font-medium")}>
+        {value}
+      </span>
+    </div>
+  );
 }

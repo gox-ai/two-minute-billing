@@ -104,8 +104,8 @@ export function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-      <div className="min-w-0 sm:max-w-md">
+    <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3 px-5 py-4">
+      <div className="min-w-0 flex-[1_1_14rem] sm:max-w-md">
         <div className="text-sm leading-relaxed font-medium text-foreground">{question}</div>
         {/* The whole caveat is parenthesised — "(Note: …)" — rather than bolding a
             label, which keeps it reading as an aside to the question. */}
@@ -116,7 +116,7 @@ export function SettingRow({
         ) : null}
         {help ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{help}</p> : null}
       </div>
-      <div className="shrink-0 sm:pt-0.5 sm:text-right">{children}</div>
+      <div className="max-w-full min-w-0 sm:pt-0.5 sm:text-right">{children}</div>
     </div>
   );
 }

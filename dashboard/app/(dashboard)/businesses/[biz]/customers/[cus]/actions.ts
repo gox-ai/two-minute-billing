@@ -140,9 +140,16 @@ export async function refundExcessPaymentAction(
   const res = await apiPost(`/v1/businesses/${biz}/payments/${pay}/refund`, {
     amount_minor: Number(parsed.data.amount_minor),
     ...(reason ? { reason } : {}),
+    ...(formData.get("confirm_repeat") === "true" ? { confirm_repeat: true } : {}),
   });
   revalidatePath(cusUrl(biz, cus));
-  if (!res.ok) return actionError(res.error ?? "We could not refund the payment.");
+  if (!res.ok) {
+    if (res.status === 409 && res.code === "possible_duplicate")
+      return actionError(res.error ?? "This refund repeats a refund sent a short time ago.", {
+        code: "possible_duplicate",
+      });
+    return actionError(res.error ?? "We could not refund the payment.");
+  }
   const r = res.data as { status?: string; amount_minor?: number; currency?: string };
   const amount = r.amount_minor != null && r.currency ? money(r.amount_minor, r.currency) : null;
   if (r.status === "pending")
@@ -234,6 +241,31 @@ export async function assignPaymentMethodRoleAction(
     ? actionOk(`Role set to ${role}`)
     : actionError(
         res.error ?? "We could not change the payment method role.",
+        res.status === 409 ? { code: "conflict" } : undefined,
+      );
+}
+
+// ── Gateway for new payment methods ──────────────────────────────────────────
+
+/** `new_method_gateway_account`: a `gwa_…`, or empty for the business routing (null). */
+export async function setNewMethodGatewayAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  await requirePermission("customers:manage", "manager");
+  const biz = String(formData.get("biz") ?? "").trim();
+  const cus = String(formData.get("cus") ?? "").trim();
+  const gwa = String(formData.get("new_method_gateway_account") ?? "").trim();
+  if (!biz || !cus) return actionError("The business or customer ID is missing. Reload the page.");
+  if (gwa && !gwa.startsWith("gwa_")) return actionError("Select a gateway from the list.");
+  const res = await apiPatch(`/v1/businesses/${biz}/customers/${cus}`, {
+    new_method_gateway_account: gwa || null,
+  });
+  revalidatePath(cusUrl(biz, cus));
+  return res.ok
+    ? actionOk("Gateway saved.")
+    : actionError(
+        res.error ?? "We could not save the gateway.",
         res.status === 409 ? { code: "conflict" } : undefined,
       );
 }

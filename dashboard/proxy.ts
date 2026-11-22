@@ -32,8 +32,11 @@ const PUBLIC = [
   "/signup",
   // Cancelling a support 2FA reset, from its email. The owner may be locked out by design.
   "/two-factor-reset",
-  // Confirming a team alert address (0495): the reader is often not a member at all.
+  // The retired team alert confirmation link (0495): it now says the link is no longer used.
   "/team-alerts",
+  // Confirming an outside address for team notifications (0533): the reader is often not a
+  // member at all. Only /confirm: the rest of /notifications needs a session.
+  "/notifications/confirm",
   // Google sign-in start + callback. Outside every route group, and the callback is
   // reached by a redirect FROM Google carrying no cookie of ours by definition.
   "/auth/google",
@@ -133,7 +136,11 @@ export const config = {
   // Listing extensions rather than a bare `\.` keeps the default-deny posture for routes:
   // no page, action or route handler in this app ends in one of these, so nothing that
   // needs a session can accidentally fall through by acquiring a dot in its path.
+  //
+  // The service worker and its offline page are named exactly, not by a `.js`/`.html` arm: a
+  // signed-out visitor's worker install fetches both, and a 307 to /login would fail it.
+  // `/manifest.webmanifest` is already covered by the extension list.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|otf|txt|xml|webmanifest)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sw\\.js$|offline\\.html$|.*\\.(?:png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|otf|txt|xml|webmanifest)$).*)",
   ],
 };

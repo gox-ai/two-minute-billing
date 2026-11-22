@@ -39,6 +39,7 @@ export function SegmentCustomerTable({
   customers,
   fallbackCurrency,
   tz,
+  showSubscriptions = true,
 }: {
   biz: string;
   customers: SegmentCustomer[];
@@ -46,6 +47,8 @@ export function SegmentCustomerTable({
   fallbackCurrency: string;
   /** Business timezone: a server component cannot read the provider. */
   tz: string | null;
+  /** False when the business has no subscriptions: no Subscriptions, MRR or status columns. */
+  showSubscriptions?: boolean;
 }) {
   if (customers.length === 0) {
     return (
@@ -68,12 +71,16 @@ export function SegmentCustomerTable({
             <TableHead className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
               Country
             </TableHead>
-            <TableHead className="text-right">Subscriptions</TableHead>
-            <TableHead className="text-right">MRR</TableHead>
+            {showSubscriptions ? (
+              <>
+                <TableHead className="text-right">Subscriptions</TableHead>
+                <TableHead className="text-right">MRR</TableHead>
+              </>
+            ) : null}
             <TableHead className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
               Signed up
             </TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>{showSubscriptions ? "Status" : "Last order"}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -98,36 +105,46 @@ export function SegmentCustomerTable({
                 <TableCell className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
                   {c.address?.country ?? "—"}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{live}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {currencies.length === 0
-                    ? money(0, c.effective_currency || fallbackCurrency)
-                    : // A customer billing in two currencies has two figures. Printing
-                      // both is the only honest answer; summing them is not.
-                      currencies
-                        .sort()
-                        .map((cur) => money(facts.mrr[cur]!, cur))
-                        .join(" · ")}
-                </TableCell>
+                {showSubscriptions ? (
+                  <>
+                    <TableCell className="text-right tabular-nums">{live}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {currencies.length === 0
+                        ? money(0, c.effective_currency || fallbackCurrency)
+                        : // A customer billing in two currencies has two figures. Printing
+                          // both is the only honest answer; summing them is not.
+                          currencies
+                            .sort()
+                            .map((cur) => money(facts.mrr[cur]!, cur))
+                            .join(" · ")}
+                    </TableCell>
+                  </>
+                ) : null}
                 <TableCell className="@min-[59.5rem]/main:hidden @min-[72.875rem]/main:table-cell">
                   {fmtDate(c.created_at, tz)}
                 </TableCell>
-                <TableCell>
-                  {/* A chip in every row. A buyer with no subscription gets "No subscription",
-                      and when they last bought under it: that says more than "none". */}
-                  {dominantStatus(facts.statuses) ? (
-                    <StatusChip status={dominantStatus(facts.statuses)} />
-                  ) : (
-                    <span className="flex items-center gap-2 whitespace-nowrap">
-                      <Chip>No subscription</Chip>
-                      {facts.last_order_at ? (
-                        <span className="text-xs text-muted-foreground">
-                          Last order {fmtDate(facts.last_order_at, tz)}
-                        </span>
-                      ) : null}
-                    </span>
-                  )}
-                </TableCell>
+                {showSubscriptions ? (
+                  <TableCell>
+                    {/* A chip in every row. A buyer with no subscription gets "No subscription",
+                        and when they last bought under it: that says more than "none". */}
+                    {dominantStatus(facts.statuses) ? (
+                      <StatusChip status={dominantStatus(facts.statuses)} />
+                    ) : (
+                      <span className="flex items-center gap-2 whitespace-nowrap">
+                        <Chip>No subscription</Chip>
+                        {facts.last_order_at ? (
+                          <span className="text-xs text-muted-foreground">
+                            Last order {fmtDate(facts.last_order_at, tz)}
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
+                  </TableCell>
+                ) : (
+                  <TableCell>
+                    {facts.last_order_at ? fmtDate(facts.last_order_at, tz) : "—"}
+                  </TableCell>
+                )}
               </TableRow>
             );
           })}

@@ -61,6 +61,8 @@ const GATEWAY_FAMILY: Record<string, GatewayErrorFamily> = {
   card_restricted: "payment_method",
   incorrect_cvc: "payment_method",
   incorrect_number: "payment_method",
+  // The billing address or postal code does not match the issuer's record.
+  incorrect_address: "payment_method",
   stolen_card: "payment_method",
   lost_card: "payment_method",
   pickup_card: "payment_method",
@@ -92,6 +94,10 @@ const GATEWAY_FAMILY: Record<string, GatewayErrorFamily> = {
   bank_account_closed: "bank_account",
   bank_account_invalid_details: "bank_account",
   bank_account_not_found: "bank_account",
+  // The account exists but this rail may not debit it.
+  bank_account_restricted: "bank_account",
+  // Micro-deposit or other account check not completed.
+  bank_account_not_verified: "bank_account",
 
   // — standing authority to debit —
   mandate_expired: "mandate",
@@ -103,6 +109,8 @@ const GATEWAY_FAMILY: Record<string, GatewayErrorFamily> = {
 
   // — a person had to prove who they were —
   authentication_required: "identity_verification",
+  // The buyer must add their billing name and address (India exports).
+  billing_details_required: "identity_verification",
   afa_not_completed: "identity_verification",
 
   // — the merchant's own configuration —
@@ -113,8 +121,34 @@ const GATEWAY_FAMILY: Record<string, GatewayErrorFamily> = {
   gateway_request_rejected: "technical",
   gateway_error: "technical",
 
+  // A currency the gateway account cannot take, refused before the bank is asked.
+  currency_not_supported: "merchant_account",
+  // The card type is not accepted on this rail.
+  card_not_supported: "payment_method",
+  // The gateway said "not now": a daily or per-account debit limit, or a transient refusal.
+  try_again_later: "transaction_processing",
+  // A capture of an authorized hold that the gateway refused.
+  capture_refused: "transaction_processing",
+  // The payer left or cancelled the gateway's authorization page.
+  setup_cancelled: "transaction_authorization",
+  // Its payment-time sibling: the payer left a hosted checkout or mandate page, or it
+  // expired. Not a decline; no dunning effect (`decline-policy.ts` NO_DUNNING_EFFECT).
+  payment_abandoned: "transaction_authorization",
+  // The payer stopped ONE mandate debit at their bank; the mandate stays active.
+  debit_cancelled_by_payer: "transaction_authorization",
+  // The gateway could not create the order behind a charge.
+  order_failed: "technical",
+  // The browser's result could not be read or did not match the intent.
+  invalid_client_result: "technical",
+
   // — the fallback, and it is deliberately last —
   charge_failed: "general",
+  // Refusals with no reason given: an authorization, a card save, an asynchronous debit,
+  // and a gateway that reports only its status word ("failed").
+  authorization_failed: "general",
+  setup_failed: "general",
+  async_failed: "general",
+  failed: "general",
 };
 
 /**
@@ -125,21 +159,82 @@ const GATEWAY_FAMILY: Record<string, GatewayErrorFamily> = {
 const BILLING_FAMILY: Record<string, BillingErrorFamily> = {
   no_payment_method: "collection",
   gateway_account_unavailable: "collection",
+  // Our own pre-flight refusals: the gateway was never asked.
+  mandate_missing: "collection",
+  mandate_paused: "collection",
+  mandate_currency_mismatch: "collection",
+  card_limit_exceeded: "collection",
+  // Hard-declined method held: not charged until it is updated or another is added.
+  payment_method_unusable: "collection",
+  // Our attempt caps: per invoice, and per card across invoices (`representment.ts`).
+  invoice_attempt_limit: "collection",
+  card_attempt_limit: "collection",
 
   late_failure: "settlement",
   reconciled_failed: "settlement",
   reversal: "settlement",
   authorization_unappliable: "settlement",
   debit_cancelled: "settlement",
+  late_capture_excess: "settlement",
+  unmatched_gateway_capture: "settlement",
 
   refund_failed: "refund",
   refund_failed_at_gateway: "refund",
   provider_unresolved: "refund",
+  refund_refused: "refund",
+  refund_not_created: "refund",
 
   intent_expired: "intent",
   intent_create_failed: "intent",
   capture_failed: "intent",
+  intent_voided: "intent",
 };
+
+/**
+ * Failure codes the engine and adapters book as literals, outside any rule or table. The
+ * unit test and `verify:decline-overrides` prove each resolves `known`. Add a code here when
+ * you add a literal.
+ */
+export const ENGINE_BOOKED_CODES: readonly string[] = [
+  "charge_failed",
+  "async_failed",
+  "authorization_failed",
+  "setup_failed",
+  "setup_cancelled",
+  "capture_refused",
+  "capture_failed",
+  "try_again_later",
+  "failed",
+  "order_failed",
+  "currency_not_supported",
+  "card_not_supported",
+  "invalid_client_result",
+  "gateway_error",
+  "gateway_request_rejected",
+  "gateway_account_unavailable",
+  "no_payment_method",
+  "mandate_missing",
+  "mandate_expired",
+  "mandate_pending",
+  "mandate_spent",
+  "mandate_paused",
+  "mandate_currency_mismatch",
+  "mandate_ceiling_exceeded",
+  "card_limit_exceeded",
+  "payment_method_unusable",
+  "invoice_attempt_limit",
+  "card_attempt_limit",
+  "payment_abandoned",
+  "debit_cancelled_by_payer",
+  "debit_cancelled",
+  "intent_expired",
+  "intent_voided",
+  "late_failure",
+  "late_capture_excess",
+  "unmatched_gateway_capture",
+  "refund_refused",
+  "refund_not_created",
+];
 
 export interface ResolvedErrorId {
   /** `gateway.transaction_processing.insufficient_funds` */

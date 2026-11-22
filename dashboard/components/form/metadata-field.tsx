@@ -145,7 +145,7 @@ function StructuredMetadata({
   const text = same(current, stored ?? {}) ? initialText : metaText(current);
 
   const report = React.useRef(onTextChange);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     report.current = onTextChange;
   });
   React.useEffect(() => {

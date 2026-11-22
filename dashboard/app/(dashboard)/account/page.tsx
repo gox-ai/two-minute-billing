@@ -146,6 +146,32 @@ function PasskeyRow({
   );
 }
 
+/**
+ * One method only: a passkey works only where its password manager is (an iCloud Keychain
+ * passkey never reaches an Android phone), and an app works only on its phone. Either way the
+ * other device can get in only with a recovery code.
+ */
+function SecondMethodPrompt({ mfa }: { mfa: MfaStatus }) {
+  const methods = mfa.passkeys.length + (mfa.authenticatorApp ? 1 : 0);
+  if (!mfa.confirmed || methods !== 1 || mfa.resetEffectiveAt) return null;
+  return (
+    <div className="px-5 pb-2">
+      {mfa.authenticatorApp ? (
+        <Alert tone="info" title="Add a second method">
+          If you lose the phone with your authenticator app, you can sign in only with a recovery
+          code. Add a passkey too.
+        </Alert>
+      ) : (
+        <Alert tone="warning" title="Add a second method">
+          You can complete the sign-in only on devices that can use your passkey. For example, a
+          passkey in iCloud Keychain does not operate on an Android phone. Add an authenticator app,
+          or add a passkey on each device that you sign in on.
+        </Alert>
+      )}
+    </div>
+  );
+}
+
 /** The recovery-codes row: how many are left, and the warning the count deserves. */
 function RecoveryCodesRow({ mfa }: { mfa: MfaStatus }) {
   const left = mfa.recoveryCodesLeft;
@@ -389,6 +415,9 @@ export default async function AccountPage({
               <Link href="#sessions" className="text-primary hover:underline">
                 Active sessions
               </Link>
+              <Link href="/account/notifications" className="text-primary hover:underline">
+                Notifications
+              </Link>
               {mfa?.confirmed ? (
                 <Link href="#trusted-browsers" className="text-primary hover:underline">
                   Trusted browsers
@@ -560,6 +589,7 @@ export default async function AccountPage({
                     {mfa.confirmed ? null : " To enable it, add a passkey or an authenticator app."}
                   </p>
                 </div>
+                <SecondMethodPrompt mfa={mfa} />
                 {mfa.passkeys.length === 0 ? (
                   <SettingRow
                     label="Passkey"

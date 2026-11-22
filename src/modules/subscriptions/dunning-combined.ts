@@ -23,7 +23,11 @@ import {
   invoiceOutstanding,
 } from "@/modules/invoicing/service";
 import { chargeOrder, resolveChargeCandidates, type Pm } from "@/modules/invoicing/collection";
-import { presentationBlock } from "@/modules/invoicing/representment";
+import {
+  invoicePresentations,
+  MAX_PRESENTATIONS_PER_INVOICE,
+  presentationBlock,
+} from "@/modules/invoicing/representment";
 import { isCardInstrument, overCardLimit } from "@/modules/invoicing/card-limit";
 import { loadPaymentApplication } from "@/modules/payments/application-config";
 import { businesses, customers, invoices, paymentRequestInvoices, subscriptions } from "@db/schema";
@@ -53,6 +57,10 @@ export async function tryCombinedRetry(input: {
   const { organizationId, businessId, primary, now } = input;
   const cfg = await loadPaymentApplication(organizationId, businessId);
   if (cfg.severalDueInvoices !== "combined") return null;
+  // An invoice at its attempt cap is booked alone, without a charge (`collectInvoice`).
+  const atCap = async (inv: Invoice) =>
+    (await invoicePresentations(organizationId, inv.id)) >= MAX_PRESENTATIONS_PER_INVOICE;
+  if (await atCap(primary)) return null;
 
   const order = await combinableOrder(
     organizationId,
@@ -64,6 +72,7 @@ export async function tryCombinedRetry(input: {
         customerId: primary.customerId,
         subscription: input.subscription,
         currency: primary.currency,
+        skipUnusable: true,
       }),
     ),
     now,
@@ -82,9 +91,10 @@ export async function tryCombinedRetry(input: {
         customerId: s.inv.customerId,
         subscription: s.sub,
         currency: s.inv.currency,
+        skipUnusable: true,
       }),
     );
-    if (own[0]?.id === order[0]!.id) group.push(s);
+    if (own[0]?.id === order[0]!.id && !(await atCap(s.inv))) group.push(s);
   }
   if (group.length === 0) return null;
 

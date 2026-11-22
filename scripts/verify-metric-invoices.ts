@@ -488,9 +488,10 @@ const M = (grain: Grain, periodEnd: string) => materialised.get(`${grain}|${peri
   }
   ok("registry: every declared measure is implemented, with the aggregate it promises", paired);
   ok(
-    "registry: the invoice group is twenty-three measures",
-    // …plus `mrr_at_risk`, fixtured in verify:metric-new-measures.
-    MEASURES.filter((m) => m.source === "invoices" && m.id !== "mrr_at_risk").length === 23,
+    "registry: the invoice group is twenty-five measures",
+    // …plus `mrr_at_risk`, fixtured in verify:metric-new-measures. Gross revenue and its
+    // deductions are fixtured in verify:metric-revenue-net.
+    MEASURES.filter((m) => m.source === "invoices" && m.id !== "mrr_at_risk").length === 25,
   );
   /**
    * THE RATE IS STORED AS ITS HALVES, and the halves are the two measures beside it.
@@ -980,7 +981,10 @@ const report = (reportKey: string, currency: string, opts: Record<string, string
     const declared = m.dimensions.filter((d) => d !== "currency" && d !== "business");
     const seen = emitted.get(m.id) ?? new Set<string>();
     // Fixtured in verify:metric-usage: this book has no usage lines, so no meter.
-    const elsewhere: Record<string, readonly string[]> = { revenue_billed: ["meter"] };
+    const elsewhere: Record<string, readonly string[]> = {
+      revenue_billed: ["meter"],
+      revenue_billed_gross: ["meter"],
+    };
     for (const d of declared)
       if (!seen.has(d) && !elsewhere[m.id]?.includes(d))
         wrong.push(`${m.id}: declares ${d}, never emits it`);

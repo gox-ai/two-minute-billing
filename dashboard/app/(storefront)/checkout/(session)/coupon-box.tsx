@@ -86,7 +86,7 @@ export function CouponBox({
           {applied.map((c) => (
             <span
               key={c}
-              className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-mono text-xs"
+              className="inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-mono text-xs wrap-anywhere"
             >
               {c}
               <button

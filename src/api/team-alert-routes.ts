@@ -1,23 +1,24 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { authenticate } from "@/platform/auth";
-import { config } from "@/platform/config";
 import { idempotency, idempotencyOnSend } from "@/platform/idempotency";
-import { AUTH_WINDOW_MS } from "@/platform/rate-limit";
-import { resolveTeamAlertsConfig } from "@/modules/team-alerts/config";
 import {
-  confirmTeamAlertRecipient,
-  listRecipientStates,
-  resendConfirmation,
-  TeamAlertRecipientError,
-} from "@/modules/team-alerts/recipients";
+  legacyRecipientStates,
+  legacyResend,
+  NotificationError,
+} from "@/modules/notifications/service";
 import { parseRequest } from "./strict-params";
-import { badRequest, refusedByRateLimit, requirePerm, resolveBusiness } from "./helpers";
+import { badRequest, requirePerm, resolveBusiness } from "./helpers";
 
 const resendBody = z.object({ email: z.string().trim().toLowerCase().email().max(320) });
-const confirmBody = z.object({ token: z.string().min(1).max(200) });
 
-/** Team alert recipients (0495): who must still confirm, "Send again", and the public confirm. */
+/** RFC 9745: the operation still answers, and is going away. */
+const deprecated = (reply: FastifyReply) => reply.header("deprecation", "true");
+
+/**
+ * Deprecated team alert recipients (0495), answered from the business's email destinations
+ * (0533 notifications). Same shapes and status codes as before; removed with the old API.
+ */
 export async function registerTeamAlertRoutes(app: FastifyInstance) {
   app.get(
     "/v1/businesses/:biz/team_alert_recipients",
@@ -25,18 +26,15 @@ export async function registerTeamAlertRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
-      const rows = await listRecipientStates(
-        req.organization!.id,
-        business.id,
-        resolveTeamAlertsConfig(business).recipients,
-      );
+      deprecated(reply);
+      const rows = await legacyRecipientStates(req.organization!.id, business.id);
       return {
         object: "list",
         data: rows.map((r) => ({
           object: "team_alert_recipient",
           email: r.email,
           state: r.state,
-          last_sent_at: r.lastSentAt,
+          last_sent_at: r.last_sent_at,
         })),
       };
     },
@@ -51,18 +49,13 @@ export async function registerTeamAlertRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;
+      deprecated(reply);
       const parsed = parseRequest(resendBody, req.body ?? {});
       if (!parsed.success) return badRequest(reply, parsed.error);
       try {
-        await resendConfirmation({
-          organizationId: req.organization!.id,
-          businessId: business.id,
-          businessName: business.name,
-          recipients: resolveTeamAlertsConfig(business).recipients,
-          email: parsed.data.email,
-        });
+        await legacyResend(req.organization!.id, business.id, parsed.data.email);
       } catch (e) {
-        if (e instanceof TeamAlertRecipientError)
+        if (e instanceof NotificationError)
           return reply
             .code(e.code === "rate_limited" ? 429 : e.code === "not_found" ? 404 : 400)
             .send({
@@ -78,24 +71,17 @@ export async function registerTeamAlertRoutes(app: FastifyInstance) {
   );
 
   /**
-   * The link in the confirmation mail, posted by the public dashboard page. The answer says
-   * only whether it worked: no business, no address.
+   * Links in team alert confirmation emails sent before 0533. Notifications confirm at
+   * `POST /auth/notification_destinations/confirm`; an old link can only be told so.
    */
-  app.post("/auth/team_alerts/confirm", async (req, reply) => {
-    if (
-      await refusedByRateLimit(req, reply, {
-        scope: "team_alert_confirm",
-        keys: [{ kind: "ip", value: req.ip, limit: config.RATE_LIMIT_AUTH_PER_IP }],
-        windowMs: AUTH_WINDOW_MS,
-      })
-    )
-      return;
-    const parsed = parseRequest(confirmBody, req.body ?? {});
-    if (!parsed.success) return badRequest(reply, "This link is not valid or is expired.");
-    if (!(await confirmTeamAlertRecipient(parsed.data.token)))
-      return reply.code(404).send({
-        error: { type: "not_found", message: "This link is not valid or is expired." },
-      });
-    return { object: "team_alert_confirmation", confirmed: true };
-  });
+  app.post("/auth/team_alerts/confirm", async (_req, reply) =>
+    reply.code(410).send({
+      error: {
+        type: "invalid_request_error",
+        code: "link_retired",
+        message:
+          "This link is no longer used. Ask an admin of the business to add your address again in Team notifications.",
+      },
+    }),
+  );
 }

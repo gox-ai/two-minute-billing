@@ -444,6 +444,7 @@ export async function previewTemplate(
       logoUrl: biz.logoUrl ?? undefined,
       iconUrl: biz.iconUrl ?? undefined,
       brandColor: biz.brandColor ?? undefined,
+      buttonTextColor: biz.buttonTextColor ?? undefined,
       ...(resolveEmailConfig(biz).footerNote
         ? { footerNote: resolveEmailConfig(biz).footerNote! }
         : {}),

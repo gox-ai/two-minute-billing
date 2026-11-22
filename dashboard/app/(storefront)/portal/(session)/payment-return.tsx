@@ -4,12 +4,12 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
-import { Alert } from "@/components/ui/alert";
 import { money } from "@/lib/format";
 import type { PortalInvoice, PortalMe } from "@/lib/portal-api";
 import { NoticeCard } from "../../chrome";
 import { portalInvoiceStateAction, portalPayInvoiceAction } from "./actions";
 import { PayInvoiceButton } from "./pay-invoice";
+import { RefusalAlert } from "../../payment-dialog";
 import { payableNow } from "./portal-state";
 import {
   clearPendingPayment,
@@ -243,6 +243,11 @@ export function PaymentReturn({
         );
       if (res.result.payment_error) return refused(res.result.payment_error.message);
       const inv = res.result;
+      // Pay and save: what the payment kept, or that it could not keep the method.
+      if (inv.saved_payment_method)
+        toast.success("We saved your payment method for future invoices.");
+      else if (inv.save_failed)
+        toast("We could not save your payment method. Add it under Payment methods.");
       setWatch((w) =>
         w
           ? {
@@ -265,8 +270,9 @@ export function PaymentReturn({
   // The list is refreshed with the page, so it is the fresher of the two.
   const inv = invoices.find((i) => i.id === watch.invoice) ?? watch.read ?? null;
   const number = watch.number ?? inv?.number ?? null;
-  // Paid after all (the webhook, or a new try below): never "not received" over a paid invoice.
-  const state = watch.state === "failed" && inv?.status === "paid" ? "paid" : watch.state;
+  // The list can see "paid" before this card's next poll (the webhook settled it first):
+  // never "in progress" or "not received" over a paid invoice.
+  const state = inv?.status === "paid" ? "paid" : watch.state;
   return (
     <div className="mb-6">
       {state === "finishing" ? (
@@ -276,7 +282,7 @@ export function PaymentReturn({
       ) : state === "processing" ? (
         <NoticeCard icon={<Loader2 className="animate-spin" />} title="Payment in progress">
           <p>
-            Your bank is still confirming the{" "}
+            We are waiting for confirmation of the{" "}
             {amount ? <span className="font-medium tabular-nums">{amount}</span> : null} payment
             {number ? (
               <>
@@ -294,10 +300,10 @@ export function PaymentReturn({
         <NoticeCard icon={<CheckCircle2 />} tone="success" title="Payment received">
           {number ? (
             <>
-              Thank you. Invoice <span className="font-medium">{number}</span> is paid.
+              Invoice <span className="font-medium">{number}</span> is paid.
             </>
           ) : (
-            "Thank you. We received your payment."
+            "We received your payment."
           )}
         </NoticeCard>
       ) : (
@@ -313,7 +319,10 @@ export function PaymentReturn({
                 "We did not receive your payment."
               )}
             </p>
-            <Alert tone="error">{watch.reason ?? "The payment did not finish."}</Alert>
+            <RefusalAlert
+              message={watch.reason ?? "The payment did not finish."}
+              step="payment_return"
+            />
             {inv && payableNow(inv) ? (
               <>
                 <p className="text-center">

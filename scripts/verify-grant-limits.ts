@@ -1,8 +1,8 @@
 /**
  * Limits on free credit (0495, `credit_config.grant_limits`): a wallet `granted` top-up,
  * promotional credit and a promotional credit grant are refused above the maximum; above the
- * alert amount they are written to the audit log and mailed to the team when `large_grants`
- * is on. Unset means no limit.
+ * alert amount they are written to the audit log and queue a "Large free credit grant"
+ * notification. Unset means no limit.
  *
  *   pnpm verify:grant-limits
  */
@@ -11,13 +11,23 @@ import { and, eq } from "drizzle-orm";
 import { systemDb, withTenant, closeDb } from "@/platform/db";
 import { publicId } from "@/platform/ids";
 import { buildApp } from "@/index";
-import { createOrganization, createBusiness, updateBusiness } from "@/modules/tenancy/service";
+import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
 import { addPromotionalCredits, BalanceError } from "@/modules/customers/balances";
 import { createPromotionalGrant, CreditRuleError } from "@/modules/credits/service";
 import { topUpWallet, WalletError } from "@/modules/wallet/service";
-import { setMailer, type OutboundEmail } from "@/providers/mailer";
-import { auditLogs, businesses, memberships, users } from "@db/schema";
+import { runWithClockScope } from "@/platform/clock";
+import { fanOutPending } from "@/modules/notifications/fanout";
+import { savePreferences } from "@/modules/notifications/service";
+import { setNotificationTransports } from "@/modules/notifications/channels";
+import {
+  auditLogs,
+  businesses,
+  memberships,
+  notificationQueue,
+  notifications,
+  users,
+} from "@db/schema";
 
 let pass = 0;
 let fail = 0;
@@ -39,14 +49,15 @@ const refusal = async (fn: () => Promise<unknown>) => {
   }
 };
 
-const sent: OutboundEmail[] = [];
-setMailer({
-  kind: "smtp",
-  target: null,
-  async send(msg) {
-    sent.push(msg);
-    return { providerMessageId: `p-${sent.length}`, status: "sent" };
+// Nothing leaves the process.
+setNotificationTransports({
+  async push() {
+    return { statusCode: 201 };
   },
+  async chat() {
+    return { status: 200, text: "" };
+  },
+  async email() {},
 });
 
 const RUN = randomUUID().slice(0, 8);
@@ -63,13 +74,17 @@ const customer = await createCustomer({
   businessId: biz.id,
   email: `grants-${RUN}@example.com`,
 });
-// A team member receives the alert without confirmation.
-const member = `member-${RUN}@example.com`;
+// The owner sets "Large free credit grant" to Instant.
 const [u] = await systemDb
   .insert(users)
-  .values({ publicId: publicId("usr"), email: member, name: "Member" })
+  .values({ publicId: publicId("usr"), email: `owner-${RUN}@example.com`, name: "Owner" })
   .returning();
-await systemDb.insert(memberships).values({ organizationId: orgId, userId: u!.id, role: "ops" });
+await systemDb.insert(memberships).values({ organizationId: orgId, userId: u!.id, role: "owner" });
+const owner = { userId: u!.id, role: "owner" };
+const largeGrant = (timing: "instant" | "off") => ({
+  default: { large_credit_grant: { timing, push: false, email: false } },
+});
+await savePreferences(orgId, owner, largeGrant("instant"));
 
 const granted = (amountMinor: number) =>
   topUpWallet({
@@ -103,6 +118,23 @@ const largeGrantAudits = () =>
       .from(auditLogs)
       .where(and(eq(auditLogs.businessId, biz.id), eq(auditLogs.action, "credit.large_grant"))),
   );
+const queued = async () =>
+  (
+    await withTenant(orgId, (tx) =>
+      tx.select().from(notificationQueue).where(eq(notificationQueue.businessId, biz.id)),
+    )
+  ).filter((q) => q.kinds.includes("large_credit_grant"));
+const fanOut = () =>
+  runWithClockScope({ onlyBusinessId: biz.id }, () => fanOutPending(new Date(Date.now() + 1000)));
+const bell = () =>
+  withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(notifications)
+      .where(
+        and(eq(notifications.userId, owner.userId), eq(notifications.kind, "large_credit_grant")),
+      ),
+  );
 
 // ── Unset: no limit, no audit (today's behaviour) ─────────────────────────────
 {
@@ -116,6 +148,7 @@ const largeGrantAudits = () =>
   );
   ok("unset: a large credit grant is allowed", (await refusal(() => grant(10_000_000n))) === null);
   ok("unset: nothing is audited as a large grant", (await largeGrantAudits()).length === 0);
+  ok("unset: no notification is queued", (await queued()).length === 0);
 }
 
 // ── A maximum of 100.00 and an alert above 50.00 ──────────────────────────────
@@ -123,9 +156,6 @@ await systemDb
   .update(businesses)
   .set({ creditConfig: { grant_limits: { USD: { max_minor: 10_000, alert_above_minor: 5_000 } } } })
   .where(eq(businesses.id, biz.id));
-await updateBusiness(orgId, biz.publicId, {
-  teamAlertsConfig: { recipients: [member], large_grants: { enabled: true } },
-});
 {
   const w = await refusal(() => granted(10_001));
   ok(
@@ -138,10 +168,12 @@ await updateBusiness(orgId, biz.publicId, {
   const g = await refusal(() => grant(10_001n));
   ok("a credit grant above the maximum is refused", g instanceof CreditRuleError, g?.message);
   ok("refusals write no audit row", (await largeGrantAudits()).length === 0);
+  ok("refusals queue no notification", (await queued()).length === 0);
 
-  sent.length = 0;
   ok("at the maximum a granted top-up is allowed", (await refusal(() => granted(10_000))) === null);
+  ok("…and it queues one notification", (await queued()).length === 1);
   ok("at the alert amount nothing is audited", (await refusal(() => promo(5_000))) === null);
+  ok("…and nothing is queued", (await queued()).length === 1);
   ok(
     "above the alert amount a credit grant is allowed",
     (await refusal(() => grant(6_000n))) === null,
@@ -155,23 +187,36 @@ await updateBusiness(orgId, biz.publicId, {
       audits.every((a) => (a.after as { customer?: string })?.customer === customer.publicId),
     audits.map((a) => [a.resourceType, a.after]),
   );
+  const q = await queued();
   ok(
-    "…and each is mailed to the team",
-    sent.length === 2 &&
-      sent.every((m) => m.to === member && /above your alert limit/.test(m.subject)),
-    sent.map((m) => [m.to, m.subject]),
+    "each grant above the alert amount queues one notification",
+    q.length === 2 && q.every((r) => r.kinds.length === 1),
+    q.map((r) => [r.dedupeKey, r.kinds]),
+  );
+  await fanOut();
+  const rows = await bell();
+  ok(
+    "…and the owner who set it Instant gets it in the bell",
+    rows.length >= 1 && rows.reduce((n, r) => n + r.groupCount, 0) === 2 && !rows[0]!.test,
+    rows.map((r) => [r.title, r.groupCount]),
   );
 }
 
-// ── The alert is opt-in; the audit row is not ─────────────────────────────────
+// ── The notification is opt-in per member; the audit row is not ───────────────
 {
-  await updateBusiness(orgId, biz.publicId, {
-    teamAlertsConfig: { recipients: [member], large_grants: { enabled: false } },
-  });
-  sent.length = 0;
+  await savePreferences(orgId, owner, largeGrant("off"));
+  const before = await bell();
   await promo(7_000);
-  ok("alert off: no mail", sent.length === 0);
-  ok("alert off: still audited", (await largeGrantAudits()).length === 3);
+  ok("set to off: still audited", (await largeGrantAudits()).length === 3);
+  ok("set to off: still queued", (await queued()).length === 3);
+  await fanOut();
+  const after = await bell();
+  ok(
+    "set to off: nothing new in the bell",
+    after.length === before.length &&
+      after.reduce((n, r) => n + r.groupCount, 0) === before.reduce((n, r) => n + r.groupCount, 0),
+    after.map((r) => [r.title, r.groupCount]),
+  );
 }
 
 // ── The API answers 400 ───────────────────────────────────────────────────────
@@ -203,7 +248,7 @@ await updateBusiness(orgId, biz.publicId, {
   await app.close();
 }
 
-setMailer(null);
+setNotificationTransports(null);
 await closeDb();
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log(fail ? "❌ GRANT-LIMITS: FAIL" : "✅ GRANT-LIMITS: PASS");

@@ -9,6 +9,8 @@
 // Relative, so the root typecheck can follow test/unit/audit-action-labels.test.ts here.
 import { ASSISTANT_NAME } from "../../lib/assistant";
 import { enumLabel, sourcePhrase } from "../../lib/labels";
+import { fmtDate, fmtDateTime } from "../../lib/format-date";
+import { money } from "../../lib/format";
 
 /**
  * `action` → the verb phrase for the prose summary. Only actions we actually write
@@ -108,11 +110,17 @@ const NAMED_SOURCES: Record<string, string> = {
   assistant: ASSISTANT_NAME,
   api: "API",
   dashboard: "Dashboard",
+  portal: "Customer portal",
+  checkout: "Checkout",
+  webhook: "Gateway notification",
+  mcp: "AI agent (MCP)",
   billing_clock: "Billing clock",
   scheduled_job: "Billing clock",
   migration: "Migration",
   system: "System",
   hubspot: "HubSpot",
+  // Gateway request log only: a refusal the buyer's browser reported.
+  customer_browser: "Customer's browser",
 };
 
 /** How an event's `source` reads: "assistant" → "Billy", "scheduled_job" → "Billing clock". */
@@ -121,9 +129,9 @@ export function sourceLabel(source: string): string {
 }
 
 /** The "who caused it" phrase for a log row: "by the billing clock", "through the API". */
-export function sourceByPhrase(source: string): string {
+export function sourceByPhrase(source: string, actor?: string | null): string {
   if (source === "assistant") return `by ${ASSISTANT_NAME}`;
-  return sourcePhrase(source) ?? `from ${sourceLabel(source).toLowerCase()}`;
+  return sourcePhrase(source, actor) ?? `from ${sourceLabel(source).toLowerCase()}`;
 }
 
 /** `invoice.void` → "Invoice void" (the title when we have no better name). */
@@ -136,8 +144,28 @@ export function actionPhrase(action: string): string {
   return ACTION_PHRASE[action] ?? `performed ${humaniseAction(action).toLowerCase()}`;
 }
 
+/** Columns whose name is not the word the screens use for them. */
+const FIELD_ALIAS: Record<string, string> = {
+  current_period_start: "Current term start",
+  current_period_end: "Current term end",
+  currentPeriodStart: "Current term start",
+  currentPeriodEnd: "Current term end",
+};
+
 /** Initialisms that must not read as words ("PO number", not "Po number"). */
-const ACRONYMS = new Set(["po", "id", "ip", "url", "cn", "tds", "api", "ses", "smtp", "gdpr"]);
+const ACRONYMS = new Set([
+  "po",
+  "id",
+  "ip",
+  "url",
+  "cn",
+  "tds",
+  "api",
+  "ses",
+  "smtp",
+  "gdpr",
+  "mrr",
+]);
 
 /**
  * `amount_due_minor` → "Amount due (minor units)"; `poNumber` → "PO number".
@@ -152,6 +180,8 @@ const ACRONYMS = new Set(["po", "id", "ip", "url", "cn", "tds", "api", "ses", "s
  * never a guessed exponent.
  */
 export function fieldLabel(field: string): string {
+  const alias = FIELD_ALIAS[field];
+  if (alias) return alias;
   const isMinor = field.endsWith("_minor") || /Minor$/.test(field);
   const words = field
     .replace(/_minor$/, "")
@@ -331,6 +361,122 @@ export function changeSentence(f: DiffField): ChangeSentence | null {
     rest: "changed from {0} to {1}",
     values: [readable(f.before), readable(f.after)],
   };
+}
+
+// ── The Activity log's change lines ──────────────────────────────────────────
+
+/** One change under an Activity log row: `field from → to`, or `field changed` for a structure. */
+export interface SummaryLine {
+  field: string;
+  /** Absent when the field had no value: the line reads "set to". */
+  from?: string;
+  /** Absent when the field lost its value: the line reads "cleared". */
+  to?: string;
+  /** A structure (items, an address) changed: the line names it and nothing more. */
+  changed?: true;
+}
+
+export interface ChangeSummary {
+  lines: SummaryLine[];
+  /** Changes not shown as a line: over the cap, or money without its currency. */
+  more: number;
+}
+
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+// Minor units, by suffix, plus the columns that hold minor units without saying so.
+const isMoneyField = (f: string) =>
+  /(_minor|Minor|(^|_)mrr|Mrr|_amount_decimal|AmountDecimal)$/.test(f);
+const isIdField = (f: string) => f === "id" || /(_id|Id)$/.test(f);
+
+function scalarText(field: string, v: unknown, tz: string | null, withTime: boolean): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "on" : "off";
+  if (typeof v === "string") {
+    if (ISO_TIME.test(v)) return withTime ? fmtDateTime(v, tz) : fmtDate(v, tz);
+    if (ISO_DAY.test(v)) return fmtDate(v, tz);
+    if (!isIdField(field) && /^[a-z0-9]+(_[a-z0-9]+)+$/.test(v)) return v.replace(/_/g, " ");
+    return v;
+  }
+  return String(v);
+}
+
+/** Money on one side, or null when that side does not carry its currency. */
+function moneyText(v: unknown, side: Record<string, unknown>): string | null {
+  if (v === null || v === undefined) return "—";
+  const minor = asNumber(v);
+  const currency = side.currency;
+  if (minor === null || typeof currency !== "string" || !currency) return null;
+  return money(minor, currency);
+}
+
+/** A stored diff's keys come back in jsonb order, which puts `…_end` before `…_start`. */
+function startBeforeEnd(fields: DiffField[]): DiffField[] {
+  const at = new Map(fields.map((f, i) => [f.field, i]));
+  const rank = (f: string, i: number) => {
+    const end = f.replace(/_start$/, "_end").replace(/Start$/, "End");
+    const j = end !== f ? at.get(end) : undefined;
+    return j !== undefined && j < i ? j - 0.5 : i;
+  };
+  return fields
+    .map((f, i) => ({ f, r: rank(f.field, i) }))
+    .sort((x, y) => x.r - y.r)
+    .map((x) => x.f);
+}
+
+/**
+ * The first `max` changes of an audit row as short lines, for the Activity log.
+ *
+ * Dates read in the business timezone (with the time only when both sides fall on the
+ * same day), statuses as words, a structure as "changed". Money shows only when its
+ * side carries the currency; otherwise it is left out but still counted in `more`, so
+ * the reader knows to open Details. A creation has no before-state and shows nothing.
+ */
+export function changeSummary(
+  before: unknown,
+  after: unknown,
+  tz: string | null,
+  max = 2,
+): ChangeSummary {
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!isObj(before) || Object.keys(before).length === 0) return { lines: [], more: 0 };
+  const b = before;
+  const a = isObj(after) ? after : {};
+  const fields = startBeforeEnd(diffFields(b, a).filter((f) => !PROSE_NOISE.has(f.field)));
+  const isStructure = (v: unknown) => v !== null && typeof v === "object";
+  const lines: SummaryLine[] = [];
+  for (const f of fields) {
+    if (lines.length >= max) break;
+    if (isStructure(f.before) || isStructure(f.after)) {
+      lines.push({ field: fieldLabel(f.field), changed: true });
+      continue;
+    }
+    if (isMoneyField(f.field)) {
+      const from = moneyText(f.before, b);
+      const to = moneyText(f.after, a);
+      if (from !== null && to !== null && from !== to) {
+        lines.push({ field: fieldLabel(f.field.replace(/_minor$|Minor$/, "")), from, to });
+      }
+      continue;
+    }
+    let from = scalarText(f.field, f.before, tz, false);
+    let to = scalarText(f.field, f.after, tz, false);
+    if (from === to) {
+      from = scalarText(f.field, f.before, tz, true);
+      to = scalarText(f.field, f.after, tz, true);
+    }
+    // A side with no value is a set or a clear, not a change; the line says so.
+    const empty = (v: unknown) => v === null || v === undefined || v === "";
+    if (from !== to) {
+      lines.push({
+        field: fieldLabel(f.field),
+        ...(empty(f.before) ? {} : { from }),
+        ...(empty(f.after) ? {} : { to }),
+      });
+    }
+  }
+  return { lines, more: fields.length - lines.length };
 }
 
 /**

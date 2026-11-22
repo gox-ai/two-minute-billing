@@ -6,19 +6,23 @@
  *    no re-presentation within `RAIL_MIN_RETRY_GAP_DAYS` of a return. When the schedule's
  *    deadline attempt would break either, it is refused here and dunning ends at the
  *    period's close without it.
- *  - Per-card caps, checked before an automatic charge:
- * re-attempts stop at CARD_CAP_24H declines in 24h and CARD_CAP_30D in 30 days on the same
- * card, across all invoices and every saved copy of it (same fingerprint). Mastercard fines
- * 10 consecutive declines in 24h; Visa's current rules allow 20 reattempts in 30 days (15
- * in its 2021 rules) — 15 is kept for margin.
+ *  - Per-card caps, checked before an automatic charge, across all invoices and every saved
+ *    copy of the card (same fingerprint), by brand (`cardCaps`): Visa at most 15 declines in
+ *    30 days (its rules allow 20; 15 is margin), Mastercard 10 in 24 h and 30 in 30 days (35
+ *    allowed), any other card 10 in 24 h and 15 in 30 days.
+ *  - Per invoice, at most `MAX_PRESENTATIONS_PER_INVOICE` automatic presentations.
  *
- * A decline code alone never blocks a card: gateways' "do not retry" signals proved
- * unreliable (the same card declined generically on the next attempt).
+ * A capped attempt is not sent: collection books it as a no-charge attempt and the schedule
+ * goes on. A card a decline marked `invalid` is held separately (`resolveChargeCandidates`).
  */
 import { and, desc, eq, gt, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
 import { payments, paymentMethods } from "@db/schema";
-import { networkRetryCap, RAIL_MIN_RETRY_GAP_DAYS } from "@/modules/subscriptions/dunning-schedule";
+import {
+  networkRetryCap,
+  RAIL_MIN_RETRY_GAP_DAYS,
+  retryRailOf,
+} from "@/modules/subscriptions/dunning-schedule";
 import type { Pm } from "./collection";
 import {
   MANDATE_EXPIRED_CODE,
@@ -38,6 +42,36 @@ import {
 export const CARD_CAP_24H = 10;
 export const CARD_CAP_30D = 15;
 const DAY_MS = 86_400_000;
+
+/** At most this many automatic presentations of one invoice, on every card together. */
+export const MAX_PRESENTATIONS_PER_INVOICE = 8;
+
+/** No-charge refusals for the two caps, booked with `provider_key = 'none'`. */
+export const INVOICE_ATTEMPT_LIMIT_CODE = "invoice_attempt_limit";
+export const CARD_ATTEMPT_LIMIT_CODE = "card_attempt_limit";
+
+/** The card network of a stored brand, in the spellings our gateways use. */
+export function cardNetwork(brand: string | null | undefined): "visa" | "mastercard" | null {
+  const b = (brand ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  if (b === "visa") return "visa";
+  if (b.startsWith("master") || b === "mc") return "mastercard";
+  return null;
+}
+
+/** Declines allowed per window for this card's network. Null = no cap in that window. */
+export function cardCaps(brand: string | null | undefined): {
+  per24h: number | null;
+  per30d: number;
+} {
+  switch (cardNetwork(brand)) {
+    case "visa":
+      return { per24h: null, per30d: 15 };
+    case "mastercard":
+      return { per24h: 10, per30d: 30 };
+    default:
+      return { per24h: CARD_CAP_24H, per30d: CARD_CAP_30D };
+  }
+}
 
 export type PresentationBlock =
   | { reason: "card_cap"; until: Date; declines24h: number; declines30d: number }
@@ -65,7 +99,38 @@ const NOT_PRESENTED = [
   PRE_DEBIT_NOTICE_FAILED_CODE,
   // Refused as too early, before the network saw it.
   PRE_DEBIT_NOT_DUE_CODE,
+  // The payer left a hosted page: no instrument was asked to pay.
+  "payment_abandoned",
 ];
+
+/** Presented failures only: a gateway was asked, and our own pre-flight did not refuse it. */
+const presentedFailure = () =>
+  and(
+    eq(payments.status, "failed"),
+    ne(payments.providerKey, "none"),
+    or(isNull(payments.failureCode), notInArray(payments.failureCode, NOT_PRESENTED)),
+  );
+
+/**
+ * Automatic-cap count: presentations of this invoice so far, manual ones included. A payment
+ * request's combined charge counts once.
+ */
+export async function invoicePresentations(
+  organizationId: string,
+  invoiceId: string,
+): Promise<number> {
+  return withTenant(organizationId, async (tx) => {
+    const rows = await tx
+      .select({
+        at: payments.createdAt,
+        request: payments.paymentRequestId,
+        attempt: sql<string | null>`${payments.metadata} ->> 'payment_request_attempt'`,
+      })
+      .from(payments)
+      .where(and(eq(payments.invoiceId, invoiceId), presentedFailure()));
+    return presentations(rows).length;
+  });
+}
 
 /**
  * The payer revoked this instrument's mandate on its last presentation, and the business
@@ -120,6 +185,9 @@ export async function presentationBlock(input: {
     | "businessId"
     | "credentialsChangedAt"
     | "authorizedAt"
+    | "brand"
+    | "type"
+    | "issuerCountry"
   >;
   now: Date;
   /** Apply the per-card caps too (automatic re-attempts only). */
@@ -157,19 +225,19 @@ export async function presentationBlock(input: {
         .where(
           and(
             inArray(payments.paymentMethodId, ids.length ? ids : [pm.id]),
-            eq(payments.status, "failed"),
-            // A refusal booked without asking a gateway was never presented.
-            ne(payments.providerKey, "none"),
+            // A refusal our pre-flight booked, or one booked without a gateway, was never presented.
+            presentedFailure(),
             gt(payments.createdAt, new Date(now.getTime() - 30 * DAY_MS)),
           ),
         ),
     );
+    const caps = cardCaps(pm.brand);
     const in24 = declines.filter((t) => t > now.getTime() - DAY_MS);
     const d24 = in24.length;
     const d30 = declines.length;
     const reopen: number[] = [];
-    if (d24 >= CARD_CAP_24H) reopen.push(Math.min(...in24) + DAY_MS);
-    if (d30 >= CARD_CAP_30D) reopen.push(Math.min(...declines) + 30 * DAY_MS);
+    if (caps.per24h != null && d24 >= caps.per24h) reopen.push(Math.min(...in24) + DAY_MS);
+    if (d30 >= caps.per30d) reopen.push(Math.min(...declines) + 30 * DAY_MS);
     if (!reopen.length) return null;
     return {
       reason: "card_cap",
@@ -203,12 +271,12 @@ export function presentations(
 
 async function railBlock(input: {
   organizationId: string;
-  pm: Pick<Pm, "id" | "mandateRail">;
+  pm: Pick<Pm, "id" | "mandateRail" | "type" | "issuerCountry">;
   now: Date;
   invoiceId: string;
 }): Promise<RailBlock | null> {
-  const rail = input.pm.mandateRail?.toLowerCase();
-  const cap = networkRetryCap(rail);
+  const rail = retryRailOf(input.pm)?.toLowerCase();
+  const cap = networkRetryCap(rail, input.pm.issuerCountry);
   const gapDays = rail ? RAIL_MIN_RETRY_GAP_DAYS[rail] : undefined;
   if (!rail || (cap == null && gapDays === undefined)) return null;
   return withTenant(input.organizationId, async (tx) => {

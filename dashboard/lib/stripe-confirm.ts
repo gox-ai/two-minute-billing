@@ -14,11 +14,12 @@
  * Structural types, not Stripe.js's: the root unit suite drives this with a stub.
  */
 
-import { gatewayFailure, RETRY_IN_FORM } from "./gateway-errors";
+import { RETRY_IN_FORM, stripeClientFailure } from "./gateway-errors";
 
 interface StripeError {
   type?: string;
   code?: string;
+  param?: string;
   message?: string;
 }
 interface SetupIntentLike {
@@ -58,6 +59,8 @@ export async function confirmStripeIntent<E>(
   purpose: "setup" | "payment",
   clientSecret: string,
   returnUrl?: string,
+  /** The setup failure's first sentence; a setup that also pays says the payment failed. */
+  setupLead = "We could not save your payment method.",
 ): Promise<ConfirmOutcome> {
   // With a return URL, a method that must redirect (a bank page) can leave and come back.
   // Without one, Stripe refuses those methods at confirm.
@@ -69,15 +72,15 @@ export async function confirmStripeIntent<E>(
       ...confirmParams,
     });
     let intent = first.setupIntent;
-    let errMsg = first.error?.message;
+    let err = first.error;
     if (first.error?.code === "setup_intent_unexpected_state") {
       intent = (await stripe.retrieveSetupIntent(clientSecret)).setupIntent;
-      errMsg = undefined;
+      err = undefined;
     }
     if (!intent || intent.status !== "succeeded" || !intent.payment_method)
       return {
         ok: false,
-        error: gatewayFailure("We could not save your payment method.", errMsg, RETRY_IN_FORM),
+        error: stripeClientFailure(setupLead, err, RETRY_IN_FORM),
       };
     return {
       ok: true,
@@ -94,10 +97,10 @@ export async function confirmStripeIntent<E>(
     ...confirmParams,
   });
   let intent = first.paymentIntent;
-  let errMsg = first.error?.message;
+  let err = first.error;
   if (first.error?.code === "payment_intent_unexpected_state") {
     intent = (await stripe.retrievePaymentIntent(clientSecret)).paymentIntent;
-    errMsg = undefined;
+    err = undefined;
   }
   // `requires_capture` counts: a card authorizes, and the second leg captures it
   // server-side against the invoice. `processing` is a bank debit on its way, not a
@@ -108,7 +111,7 @@ export async function confirmStripeIntent<E>(
   if (!intent || !authorized)
     return {
       ok: false,
-      error: gatewayFailure("We could not confirm your payment.", errMsg, RETRY_IN_FORM),
+      error: stripeClientFailure("We could not confirm your payment.", err, RETRY_IN_FORM),
     };
   return { ok: true, providerToken: intent.id, pending };
 }

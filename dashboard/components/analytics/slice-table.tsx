@@ -42,8 +42,12 @@ export function SliceTable({
    * dimension itself has no page of its own to link to (country, currency). */
   onRowClick?: (key: string) => void;
 }) {
+  // A row that is zero in every period says nothing (a model the business does not use).
+  const rows = (result.split?.series ?? []).filter(
+    (r) => (r.total ?? 0) !== 0 || r.points.some((p) => (p.value ?? 0) !== 0),
+  );
   const split = result.split;
-  if (!split || split.series.length === 0) {
+  if (!split || rows.length === 0) {
     return (
       <EmptyState
         title="Nothing to report yet"
@@ -51,7 +55,7 @@ export function SliceTable({
       />
     );
   }
-  const isMatrix = split.series.some((s) => s.points.length > 0);
+  const isMatrix = rows.some((s) => s.points.length > 0);
   const periods = isMatrix ? result.series.map((p) => p.label) : [];
 
   return (
@@ -95,7 +99,7 @@ export function SliceTable({
             </tr>
           </thead>
           <tbody>
-            {split.series.map((row) => {
+            {rows.map((row) => {
               const href = drillHref(split.dimension, row.key, biz);
               const shareBps = result.total
                 ? Math.round(((row.total ?? 0) / result.total) * 10_000)

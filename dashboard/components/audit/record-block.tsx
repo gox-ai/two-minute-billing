@@ -52,15 +52,18 @@ export function RecordBlock({
   href,
   /** True for the block the reader arrived from (`?source=`). */
   isSource,
+  /** False where the full record already shows below, e.g. on an event page. */
+  defaultOpen = true,
 }: {
   block: RecordBlockData;
   href?: string;
   isSource?: boolean;
+  defaultOpen?: boolean;
 }) {
   const creation = block.snapshot === "created";
   // Starts OPEN: this page exists to show the change. It is one click from the record,
   // and a reader who clicked "Details" has already said they want the detail.
-  const [open, setOpen] = React.useState(true);
+  const [open, setOpen] = React.useState(defaultOpen);
   const { noun, verb } = actionHeadline(block.action, block.resource_type);
 
   const sentences = React.useMemo(

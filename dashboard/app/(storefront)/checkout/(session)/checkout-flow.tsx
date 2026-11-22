@@ -1,13 +1,16 @@
 "use client";
 
 import * as React from "react";
+import { paymentMethodTypeLabel } from "@/lib/filter-options";
 import { toast } from "sonner";
-import { AlertCircle, CheckCircle2, Clock, Loader2, Package } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { NO_SESSION } from "@/lib/checkout-strings";
 import { CouponBox, CouponRefusals } from "./coupon-box";
+import { RollingNumber } from "@/components/ui/rolling-number";
+import { BusyLabel } from "../../storefront-motion";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/form/field";
 import { AddressFields } from "@/components/customers/address-fields";
@@ -54,6 +57,7 @@ import {
 import { money } from "@/lib/format";
 import { fmtDate, fmtDateTime } from "@/lib/format-date";
 import { creditNarrativeFromPreview } from "@/lib/credit-legs";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 import { Chip } from "@/components/patterns/chip";
 import {
   BrandTheme,
@@ -73,7 +77,9 @@ import {
   StripeIntentForm,
   refusalMessage,
 } from "../../payment-dialog";
+import { TruncatedText } from "../../truncated-text";
 import { contactBusiness } from "@/lib/gateway-errors";
+import { clearActiveIntent, reportBuyerError, setActiveIntent } from "@/lib/buyer-error-report";
 import type {
   CheckoutView,
   CheckoutChangePreview,
@@ -141,31 +147,6 @@ interface BuyerPrefill {
 /** The engine's refusal while a gateway's approval has not reached us yet (checkout/service.ts). */
 const NOT_YET_APPROVED = /Complete the (payment step|authentication) first/;
 const RETURN_AUTO_RETRIES = 4;
-
-function toastCompletion(
-  outcome: CompletionOutcome,
-  isChange: boolean,
-  reactivate = false,
-  purchase = false,
-) {
-  if (purchase) {
-    if (outcome.unpaidInvoice?.state === "processing")
-      return void toast("We are confirming your payment.");
-    if (outcome.unpaidInvoice) return void toast.warning("Payment not received");
-    return void toast.success("Payment received");
-  }
-  const changed = reactivate
-    ? "Subscription reactivated"
-    : isChange
-      ? "Plan changed"
-      : "Subscription created";
-  if (outcome.paymentError) return void toast.warning(`${changed}. Your payment was refused.`);
-  const unpaid = outcome.unpaidInvoice;
-  if (!unpaid) return void toast.success(changed);
-  if (unpaid.state === "processing")
-    return void toast(`${changed}. We are confirming your payment.`);
-  toast.warning(`${changed}. Payment not received.`);
-}
 
 /** `url` with the session id and outcome appended, keeping its own query. Null if unparseable. */
 function withSessionOutcome(
@@ -245,10 +226,16 @@ function commitCopy(view: CheckoutView): CommitCopy {
         : payNow > 0
           ? `Confirm change and pay ${money(payNow, p!.currency)}`
           : "Confirm change";
+    const every = planInterval(view);
+    const regular = view.nextPayment;
     const next =
       p?.nextRenewalAt && p.nextRenewalAmountDueMinor != null
         ? ` Your next payment is ${money(p.nextRenewalAmountDueMinor, p.currency)} on ${fmtDate(p.nextRenewalAt, tz)}.`
-        : "";
+        : // A fresh term renews one period after it starts: the regular amount, no date to
+          // invent. Not while an introductory discount runs, which this figure excludes.
+          reactivate && regular && every && !regular.intro
+          ? ` Then ${money(regular.totalMinor, regular.currency)} every ${every}${regular.excludesUsage ? ", plus usage" : ""}.`
+          : "";
     const today = p
       ? payNow > 0
         ? `You pay ${money(payNow, p.currency)} today.`
@@ -884,7 +871,10 @@ function usePaymentChallenge({
   /** Tell the buyer once: inline when the caller shows `refusal`, else a toast. */
   const refuse = (error: string) => {
     if (showsRefusal) setRefusal(error);
-    else toast.error(error);
+    else {
+      toast.error(error);
+      reportBuyerError(error, { step: "pay" });
+    }
     onFailed?.(error);
     return error;
   };
@@ -962,7 +952,8 @@ function usePaymentChallenge({
         unpaidInvoice: res.unpaidInvoice ?? null,
         paymentError: res.paymentError ?? null,
       };
-      toastCompletion(outcome, isChange, reactivate, purchase);
+      // No toast: the done card that replaces the form says the same, once.
+      clearActiveIntent();
       onCompleted(outcome);
       return null;
     }
@@ -985,6 +976,7 @@ function usePaymentChallenge({
       return refuse(error);
     }
     const { paymentIntentId, nextAction, message } = res.actionRequired;
+    setActiveIntent(paymentIntentId);
     // A client result answers the intent it came with, so no later leg repeats it.
     completion = { ...completion };
     delete completion.clientResult;
@@ -1030,9 +1022,19 @@ function usePaymentChallenge({
             : "Confirm your subscription payment",
         ...(prefill ? { prefill } : {}),
       });
-      // Closed without authenticating. Nothing was created and the session is still open,
-      // so the buyer is exactly where they were — no toast, because nothing failed.
-      if (result.status === "dismissed") return null;
+      // Closed without the sheet's answer. The answer can be lost (a bank popup that cannot
+      // reach this page), so ask once, quietly: the engine reads the order at the gateway,
+      // and a paid one completes here. Otherwise the buyer is where they were, with no
+      // toast, because nothing failed.
+      if (result.status === "dismissed") {
+        setBusy(true);
+        try {
+          await post({ ...completion, paymentIntent: paymentIntentId }, gatewayAccount, 2, true);
+        } finally {
+          setBusy(false);
+        }
+        return null;
+      }
       if (result.status === "failed")
         return refuse(
           refusalMessage(
@@ -1043,7 +1045,7 @@ function usePaymentChallenge({
         );
       setBusy(true);
       try {
-        return await second();
+        return await second(result.status === "authorized" ? result.clientResult : undefined);
       } finally {
         setBusy(false);
       }
@@ -1148,14 +1150,9 @@ function usePaymentChallenge({
   /**
    * A STABLE `run` over a per-render `post`: the return-leg effect below holds onto it,
    * and an identity that changed every render would re-run that effect.
-   *
-   * Reseated in an EFFECT, not during render — `run` is only ever called from an event
-   * handler or a later effect, both of which happen after commit, so the ref is always the
-   * latest `post` by the time anything reads it. Writing it during render is the same
-   * pattern but is an impure render, which the lint rightly objects to.
    */
   const impl = React.useRef(post);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     impl.current = post;
   });
   const run = React.useCallback((completion: CheckoutCompletion, gatewayAccount?: string) => {
@@ -1508,7 +1505,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           clearInterval(timer);
           if (res.invoice.state === "paid") {
             setUnpaid(null);
-            return void toast.success("Payment received");
+            return void toast.success("Payment received.");
           }
           setUnpaid({
             id: res.invoice.id,
@@ -1517,7 +1514,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
             state: "outstanding",
             ...(res.invoice.failure ? { failure: res.invoice.failure } : {}),
           });
-          return void toast.warning("Payment not received");
+          return void toast.warning("Payment not received.");
         }
         if (attempts >= MAX_ATTEMPTS) {
           clearInterval(timer);
@@ -1665,7 +1662,9 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     const setupToken = pending?.setupToken ?? ret.approvalToken;
     if (!setupToken) {
       setStep("card");
-      toast.error("We could not finish adding your payment method. Try again.");
+      const text = "We could not finish adding your payment method. Try again.";
+      toast.error(text);
+      reportBuyerError(text, { step: "setup_return" });
       return;
     }
     const finish = () => {
@@ -1868,15 +1867,37 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
         tz={view.business.timezone}
         oldPlan={view.change.currentPlan?.name ?? null}
         {...(reactivation ? { reactivation } : {})}
+        // Only a charge that succeeded: a pending or lost gateway answer stays "Due today",
+        // and a zero-total term has nothing to call paid.
+        paid={
+          step === "done" &&
+          !unpaid &&
+          !paymentError &&
+          !!view.change.preview.immediateCharge &&
+          view.change.preview.amountDueMinor > 0
+        }
       />
     </>
   ) : null;
+
+  /** A priced reactivation with no coupon box and no regular cost has no order card of its
+   *  own: "Your new term" IS the order, so it takes the order's column (decided 2026-11-17). */
+  const previewInRail =
+    reactivate &&
+    view.change?.preview != null &&
+    changeBlocked == null &&
+    !view.allow_coupons &&
+    view.coupons.length === 0 &&
+    !view.nextPayment;
 
   return (
     <BrandTheme brand={view.business}>
       <PoNumberContext.Provider value={po}>
         <ConsentContext.Provider value={consent}>
-          <div className="flex w-full flex-col gap-4 pb-20 sm:gap-5 sm:pb-0">
+          <div
+            className="flex w-full flex-col gap-4 pb-20 sm:gap-5 sm:pb-0"
+            data-checkout-step={step}
+          >
             <StorefrontHeader
               brand={view.business}
               subtitle={
@@ -1901,35 +1922,44 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     href={cancelUrl}
                     className="text-sm text-muted-foreground hover:underline"
                   >
-                    Cancel
+                    {/* On a change or reactivation, "Cancel" reads as "cancel my subscription". */}
+                    {isChange ? "Go back" : "Cancel"}
                   </a>
                 ) : undefined
               }
             />
 
-            {onePage ? null : <Steps steps={steps} current={stepperAt} />}
+            {/* Only with two or more real steps: a review that is one press needs no map
+                (decided 2026-11-17). "Confirmation" is a result, not a step. */}
+            {onePage || steps.filter((st) => st.key !== "done").length < 2 ? null : (
+              <Steps steps={steps} current={stepperAt} />
+            )}
 
             {/*
           Two columns above 1000px: what the buyer ACTS on down the left, what they are
           buying down the right, sticky while they fill in a card. Below that the order
           comes first, then the step. Layout lives in `globals.css` under `.checkout-panes`.
         */}
-            <div className="checkout-panes">
+            <div className="checkout-panes sf-enter">
               <div className="checkout-rail">
-                <OrderCard
-                  view={view}
-                  locked={step === "done" || sessionEnded}
-                  sessionEnded={sessionEnded}
-                  title={
-                    isPurchase
-                      ? "Your order"
-                      : reactivate
-                        ? "Your subscription"
-                        : isChange
-                          ? "Your plan change"
-                          : "Your order"
-                  }
-                />
+                {previewInRail ? (
+                  changePreview
+                ) : (
+                  <OrderCard
+                    view={view}
+                    locked={step === "done" || sessionEnded}
+                    sessionEnded={sessionEnded}
+                    title={
+                      isPurchase
+                        ? "Your order"
+                        : reactivate
+                          ? "Your subscription"
+                          : isChange
+                            ? "Your plan change"
+                            : "Your order"
+                    }
+                  />
+                )}
               </div>
 
               <div className="checkout-main">
@@ -1997,7 +2027,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                       title="Payment in progress"
                     >
                       <p>
-                        Your bank is still confirming the{" "}
+                        We are waiting for confirmation of the{" "}
                         <span className="font-medium tabular-nums">
                           {money(unpaid.amount_due_minor, unpaid.currency)}
                         </span>{" "}
@@ -2024,20 +2054,12 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                       </p>
                     </NoticeCard>
                   ) : (
-                    <NoticeCard icon={<CheckCircle2 />} tone="success" title="Payment received">
-                      <p>Thank you for your purchase. We will email your receipt.</p>
-                      {successUrl ? (
-                        <p className="mt-3">
-                          <a
-                            data-document-link
-                            href={successUrl}
-                            className="text-sm font-medium text-primary hover:underline"
-                          >
-                            Continue
-                          </a>
-                        </p>
-                      ) : null}
-                    </NoticeCard>
+                    <DoneCard
+                      title="Payment received"
+                      body="We will email your receipt."
+                      backUrl={successUrl}
+                      businessName={view.business.name}
+                    />
                   )
                 ) : step === "done" && unpaid?.state === "processing" ? (
                   /* NOT a failure, and the distinction is the whole point: the gateway has the
@@ -2144,29 +2166,31 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     </p>
                   </NoticeCard>
                 ) : step === "done" ? (
-                  /* `success`, not `--primary`: this is an outcome the buyer wanted, and the
-             accent is the link colour, not a success mark. */
-                  <NoticeCard icon={<CheckCircle2 />} tone="success" title="Everything is complete">
-                    <p>
-                      {reactivate
-                        ? "Your subscription is reactivated. Thank you!"
+                  /* The result in plain words, with the next payment when the engine knows
+                     it, and a real way back to the business (decided 2026-11-17). No badge,
+                     no "Thank you!": a statement, as a bank would write it. */
+                  <DoneCard
+                    title={
+                      reactivate
+                        ? "Subscription reactivated"
                         : isChange
-                          ? "Your plan is changed. Thank you!"
-                          : "Your subscription is now active. Thank you!"}
-                    </p>
-                    {/* A plain link: the fallback if the automatic redirect is blocked or slow. */}
-                    {successUrl ? (
-                      <p className="mt-3">
-                        <a
-                          data-document-link
-                          href={successUrl}
-                          className="text-sm font-medium text-primary hover:underline"
-                        >
-                          Continue
-                        </a>
-                      </p>
-                    ) : null}
-                  </NoticeCard>
+                          ? view.change?.itemsUnchanged
+                            ? "Discount applied"
+                            : "Plan changed"
+                          : "Subscription started"
+                    }
+                    body={`${
+                      reactivate
+                        ? "Your subscription is active again."
+                        : isChange
+                          ? view.change?.itemsUnchanged
+                            ? "Your subscription is updated."
+                            : "Your new plan is active."
+                          : "Your subscription is active."
+                    }${doneNextPayment(view)}`}
+                    backUrl={successUrl}
+                    businessName={view.business.name}
+                  />
                 ) : onePage && (step === "details" || step === "card" || step === "pay") ? (
                   <div className="flex flex-col gap-4">
                     <DetailsStep
@@ -2266,7 +2290,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     fieldConfig={view.field_config ?? {}}
                   />
                 ) : step === "pay" && purchase ? (
-                  <div className="flex flex-col gap-4">
+                  <div key="step-pay" className="sf-step flex flex-col gap-4">
                     {detailsSummary}
                     <PurchasePayStep
                       scope={scope}
@@ -2281,8 +2305,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     />
                   </div>
                 ) : step === "confirm" ? (
-                  <div className="flex flex-col gap-4">
-                    {changePreview}
+                  <div key="step-confirm" className="sf-step flex flex-col gap-4">
+                    {previewInRail ? null : changePreview}
                     <ConfirmChangeStep
                       scope={scope}
                       commit={commit}
@@ -2306,8 +2330,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                     />
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-4">
-                    {isChange ? changePreview : detailsSummary}
+                  <div key="step-card" className="sf-step flex flex-col gap-4">
+                    {isChange ? (previewInRail ? null : changePreview) : detailsSummary}
                     <CardStep
                       scope={scope}
                       businessName={view.business.name}
@@ -2366,6 +2390,19 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   );
 }
 
+/** An amount never breaks, sign included; only a " / month" after it may wrap. */
+function unbreakable(value: React.ReactNode): React.ReactNode {
+  if (typeof value !== "string") return value;
+  const at = value.indexOf(" /");
+  if (at < 0) return <span className="whitespace-nowrap">{value}</span>;
+  return (
+    <>
+      <span className="whitespace-nowrap">{value.slice(0, at)}</span>{" "}
+      <span className="whitespace-nowrap">{value.slice(at + 1)}</span>
+    </>
+  );
+}
+
 /** One figure row of the order card: label left, amount right, both on one line. */
 function Figure({
   label,
@@ -2373,15 +2410,17 @@ function Figure({
   strong = false,
   credit = false,
   hint,
+  className,
 }: {
   label: React.ReactNode;
   value: React.ReactNode;
   strong?: boolean;
   credit?: boolean;
   hint?: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div>
+    <div className={className}>
       <div
         className={cn(
           "flex items-baseline justify-between gap-3",
@@ -2389,14 +2428,15 @@ function Figure({
         )}
       >
         <span className="min-w-0">{label}</span>
+        {/* Not shrink-0: an amount never breaks, but its "/ month" may wrap under it. */}
         <span
           className={cn(
-            "shrink-0 tabular-nums",
+            "text-right tabular-nums",
             strong && "text-lg font-semibold text-foreground",
             credit && "text-success",
           )}
         >
-          {value}
+          {unbreakable(value)}
         </span>
       </div>
       {hint ? <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div> : null}
@@ -2444,7 +2484,7 @@ function OrderLine({
   return (
     <li className={cn("px-5 py-3.5", muted && "text-muted-foreground")}>
       <div className="flex items-start gap-3">
-        <ProductGlyph src={image ?? null} fallback={<Package />} />
+        <ProductGlyph src={image ?? null} />
         <div className="min-w-0 flex-1">
           <div className={cn("text-sm font-medium wrap-break-word", struck && "line-through")}>
             {name}
@@ -2470,6 +2510,50 @@ function OrderLine({
  * is due today and what is charged after. On a phone a multi-line order folds behind a
  * toggle; a single line always shows, so the buyer sees what they buy before they pay.
  */
+/** " Your next payment is $X on D." when the engine priced and dated it, else "". */
+function doneNextPayment(view: CheckoutView): string {
+  const tz = view.business.timezone;
+  const p = view.change?.preview;
+  if (view.mode === "change")
+    return p?.nextRenewalAt && p.nextRenewalAmountDueMinor != null
+      ? ` Your next payment is ${money(p.nextRenewalAmountDueMinor, p.currency)} on ${fmtDate(p.nextRenewalAt, tz)}.`
+      : "";
+  const due = view.dueToday;
+  if (due?.trial && due.firstChargeAt)
+    return due.firstChargeMinor != null
+      ? ` Your first payment of ${money(due.firstChargeMinor, due.currency)} is on ${fmtDate(due.firstChargeAt, tz)}.`
+      : ` Your first payment is on ${fmtDate(due.firstChargeAt, tz)}.`;
+  return due?.nextChargeAt ? ` Your next payment is on ${fmtDate(due.nextChargeAt, tz)}.` : "";
+}
+
+/** The finished checkout: what happened, what comes next, and the way back. */
+function DoneCard({
+  title,
+  body,
+  backUrl,
+  businessName,
+}: {
+  title: string;
+  body: string;
+  backUrl: string | null;
+  businessName: string;
+}) {
+  return (
+    <section className="sf-rise rounded-xl border bg-card px-5 py-5 sm:px-6">
+      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+      {/* The fallback if the automatic redirect is blocked or slow. */}
+      {backUrl ? (
+        <Button asChild className="mt-4">
+          <a data-document-link href={backUrl}>
+            Back to {businessName}
+          </a>
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
 function OrderCard({
   view,
   title,
@@ -2494,7 +2578,10 @@ function OrderCard({
     "";
   const rows: Array<{ key: string; name: string; node: React.ReactNode }> = [];
   const current = view.change?.currentPlan;
-  if (isChange && current) {
+  // A reactivation lists its own lines, the plan among them: a "current plan" row repeats it.
+  // So does the priced "Your new term" beside this card (decided 2026-11-17).
+  const pricedReactivation = reactivate && view.change?.preview != null && !view.change?.blocked;
+  if (isChange && current && !(reactivate && (view.items.length > 0 || pricedReactivation))) {
     const swaps = !unchanged && !reactivate && view.items.some((i) => i.kind === "plan");
     rows.push({
       key: "current",
@@ -2535,7 +2622,10 @@ function OrderCard({
         node: <OfferLine key={l.price} line={l} currency={currency} locked={locked} />,
       });
     }
-  } else if (!unchanged) {
+  } else if (!unchanged && !pricedReactivation) {
+    // A reactivation's lines are already priced in "Your new term" beside this card, so they
+    // are not listed twice (decided 2026-11-17); this card keeps the coupon box and the
+    // regular cost.
     for (const [i, item] of view.items.entries()) {
       const sub = lineSubline(item, item.currency);
       rows.push({
@@ -2557,6 +2647,10 @@ function OrderCard({
       });
     }
   }
+  // A priced reactivation with nothing else to say (no coupon box, no regular cost) would be
+  // a card holding one sentence: "Your new term" beside it is the whole order.
+  if (pricedReactivation && !view.allow_coupons && view.coupons.length === 0 && !view.nextPayment)
+    return null;
   const chosen = view.offer ? view.offer.lines.filter((l) => l.quantity > 0).length : rows.length;
   const folds = rows.length > 1;
   const first = rows.find((r) => r.key !== "current")?.name ?? rows[0]?.name ?? "";
@@ -2593,7 +2687,9 @@ function OrderCard({
           {rows.length === 0 || (unchanged && rows.length === 1) ? (
             <li className="px-5 py-3 text-sm text-muted-foreground">
               {reactivate
-                ? "Your subscription is reactivated on its current plan."
+                ? unchanged
+                  ? "Your plan does not change."
+                  : "The lines and today's amount are in Your new term."
                 : isChange
                   ? view.coupons.length > 0
                     ? "This link applies a discount to your subscription. Your plan does not change."
@@ -2611,7 +2707,7 @@ function OrderCard({
                 {view.coupons.length > 1 ? "Discounts applied" : "Discount applied"}
               </span>
               {view.coupons.map((c) => (
-                <Chip key={c} className="font-mono">
+                <Chip key={c} className="max-w-full shrink font-mono wrap-anywhere">
                   {c}
                 </Chip>
               ))}
@@ -2630,6 +2726,7 @@ function OrderCard({
           tz={view.business.timezone}
           reactivate={reactivate}
           unchanged={unchanged}
+          interval={planInterval(view)}
         />
       ) : null}
     </StorefrontSection>
@@ -2743,6 +2840,7 @@ function CreateTotals({ view }: { view: CheckoutView }) {
     );
   }
   const credit = due.totalMinor - due.amountDueMinor;
+  const included = splitTax(due.taxMinor, due.taxLines).includedMinor;
   return (
     <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
       {due.subtotalMinor != null ? (
@@ -2754,19 +2852,25 @@ function CreateTotals({ view }: { view: CheckoutView }) {
           label={d.label === "Discounts" ? "Discounts" : `Discount (${d.label})`}
           value={`−${money(d.amountMinor, cur)}`}
           credit
+          className="sf-slide"
         />
       ))}
       {(due.taxLines ?? []).map((t, i) => (
         <Figure key={`t-${i}`} label={t.label} value={money(t.amountMinor, cur)} />
       ))}
-      {(due.taxLines ?? []).length === 0 && due.taxMinor > 0 ? (
+      {!due.taxLines && due.taxMinor > 0 ? (
         <Figure label="Tax" value={money(due.taxMinor, cur)} />
       ) : null}
+      {included > 0 ? <Figure label={INCLUDED_TAX_LABEL} value={money(included, cur)} /> : null}
       {credit > 0 ? (
         <Figure label="Account credit" value={`−${money(credit, cur)}`} credit />
       ) : null}
       <div className="mt-1 border-t pt-2">
-        <Figure label="Due today" value={money(due.amountDueMinor, cur)} strong />
+        <Figure
+          label="Due today"
+          value={<RollingNumber value={money(due.amountDueMinor, cur)} />}
+          strong
+        />
       </div>
       {later.length > 0 ? (
         <div className="mt-1 flex flex-col gap-2 border-t pt-3">{later}</div>
@@ -2785,12 +2889,15 @@ function ChangeRecurring({
   tz,
   reactivate,
   unchanged = false,
+  interval = null,
 }: {
   next: CheckoutNextPayment;
   preview?: CheckoutChangePreview | undefined;
   tz: string | null;
   reactivate: boolean;
   unchanged?: boolean;
+  /** The plan's billing interval ("month", "3 months"): the figure is per this period. */
+  interval?: string | null;
 }) {
   const cur = next.currency;
   const notes = [
@@ -2809,7 +2916,7 @@ function ChangeRecurring({
               ? "Your plan costs"
               : "Your plan costs after the change"
         }
-        value={money(next.totalMinor, cur)}
+        value={`${money(next.totalMinor, cur)}${interval ? ` /\u00a0${interval.replace(/ /g, "\u00a0")}` : ""}`}
         strong
         hint={notes.join(" ") || undefined}
       />
@@ -2981,15 +3088,17 @@ function PhonePayBar({
   };
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card px-4 py-3 shadow-lg sm:hidden">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-xs text-muted-foreground">
-            {name ? `${name} · ` : ""}
-            {isChange ? "Due now" : "Due today"}
-          </div>
-          <div className="text-base font-semibold tabular-nums">{amount}</div>
+      {/* Wraps: a very large amount puts the button on its own line. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        {/* Sized by the amount alone: the name line never pushes the button down. */}
+        <div className="flex-[1_1_0%]">
+          <TruncatedText
+            value={`${name ? `${name} · ` : ""}${isChange ? "Due now" : "Due today"}`}
+            className="text-xs text-muted-foreground contain-[inline-size]"
+          />
+          <div className="text-base font-semibold whitespace-nowrap tabular-nums">{amount}</div>
         </div>
-        <Button onClick={go} className="shrink-0">
+        <Button onClick={go} className="ml-auto shrink-0">
           Go to payment
         </Button>
       </div>
@@ -3044,7 +3153,7 @@ function previewOutcome(
       return {
         title: "Due when your trial ends",
         footer: `Due ${when}`,
-        note: `Your subscription restarts now. We do not charge you today. Your first invoice on ${when} shows this amount.`,
+        note: `Your subscription reactivates now. We do not charge you today. Your first invoice on ${when} shows this amount.`,
       };
     }
     if (preview.totalMinor > 0) {
@@ -3172,7 +3281,7 @@ function DetailsSummary({
         </button>
       }
     >
-      <div className="min-w-0 text-sm">
+      <div className="min-w-0 text-sm wrap-break-word">
         {name || a?.company ? (
           <div className="font-medium">{[name, a?.company].filter(Boolean).join(" · ")}</div>
         ) : null}
@@ -3191,6 +3300,7 @@ function DetailsSummary({
 function PurchaseTotal({ purchase }: { purchase: CheckoutPurchase }) {
   const cur = purchase.currency;
   const credit = purchase.total_minor - purchase.amount_due_minor;
+  const included = splitTax(purchase.tax_minor, purchase.tax_lines).includedMinor;
   return (
     <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-4">
       <Figure label="Subtotal" value={money(purchase.subtotal_minor, cur)} />
@@ -3205,9 +3315,7 @@ function PurchaseTotal({ purchase }: { purchase: CheckoutPurchase }) {
       {purchase.tax_lines.map((t, i) => (
         <Figure key={`${t.label}-${i}`} label={t.label} value={money(t.amount_minor, cur)} />
       ))}
-      {purchase.tax_lines.length === 0 && purchase.tax_minor > 0 ? (
-        <Figure label="Tax" value={money(purchase.tax_minor, cur)} />
-      ) : null}
+      {included > 0 ? <Figure label={INCLUDED_TAX_LABEL} value={money(included, cur)} /> : null}
       {credit > 0 ? (
         <Figure label="Account credit" value={`−${money(credit, cur)}`} credit />
       ) : null}
@@ -3296,10 +3404,12 @@ function PurchasePayStep({
               <Button
                 onClick={() => void challenge.run({})}
                 disabled={blocked || challenge.busy}
-                className="w-full"
+                className="h-auto min-h-10 w-full py-2 whitespace-normal"
                 size="lg"
               >
-                {challenge.busy ? commit.busy : commit.label}
+                <BusyLabel busy={challenge.busy}>
+                  {challenge.busy ? commit.busy : commit.label}
+                </BusyLabel>
               </Button>
             )}
           </CommitArea>
@@ -3320,7 +3430,7 @@ function DetailsBlockedNote() {
 
 /** The last refused payment, kept on the card after its toast closes. */
 function PaymentRefusal({ message }: { message: string | null }) {
-  return <RefusalAlert message={message} className="mt-4" />;
+  return <RefusalAlert message={message} className="mt-4" step="pay" />;
 }
 
 /**
@@ -3347,6 +3457,7 @@ function PreviewCard({
   tz,
   oldPlan,
   reactivation,
+  paid = false,
 }: {
   preview: CheckoutChangePreview;
   /** Business timezone from the session payload — see the fmtDate call below. */
@@ -3354,6 +3465,8 @@ function PreviewCard({
   /** The plan being left, named in the credit sentence. */
   oldPlan: string | null;
   reactivation?: { startsAt: string | null };
+  /** The checkout is finished: what was due today is now paid. */
+  paid?: boolean;
 }) {
   const total = Math.abs(preview.immediateCharge ? preview.amountDueMinor : preview.totalMinor);
   const outcome = previewOutcome(preview, tz, reactivation != null);
@@ -3394,9 +3507,10 @@ function PreviewCard({
   // The invoice's OWN total, from the engine. The local reconstruction is a fallback for a
   // preview produced before the field existed, and is correct for exactly the shape this
   // page renders (charge lines − promo + tax).
+  const couponOffMinor = preview.couponDiscountMinor ?? 0;
   const invoiceTotalMinor =
     preview.invoiceTotalMinor ??
-    chargeLinesMinor - preview.promotionalDiscountMinor + preview.taxMinor;
+    chargeLinesMinor - couponOffMinor - preview.promotionalDiscountMinor + preview.taxMinor;
   // `fmtDate` and not `toLocaleDateString`: the credited period is rendered on a page that
   // hydrates, and Node and the browser disagree on the default locale — see the note on the
   // renewal date below, which threw the whole tree away over exactly this.
@@ -3466,6 +3580,20 @@ function PreviewCard({
             </span>
           </div>
         ) : null}
+        {/* Each coupon by the name its invoice prints; one unnamed row only as a fallback. */}
+        {couponOffMinor > 0
+          ? (preview.couponDiscountLines?.length
+              ? preview.couponDiscountLines
+              : [{ label: "Discount", amountMinor: couponOffMinor }]
+            ).map((d, i) => (
+              <div key={`${d.label}-${i}`} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 text-muted-foreground">{d.label}</span>
+                <span className="shrink-0 text-success tabular-nums">
+                  −{money(d.amountMinor, preview.currency)}
+                </span>
+              </div>
+            ))
+          : null}
         {/* ABOVE tax: promotional credit is applied before tax and shrinks the taxable
             base, so the tax below is charged on what is left after it. Without the row the
             footer total was smaller than the lines plus tax by an unnamed amount. */}
@@ -3481,20 +3609,21 @@ function PreviewCard({
             an Indian buyer can match this quote against the document they are sent. One
             lump "Tax" row is the fallback for a tax with no component breakdown (and for a
             preview produced before `taxLines` existed). */}
-        {preview.taxLines.length > 0 ? (
-          preview.taxLines.map((t, i) => (
-            <div key={`${t.label}-${i}`} className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">{t.label}</span>
-              <span className="shrink-0 tabular-nums">
-                {money(t.amountMinor, preview.currency)}
-              </span>
-            </div>
-          ))
-        ) : preview.taxMinor > 0 ? (
+        {preview.taxLines.length > 0
+          ? preview.taxLines.map((t, i) => (
+              <div key={`${t.label}-${i}`} className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">{t.label}</span>
+                <span className="shrink-0 tabular-nums">
+                  {money(t.amountMinor, preview.currency)}
+                </span>
+              </div>
+            ))
+          : null}
+        {splitTax(preview.taxMinor, preview.taxLines).includedMinor > 0 ? (
           <div className="flex items-center justify-between gap-3">
-            <span className="text-muted-foreground">Tax</span>
+            <span className="text-muted-foreground">{INCLUDED_TAX_LABEL}</span>
             <span className="shrink-0 tabular-nums">
-              {money(preview.taxMinor, preview.currency)}
+              {money(splitTax(preview.taxMinor, preview.taxLines).includedMinor, preview.currency)}
             </span>
           </div>
         ) : null}
@@ -3552,7 +3681,9 @@ function PreviewCard({
         ) : null}
       </div>
       <div className="flex items-baseline justify-between gap-3 border-t bg-muted/40 px-5 py-3.5">
-        <span className="text-sm font-medium">{outcome.footer}</span>
+        <span className="text-sm font-medium">
+          {paid && outcome.footer === "Due today" ? "Paid today" : outcome.footer}
+        </span>
         <span className="text-xl font-semibold tracking-tight tabular-nums">
           {money(total, preview.currency)}
         </span>
@@ -3581,16 +3712,20 @@ function PreviewCard({
           </div>
         </div>
       ) : null}
-      {outcome.note || preview.termReset || reactivation ? (
+      {outcome.note ||
+      preview.termReset ||
+      (reactivation && (reactivation.startsAt || preview.newPeriodEnd)) ? (
         <div className="flex flex-col gap-1 border-t px-5 py-3 text-xs text-muted-foreground">
           {outcome.note ? <p>{outcome.note}</p> : null}
+          {/* "Starts when you confirm" is said once, by the payment section below. */}
           {reactivation ? (
-            <p>
-              {reactivation.startsAt
-                ? `Your new term starts on ${fmtDate(reactivation.startsAt, tz)}`
-                : "Your new term starts when you confirm"}
-              {preview.newPeriodEnd ? `, renewing ${fmtDate(preview.newPeriodEnd, tz)}` : ""}.
-            </p>
+            reactivation.startsAt || preview.newPeriodEnd ? (
+              <p>
+                {reactivation.startsAt
+                  ? `Your new term starts on ${fmtDate(reactivation.startsAt, tz)}${preview.newPeriodEnd ? `, renewing ${fmtDate(preview.newPeriodEnd, tz)}` : ""}.`
+                  : `Your new term renews on ${fmtDate(preview.newPeriodEnd!, tz)}.`}
+              </p>
+            ) : null
           ) : preview.termReset ? (
             <p>
               This starts a new billing term
@@ -3708,7 +3843,7 @@ function ConfirmChangeStep({
    */
   const reauth = Boolean(mandate?.reauthorizationRequired);
   return (
-    <StorefrontSection title={reactivation ? "Reactivate" : "Confirm your change"}>
+    <StorefrontSection title={reactivation ? "Payment" : "Confirm your change"}>
       <div className="flex flex-col gap-3">
         <PoNumberInput />
         {reauth && mandate ? (
@@ -3747,7 +3882,7 @@ function ConfirmChangeStep({
           <>
             <p className="text-sm text-muted-foreground">
               {reactivation
-                ? "Your subscription restarts when you confirm."
+                ? "Your subscription reactivates when you confirm."
                 : itemsUnchanged
                   ? preview
                     ? "Your plan does not change. Your discount applies when you confirm."
@@ -3780,10 +3915,12 @@ function ConfirmChangeStep({
               <Button
                 onClick={confirm}
                 disabled={busy || challenge.busy}
-                className="w-full"
+                className="h-auto min-h-10 w-full py-2 whitespace-normal"
                 size="lg"
               >
-                {busy || challenge.busy ? commit.busy : commit.label}
+                <BusyLabel busy={busy || challenge.busy}>
+                  {busy || challenge.busy ? commit.busy : commit.label}
+                </BusyLabel>
               </Button>
             </CommitArea>
             {/* Lists the methods the buyer holds before offering to add another. */}
@@ -4521,6 +4658,24 @@ function CardStep({
     currency,
   );
 
+  /**
+   * The gateway picker names what each gateway accepts here ("Card", "Card, UPI or …"),
+   * never the provider. Two gateways that accept the same methods are one choice for the
+   * buyer: we keep the first (the business's order) and route through it.
+   */
+  const gatewayChoices: Array<{ id: string; label: string }> = [];
+  for (const g of gateways ?? []) {
+    const rails = railsForCurrency(
+      g.method_types && g.method_types.length > 0 ? g.method_types : ["card"],
+      currency,
+    ).map(paymentMethodTypeLabel);
+    const label =
+      rails.length <= 1
+        ? (rails[0] ?? "Card")
+        : `${rails.slice(0, -1).join(", ")} or ${rails[rails.length - 1]}`;
+    if (!gatewayChoices.some((c) => c.label === label)) gatewayChoices.push({ id: g.id, label });
+  }
+
   // Above the ceiling a card/UPI mandate needs the payer's approval on EVERY debit,
   // while a netbanking e-mandate authenticates once here and then runs unattended.
   // Advice, never a block — all three work, and the choice is the buyer's.
@@ -4588,6 +4743,10 @@ function CardStep({
   /** The committing action, with its amount ("Subscribe and pay $252.04", "Start free trial"). */
   const cta = commit.label;
   const busyCta = commit.busy;
+  /** A decline on a step that also charges is a payment that failed, not a save. */
+  const failLead = moneyDueToday
+    ? "We could not take your payment."
+    : "We could not save your payment method.";
 
   const runEmbeddedCheckout = async (
     descriptor: RazorpayCheckoutDescriptor,
@@ -4614,17 +4773,13 @@ function CardStep({
      */
     if (result.status === "failed")
       return void challenge.showRefusal(
-        refusalMessage(
-          "We could not save your payment method.",
-          result.message,
-          "Try again, or use a different payment method.",
-        ),
+        refusalMessage(failLead, result.message, "Try again, or use a different payment method."),
       );
     // A setup always names its payment; "unconfirmed" is only for a charge.
     if (result.status !== "authorized") return;
     setSaving(true);
     // The setup intent, not the payment id — see the return-leg note above.
-    await complete(result.paymentId, paymentIntent);
+    await complete(result.paymentId, paymentIntent, result.clientResult);
     clearPendingVaultSetup(scope);
     setSaving(false);
   };
@@ -4645,11 +4800,7 @@ function CardStep({
     // Beside Pay and kept there: the gateway's sheet is closed, and a toast goes by itself.
     if (result.status === "failed")
       return void challenge.showRefusal(
-        refusalMessage(
-          "We could not save your payment method.",
-          result.message,
-          "Try again, or use a different payment method.",
-        ),
+        refusalMessage(failLead, result.message, "Try again, or use a different payment method."),
       );
     setSaving(true);
     await complete(undefined, paymentIntent, result.clientResult);
@@ -4734,6 +4885,7 @@ function CardStep({
       // Often the gateway's own refusal (a phone number it will not take): kept beside Pay.
       return void challenge.showRefusal(res.error);
     }
+    setActiveIntent(res.setup.payment_intent);
     /**
      * The rail RazorPay never returns from: hold THIS tab and put the authorization
      * somewhere else. The panel below always renders the link as an anchor, so a blocked
@@ -4900,19 +5052,17 @@ function CardStep({
       not — a single-option radio group is a control that cannot do anything, so
       it is omitted and the id still rides along on `begin`. (The portal renders
       the list unconditionally; this is a deliberate departure.) */}
-      {gateways && gateways.length > 1 ? (
+      {gatewayChoices.length > 1 ? (
         <div className="flex flex-col gap-2">
-          <div className="text-sm font-medium">Payment provider</div>
-          {/* ⚠️ The gateway KEY is deliberately not rendered: "RAZORPAY" / "TMTEST" is our
-          routing detail, means nothing to a payer, and reads like an unfinished
-          screen. The account's own label is the only part addressed to them. */}
+          <div className="text-sm font-medium">Pay with</div>
+          {/* Methods, never the provider: which gateway carries the payment is our routing. */}
           <RadioGroup
             value={selectedGateway}
             onValueChange={setSelectedGateway}
-            aria-label="Payment provider"
+            aria-label="Pay with"
             className="flex flex-col gap-2"
           >
-            {gateways.map((g) => (
+            {gatewayChoices.map((g) => (
               <div
                 key={g.id}
                 /* The whole row selects, same as the rail chooser below it — see the note
@@ -4931,7 +5081,10 @@ function CardStep({
                     : "hover:bg-muted/50",
                 )}
               >
-                <RadioOption value={g.id} label={<span className="truncate">{g.label}</span>} />
+                <RadioOption
+                  value={g.id}
+                  label={<span className="wrap-break-word">{g.label}</span>}
+                />
               </div>
             ))}
           </RadioGroup>
@@ -5025,27 +5178,29 @@ function CardStep({
           className="w-full"
           size="lg"
         >
-          {starting
-            ? "Starting…"
-            : saving
-              ? "Saving…"
-              : activeGateway?.gateway_key === "paypal" || activeMethodType === "paypal"
-                ? "Continue with PayPal"
-                : activeMethodType === "venmo"
-                  ? "Continue with Venmo"
-                  : activeGateway?.gateway_key === "gocardless"
-                    ? "Set up Direct Debit"
-                    : activeGateway?.gateway_key === "mollie"
-                      ? "Continue to Mollie"
-                      : activeMethodType === "upi"
-                        ? "Authorize UPI Autopay"
-                        : isRazorpay && activeMethodType === "bank_transfer"
-                          ? "Authorize Netbanking e-Mandate"
-                          : achText
-                            ? "Enter bank account details"
-                            : activeMethodType === "card"
-                              ? "Enter card details"
-                              : "Continue"}
+          <BusyLabel busy={starting || saving}>
+            {starting
+              ? "Starting…"
+              : saving
+                ? "Saving…"
+                : activeGateway?.gateway_key === "paypal" || activeMethodType === "paypal"
+                  ? "Continue with PayPal"
+                  : activeMethodType === "venmo"
+                    ? "Continue with Venmo"
+                    : activeGateway?.gateway_key === "gocardless"
+                      ? "Set up Direct Debit"
+                      : activeGateway?.gateway_key === "mollie"
+                        ? "Continue to Mollie"
+                        : activeMethodType === "upi"
+                          ? "Authorize UPI Autopay"
+                          : isRazorpay && activeMethodType === "bank_transfer"
+                            ? "Authorize Netbanking e-Mandate"
+                            : achText
+                              ? "Enter bank account details"
+                              : activeMethodType === "card"
+                                ? "Enter card details"
+                                : "Continue"}
+          </BusyLabel>
         </Button>
       </CommitArea>
     </>
@@ -5144,7 +5299,7 @@ function CardStep({
                         ) : undefined;
                       })()}
                       label={
-                        <span className="truncate">
+                        <span className="wrap-break-word">
                           {instrumentLabel({
                             type: m.type,
                             brand: m.brand,
@@ -5153,7 +5308,10 @@ function CardStep({
                           })}
                           {/* Same word as the portal chip and the operator dashboard. */}
                           {m.is_default ? (
-                            <span className="text-muted-foreground"> · primary</span>
+                            <span className="whitespace-nowrap text-muted-foreground">
+                              {" "}
+                              · primary
+                            </span>
                           ) : null}
                         </span>
                       }
@@ -5204,7 +5362,9 @@ function CardStep({
                     className="w-full"
                     size="lg"
                   >
-                    {saving || challenge.busy ? busyCta : cta}
+                    <BusyLabel busy={saving || challenge.busy}>
+                      {saving || challenge.busy ? busyCta : cta}
+                    </BusyLabel>
                   </Button>
                 </CommitArea>
               </>
@@ -5267,6 +5427,7 @@ function CardStep({
             confirmLabel={cta}
             busyLabel={busyCta}
             returnUrl={`${window.location.origin}/checkout?setup=return`}
+            failureLead={failLead}
             // A method that redirects leaves this tab; the setup return leg completes it.
             onBeforeConfirm={() =>
               savePendingVaultSetup(scope, {

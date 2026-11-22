@@ -11,14 +11,14 @@ import {
 } from "@/components/patterns/list-page";
 import { makeListSource } from "@/lib/list-source";
 import { IdCell, TextCell, TruncateCell } from "@/components/patterns/list-cells";
-import { Chip, StatusChip } from "@/components/patterns/chip";
+import { StatusChip } from "@/components/patterns/chip";
 import { EmptyState } from "@/components/states";
-import { EditDrawer } from "@/components/edit-drawer";
+import { HttpStatusChip, LogDetailDrawer, LogJsonBlock } from "@/components/webhooks/log-detail";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw, ScanSearch } from "lucide-react";
 import { replayGatewayWebhookAction } from "@/app/(dashboard)/businesses/[biz]/gateway_webhooks/actions";
 import { fmtDateTime } from "@/lib/format-date";
 import type { GatewayWebhook } from "@/lib/api/payments";
@@ -66,15 +66,6 @@ const DATE_OPS = [
   "is_present",
 ];
 
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-3 gap-2 py-1.5 text-sm">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="col-span-2 break-all">{children}</dd>
-    </div>
-  );
-}
-
 /**
  * Truncate the middle of a URL so the host and the path tail stay visible — same
  * treatment as the outbound Gateway Requests log (kept local to each table rather
@@ -85,13 +76,6 @@ function truncateMiddle(s: string, max = 56): string {
   const head = Math.ceil((max - 1) / 2);
   const tail = Math.floor((max - 1) / 2);
   return `${s.slice(0, head)}…${s.slice(s.length - tail)}`;
-}
-
-/** Tone for the status WE answered the gateway with (502 = please redeliver). */
-function statusTone(status: number): "green" | "tan" | "red" {
-  if (status >= 500) return "red";
-  if (status >= 400) return "tan";
-  return "green";
 }
 
 /**
@@ -123,7 +107,8 @@ function ReplayButton({
         ) : (
           <RotateCcw className="size-3.5" />
         )}
-        <span className="ml-1">Replay</span>
+        {/* Icon-only in a narrow list, where the row's title needs the width. */}
+        <span className="list-narrow:sr-only">Replay</span>
       </Button>
       {/* A replay RE-RUNS money handlers: it can book a capture, settle an invoice and
           issue a refund. It used to sit only on rare `error` rows; since `ignored` became
@@ -197,6 +182,13 @@ export function GatewayWebhooksTable({
 
   const columns = React.useMemo<ColumnDef<GatewayWebhook>[]>(
     () => [
+      // First: a webhook log is read by time.
+      {
+        accessorKey: "received_at",
+        id: "received_at",
+        header: "Received",
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.received_at, tz)}</TextCell>,
+      },
       {
         id: "id",
         header: "ID",
@@ -263,8 +255,9 @@ export function GatewayWebhooksTable({
         accessorFn: (w) => w.response_status ?? "",
         cell: ({ row }) => {
           const s = row.original.response_status;
+          // The status WE answered the gateway with (502 = please redeliver).
           if (s == null) return <TextCell>{null}</TextCell>;
-          return <Chip tone={statusTone(s)}>{s}</Chip>;
+          return <HttpStatusChip status={s} />;
         },
       },
       {
@@ -284,12 +277,6 @@ export function GatewayWebhooksTable({
             </TruncateCell>
           );
         },
-      },
-      {
-        accessorKey: "received_at",
-        id: "received_at",
-        header: "Received",
-        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.received_at, tz)}</TextCell>,
       },
       // How long each inbound webhook took ("4269 ms"). We stored `received_at` AND
       // `processed_at` all along and never subtracted them — the drill-in even prints
@@ -360,6 +347,9 @@ export function GatewayWebhooksTable({
       { id: "transaction", label: "Transaction", group: "Identity", serverOps: TEXT_OPS },
       // The gateway's intent id (`seti_…`, `pi_…`) — how an intent attempt links here.
       { id: "intent", label: "Gateway intent", group: "Identity", serverOps: TEXT_OPS },
+      // Our intent and attempt (`pi_…`, `pia_…`), linked when the event is applied.
+      { id: "payment_intent", label: "Payment intent", group: "Identity", serverOps: ENUM_OPS },
+      { id: "payment_attempt", label: "Payment attempt", group: "Identity", serverOps: ENUM_OPS },
       {
         id: "gateway_key",
         label: "Gateway",
@@ -439,8 +429,9 @@ export function GatewayWebhooksTable({
             {w.outcome === "error" || w.outcome === "ignored" ? (
               <ReplayButton biz={biz} id={w.id} outcome={w.outcome} type={w.type} />
             ) : null}
-            <Button variant="ghost" size="sm" onClick={() => setDetail(w)}>
-              Inspect
+            <Button variant="ghost" size="sm" onClick={() => setDetail(w)} aria-label="Inspect">
+              <ScanSearch className="hidden size-3.5 list-narrow:block" />
+              <span className="list-narrow:sr-only">Inspect</span>
             </Button>
           </span>
         )}
@@ -453,92 +444,76 @@ export function GatewayWebhooksTable({
         }
       />
 
-      <EditDrawer
+      <LogDetailDrawer
         open={!!detail}
-        onOpenChange={(o) => !o && setDetail(null)}
-        title={detail ? `Webhook ${detail.id}` : "Webhook"}
-        description={
+        onClose={() => setDetail(null)}
+        title={detail?.type ?? "Unknown event"}
+        description={detail ? gatewayDisplayName(detail.gateway_key, gatewayCatalog) : undefined}
+        rows={
           detail
-            ? `${gatewayDisplayName(detail.gateway_key, gatewayCatalog)} · ${detail.type ?? "unknown event"}`
-            : undefined
+            ? [
+                { label: "Webhook", value: <IdCell id={detail.id} /> },
+                { label: "Outcome", value: <StatusChip status={detail.outcome ?? "pending"} /> },
+                {
+                  label: "Gateway",
+                  value: (
+                    <GatewayLabel
+                      gatewayKey={detail.gateway_key}
+                      name={gatewayDisplayName(detail.gateway_key, gatewayCatalog)}
+                      fit
+                    />
+                  ),
+                },
+                {
+                  label: "Provider event id",
+                  value: detail.provider_event_id ? (
+                    <span className="font-mono text-xs">{detail.provider_event_id}</span>
+                  ) : null,
+                },
+                {
+                  label: "Transaction",
+                  value: detail.transaction ? (
+                    <IdCell
+                      id={detail.transaction}
+                      href={`/businesses/${biz}/transactions/${detail.transaction}`}
+                    />
+                  ) : null,
+                },
+                {
+                  label: "Status code",
+                  value:
+                    detail.response_status != null ? (
+                      <HttpStatusChip status={detail.response_status} />
+                    ) : null,
+                },
+                {
+                  label: "URL",
+                  value: detail.request_url ? (
+                    <span className="font-mono text-xs">{detail.request_url}</span>
+                  ) : null,
+                },
+                {
+                  label: "Error",
+                  value: detail.error ? (
+                    <span className="text-destructive">{detail.error}</span>
+                  ) : null,
+                },
+                { label: "Received", value: fmtDateTime(detail.received_at, tz) },
+                {
+                  label: "Processed",
+                  value: detail.processed_at ? fmtDateTime(detail.processed_at, tz) : null,
+                },
+              ]
+            : []
         }
       >
         {detail ? (
-          <div className="space-y-4 pb-6">
-            <dl className="divide-y">
-              <DetailRow label="Outcome">
-                <StatusChip status={detail.outcome ?? "pending"} />
-              </DetailRow>
-              <DetailRow label="Gateway">
-                <GatewayLabel
-                  gatewayKey={detail.gateway_key}
-                  name={gatewayDisplayName(detail.gateway_key, gatewayCatalog)}
-                  fit
-                />
-              </DetailRow>
-              <DetailRow label="Event type">
-                <span className="font-mono text-xs">{detail.type ?? "—"}</span>
-              </DetailRow>
-              <DetailRow label="Provider event id">
-                <span className="font-mono text-xs">{detail.provider_event_id ?? "—"}</span>
-              </DetailRow>
-              <DetailRow label="Transaction">
-                {detail.transaction ? (
-                  <IdCell
-                    id={detail.transaction}
-                    href={`/businesses/${biz}/transactions/${detail.transaction}`}
-                  />
-                ) : (
-                  "—"
-                )}
-              </DetailRow>
-              <DetailRow label="Status code">
-                {detail.response_status != null ? (
-                  <Chip tone={statusTone(detail.response_status)}>{detail.response_status}</Chip>
-                ) : (
-                  "—"
-                )}
-              </DetailRow>
-              <DetailRow label="URL">
-                {detail.request_url ? (
-                  <span className="font-mono text-xs">{detail.request_url}</span>
-                ) : (
-                  "—"
-                )}
-              </DetailRow>
-              <DetailRow label="Error">
-                {detail.error ? <span className="text-destructive">{detail.error}</span> : "—"}
-              </DetailRow>
-              <DetailRow label="Received">{fmtDateTime(detail.received_at, tz)}</DetailRow>
-              <DetailRow label="Processed">
-                {detail.processed_at ? fmtDateTime(detail.processed_at, tz) : "—"}
-              </DetailRow>
-            </dl>
-
-            <div>
-              <p className="mb-1.5 text-sm font-medium">Headers</p>
-              {detail.headers != null ? (
-                <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
-                  {JSON.stringify(detail.headers, null, 2)}
-                </pre>
-              ) : (
-                <p className="text-sm text-muted-foreground">No headers stored.</p>
-              )}
-            </div>
-
-            <div>
-              <p className="mb-1.5 text-sm font-medium">Payload</p>
-              {detail.payload != null ? (
-                <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
-                  {JSON.stringify(detail.payload, null, 2)}
-                </pre>
-              ) : (
-                <p className="text-sm text-muted-foreground">No payload stored.</p>
-              )}
-            </div>
-          </div>
+          <>
+            <LogJsonBlock title="Headers" value={detail.headers} empty="No headers stored." />
+            <LogJsonBlock title="Payload" value={detail.payload} empty="No payload stored." />
+          </>
         ) : null}
-      </EditDrawer>
+      </LogDetailDrawer>
     </>
   );
 }

@@ -4867,6 +4867,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/countries/{code}/postal-codes/{postal}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Look up the state and places for a postal code
+         * @description Postal data: GeoNames (https://www.geonames.org), licensed CC BY 4.0. Answers 404 when the code is unknown.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description ISO 3166-1 alpha-2 country code, case-insensitive */
+                    code: string;
+                    /** @description The postal code. Spaces and hyphens do not matter. */
+                    postal: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PostalCodeLookup"];
+                    };
+                };
+                /** @description Unknown postal code */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me": {
         parameters: {
             query?: never;
@@ -7155,11 +7208,17 @@ export interface paths {
         };
         /**
          * Payments holding the customer's excess credit
-         * @description Each payment that left money on the customer's excess balance and still holds some: `held_minor` is what it put there less what its refunds drew out; `refundable_minor` caps that by the customer's excess balance in that currency now. Refund one with `POST …/payments/{pay}/refund`. Integer minor units.
+         * @description Each payment that left money on the customer's excess balance and still holds some. `held_minor` is what it put there less what its refunds drew out. Invoices draw the balance oldest payment first, so `remaining_minor` is what is still on the balance from this payment; the `remaining_minor` values sum to the customer's excess balance in that currency, and a payment with nothing left is not listed. `refundable_minor` is what a refund of this payment can take now, never more than `remaining_minor`. Refund one with `POST …/payments/{pay}/refund`. Integer minor units. `include_used=true` also lists the payments whose excess invoices used up (`remaining_minor` 0).
          */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description `true`: also list payments whose excess is all used.
+                     * @enum {string}
+                     */
+                    include_used?: "true" | "false";
+                };
                 header?: never;
                 path: {
                     /** @description Business id (biz_…) */
@@ -7323,6 +7382,8 @@ export interface paths {
                         metadata?: Record<string, never> | null;
                         /** @description Set to false to archive the customer; true to restore it. */
                         active?: boolean;
+                        /** @description gwa_… a new payment method of this customer goes to (portal Pay now and Add a payment method), ahead of the business routing. null = the business setting. Saved methods stay on the gateway that holds them. */
+                        new_method_gateway_account?: string | null;
                         /** @description false stops automatic billing emails to this customer. */
                         email_notifications?: boolean;
                         /** @description true excludes this customer from dunning. false resumes dunning on invoices already in it. */
@@ -10602,6 +10663,243 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/checkout_report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Checkout report: opens, the funnel, payments and recovery
+         * @description Hosted checkout sessions (new sign-ups and purchases) first opened in [`start`, `end`] (civil days in the business timezone). The funnel counts a session at a step when it reached that step or a later one, as the `checkout_funnel` report does; conversion is completed ÷ opened, as `checkout_conversion`. Revenue is the paid total of each completed checkout's purchase invoice or its subscription's first invoice. Recovery counts sessions CREATED in the window that completed after a reminder email, as `checkout_reminders` and `checkout_recovered_revenue` do. With `compare=true`, `previous` holds the same figures for the same number of days just before. Money is integer minor units in `currency` (the business currency unless `currency` is set), converted at each amount's day; a currency with no rate is left out and named in `missing_rates`. `live` ignores the window: sessions used in the last 5 minutes and opened in the last 30. `tracking` holds first-party visit figures (no cookies; GPC and DNT honoured): only visits whose page ran in a browser count, with the referrer host, UTM tags, device, browser and the edge's country; `tracking.since` is the first tracked view, so a window that starts earlier is partly untracked. `country` and `device` narrow every figure to sessions with a matching tracked visit.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /**
+                     * Format: date
+                     * @description First civil day of the window, in the business timezone
+                     */
+                    start: string;
+                    /**
+                     * Format: date
+                     * @description Last civil day of the window, inclusive. At most 366 days.
+                     */
+                    end: string;
+                    /**
+                     * @description Also return the previous window of the same length
+                     * @enum {string}
+                     */
+                    compare?: "true" | "false";
+                    /** @description Report in this currency only. Default: every currency, converted into the business currency */
+                    currency?: string;
+                    /** @description Only sessions from this payment link (`plink_…`) */
+                    payment_link?: string;
+                    /** @description Only sessions with an item of this product: a plan, a one-time charge or a credit pack */
+                    product?: string;
+                    /** @description The same filter as `product`, under its earlier name */
+                    plan?: string;
+                    /** @description Only sessions with a tracked visit from this country (ISO 3166-1 alpha-2, from the visitor's request) */
+                    country?: string;
+                    /**
+                     * @description Only sessions with a tracked visit from this device category
+                     * @enum {string}
+                     */
+                    device?: "desktop" | "mobile" | "tablet";
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The checkout report */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CheckoutReport"];
+                    };
+                };
+                /** @description Invalid window, unknown payment link or product */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/portal_report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Portal report: visits, actions, payments and saves
+         * @description Customer portal sessions signed in during [`start`, `end`] (civil days in the business timezone), and the actions they took, read from the events each session emitted. `arrival` is how the link was made: an email link carries the type of the email that sent it (`email` when none is recorded), `email_code` a sign-in with an email code, `api` every other link (the dashboard uses the API). Payments are the payments a portal session made, by the day they happened; `recovered_from_failed_emails_minor` is the part paid in visits that arrived from a failed-payment email (`payment_failed`, `payment_authentication_required`, `dunning_action_required`). Cancellations and the save rate come from the portal cancel flow, as the `cancellation_saves` report counts them, and are narrowed by `plan` only (not by `arrived_from`, `country` or `device`). `tracking` holds first-party visit figures (no cookies; GPC and DNT honoured): sections viewed, countries, devices, browsers and invoice PDF downloads; `tracking.since` is the first tracked view. `country` and `device` narrow the other figures to sessions with a matching tracked visit. With `compare=true`, `previous` holds the same figures for the window just before. Money is integer minor units in `currency`.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /**
+                     * Format: date
+                     * @description First civil day of the window, in the business timezone
+                     */
+                    start: string;
+                    /**
+                     * Format: date
+                     * @description Last civil day of the window, inclusive. At most 366 days.
+                     */
+                    end: string;
+                    /**
+                     * @description Also return the previous window of the same length
+                     * @enum {string}
+                     */
+                    compare?: "true" | "false";
+                    /** @description Report in this currency only. Default: every currency, converted into the business currency */
+                    currency?: string;
+                    /** @description Only visits that arrived this way: an arrival key from `options.arrivals` */
+                    arrived_from?: string;
+                    /** @description Only customers with a subscription on this plan product */
+                    plan?: string;
+                    /** @description Only sessions with a tracked visit from this country (ISO 3166-1 alpha-2, from the visitor's request) */
+                    country?: string;
+                    /**
+                     * @description Only sessions with a tracked visit from this device category
+                     * @enum {string}
+                     */
+                    device?: "desktop" | "mobile" | "tablet";
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The portal report */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PortalReport"];
+                    };
+                };
+                /** @description Invalid window or unknown plan */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/email_report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Email report: delivery, failures, portal visits and recovery
+         * @description Billing emails queued in [`start`, `end`] (civil days in the business timezone). Status counts are the delivery report's: `delivered` is an email marked sent on a transport that delivers (`smtp`, `ses`, `esp`); `bounced` excludes complaints, which count as `complained`; the rates divide by `attempted` (delivered + bounced + complained + failed). `link_visits` counts portal visits whose link came from an email, as the portal report's `arrival` does, and `recovered_minor` is the portal report's `recovered_from_failed_emails_minor`; both are null under a `transport` filter. `paid_after` counts invoices paid within `dunning.hold_days` days after a delivered email that asked for payment. Reasons hold stored provider and server responses with addresses removed; recipient domains are domains only. `tracked`, `opened`, `clicked`, `open_bps` and `click_bps` cover delivered emails sent while the business had `email_config.trackEngagement` on, once per email; a person's click counts as an open, and machine opens (mail privacy proxies, security scanners, prefetch) are counted apart in `machine_opened`. `tracking.covers_period` is false when the window starts before tracking began. `top_links` ranks links by people's clicks; link paths hold plain words only (ids and tokens show as `:id`) and no query string. With `compare=true`, `previous` holds the same figures for the same number of days just before. Money is integer minor units in `currency`.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /**
+                     * Format: date
+                     * @description First civil day of the window, in the business timezone
+                     */
+                    start: string;
+                    /**
+                     * Format: date
+                     * @description Last civil day of the window, inclusive. At most 366 days.
+                     */
+                    end: string;
+                    /**
+                     * @description Also return the previous window of the same length
+                     * @enum {string}
+                     */
+                    compare?: "true" | "false";
+                    /** @description Report money in this currency only. Default: converted into the business currency */
+                    currency?: string;
+                    /** @description Only emails of this type, for example `payment_failed` */
+                    type?: string;
+                    /** @description Only emails sent by this transport; `unknown` = not recorded */
+                    transport?: string;
+                    /** @description How many recent emails to return (default 10) */
+                    recent?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The email report */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailReport"];
+                    };
+                };
+                /** @description Invalid window */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/analytics/sync": {
         parameters: {
             query?: never;
@@ -10658,7 +10956,7 @@ export interface paths {
         };
         /**
          * Every measure that can be asked for, and how it may be cut
-         * @description Discovery. Read this instead of hard-coding a list of metrics: a measure that is not here does not exist, and new ones appear here before anything else announces them. Each entry says what the number MEANS, whether it is a value at an instant (`kind: stock`) or a sum over a window (`kind: flow`), what unit it is in, which dimensions it may be split by, which grains it may be shown at, and whether a comparison window is meaningful. A client that renders its picker from this payload cannot offer a cut the engine would refuse.
+         * @description Discovery. Read this instead of hard-coding a list of metrics: a measure that is not here does not exist, and new ones appear here before anything else announces them. Each entry says what the number MEANS, whether it is a value at an instant (`kind: stock`) or a sum over a window (`kind: flow`), what unit it is in, which dimensions it may be split by, which grains it may be shown at, and whether a comparison window is meaningful. A client that renders its picker from this payload cannot offer a cut the engine would refuse. `model` names the shelf the measure belongs to: `all`, `subscriptions`, `one_time`, `usage`, `credits` or `payments`.
          */
         get: {
             parameters: {
@@ -10733,7 +11031,7 @@ export interface paths {
                      * @default 20
                      */
                     split_limit?: number;
-                    /** @description ISO 4217 code to state the figures in. Nothing is converted here: this SELECTS the currency the figures were recorded in. Omit it when only one currency is present; a money measure with several is refused until you name one. */
+                    /** @description ISO 4217 code to state the figures in. Nothing is converted here: this SELECTS the currency the figures were recorded in. Omit it when only one currency is present; a money measure with several is refused until you name one. A count ignores it and answers across currencies (`currency_basis: across_currencies`). */
                     currency?: string;
                     /**
                      * @description Add the equal-length window immediately before this one, as `compare` on the response: its dates, its total, the absolute change and the change in basis points. Refused on a measure whose `supports_compare` is false.
@@ -10886,6 +11184,783 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["EventList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List orders (paginated)
+         * @description Invoices for one-time products: no subscription, at least one one-time line that is not a credit pack, and a status of posted, payment_due, not_paid or paid. Same paging, sort and filter grammar as the invoice list. `status` is what the list shows: `paid`, `due`, `refunded` or `partly_refunded`; `invoice_status` is the invoice's own status. `?customer=cus_a` scopes the list to one customer. A custom field of the customer filters as `cf_<api_name>`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description Maximum number of rows to return.
+                     * @default 50
+                     */
+                    limit?: number;
+                    /** @description Opaque cursor from a previous next_cursor */
+                    starting_after?: string;
+                    /** @description The previous page's next_offset — the same token as next_cursor under a second name. Pass one of offset or starting_after, not two different values. */
+                    offset?: string;
+                    /**
+                     * @description Accepted; invoices are never deleted (a void keeps the row), so it changes nothing.
+                     * @default false
+                     */
+                    include_deleted?: boolean;
+                    /** @description Free-text over invoice id / number / status / customer id, any name column (name, first/last, company), email */
+                    q?: string;
+                    /**
+                     * @description Sort ascending by this field.
+                     * @enum {string}
+                     */
+                    "sort_by[asc]"?: "created_at" | "number" | "status" | "subtotal_minor" | "total_minor" | "period_start" | "period_end" | "due_date" | "paid_at";
+                    /**
+                     * @description Sort descending by this field.
+                     * @enum {string}
+                     */
+                    "sort_by[desc]"?: "created_at" | "number" | "status" | "subtotal_minor" | "total_minor" | "period_start" | "period_end" | "due_date" | "paid_at";
+                    /** @description Filter on `id`. Send as `id[<operator>]=<value>`. */
+                    id?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `number`. Send as `number[<operator>]=<value>`. */
+                    number?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `status`. Send as `status[<operator>]=<value>`. */
+                    status?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description One of `in_progress`, `parked`, `succeeded`, `exhausted`, `stopped`. The old spelling `success` is still accepted as a deprecated alias and matches the same rows. */
+                    dunning_status?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Which rung of the receivables ageing ladder, derived from `due_date` against the time of the request rather than stored. The standard ladder's rungs are `Current` (not yet due, or no due date), `1-30 days`, `31-60 days`, `61-90 days`, `91-120 days`, `121-150 days`, `151-180 days`, `181-365 days`, `365+ days`. The rung names use an en dash, exactly as the receivables report prints them. The boundaries come from the NAME — `Current`, `<from>-<to> days` or `<from>+ days` — so a ladder built at another rung width (the report's `aging_interval`) drills through this same filter; a value that is not a rung at all is a 400 rather than an empty page. Ageing only: combine it with `status[in]=posted,payment_due,not_paid` and `written_off[is]=false` to match the report's own population. */
+                    ar_bucket?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `currency`. Send as `currency[<operator>]=<value>`. */
+                    currency?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `channel`. Send as `channel[<operator>]=<value>`. */
+                    channel?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `imported`. Send as `imported[<operator>]=<value>`. */
+                    imported?: {
+                        is?: string;
+                    };
+                    /** @description Filter on `written_off`. Send as `written_off[<operator>]=<value>`. */
+                    written_off?: {
+                        is?: string;
+                    };
+                    /** @description Filter on `subtotal_minor`. Send as `subtotal_minor[<operator>]=<value>`. */
+                    subtotal_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `total_minor`. Send as `total_minor[<operator>]=<value>`. */
+                    total_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `promotional_discount_minor`. Send as `promotional_discount_minor[<operator>]=<value>`. */
+                    promotional_discount_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `credits_applied_minor`. Send as `credits_applied_minor[<operator>]=<value>`. */
+                    credits_applied_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `amount_paid_minor`. Send as `amount_paid_minor[<operator>]=<value>`. */
+                    amount_paid_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Narrows on the LIVE balance the response prints, not the stored issue-time collectible — the two differ once payments land. */
+                    amount_due_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `withholding_minor`. Send as `withholding_minor[<operator>]=<value>`. */
+                    withholding_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `attempt_count`. Send as `attempt_count[<operator>]=<value>`. */
+                    attempt_count?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `created_at`. Send as `created_at[<operator>]=<value>`. */
+                    created_at?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `period_start`. Send as `period_start[<operator>]=<value>`. */
+                    period_start?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Narrows on the INCLUSIVE boundary the response prints, not the stored exclusive one. */
+                    period_end?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `due_date`. Send as `due_date[<operator>]=<value>`. */
+                    due_date?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `paid_at`. Send as `paid_at[<operator>]=<value>`. */
+                    paid_at?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `voided_at`. Send as `voided_at[<operator>]=<value>`. */
+                    voided_at?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `next_attempt_at`. Send as `next_attempt_at[<operator>]=<value>`. */
+                    next_attempt_at?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `dunning_exhausted_at`. Send as `dunning_exhausted_at[<operator>]=<value>`. */
+                    dunning_exhausted_at?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `expected_payment_date`. Send as `expected_payment_date[<operator>]=<value>`. */
+                    expected_payment_date?: {
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds — the business-zone day containing that instant. */
+                        on?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        after?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_before?: string;
+                        /** @description `YYYY-MM-DD` (a whole business-zone day), or unix seconds (an exact instant). */
+                        on_or_after?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). Each bound is `YYYY-MM-DD` (a whole business-zone day) or unix seconds (an exact instant). */
+                        between?: string;
+                        /** @description A positive number of days. */
+                        in_last?: string;
+                        /** @description A positive number of days. */
+                        in_next?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `po_number`. Send as `po_number[<operator>]=<value>`. */
+                    po_number?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description The issue-time FX snapshot. `exchange_rate[is_present]=false` is the useful one — the invoices a converted report cannot account for. Comparisons accept decimals (`exchange_rate[gt]=95`), and the stored value is exact, so prefer `gt`/`lt`/`between` over `is` on a rate. */
+                    exchange_rate?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `exchange_rate_base`. Send as `exchange_rate_base[<operator>]=<value>`. */
+                    exchange_rate_base?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `seller_state_code`. Send as `seller_state_code[<operator>]=<value>`. */
+                    seller_state_code?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `place_of_supply_code`. Send as `place_of_supply_code[<operator>]=<value>`. */
+                    place_of_supply_code?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `tax_treatment`. Send as `tax_treatment[<operator>]=<value>`. */
+                    tax_treatment?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `tax_note`. Send as `tax_note[<operator>]=<value>`. */
+                    tax_note?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Joins on `customers.public_id`. The bare `?customer=cus_…` scope above is cheaper (it filters the invoice's own FK) — prefer it for a single customer. */
+                    customer?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Compares the customer's RESOLVED display name — `first_name last_name`, else `company`, else the legacy `name` — the same string `customer_name` is reported as, so `contains=priya raghunathan` matches a customer who has only the two structured columns. Not a column: `is_present=false` means no name of any kind (filter `customer_email` for the address a nameless row displays instead). */
+                    customer_name?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Filter on `customer_email`. Send as `customer_email[<operator>]=<value>`. */
+                    customer_email?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Joins on `subscriptions.public_id`; prefer the bare `?subscription=sub_…` scope. */
+                    subscription?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description `true`: raised for a subscription; `false`: a one-off invoice. Same predicate as `subscription[is_present]`. */
+                    recurring?: {
+                        is?: string;
+                    };
+                    /** @description One of `paid`, `due`, `refunded`, `partly_refunded`. Refunds are the succeeded refunds of the invoice's payments: all of the payment back is `refunded`. */
+                    order_status?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description A product id. Matches an order with a one-time line for that product. Credit pack lines do not count. */
+                    product?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description A coupon code. Matches an order that a discount from that coupon reduced. */
+                    coupon?: {
+                        is?: string;
+                        is_not?: string;
+                        contains?: string;
+                        not_contains?: string;
+                        starts_with?: string;
+                        ends_with?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description A gateway key. Matches an order that a succeeded payment through it paid. */
+                    gateway?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description A payment method type, for example `card`. Matches the method of a succeeded payment. */
+                    payment_method_type?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description The customer's billing country, ISO 3166-1 alpha-2. */
+                    customer_country?: {
+                        is?: string;
+                        is_not?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        in?: string;
+                        /** @description Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        not_in?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Succeeded refunds on the order, in minor units. */
+                    refunded_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Tax on the order, in minor units. */
+                    tax_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                    /** @description Discounts on the order's lines, in minor units. */
+                    discount_minor?: {
+                        is?: string;
+                        is_not?: string;
+                        gt?: string;
+                        gte?: string;
+                        lt?: string;
+                        lte?: string;
+                        /** @description Two bounds, inclusive: Comma-separated (`a,b`) or a JSON array (`["a","b"]`). */
+                        between?: string;
+                        /** @description `true` or `false`. */
+                        is_present?: string;
+                    };
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OrderList"];
+                    };
+                };
+                /** @description Bad limit / unknown query parameter, filter field, operator or sort key */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/orders/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an order
+         * @description The order as the list shows it, plus every payment attempt (`payments`) and every refund (`refunds`). 404 when the invoice is not an order, or is in another business.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /** @description The order's id. */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OrderDetail"];
+                    };
+                };
+                /** @description No such order */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
                     };
                 };
             };
@@ -12150,7 +13225,7 @@ export interface paths {
                                  * @description What started the attempt.
                                  * @enum {string}
                                  */
-                                trigger?: "billing_clock" | "dashboard" | "portal" | "new_payment_method" | "offline" | "api" | null | null;
+                                trigger?: "billing_clock" | "dashboard" | "portal" | "new_payment_method" | "offline" | "api" | "checkout" | "webhook" | "mcp" | null | null;
                                 /** @description Who started the attempt, when a person did. */
                                 actor?: string | null;
                                 /** @description The transaction booked for the attempt; null when nothing reached a gateway. */
@@ -12176,12 +13251,12 @@ export interface paths {
                                  * Format: date-time
                                  * @description For a hold, when it ends (ISO-8601 UTC).
                                  */
-                                until?: string;
+                                until?: string | null;
                                 /**
-                                 * @description Why the invoice is on hold.
+                                 * @description Why the invoice is on hold. `parked_for_ops`: the gateway refused our request. The invoice waits for our team, has no deadline (`until` is null), and no final action runs.
                                  * @enum {string}
                                  */
-                                reason?: "parked" | "network_limit";
+                                reason?: "parked" | "network_limit" | "parked_for_ops";
                                 /**
                                  * @description What happens to the invoice in the final action.
                                  * @enum {string}
@@ -12519,6 +13594,8 @@ export interface paths {
                                  * @description The retry started time (ISO-8601 UTC).
                                  */
                                 retry_started_at?: string;
+                                /** @description Settled by a write-off. `status` is `paid`, but nothing was collected: the row is under `given_up`, not `recovered`. */
+                                written_off?: boolean;
                                 /**
                                  * @description The customer's id (cus_…).
                                  * @example cus_…
@@ -12698,7 +13775,7 @@ export interface paths {
         };
         /**
          * List team alert recipients and their confirmation state
-         * @description One row per address in `team_alerts_config.recipients`. `member`: a team member, gets alerts. `confirmed`: confirmed by email, gets alerts. `pending`: gets no alerts until the address is confirmed.
+         * @description Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. This endpoint keeps answering from the business's email destinations until it is removed. One row per address in `team_alerts_config.recipients`. `member`: a team member, gets alerts. `confirmed`: confirmed by email, gets alerts. `pending`: gets no alerts until the address is confirmed.
          */
         get: {
             parameters: {
@@ -12751,7 +13828,7 @@ export interface paths {
         put?: never;
         /**
          * Send the confirmation email to a pending team alert recipient again
-         * @description The new link replaces the old one. Limited per address: 429 when we sent too many confirmation emails to it.
+         * @description Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. The new link replaces the old one. Limited per address: 429 when we sent too many confirmation emails to it.
          */
         post: {
             parameters: {
@@ -16432,7 +17509,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a receipt */
+        /**
+         * Get a receipt
+         * @description `initiated_by` says what started the charge behind the receipt: `{ trigger, actor }`, as on a transaction. Null when nothing recorded it.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -16675,7 +17755,7 @@ export interface paths {
         };
         /**
          * Get a payment request
-         * @description `amount_minor` is the live total of the invoices still open. An invoice paid, voided or written off elsewhere drops out (`settled_elsewhere`).
+         * @description `amount_minor` is the live total of the invoices still open. An invoice paid, voided or written off elsewhere drops out (`settled_elsewhere`). `created_through` is `{ source, actor }` for who sent the request (a member's email in the dashboard, or the API). `initiated_by` is `{ trigger, actor }` for the charge that paid it, set only when the request is paid. Both are null when nothing recorded them.
          */
         get: {
             parameters: {
@@ -20336,7 +21416,7 @@ export interface paths {
         put?: never;
         /**
          * Refund a payment (full or partial)
-         * @description A payment on an invoice is refunded as revenue (contra-revenue, capped by what that invoice's credit notes do not already claim). A payment on NO invoice is held as the customer's excess credit — it is refunded out of that credit instead, capped by what the payment still holds and by the customer's current excess balance (some may already have been applied to invoices). A payment that is neither is refused with a 400. `GET …/customers/{cus}/excess_payments` lists what is refundable this way.
+         * @description A payment on an invoice is refunded as revenue (contra-revenue, capped by what that invoice's credit notes do not already claim). A payment on NO invoice is held as the customer's excess credit — it is refunded out of that credit instead, capped by the payment's `remaining_minor` in `GET …/customers/{cus}/excess_payments` (invoices draw the excess balance oldest payment first) and by the customer's current excess balance. A refund above that cap is refused with a 400. A payment that is neither is refused with a 400. That list's `refundable_minor` is what is refundable this way.
          */
         post: {
             parameters: {
@@ -20386,7 +21466,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                /** @description Possible repeat: this payment already has a pending or succeeded refund of the same amount from the last 10 minutes (`error.code` is `possible_duplicate`). Nothing is booked. Send the request again with `confirm_repeat: true` to send the refund anyway. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -21285,6 +22365,67 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/billing_models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The billing models a business has data for
+         * @description Which of `subscriptions`, `one_time`, `usage` and `credits` this business had figures for in the last 90 days. Screens use it to show a model's reports and boards only when there is something to show. An empty list means no model has data yet.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `billing_models`.
+                             * @enum {string}
+                             */
+                            object?: "billing_models";
+                            /** @description The business id. */
+                            business?: string;
+                            /** @description The models. */
+                            models?: ("subscriptions" | "one_time" | "usage" | "credits")[];
+                        };
+                    };
+                };
+                /** @description No such business */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -27542,11 +28683,15 @@ export interface paths {
         };
         /**
          * List payment intents (paginated)
-         * @description Cursor-paginated. `status` and `purpose` narrow in SQL and are VALIDATED — an unrecognised value is a 400 naming the vocabulary, never an empty page. Every row carries `attempt_count` (the “Payment Attempts” column). No other query parameter is accepted.
+         * @description Cursor-paginated. `status` and `purpose` narrow in SQL and are VALIDATED — an unrecognised value is a 400 naming the vocabulary, never an empty page. `customer` and `invoice` narrow to one record of this business; an id that matches nothing returns an empty page. Every row carries `attempt_count` (the “Payment Attempts” column) and `last_error`. No other query parameter is accepted.
          */
         get: {
             parameters: {
                 query?: {
+                    /** @description Only this customer's intents (`cus_…`). */
+                    customer?: string;
+                    /** @description Only the intents collecting for this invoice (its public id). */
+                    invoice?: string;
                     /**
                      * @description Only intents with this status.
                      * @enum {string}
@@ -30053,10 +31198,12 @@ export interface paths {
                          * @enum {string}
                          */
                         reason: "fraudulent" | "unrecognized" | "duplicate" | "subscription_canceled" | "product_not_received" | "product_unacceptable" | "credit_not_processed" | "general";
-                        /** @description Optional. The case number that your processor gave the dispute. */
+                        /** @description Optional. The case number that your processor gave the dispute. A second dispute with the same case number in this business is refused with 409. When the gateway reports the same case later, it updates this dispute and does not record a new one. */
                         processor_reference?: string;
                         /** @description When the processor opened the dispute, in Unix seconds. Default now. It must not be in the future. */
                         opened_at?: number;
+                        /** @description Optional. The processor's deadline for evidence, in Unix seconds. It must not be before `opened_at`. */
+                        evidence_due_by?: number;
                     };
                 };
             };
@@ -30088,7 +31235,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description The gateway already reported a dispute on this payment */
+                /** @description The gateway already reported a dispute on this payment, or a dispute with this case number exists */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -33670,7 +34817,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                /** @description Possible repeat: this payment already has a pending or succeeded refund of the same amount from the last 10 minutes (`error.code` is `possible_duplicate`). Nothing is booked. Send the request again with `confirm_repeat: true` to send the refund anyway. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -33717,6 +34864,8 @@ export interface paths {
                     "application/json": {
                         /** @description Amount to refund in minor units; defaults to the full available amount */
                         amount_minor?: number;
+                        /** @description Set to true to send a refund that repeats one sent in the last 10 minutes (same payment, same amount). Without it, the repeat is refused with a 409 `possible_duplicate`. */
+                        confirm_repeat?: boolean;
                     };
                 };
             };
@@ -34607,7 +35756,7 @@ export interface paths {
                     resource_type?: string;
                     /** @description Only events about this resource. */
                     resource_id?: string;
-                    /** @description Only events from this source. */
+                    /** @description Only events from this source: `api`, `dashboard`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system`, `hubspot` or `assistant`. */
                     source?: string;
                     /**
                      * Format: date-time
@@ -36915,6 +38064,8 @@ export interface paths {
                         favicon_url?: string | null;
                         /** @description #RRGGBB. Accent on the hosted portal/checkout and the button fill in billing email. */
                         brand_color?: string | null;
+                        /** @description #RRGGBB. The label color on brand-color buttons on the hosted portal, checkout and billing emails. When set, it is used as given, whatever its contrast. When null, the label is white, near-black or black, whichever reaches 4.5:1 on `brand_color`. */
+                        button_text_color?: string | null;
                         /** @description May a BUYER type a coupon code on the hosted checkout and the self-serve portal? Off by default. It gates the SURFACE only — a code a buyer enters is still subject to the coupon's own validity, redemption cap and item constraints. */
                         allow_customer_coupons?: boolean;
                         /** @description How many coupon codes a buyer can enter on one checkout or one subscription in the portal. Default 1. Discounts that you apply through the dashboard or the API do not count, but at 1 the portal accepts no code while the subscription has any discount. */
@@ -37691,6 +38842,24 @@ export interface paths {
                             portal_hide_zero_invoices?: boolean;
                             /** @description The portal does not list voided invoices. Default false. */
                             portal_hide_voided_invoices?: boolean;
+                            /**
+                             * @description Portal Pay now with a new card: `offer` shows the buyer a box to save it for later invoices (ticked when they have no working payment method), `always` saves it and shows the consent text, `never` pays without saving it. Unset means offer. Only on gateways that can save a method while they charge.
+                             * @enum {string}
+                             */
+                            portal_save_new_method?: "offer" | "always" | "never";
+                            /** @description Where new payment methods go and in what order, per currency (key: ISO currency code). `order` lists payment methods first-to-last in the portal (saved methods always come first); `gateways` maps a method (`card`, `upi`, `paypal`…) to the gwa_… that takes it. A currency without an entry uses the automatic choice: the buyer's primary gateway, then the business default, then the oldest account that offers the method. */
+                            payment_routing?: {
+                                [key: string]: {
+                                    /** @description The order. */
+                                    order?: string[];
+                                    /** @description The gateways. */
+                                    gateways?: {
+                                        [key: string]: string;
+                                    };
+                                };
+                            };
+                            /** @description Ask why when a buyer deletes their last payment method in the portal (four reasons, optional). The answer rides on the `payment_source_deleted` event as `deletion_reason`. Unset means off. */
+                            portal_ask_delete_reason?: boolean;
                             /** @description Which tasks a portal link may open on. Each defaults to true; false makes such a link open the portal home. */
                             portal_actions?: {
                                 /** @description The pay invoice. */
@@ -37782,10 +38951,12 @@ export interface paths {
                              * @enum {string}
                              */
                             linkTarget?: "portal" | "merchant_url";
+                            /** @description Record opens and clicks of billing emails. We add a 1x1 image to the HTML part and send each link through a redirect on our API host. We store the time, a device and browser family, and the link; never the IP address, the full user agent or the recipient address. Default false for a business that existed before this setting; true for a business a person creates. */
+                            trackEngagement?: boolean;
                             /** @description An http(s) URL. Required when `linkTarget` is `merchant_url`. Kept when you change the target back to `portal`. */
                             merchantUrl?: string | null;
                         } | null;
-                        /** @description Mail to your own team: overdue high-value invoices, failed webhooks and a daily summary. Replaces the stored value. `null` turns every alert off. */
+                        /** @description Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. Mail to your own team: overdue high-value invoices, failed webhooks and a daily summary. Each recipient becomes an email destination of this business. Replaces the stored value. `null` turns every alert off. */
                         team_alerts_config?: components["schemas"]["TeamAlertsConfig"] | null;
                         /** @description A prefix for credit note numbers. */
                         credit_note_prefix?: string;
@@ -41331,9 +42502,9 @@ export interface components {
             id?: string;
             /** @description `biz_…`. Null for an organization-wide action. */
             business_id?: Record<string, never>;
-            /** @description Who acted: an API key id, a member's email, `billing_clock`, `system`, or the id of the checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from. */
+            /** @description Who acted: an API key id, a member's email, `billing_clock`, `system`, or the id of the checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from, or the key of the gateway that sent a notification (`stripe`, `razorpay`). */
             actor?: Record<string, never>;
-            /** @description Where the action came from, e.g. `api`, `dashboard`. */
+            /** @description Where the action came from: `api`, `dashboard`, `portal` (the customer portal), `checkout` (hosted checkout), `webhook` (a gateway notification), `mcp` (an AI agent over OAuth), `scheduled_job` (the billing clock), `migration`, `system`, `hubspot` or `assistant`. Rows written before `portal`, `checkout`, `webhook` and `mcp` existed keep `api`. */
             source?: string;
             /** @description What happened, e.g. `subscription.cancel`. */
             action?: string;
@@ -42683,6 +43854,35 @@ export interface components {
             /** @description True if the country's subdivision list is complete and addresses must use it. */
             subdivision_strict: boolean;
         };
+        PostalCodeLookup: {
+            /**
+             * @description The object type; always `postal_code`.
+             * @enum {string}
+             */
+            object: "postal_code";
+            /**
+             * @description The country (ISO-3166 alpha-2 code).
+             * @example IN
+             */
+            country: string;
+            /**
+             * @description The postal code.
+             * @example 600001
+             */
+            postal_code: string;
+            /**
+             * @description Our subdivision code (the `state_code` an address stores), or null if none matched.
+             * @example TN
+             */
+            state_code: string | null;
+            /**
+             * @description The postal code lookup's state name.
+             * @example Tamil Nadu
+             */
+            state_name: string | null;
+            /** @description The distinct place names for the code. */
+            cities: string[];
+        };
         BusinessCreate: {
             /** @description The business's name. */
             name: string;
@@ -42697,15 +43897,15 @@ export interface components {
              */
             livemode?: "live" | "test";
         };
-        /** @description Team alerts. Each alert sends only when it is enabled and `recipients` has at least one address. Mail comes from the platform sender, not from the business mail settings. */
+        /** @description Deprecated team alerts. Team notifications replace them: owners and admins set them up in the dashboard under Settings → Team notifications. Each alert sends only when it is enabled and `recipients` has at least one address. Mail comes from the platform sender, not from the business mail settings. */
         TeamAlertsConfig: {
             /** @description Who gets the alerts. Max 10. Required when an alert is enabled. An address that is not a team member gets a confirmation email and no alert until it is confirmed. */
             recipients: string[];
-            /** @description An alert when an unpaid invoice passes its due date and the amount due is at or above the limit for its currency. Checked every hour. An invoice in a currency with no limit gets no alert. */
+            /** @description An alert when an unpaid invoice passes its due date and the amount due is at or above the limit for its currency. Checked every hour. */
             overdue?: {
                 /** @description Send this alert. */
                 enabled?: boolean;
-                /** @description Limit per currency, in minor units, keyed by ISO-4217 code. At least one when `enabled`. */
+                /** @description Limit per currency, in minor units, keyed by ISO-4217 code. At least one when `enabled`. An invoice in a currency with no limit gets an alert at every amount. */
                 thresholds?: {
                     [key: string]: number;
                 };
@@ -42772,6 +43972,7 @@ export interface components {
                 [key: string]: components["schemas"]["PortalFieldState"];
             };
             address_field_locks?: components["schemas"]["AddressFieldLocks"];
+            /** @description Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. */
             team_alerts_config?: components["schemas"]["TeamAlertsConfig"];
             /**
              * Format: date-time
@@ -43867,6 +45068,13 @@ export interface components {
             created_at?: string;
         };
         Customer: {
+            /** @description What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists. */
+            created_through?: {
+                /** @description Where the created through comes from. */
+                source?: string;
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /** @description The coupons applied to this customer that can still discount an invoice. Emitted by GET (detail) only. */
             readonly discounts?: components["schemas"]["CustomerDiscount"][];
             /** @description Credit policy for this customer: an override of what happens when credit is used up (ignored after `override_expires_at`), and an overdraft limit per currency. Replaced whole; null = the business's settings. */
@@ -43901,11 +45109,11 @@ export interface components {
             currency?: string | null;
             /** @description DERIVED, read-only: the currency to transact in — `currency` when the operator set one, else the currency of the customer's live (active/in_trial) subscriptions, highest MRR winning a tie. Emitted by GET (detail) and by the list; absent from create/patch/archive responses. Null when there is nothing to derive from — fall back to the business default. Never write it back to `currency`. */
             readonly effective_currency?: string | null;
-            /** @description DERIVED, read-only: cash collected from this customer, one entry per currency — succeeded payments minus succeeded refunds. Credits applied to invoices are not cash and are excluded. Emitted by GET (detail) only. */
+            /** @description DERIVED, read-only: cash collected from this customer, one entry per currency — succeeded payments minus succeeded refunds, tax included. Credit is not cash and is excluded: promotional credit, plan credits and a credit pack's credit when it pays a later invoice (the pack counts once, when its own invoice is paid). A credit note reduces it only when it is refunded as money. This is cash, not `revenue_billed` (net, before tax). Emitted by GET (detail) only. */
             readonly lifetime_revenue?: ({
                 /** @description The currency of this entry (ISO-4217 code). */
                 currency?: string;
-                /** @description Cash collected in this currency, in minor units. */
+                /** @description Cash collected in this currency, in minor units: payments less refunds, tax included. Free credit is not included. */
                 amount_minor?: number;
                 /** @description Number of paid invoices in this currency. */
                 paid_invoices_count?: number;
@@ -43915,6 +45123,24 @@ export interface components {
                  */
                 first_paid_at?: string | null;
             })[];
+            /** @description DERIVED, read-only: this customer's lifetime net billed revenue, one entry per currency. Before tax, less discounts, promotional and plan credits, usage paid by a credit pack at its cost, and credit notes. Credit notes are deducted on their own issue date, so a total can be negative. Emitted by GET (detail) only. */
+            readonly revenue_billed?: {
+                /** @description The currency of this entry (ISO-4217 code). */
+                currency?: string;
+                /** @description Net billed revenue in this currency, in minor units: before tax and less credit notes. */
+                amount_minor?: number;
+            }[];
+            /** @description DERIVED, read-only: the customer's credit, one entry per currency. Lists every currency the customer has ever held credit in (promotional, refundable or excess), with 0 where a balance is used up. A currency the customer never held credit in is not listed, so a missing entry means no credit ever, and an entry of zeros means the credit is used up. Sorted by currency code. Emitted by GET (detail) and in event content; absent from the list and from create/patch responses. */
+            readonly balances?: {
+                /** @description The currency of this entry (ISO-4217 code). */
+                currency_code: string;
+                /** @description Promotional credit left, in minor units. Applies before tax; never refunded. */
+                promotional_credits: number;
+                /** @description Refundable credit left from credit notes, in minor units. */
+                refundable_credits: number;
+                /** @description Excess payment credit left, in minor units: what overpayments put on the balance less what invoices and refunds used. */
+                excess_payments: number;
+            }[];
             /** @description True if the customer is exempt from tax. */
             tax_exempt?: boolean;
             /** @description Whether the customer gets billing emails. */
@@ -44122,6 +45348,10 @@ export interface components {
             segment?: string | null;
             /** @description Total MRR of the matching customers per currency, in minor units. */
             mrr_by_currency?: {
+                [key: string]: number;
+            };
+            /** @description Revenue billed to the whole population in the last 12 months, before tax and net of discounts and credits (credit notes not deducted), every revenue type: ISO code → integer minor units. */
+            revenue_billed_by_currency?: {
                 [key: string]: number;
             };
         };
@@ -44837,6 +46067,13 @@ export interface components {
             on_charge_failure?: "refuse" | "dun";
         };
         Subscription: {
+            /** @description What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists. */
+            created_through?: {
+                /** @description Where the created through comes from. */
+                source?: string;
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /** @description The object type. */
             object: string;
             /**
@@ -44952,7 +46189,9 @@ export interface components {
             } | null;
             /** @description What one billing period charges for the recurring items, in minor units, net of discounts that last more than one period and before tax; null when cancelled or when an item recurs on a different cadence than the subscription */
             recurring_amount_minor?: number | null;
-            /** @description DERIVED, read-only: cash collected on this subscription's invoices, in its currency — succeeded payments minus succeeded refunds. Credits applied to invoices are excluded. Emitted by GET (detail) only. */
+            /** @description DERIVED, read-only: this subscription's lifetime net billed revenue in its currency. Before tax, less discounts, promotional and plan credits, usage paid by a credit pack at its cost, and credit notes. Credit notes are deducted on their own issue date, so the total can be negative. Emitted by GET (detail) only. */
+            readonly revenue_billed_minor?: number;
+            /** @description DERIVED, read-only: cash collected on this subscription's invoices, in its currency — succeeded payments minus succeeded refunds, tax included. Credit applied to its invoices is excluded: promotional credit, plan credits, credit pack credit and account credit. A credit note reduces it only when it is refunded as money. This is cash, not `revenue_billed` (net, before tax). Emitted by GET (detail) only. */
             readonly revenue_to_date_minor?: number;
             /** @description How many of this subscription's invoices received a succeeded payment. */
             readonly revenue_paid_invoices_count?: number;
@@ -45557,8 +46796,155 @@ export interface components {
              */
             customer?: string;
         };
+        /** @description An order: an invoice for one-time products, with no subscription. Money is integer minor units in `currency`. */
+        Order: {
+            /**
+             * @description The object type; always `order`.
+             * @enum {string}
+             */
+            object: "order";
+            /** @description The invoice id. */
+            id: string;
+            /** @description The invoice number. */
+            number?: string | null;
+            /** @description The customer's id (cus_…). */
+            customer?: {
+                /** @description The customer's id. */
+                id?: string | null;
+                /** @description The customer's name. */
+                name?: string | null;
+                /** @description The customer's email address. */
+                email?: string | null;
+                /** @description Billing country. */
+                country?: string | null;
+                /** @description The customer's custom fields. */
+                custom_fields?: {
+                    [key: string]: unknown;
+                } | null;
+            };
+            /** @description The products on the one-time lines. Credit pack lines are not listed. */
+            products?: ({
+                /** @description Product id, if the line has one. */
+                id?: string | null;
+                /** @description The product's name. */
+                name?: string;
+                /** @description Total quantity across lines. */
+                units?: number;
+            })[];
+            /** @description The invoice total. */
+            total_minor: number;
+            /** @description The order's currency (ISO-4217 code). */
+            currency: string;
+            /**
+             * @description `due` covers posted, payment_due and not_paid.
+             * @enum {string}
+             */
+            status: "paid" | "due" | "refunded" | "partly_refunded";
+            /** @description The invoice's own status. */
+            invoice_status?: string;
+            /** @description Succeeded refunds on its payments. */
+            refunded_minor?: number;
+            /** @description Discounts on the order's lines. */
+            discount_minor?: number;
+            /** @description Tax on the order. */
+            tax_minor?: number;
+            /**
+             * Format: date-time
+             * @description When the order was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description When the order was paid (ISO-8601 UTC), or null.
+             */
+            paid_at?: string | null;
+            /**
+             * Format: date-time
+             * @description The order's due date.
+             */
+            due_date?: string | null;
+            /** @description api, dashboard, system or import. */
+            channel?: string | null;
+            /** @description The method of the payment that paid the order, if any. */
+            payment_method?: {
+                /** @description The payment method's type. */
+                type?: string;
+                /** @description The card brand. */
+                brand?: string | null;
+                /** @description The last four digits of the card number. */
+                last4?: string | null;
+            } | null;
+            /** @description Gateway of that payment. */
+            gateway?: string | null;
+            /** @description Codes of the coupons that reduced the order. */
+            coupons?: string[];
+        };
+        OrderDetail: components["schemas"]["Order"] & {
+            /** @description What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists. */
+            created_through?: {
+                /** @description Where the created through comes from. */
+                source?: string;
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
+            /** @description The order detail's payments. */
+            payments?: ({
+                /** @description The payment's id. */
+                id?: string;
+                /** @description The payment's status. */
+                status?: string;
+                /** @description The amount in minor units (integer), e.g. 2900 = $29.00. */
+                amount_minor?: number;
+                /** @description The payment's currency (ISO-4217 code). */
+                currency?: string;
+                /** @description The gateway's key. */
+                gateway?: string;
+                /** @description The payment method's id (pm_…). */
+                payment_method?: {
+                    [key: string]: unknown;
+                } | null;
+                /** @description The payment's failure code. */
+                failure_code?: string | null;
+                /** @description The payment's failure message. */
+                failure_message?: string | null;
+                /**
+                 * Format: date-time
+                 * @description When the payment was created (ISO-8601 UTC).
+                 */
+                created_at?: string;
+            })[];
+            /** @description The order detail's refunds. */
+            refunds?: ({
+                /** @description The refund's id. */
+                id?: string;
+                /** @description The refund's payment. */
+                payment?: string;
+                /** @description The refund's status. */
+                status?: string;
+                /** @description The refund amount in minor units. */
+                amount_minor?: number;
+                /** @description The refund's currency (ISO-4217 code). */
+                currency?: string;
+                /** @description The reason. */
+                reason?: string | null;
+                /** @description The gateway's key. */
+                gateway?: string;
+                /**
+                 * Format: date-time
+                 * @description When the refund was created (ISO-8601 UTC).
+                 */
+                created_at?: string;
+            })[];
+        };
         /** @description An invoice. Money is integer minor units in `currency`. Since 2026-09-02 each invoice also carries the exchange rate that applied when it was finalized (`exchange_rate`), so a multi-currency book can be converted at issue-time rates instead of at whatever rate the reader holds today. It is **null on invoices raised before that date** and wherever no rate was configured — never assume 1. */
         Invoice: {
+            /** @description What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists. */
+            created_through?: {
+                /** @description Where the created through comes from. */
+                source?: string;
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /** @description The object type. */
             object: string;
             /**
@@ -45627,6 +47013,10 @@ export interface components {
             })[];
             /** @description POST-tax customer-balance credit consumed at generation: the refundable + excess buckets. The promotional bucket is applied pre-tax and is reported as `promotional_discount_minor`, already inside `total_minor` — counting it here too would subtract it twice. */
             credits_applied_minor?: number;
+            /** @description The refundable-credit part of `credits_applied_minor`: credit from refundable credit notes. */
+            refundable_credits_applied_minor?: number;
+            /** @description The excess-payment part of `credits_applied_minor`: money the customer paid earlier above what was due. */
+            excess_payments_applied_minor?: number;
             /** @description Credit grants applied before tax (promotional, and paid credit taxed at purchase). Already off `total_minor`. */
             grant_credits_pre_tax_minor?: number;
             /** @description Money credit grants taxed at use, applied after tax. Included in `credits_applied_minor`. */
@@ -46105,6 +47495,23 @@ export interface components {
             object?: "list";
             /** @description The rows on this page. */
             data?: components["schemas"]["Invoice"][];
+            /** @description Whether more rows exist after this page. */
+            has_more?: boolean;
+            /** @description Opaque; pass as starting_after */
+            next_cursor?: string | null;
+            /** @description Present only while has_more; the same opaque token as next_cursor — pass as offset */
+            next_offset?: string;
+            /** @description Filtered-set count; first page only */
+            total?: number | null;
+        };
+        OrderList: {
+            /**
+             * @description The object type; always `list`.
+             * @enum {string}
+             */
+            object?: "list";
+            /** @description The rows on this page. */
+            data?: components["schemas"]["Order"][];
             /** @description Whether more rows exist after this page. */
             has_more?: boolean;
             /** @description Opaque; pass as starting_after */
@@ -47023,6 +48430,13 @@ export interface components {
             }[];
         };
         CreditNote: {
+            /** @description What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists. */
+            created_through?: {
+                /** @description Where the created through comes from. */
+                source?: string;
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /**
              * @description `full`: a credit pack line was credited whole, used credits too. `unused`: the unused part only (every note before this field).
              * @enum {string}
@@ -47289,6 +48703,16 @@ export interface components {
             total?: number | null;
         };
         Transaction: {
+            /** @description What started the payment: `{ trigger, actor }`. `trigger` is `billing_clock`, `dashboard`, `portal`, `checkout`, `new_payment_method`, `offline`, `webhook`, `mcp` or `api`. `actor` is the member for `dashboard` and `offline`, and the gateway key for `webhook`. Null when nothing recorded it. */
+            initiated_by?: {
+                /**
+                 * @description What started the initiated by.
+                 * @enum {string}
+                 */
+                trigger?: "billing_clock" | "dashboard" | "portal" | "checkout" | "new_payment_method" | "offline" | "webhook" | "mcp" | "api";
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /** @description The object type. */
             object?: string;
             /**
@@ -47364,6 +48788,11 @@ export interface components {
              * @example card
              */
             method_type?: "card" | "upi" | "wallet" | "bank_transfer" | "paypal" | "venmo" | "us_bank_account" | "sepa_debit" | "bacs_debit" | "au_becs_debit" | "nz_becs_debit" | "acss_debit" | "autogiro" | "betalingsservice" | "payto" | null | null;
+            /**
+             * @description The gateway's own code for a failed transaction, beside our `error_code`. It comes from the logged gateway response. Set on the single read of a failed transaction only. Null when the response held no code.
+             * @example invalid_account
+             */
+            gateway_code?: string | null;
             /** @description Set on the single read of an in-progress payment whose gateway can cancel a pending debit. Then you can call `POST /v1/businesses/{biz}/payments/{pay}/cancel_pending_debit`. Null when you cannot. */
             pending_debit_cancel?: {
                 /**
@@ -47381,6 +48810,8 @@ export interface components {
                 payment?: string;
                 /** @description The most that a new dispute can claim: the captured amount less refunds and disputes that are not won. */
                 available_minor?: number;
+                /** @description True when the gateway reports its disputes only in a daily report. A dispute that you record first, with its case number, is not recorded again when the report shows it. */
+                reported_daily?: boolean;
             } | null;
             /** @description True only while `status: in_progress` and the debit is paused for the payer's additional-factor authentication. It is waiting on the CUSTOMER, not on the network. Set when the gateway stated it for this debit — at ANY amount, since an issuer may challenge whatever it likes — and otherwise predicted from the RBI/NPCI rule (INR above ₹15,000, card and UPI rails) for a rail that states nothing. A netbanking e-mandate debit is not predicted, because that rail authenticates once at registration; it is still reported if the gateway says this debit stopped. */
             awaiting_authentication?: boolean;
@@ -47451,6 +48882,16 @@ export interface components {
             gateway_account?: string;
         };
         PaymentIntent: {
+            /** @description What started the payment: `{ trigger, actor }`. `trigger` is `billing_clock`, `dashboard`, `portal`, `checkout`, `new_payment_method`, `offline`, `webhook`, `mcp` or `api`. `actor` is the member for `dashboard` and `offline`, and the gateway key for `webhook`. Null when nothing recorded it. */
+            initiated_by?: {
+                /**
+                 * @description What started the initiated by.
+                 * @enum {string}
+                 */
+                trigger?: "billing_clock" | "dashboard" | "portal" | "checkout" | "new_payment_method" | "offline" | "webhook" | "mcp" | "api";
+                /** @description Who did it. */
+                actor?: string | null;
+            } | null;
             /**
              * @description The object type; always `payment_intent`.
              * @enum {string}
@@ -47734,6 +49175,8 @@ export interface components {
             amount_minor?: number;
             /** @description Why the refund is made. */
             reason?: string;
+            /** @description Set to true to send a refund that repeats one sent in the last 10 minutes (same payment, same amount). Without it, the repeat is refused with a 409 `possible_duplicate`. */
+            confirm_repeat?: boolean;
             /**
              * @description What happens when the gateway declines this refund after it accepted it, for this refund only. `block`: the money stays with the business. `issue_credit`: the customer gets it as refundable credit on an open credit note. Stored on the refund, so a decline that arrives later by webhook uses it. Omitted: the business rule (`billing_rules_config.declined_refund`). Applies to a refund of an invoice payment; a refund of held excess credit always returns to that credit.
              * @enum {string}
@@ -49135,10 +50578,15 @@ export interface components {
              */
             payment_amount_minor: number;
             /**
-             * @description The part of the payment still held as excess credit, in minor units.
+             * @description What the payment put on the excess balance, less its own refunds, in minor units.
              * @example 1200
              */
             held_minor: number;
+            /**
+             * @description What is still on the excess balance from this payment after invoices used credit, oldest payment first, in minor units.
+             * @example 1200
+             */
+            remaining_minor: number;
             /**
              * @description The part that you can refund now, in minor units.
              * @example 1200
@@ -51470,6 +52918,586 @@ export interface components {
                     share_bps?: number;
                 }[];
             };
+        };
+        /** @description Hosted checkout figures for a window of business days. */
+        CheckoutReport: {
+            /**
+             * @description The object type; always `checkout_report`.
+             * @enum {string}
+             */
+            object: "checkout_report";
+            /**
+             * @description The business id.
+             * @example biz_XXXXXXXXXXXX01
+             */
+            business: string;
+            /**
+             * @description The first day of the window (YYYY-MM-DD).
+             * @example 2026-10-22
+             */
+            start: string;
+            /**
+             * @description The last day of the window (YYYY-MM-DD).
+             * @example 2026-11-18
+             */
+            end: string;
+            /**
+             * @description The first day of the previous window.
+             * @example 2026-09-24
+             */
+            previous_start?: string;
+            /**
+             * @description The last day of the previous window.
+             * @example 2026-10-21
+             */
+            previous_end?: string;
+            /**
+             * @description The business time zone.
+             * @example America/New_York
+             */
+            timezone?: string;
+            /**
+             * @description The currency of the money figures.
+             * @example USD
+             */
+            currency: string;
+            /** @description Currencies with no exchange rate, left out of the money figures. */
+            missing_rates?: string[];
+            /** @description The window's figures. */
+            totals: {
+                /**
+                 * @description Sessions first opened in the window.
+                 * @example 120
+                 */
+                opened?: number;
+                /**
+                 * @description Of those, the sessions completed.
+                 * @example 30
+                 */
+                completed?: number;
+                /**
+                 * @description Completed ÷ opened, in basis points.
+                 * @example 2500
+                 */
+                conversion_bps?: number | null;
+                /**
+                 * @description Paid revenue of the completed sessions, minor units.
+                 * @example 297000
+                 */
+                revenue_minor?: number;
+                /**
+                 * @description Revenue ÷ completed, minor units.
+                 * @example 9900
+                 */
+                aov_minor?: number | null;
+                /**
+                 * @description Sessions with details entered, not paid, idle for an hour.
+                 * @example 20
+                 */
+                abandoned?: number;
+                /**
+                 * @description Sessions created in the window that completed after a reminder.
+                 * @example 4
+                 */
+                recovered?: number;
+                /**
+                 * @description Their paid revenue, minor units.
+                 * @example 39600
+                 */
+                recovered_revenue_minor?: number;
+                /**
+                 * @description Median seconds from opened to paid.
+                 * @example 161
+                 */
+                median_complete_seconds?: number | null;
+            };
+            /** @description The same figures for the previous window; null unless `compare=true`. */
+            previous?: Record<string, never> | null;
+            /** @description Right now, whatever the window. */
+            live?: {
+                /**
+                 * @description Open sessions used in the last 5 minutes.
+                 * @example 2
+                 */
+                active_now?: number;
+                /**
+                 * @description Sessions first opened in the last 30 minutes.
+                 * @example 5
+                 */
+                opened_last_30_minutes?: number;
+                /** @description The last 30 minutes, oldest first. */
+                per_minute?: number[];
+            };
+            /** @description The window's days, in order. */
+            days?: {
+                /** @description The day. */
+                date?: string;
+                /** @description Its axis label. */
+                label?: string;
+            }[];
+            /** @description Per-day figures, one per day in `days`. */
+            series?: Record<string, never>;
+            /** @description The funnel, in order. */
+            funnel: ({
+                /** @description The step. */
+                step?: string;
+                /** @description Its name. */
+                label?: string;
+                /** @description Sessions at this step. */
+                sessions?: number;
+                /** @description Median seconds from the previous step. */
+                median_seconds_from_previous?: number | null;
+            })[];
+            /** @description By payment link, by revenue. */
+            links?: Record<string, never>[];
+            /** @description By method. */
+            payment_methods?: Record<string, never>[];
+            /** @description Payment attempts and the newest refusal of each session. */
+            failures?: Record<string, never>;
+            /** @description Reminder emails and the checkouts they recovered. */
+            recovery?: Record<string, never>;
+            /** @description Sessions with and without a coupon, and the codes used. */
+            coupons?: Record<string, never>;
+            /** @description By country. */
+            countries?: Record<string, never>[];
+            /** @description Time from opened to paid. */
+            time_to_complete?: Record<string, never>[];
+            /** @description First-party visit tracking over the window (sessions whose page ran in a browser). */
+            tracking?: {
+                /**
+                 * @description The first tracked view of any window; null before tracking began.
+                 * @example 2026-11-19T10:00:00.000Z
+                 */
+                since?: string | null;
+                /**
+                 * @description Tracked views in the window.
+                 * @example 96
+                 */
+                views?: number;
+                /**
+                 * @description Of those, the sessions completed.
+                 * @example 24
+                 */
+                completed?: number;
+                /** @description Where buyers come from, by revenue. */
+                channels?: Record<string, never>[];
+                /** @description By visitor country. */
+                countries?: Record<string, never>[];
+                /** @description By device. */
+                devices?: Record<string, never>[];
+                /** @description By browser. */
+                browsers?: Record<string, never>[];
+                /** @description By step. */
+                step_time?: Record<string, never>[];
+            };
+        };
+        /** @description Customer portal figures for a window of business days. */
+        PortalReport: {
+            /**
+             * @description The object type; always `portal_report`.
+             * @enum {string}
+             */
+            object: "portal_report";
+            /**
+             * @description The business id.
+             * @example biz_XXXXXXXXXXXX01
+             */
+            business: string;
+            /**
+             * @description The first day of the window (YYYY-MM-DD).
+             * @example 2026-10-22
+             */
+            start: string;
+            /**
+             * @description The last day of the window (YYYY-MM-DD).
+             * @example 2026-11-18
+             */
+            end: string;
+            /**
+             * @description The first day of the previous window.
+             * @example 2026-09-24
+             */
+            previous_start?: string;
+            /**
+             * @description The last day of the previous window.
+             * @example 2026-10-21
+             */
+            previous_end?: string;
+            /**
+             * @description The business time zone.
+             * @example America/New_York
+             */
+            timezone?: string;
+            /**
+             * @description The currency of the money figures.
+             * @example USD
+             */
+            currency: string;
+            /** @description Currencies with no exchange rate, left out of the money figures. */
+            missing_rates?: string[];
+            /** @description Filter values seen in the window. */
+            options?: {
+                /** @description Arrival keys. */
+                arrivals?: string[];
+            };
+            /** @description The window's figures. */
+            totals: {
+                /**
+                 * @description Portal sessions signed in during the window.
+                 * @example 90
+                 */
+                visits?: number;
+                /**
+                 * @description Customers behind those visits.
+                 * @example 60
+                 */
+                customers?: number;
+                /**
+                 * @description Visits with at least one action.
+                 * @example 40
+                 */
+                visits_with_action?: number;
+                /**
+                 * @description Visits with an action ÷ visits, in basis points.
+                 * @example 4444
+                 */
+                action_rate_bps?: number | null;
+                /**
+                 * @description Paid in portal sessions, minor units.
+                 * @example 120000
+                 */
+                paid_minor?: number;
+                /**
+                 * @description Invoices those payments paid.
+                 * @example 12
+                 */
+                invoices_paid?: number;
+                /**
+                 * @description Paid in visits from a failed-payment email, minor units.
+                 * @example 50000
+                 */
+                recovered_from_failed_emails_minor?: number;
+                /**
+                 * @description Payment methods added in the portal.
+                 * @example 8
+                 */
+                methods_added?: number;
+                /**
+                 * @description Cancellations through the portal cancel flow.
+                 * @example 3
+                 */
+                cancellations?: number;
+                /**
+                 * @description Saves ÷ (saves + lost), basis points, as `cancellation_saves`.
+                 * @example 3000
+                 */
+                save_rate_bps?: number | null;
+            };
+            /** @description The same figures for the previous window; null unless `compare=true`. */
+            previous?: Record<string, never> | null;
+            /** @description Right now, whatever the window. */
+            live?: {
+                /**
+                 * @description Sessions used in the last 5 minutes.
+                 * @example 1
+                 */
+                active_now?: number;
+                /**
+                 * @description Sessions signed in during the last 30 minutes.
+                 * @example 3
+                 */
+                visits_last_30_minutes?: number;
+                /** @description The last 30 minutes, oldest first. */
+                per_minute?: number[];
+            };
+            /** @description The window's days, in order. */
+            days?: {
+                /** @description The day. */
+                date?: string;
+                /** @description Its axis label. */
+                label?: string;
+            }[];
+            /** @description Per-day figures, one per day in `days`. */
+            series?: Record<string, never>;
+            /** @description Made, opened, took an action. */
+            funnel: {
+                /** @description The step. */
+                step?: string;
+                /** @description Its name. */
+                label?: string;
+                /** @description Links at this step. */
+                sessions?: number;
+            }[];
+            /** @description By arrival. */
+            arrivals?: Record<string, never>[];
+            /** @description Completed actions. */
+            actions?: Record<string, never>[];
+            /** @description Portal payments by method, and saved versus new methods. */
+            payments?: Record<string, never>;
+            /** @description Methods added, deleted and made primary, and delete reasons. */
+            payment_methods?: Record<string, never>;
+            /** @description Plan changes, pauses and cancellations made in the portal. */
+            plan_changes?: Record<string, never>;
+            /** @description The cancel flow: started, saw an offer, took one, saved; with reasons. */
+            retention?: Record<string, never>;
+            /** @description The newest ten visits in the window. */
+            recent?: Record<string, never>[];
+            /** @description First-party visit tracking over the window (visits whose page ran in a browser). */
+            tracking?: {
+                /**
+                 * @description The first tracked view of any window; null before tracking began.
+                 * @example 2026-11-19T10:00:00.000Z
+                 */
+                since?: string | null;
+                /**
+                 * @description Tracked visits in the window.
+                 * @example 80
+                 */
+                visits?: number;
+                /** @description Sections viewed. */
+                sections?: Record<string, never>[];
+                /** @description By visitor country. */
+                countries?: Record<string, never>[];
+                /** @description By device. */
+                devices?: Record<string, never>[];
+                /** @description By browser. */
+                browsers?: Record<string, never>[];
+                /**
+                 * @description Invoice PDF downloads.
+                 * @example 12
+                 */
+                pdf_downloads?: number;
+                /**
+                 * @description Visits with at least one invoice PDF download.
+                 * @example 9
+                 */
+                visits_with_pdf?: number;
+            };
+        };
+        /** @description Billing email figures for a window of business days. */
+        EmailReport: {
+            /**
+             * @description The object type; always `email_report`.
+             * @enum {string}
+             */
+            object: "email_report";
+            /**
+             * @description The business id.
+             * @example biz_XXXXXXXXXXXX01
+             */
+            business: string;
+            /**
+             * @description The first day of the window (YYYY-MM-DD).
+             * @example 2026-10-22
+             */
+            start: string;
+            /**
+             * @description The last day of the window (YYYY-MM-DD).
+             * @example 2026-11-18
+             */
+            end: string;
+            /**
+             * @description The first day of the previous window.
+             * @example 2026-09-24
+             */
+            previous_start?: string;
+            /**
+             * @description The last day of the previous window.
+             * @example 2026-10-21
+             */
+            previous_end?: string;
+            /**
+             * @description The business time zone.
+             * @example America/New_York
+             */
+            timezone?: string;
+            /**
+             * @description The currency of the money figures.
+             * @example USD
+             */
+            currency: string;
+            /** @description Currencies with no exchange rate, left out of the money figures. */
+            missing_rates?: string[];
+            /** @description The filters applied. */
+            filters?: {
+                /** @description The email type. */
+                type?: string | null;
+                /** @description The transport. */
+                transport?: string | null;
+            };
+            /** @description Filter values seen in the window and the one before. */
+            options?: {
+                /** @description Email types. */
+                types?: string[];
+                /** @description Transports. */
+                transports?: string[];
+            };
+            /** @description The window's figures. */
+            totals: {
+                /**
+                 * @description Emails queued in the window.
+                 * @example 400
+                 */
+                queued?: number;
+                /**
+                 * @description Sent on a transport that delivers.
+                 * @example 380
+                 */
+                delivered?: number;
+                /**
+                 * @description Marked sent with no mail server behind it.
+                 * @example 0
+                 */
+                not_sent?: number;
+                /**
+                 * @description Still waiting to be sent.
+                 * @example 2
+                 */
+                pending?: number;
+                /**
+                 * @description Out of retries.
+                 * @example 3
+                 */
+                failed?: number;
+                /**
+                 * @description Refused by the recipient's server, complaints excluded.
+                 * @example 10
+                 */
+                bounced?: number;
+                /**
+                 * @description Marked as spam by the recipient.
+                 * @example 1
+                 */
+                complained?: number;
+                /**
+                 * @description Not sent, for a reason on the email.
+                 * @example 4
+                 */
+                skipped?: number;
+                /**
+                 * @description Delivered + bounced + complained + failed.
+                 * @example 394
+                 */
+                attempted?: number;
+                /**
+                 * @description Delivered ÷ attempted, in basis points.
+                 * @example 9645
+                 */
+                delivered_bps?: number | null;
+                /**
+                 * @description Bounced ÷ attempted, in basis points.
+                 * @example 254
+                 */
+                bounce_bps?: number | null;
+                /**
+                 * @description Complained ÷ attempted, in basis points.
+                 * @example 25
+                 */
+                complaint_bps?: number | null;
+                /**
+                 * @description Portal visits whose link came from an email; null under a transport filter.
+                 * @example 60
+                 */
+                link_visits?: number | null;
+                /**
+                 * @description Paid in visits from a failed-payment email, minor units; null under a transport filter.
+                 * @example 50000
+                 */
+                recovered_minor?: number | null;
+                /**
+                 * @description Delivered emails sent with open and click tracking on. The rates below are taken over these.
+                 * @example 300
+                 */
+                tracked?: number;
+                /**
+                 * @description Of those, opened by a person. A click counts as an open. Machine opens are not included.
+                 * @example 120
+                 */
+                opened?: number;
+                /**
+                 * @description Of those, clicked by a person.
+                 * @example 45
+                 */
+                clicked?: number;
+                /**
+                 * @description Of those, opened only or also by a mail privacy proxy, scanner or prefetch. Not in `opened`.
+                 * @example 80
+                 */
+                machine_opened?: number;
+                /**
+                 * @description Opened ÷ tracked, in basis points; null with no tracked email.
+                 * @example 4000
+                 */
+                open_bps?: number | null;
+                /**
+                 * @description Clicked ÷ tracked, in basis points; null with no tracked email.
+                 * @example 1500
+                 */
+                click_bps?: number | null;
+            };
+            /** @description The same figures for the previous window; null unless `compare=true`. */
+            previous?: Record<string, never> | null;
+            /** @description Open and click tracking for this business. */
+            tracking?: {
+                /** @description The business setting `email_config.trackEngagement` now. */
+                enabled?: boolean;
+                /**
+                 * @description The first send with tracking on; null when there never was one.
+                 * @example 2026-11-19T10:00:00.000Z
+                 */
+                since?: string | null;
+                /** @description False when the window starts before `since`, so the rates cover only part of it. */
+                covers_period?: boolean;
+            };
+            /** @description The most-clicked links of the window, by people's clicks. */
+            top_links?: Record<string, never>[];
+            /** @description Right now, whatever the window. */
+            live?: {
+                /**
+                 * @description Emails waiting to be sent.
+                 * @example 1
+                 */
+                waiting?: number;
+                /**
+                 * @description Emails queued in the last 30 minutes.
+                 * @example 3
+                 */
+                queued_last_30_minutes?: number;
+                /** @description The last 30 minutes, oldest first. */
+                per_minute?: number[];
+            };
+            /** @description The window's days, in order. */
+            days?: {
+                /** @description The day. */
+                date?: string;
+                /** @description Its axis label. */
+                label?: string;
+            }[];
+            /** @description Per-day figures, one per day in `days`. */
+            series?: Record<string, never>;
+            /** @description Queued, delivered, opened, clicked, portal link opened, paid. Opened and clicked appear only when the window has tracked emails. */
+            funnel: {
+                /** @description The step. */
+                step?: string;
+                /** @description Its name. */
+                label?: string;
+                /** @description Emails (or invoices, at `paid`) at this step. */
+                sessions?: number;
+            }[];
+            /** @description By email type. */
+            by_type?: Record<string, never>[];
+            /** @description By transport. */
+            by_transport?: Record<string, never>[];
+            /** @description The ten busiest recipient domains. */
+            by_domain?: Record<string, never>[];
+            /** @description Top reasons. */
+            reasons?: Record<string, never>[];
+            /** @description Skipped by reason. */
+            skipped_reasons?: Record<string, never>[];
+            /** @description The failed-payment email sequence: how many were sent at each position and how many invoices were paid after it. */
+            dunning?: Record<string, never>;
+            /** @description The newest emails in the window. */
+            recent?: Record<string, never>[];
         };
         /** @description What cancellations cost, why they happened and who left. */
         BusinessCancellationAnalytics: {

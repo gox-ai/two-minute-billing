@@ -1,7 +1,6 @@
 import type { BillingRulesPatch } from "@/lib/billing-rules";
 import type { FinalSubscriptionAction } from "@/lib/api";
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut, listBusinesses } from "@/lib/api";
-import type { TeamAlertRecipient } from "@/lib/api";
+import { apiDelete, apiPatch, apiPut, listBusinesses } from "@/lib/api";
 import type {
   Business,
   CreditsFlexibilitySlots,
@@ -10,7 +9,6 @@ import type {
   PortalFieldKey,
   PortalFieldState,
   ReminderConfig,
-  TeamAlertsConfig,
 } from "@/lib/api";
 export type { AddressFieldLocks, PortalFieldKey, PortalFieldState } from "@/lib/api";
 
@@ -162,6 +160,8 @@ export interface BusinessSettingsPatch {
   icon_url?: string | null;
   favicon_url?: string | null;
   brand_color?: string | null;
+  /** 0542 — label on a brand-color button; null = automatic. */
+  button_text_color?: string | null;
   /** 0238 — may a BUYER type a coupon code on the hosted checkout / portal? */
   allow_customer_coupons?: boolean;
   max_customer_coupon_codes?: number;
@@ -353,6 +353,12 @@ export interface BusinessSettingsPatch {
     portal_link_error_html?: string | null;
     /** One-time purchases: keep the buyer's payment method. Default `ask`. */
     one_time_save_payment_method?: "never" | "always" | "ask";
+    portal_save_new_method?: "offer" | "always" | "never";
+    /** Per currency: the order of method rows in the portal, and the account a NEW method of
+     * each kind goes to. Absent = automatic. */
+    payment_routing?: Record<string, { order: string[]; gateways: Record<string, string> }>;
+    /** Portal asks why when a buyer deletes their last payment method. Default FALSE. */
+    portal_ask_delete_reason?: boolean;
     /** Portal usage view on metered subscriptions. Default TRUE. */
     portal_show_usage?: boolean;
     /** Portal projected usage. Default FALSE. */
@@ -442,10 +448,10 @@ export interface BusinessSettingsPatch {
     attachReceiptPdf?: boolean;
     /** Where email links go; `merchant_url` needs `merchantUrl`. */
     linkTarget?: "portal" | "merchant_url";
+    /** Record opens and clicks. Unset = off. */
+    trackEngagement?: boolean;
     merchantUrl?: string | null;
   } | null;
-  // Team alerts (0489). Replaces the stored value; null turns every alert off.
-  team_alerts_config?: TeamAlertsConfig | null;
   // Document customization (0239). Shape mirrors Business['invoice_customization'].
   invoice_customization?: NonNullable<Business["invoice_customization"]> | null;
   /**
@@ -459,11 +465,3 @@ export interface BusinessSettingsPatch {
 /** PATCH business settings. Returns apiWrite's { ok, status, error?, data? }. */
 export const updateBusiness = (biz: string, patch: BusinessSettingsPatch) =>
   apiPatch(`/v1/businesses/${biz}`, patch);
-
-/** Team alert addresses and their confirmation state (0495). */
-export const listTeamAlertRecipients = (biz: string) =>
-  apiGet<{ data: TeamAlertRecipient[] }>(`/v1/businesses/${biz}/team_alert_recipients`);
-
-/** Send the confirmation email to a pending address again. */
-export const resendTeamAlertConfirmation = (biz: string, email: string) =>
-  apiPost(`/v1/businesses/${biz}/team_alert_recipients/resend`, { email });

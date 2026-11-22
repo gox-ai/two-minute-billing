@@ -9,6 +9,7 @@ import {
   RECEIPT_SORT_FIELDS,
   serializeReceiptRow,
 } from "@/modules/receipts/service";
+import { attributePayingTransaction } from "@/modules/invoicing/dunning-journey";
 import { renderReceiptPdf } from "@/modules/receipts/pdf";
 
 /** Receipts (0387): read-only. A receipt is created by the payment, never by a caller. */
@@ -53,7 +54,11 @@ export async function registerReceiptRoutes(app: FastifyInstance) {
       const { rcpt } = req.params as { rcpt: string };
       const row = await getReceipt(req.organization!.id, business.id, rcpt);
       if (!row) return notFound(reply, `No such receipt: ${rcpt}`);
-      return serializeReceiptRow(row);
+      const by = await attributePayingTransaction(req.organization!.id, {
+        transactionId: row.receipt.transactionId,
+        paymentId: row.receipt.paymentId,
+      });
+      return { ...serializeReceiptRow(row), initiated_by: by.trigger ? by : null };
     },
   );
 

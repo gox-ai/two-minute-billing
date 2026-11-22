@@ -5,7 +5,7 @@
  *
  *   pnpm verify:refund
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { withTenant, closeDb } from "@/platform/db";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
 import { createCustomer } from "@/modules/customers/service";
@@ -19,7 +19,7 @@ import {
   RefundError,
   refundGatewayAccount,
 } from "@/modules/refunds/service";
-import { gatewayAccounts, ledgerEntries, transactions } from "@db/schema";
+import { gatewayAccounts, ledgerEntries, refunds, transactions } from "@db/schema";
 import { randomUUID } from "node:crypto";
 
 const org = await createOrganization({ name: "Refund Org" });
@@ -122,6 +122,129 @@ const allRefunds = await listRefunds(orgId, payment.id);
 const cash = await bal("cash");
 const refundsAcct = await bal("refunds");
 
+// 3b) Repeat guard (`guardRepeat`): same amount on the same payment within 10 minutes.
+const guardChecks: Array<[string, boolean]> = [];
+{
+  const c2 = await createCustomer({
+    organizationId: orgId,
+    businessId: biz.id,
+    email: "guard@a.com",
+  });
+  await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: biz.id,
+    customer: c2,
+    token: "tok_4242",
+  });
+  const sub2 = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: c2.id,
+    now: new Date(),
+    items: [{ price, quantity: 1 }],
+  });
+  const { payment: p2 } = await billSubscriptionPeriod({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscription: sub2.subscription,
+    periodStart: sub2.subscription.currentPeriodStart!,
+    periodEnd: sub2.subscription.currentPeriodEnd!,
+  });
+  const base = { organizationId: orgId, businessId: biz.id, paymentPublicId: p2!.publicId };
+  const counts = () =>
+    withTenant(orgId, async (tx) => ({
+      refunds: (await tx.select().from(refunds).where(eq(refunds.paymentId, p2!.id))).length,
+      txns: (
+        await tx
+          .select()
+          .from(transactions)
+          .where(and(eq(transactions.paymentId, p2!.id), eq(transactions.type, "refund")))
+      ).length,
+      cash: await bal("cash"),
+    }));
+  const age = (minutes: number) =>
+    withTenant(orgId, (tx) =>
+      tx
+        .update(refunds)
+        .set({ createdAt: sql`app_now() - make_interval(mins => ${minutes})` })
+        .where(eq(refunds.paymentId, p2!.id)),
+    );
+  const codeOf = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      return null;
+    } catch (e) {
+      return e instanceof RefundError
+        ? { code: e.code ?? "", message: e.message }
+        : { code: "x", message: "" };
+    }
+  };
+
+  await refundPayment({ ...base, amountMinor: 2100, guardRepeat: true });
+  const before = await counts();
+  // (1) same amount again → refused, nothing booked, no gateway call.
+  const dup = await codeOf(() => refundPayment({ ...base, amountMinor: 2100, guardRepeat: true }));
+  const after = await counts();
+  guardChecks.push([
+    "repeat: same amount twice → possible_duplicate, message names $21.00",
+    dup?.code === "possible_duplicate" &&
+      dup.message.includes("$21.00") &&
+      dup.message.includes("confirm it"),
+  ]);
+  guardChecks.push([
+    "repeat: refused refund books nothing and makes no gateway call",
+    after.refunds === before.refunds && after.txns === before.txns && after.cash === before.cash,
+  ]);
+  // (6) an automated caller (no guardRepeat) is not blocked.
+  const auto = await codeOf(() => refundPayment({ ...base, amountMinor: 2100 }));
+  guardChecks.push(["repeat: caller without guardRepeat is not blocked", auto === null]);
+  // (3) a different amount is allowed.
+  const other = await codeOf(() => refundPayment({ ...base, amountMinor: 700, guardRepeat: true }));
+  guardChecks.push(["repeat: a different amount is allowed", other === null]);
+  // (2) confirmed repeat: the route sends guardRepeat false.
+  const confirmed = await codeOf(() =>
+    refundPayment({ ...base, amountMinor: 700, guardRepeat: false }),
+  );
+  guardChecks.push(["repeat: confirmed repeat goes through", confirmed === null]);
+  // The window is 10 minutes of DB time: 11 minutes later the same amount is allowed.
+  await age(11);
+  const late = await codeOf(() => refundPayment({ ...base, amountMinor: 2100, guardRepeat: true }));
+  guardChecks.push(["repeat: same amount after 11 minutes is allowed", late === null]);
+  // (4) a failed refund never blocks a retry.
+  await withTenant(orgId, (tx) =>
+    tx
+      .update(refunds)
+      .set({ status: "failed", createdAt: sql`app_now()` })
+      .where(eq(refunds.paymentId, p2!.id)),
+  );
+  const retry = await codeOf(() =>
+    refundPayment({ ...base, amountMinor: 2100, guardRepeat: true }),
+  );
+  guardChecks.push(["repeat: after a failed refund the same amount is allowed", retry === null]);
+
+  // Route: 409 with a code, then confirm_repeat sends it.
+  const { buildApp } = await import("@/index");
+  const app = await buildApp({ logger: false });
+  const post = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: `/v1/businesses/${biz.publicId}/payments/${p2!.publicId}/refund`,
+      headers: { authorization: `Bearer ${org.secret}`, "idempotency-key": randomUUID() },
+      payload,
+    });
+  const r409 = await post({ amount_minor: 2100 });
+  const rOk = await post({ amount_minor: 2100, confirm_repeat: true });
+  const j = r409.json() as { error?: { type?: string; code?: string } };
+  guardChecks.push([
+    "route: repeat → 409 invalid_request_error possible_duplicate",
+    r409.statusCode === 409 &&
+      j.error?.code === "possible_duplicate" &&
+      j.error?.type === "invalid_request_error",
+  ]);
+  guardChecks.push(["route: confirm_repeat → 201", rOk.statusCode === 201]);
+  await app.close();
+}
+
 // 4) Adapter resolution without a payment method: a one-off intent capture or an import
 // leaves none, and the env-keyed fallback is unset in production.
 const resolved = await withTenant(orgId, async (tx) => {
@@ -159,7 +282,9 @@ console.log(
   `adapter resolution without a payment method: ${JSON.stringify({ ...resolved, ambiguous: resolved.ambiguous?.id ?? null })}`,
 );
 
+for (const [n, ok] of guardChecks) console.log(`  ${ok ? "✓" : "✗"} ${n}`);
 const pass =
+  guardChecks.every(([, ok]) => ok) &&
   resolutionOk &&
   r1.amountMinor === 3000n &&
   r1.status === "succeeded" &&

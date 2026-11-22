@@ -29,7 +29,7 @@ export function stepLabel(name: string, a: Record<string, unknown>): string {
     case "list_payments":
       return "Listed payments";
     case "get_payment_attempts":
-      return `Read the attempts on ${s("payment_intent")}`;
+      return `Read payment intent ${s("payment_intent")}`;
     case "get_metrics":
       return "Read the revenue metrics";
     case "explain_invoice":

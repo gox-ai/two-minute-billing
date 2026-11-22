@@ -1,4 +1,5 @@
 import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
+import { notPlatformUser } from "@/modules/tenancy/platform-org";
 import { systemDb } from "@/platform/db";
 import { mfaResetRequests, securityEvents, userMfa, users } from "@db/schema";
 import { config } from "@/platform/config";
@@ -279,6 +280,8 @@ export async function pendingMfaReset(userId: string): Promise<Date | null> {
 /** Drop security events past SECURITY_EVENT_RETENTION_DAYS. */
 export async function sweepSecurityEvents(now: Date = new Date()): Promise<{ deleted: number }> {
   const cutoff = new Date(now.getTime() - config.SECURITY_EVENT_RETENTION_DAYS * 86_400_000);
-  const res = await systemDb.delete(securityEvents).where(lt(securityEvents.at, cutoff));
+  const res = await systemDb
+    .delete(securityEvents)
+    .where(and(lt(securityEvents.at, cutoff), notPlatformUser(securityEvents.userId)));
   return { deleted: (res as unknown as { count?: number }).count ?? 0 };
 }

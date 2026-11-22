@@ -213,15 +213,15 @@ const OK = { resultCode: "Ok", message: [{ code: "I00001", text: "Successful." }
   );
   const cur = n("39");
   ok(
-    "decline: 39 (currency) → gateway_request_rejected, hidden",
-    cur.code === "gateway_request_rejected" && !cur.retriable && cur.exposedToPayer === false,
+    "decline: 39 (currency) → gateway_request_rejected, retried (ours), hidden",
+    cur.code === "gateway_request_rejected" && cur.retriable && cur.exposedToPayer === false,
   );
   ok(
     "decline: 290 → gateway_request_rejected with the AVS remedy",
     n("290").code === "gateway_request_rejected" &&
       /Address Verification/.test(n("290").message ?? ""),
   );
-  ok("decline: an unmapped code passes through", n("9999").code === "9999");
+  ok("decline: an unmapped code books charge_failed", n("9999").code === "charge_failed");
   ok("decline: no code → charge_failed", normalizeAuthorizenetDecline({}).code === "charge_failed");
   ok(
     "decline: registered in DECLINE_SETS",
@@ -1219,17 +1219,16 @@ try {
       ],
     },
   });
+  const badKeys = await adapter.charge({
+    amountMinor: 100n,
+    currency: "USD",
+    customer,
+    paymentMethod: pm,
+    idempotencyKey: "k4",
+  });
   ok(
-    "charge: bad API keys throw",
-    (await throws(() =>
-      adapter.charge({
-        amountMinor: 100n,
-        currency: "USD",
-        customer,
-        paymentMethod: pm,
-        idempotencyKey: "k4",
-      }),
-    )) instanceof Error,
+    "charge: bad API keys are a failed charge of ours (gateway_request_rejected), not a throw",
+    badKeys.status === "failed" && badKeys.failure?.code === "gateway_request_rejected",
   );
 
   // refunds

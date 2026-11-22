@@ -51,8 +51,19 @@ interface Ctx {
   tz: string;
 }
 
-function IdLink({ id, label, ctx }: { id: string; label?: string | null; ctx: Ctx }) {
-  const href = recordHref(ctx.biz, id);
+/** `route`: the folder of the record shown (`customers`), for an imported id with no prefix. */
+function IdLink({
+  id,
+  label,
+  ctx,
+  route,
+}: {
+  id: string;
+  label?: string | null;
+  ctx: Ctx;
+  route: string;
+}) {
+  const href = recordHref(ctx.biz, id, route);
   // An id alone shortens in the middle and stays on one line.
   const text = label || <MiddleEllipsis value={id} className="text-xs" />;
   return href ? (
@@ -210,7 +221,7 @@ function invoiceLines(list: Rec[], ctx: Ctx): Line[] {
       const due = num(i.amount_due_minor);
       return {
         key: str(i.id)!,
-        title: <IdLink id={str(i.id)!} label={str(i.number)} ctx={ctx} />,
+        title: <IdLink id={str(i.id)!} label={str(i.number)} ctx={ctx} route="invoices" />,
         status: str(i.status),
         amount: amount(i.total_minor, i.currency),
         context: [
@@ -230,12 +241,18 @@ function getInvoice(d: unknown, ctx: Ctx) {
   const due = num(inv.amount_due_minor);
   return (
     <RecordCard
-      title={<IdLink id={id} label={str(inv.number)} ctx={ctx} />}
+      title={<IdLink id={id} label={str(inv.number)} ctx={ctx} route="invoices" />}
       status={str(inv.status)}
       amount={amount(inv.total_minor, inv.currency)}
       context={[
         str(inv.customer) ? (
-          <IdLink key="c" id={str(inv.customer)!} label={str(inv.customer_name)} ctx={ctx} />
+          <IdLink
+            key="c"
+            id={str(inv.customer)!}
+            label={str(inv.customer_name)}
+            ctx={ctx}
+            route="customers"
+          />
         ) : null,
         dateIn(inv.due_date, ctx) ? `Due ${dateIn(inv.due_date, ctx)}` : null,
         due ? `${amount(due, inv.currency)} due` : null,
@@ -259,7 +276,7 @@ function getCustomer(d: unknown, ctx: Ctx) {
   return (
     <div className="flex flex-col gap-2">
       <RecordCard
-        title={<IdLink id={id} label={customerName(c)} ctx={ctx} />}
+        title={<IdLink id={id} label={customerName(c)} ctx={ctx} route="customers" />}
         context={[
           str(c.email),
           str(c.company) !== customerName(c) ? str(c.company) : null,
@@ -285,8 +302,11 @@ function subscriptionLines(list: Rec[], ctx: Ctx): Line[] {
     .map((s) => ({
       key: str(s.id)!,
       title: (
-        <IdLink id={str(s.id)!} label={str(s.customer_name) ?? payerName(s) ?? str(s.customer_email)}
+        <IdLink
+          id={str(s.id)!}
+          label={str(s.customer_name) ?? payerName(s) ?? str(s.customer_email)}
           ctx={ctx}
+          route="subscriptions"
         />
       ),
       status: str(s.status),
@@ -306,12 +326,18 @@ function getSubscription(d: unknown, ctx: Ctx) {
   if (!r || !s || !id) return null;
   return (
     <RecordCard
-      title={<IdLink id={id} ctx={ctx} />}
+      title={<IdLink id={id} ctx={ctx} route="subscriptions" />}
       status={str(s.status)}
       amount={amount(s.mrr, s.currency) ? `${amount(s.mrr, s.currency)} MRR` : null}
       context={[
         str(s.customer) ? (
-          <IdLink key="c" id={str(s.customer)!} label={str(s.customer_name)} ctx={ctx} />
+          <IdLink
+            key="c"
+            id={str(s.customer)!}
+            label={str(s.customer_name)}
+            ctx={ctx}
+            route="customers"
+          />
         ) : null,
         dateIn(s.next_billing_at, ctx) ? `Renews ${dateIn(s.next_billing_at, ctx)}` : null,
         dateIn(s.current_period_end, ctx) ? `Term ends ${dateIn(s.current_period_end, ctx)}` : null,
@@ -335,7 +361,9 @@ function listPayments(d: unknown, ctx: Ctx) {
         .filter((t) => str(t.id))
         .map((t) => ({
           key: str(t.id)!,
-          title: <IdLink id={str(t.id)!} label={typeLabel(t.type)} ctx={ctx} />,
+          title: (
+            <IdLink id={str(t.id)!} label={typeLabel(t.type)} ctx={ctx} route="transactions" />
+          ),
           status: str(t.status),
           amount: amount(t.amount_minor, t.currency),
           context: [dateIn(str(t.occurred_at) ?? str(t.created_at), ctx), str(t.customer_name)],
@@ -354,7 +382,7 @@ function searchCustomers(d: unknown, ctx: Ctx) {
         .filter((c) => str(c.id))
         .map((c) => ({
           key: str(c.id)!,
-          title: <IdLink id={str(c.id)!} label={customerName(c)} ctx={ctx} />,
+          title: <IdLink id={str(c.id)!} label={customerName(c)} ctx={ctx} route="customers" />,
           context: [str(c.email), str(c.company) !== customerName(c) ? str(c.company) : null],
         }))}
     />
@@ -402,7 +430,7 @@ function explainInvoice(d: unknown, ctx: Ctx) {
     <div className="rounded-xl border bg-card text-sm">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
         <span className="min-w-0 flex-[1_1_8rem] truncate font-medium">
-          {id ? <IdLink id={id} label={str(r.number)} ctx={ctx} /> : "Totals"}
+          {id ? <IdLink id={id} label={str(r.number)} ctx={ctx} route="invoices" /> : "Totals"}
         </span>
         {typeof t.holds === "boolean" ? (
           <span
@@ -698,7 +726,9 @@ function getUpcomingCharges(d: unknown, ctx: Ctx) {
         />
       ) : null}
       {r.estimate === true ? (
-        <p className="m-0 px-1 text-xs text-muted-foreground">An estimate. Final amounts can differ.</p>
+        <p className="m-0 px-1 text-xs text-muted-foreground">
+          An estimate. Final amounts can differ.
+        </p>
       ) : null}
       {subs ? <RecordList label="Upcoming" lines={subscriptionLines(subs, ctx)} /> : null}
     </div>
@@ -738,7 +768,11 @@ function explainBalance(d: unknown) {
   const r = rec(d);
   if (!r) return null;
   const sections: Array<[string, unknown, string[]]> = [
-    ["Promotional credits", r.promotional_credits, ["promotional_credits", "balance_minor", "balance"]],
+    [
+      "Promotional credits",
+      r.promotional_credits,
+      ["promotional_credits", "balance_minor", "balance"],
+    ],
     ["Excess payments", r.excess_payments, ["excess_payments", "balance_minor", "balance"]],
     ["Wallet", r.wallet, ["balance_minor", "balance"]],
   ];
@@ -804,13 +838,15 @@ function getCollectionsQueue(d: unknown, ctx: Ctx) {
           .filter((i) => str(i.id))
           .map((i) => ({
             key: str(i.id)!,
-            title: <IdLink id={str(i.id)!} label={str(i.number)} ctx={ctx} />,
+            title: <IdLink id={str(i.id)!} label={str(i.number)} ctx={ctx} route="invoices" />,
             status: str(i.dunning_status),
             amount: amount(i.amount_due_minor, i.currency),
             context: [
               str(i.customer_name),
               dateIn(i.due_date, ctx) ? `Due ${dateIn(i.due_date, ctx)}` : null,
-              dateIn(i.next_attempt_at, ctx) ? `Next retry ${dateIn(i.next_attempt_at, ctx)}` : null,
+              dateIn(i.next_attempt_at, ctx)
+                ? `Next retry ${dateIn(i.next_attempt_at, ctx)}`
+                : null,
             ],
           }))}
       />
@@ -829,7 +865,7 @@ function queryRecords(d: unknown, ctx: Ctx) {
   if (!r || !totals) return null;
   const groupBy = Array.isArray(r.group_by) ? (r.group_by as string[]) : [];
   const currencyOf = (key: Rec | null) =>
-    str(key?.currency) ?? (str(rec(rows(r.sample)?.[0])?.currency) ?? null);
+    str(key?.currency) ?? str(rec(rows(r.sample)?.[0])?.currency) ?? null;
   const fmt = (name: string, v: unknown, cur: string | null) =>
     typeof v !== "number"
       ? "—"
@@ -839,7 +875,10 @@ function queryRecords(d: unknown, ctx: Ctx) {
   const metricNames = Object.keys(totals).filter((k) => k !== "count");
   const single = groups?.length === 1 || !groupBy.includes("currency") ? currencyOf(null) : null;
   const stats: Stat[] = [
-    { label: str(r.resource) ? `${sentence(words(str(r.resource)!))} matched` : "Matched", value: fmt("count", totals.count, null) },
+    {
+      label: str(r.resource) ? `${sentence(words(str(r.resource)!))} matched` : "Matched",
+      value: fmt("count", totals.count, null),
+    },
     ...metricNames.map((k) => ({ label: metricLabel(k), value: fmt(k, totals[k], single) })),
   ];
   const partial = r.complete === false;
@@ -865,7 +904,7 @@ function queryRecords(d: unknown, ctx: Ctx) {
                 return (
                   <tr key={i} className="border-t">
                     <td className="px-3 py-1.5 wrap-break-word">{groupKeyText(key)}</td>
-                    <td className="px-3 py-1.5 text-right text-muted-foreground whitespace-nowrap">
+                    <td className="px-3 py-1.5 text-right whitespace-nowrap text-muted-foreground">
                       {fmt("count", g.count, null)}
                     </td>
                     {metricNames.map((k) => (

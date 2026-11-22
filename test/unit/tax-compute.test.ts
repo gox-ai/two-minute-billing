@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { __taxCodeForLine } from "@/modules/invoicing/service";
 import {
   allocateTaxAcrossLines,
+  backOutMinor,
   computeInvoiceTax,
+  inclusiveTaxMinorFor,
   splitByWeight,
   taxMinorFor,
   type TaxableLine,
@@ -181,6 +183,26 @@ describe("computeInvoiceTax — India GST components", () => {
     // Backing each component out independently would have given
     // 2 * (118000*900/10900) = 19486 — nearly ₹15 too much.
     expect(t.inclusiveTaxMinor).not.toBe(19486n);
+  });
+
+  it("inclusive back-out rounds half-up, not down", () => {
+    // ₹117 at 18%: 11700 × 1800 / 11800 = 1784.75 → 1785 (truncation gave 1784).
+    expect(run([L("0", 11700n, GST_INTER, true, true)]).inclusiveTaxMinor).toBe(1785n);
+    // ₹999: 15238.98 → 15239, split 7620 + 7619 intra-state.
+    const t = run([L("0", 99900n, GST_INTRA, true, true)]);
+    expect(t.inclusiveTaxMinor).toBe(15239n);
+    expect(named(t, "CGST") + named(t, "SGST/UTGST")).toBe(15239n);
+    // Below the half stays down: ₹2,499 → 38120.34 → 38120.
+    expect(run([L("0", 249900n, GST_INTER, true, true)]).inclusiveTaxMinor).toBe(38120n);
+  });
+
+  it("the estimate twin books what the invoice books", () => {
+    for (let gross = 1n; gross <= 3000n; gross += 7n) {
+      const t = run([L("0", gross, GST_INTRA, true, true)]);
+      expect(inclusiveTaxMinorFor(GST_INTRA, gross)).toBe(t.inclusiveTaxMinor);
+    }
+    expect(backOutMinor(11700n, 1800n)).toBe(1785n);
+    expect(backOutMinor(11700n, 0n)).toBe(0n);
   });
 
   it("zero-rated export: no tax, reason recorded, note carried on the resolution", () => {

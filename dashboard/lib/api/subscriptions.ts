@@ -58,6 +58,8 @@ export interface SubscriptionExtras {
   revenue_to_date_minor?: number;
   revenue_paid_invoices_count?: number;
   revenue_since?: string | null;
+  /** Net billed revenue less credit notes, before tax (detail GET only). */
+  revenue_billed_minor?: number;
   /** Upcoming renewals this subscription skips (ISO instants, soonest first). */
   skipped_renewals?: string[];
   /** A change held until its invoice is paid (`apply_when_paid`); null = none. */
@@ -398,6 +400,8 @@ export interface CancelEstimate {
     lines: Array<{ description: string; amount_minor: number }>;
     subtotal_minor: number;
     tax_minor: number;
+    /** Added tax by component; tax inside tax-inclusive prices is in `tax_minor` only. */
+    tax_lines?: Array<{ label: string; amount_minor: number }>;
     /** NET of `promotional_discount_minor`, as the invoice document reports it. */
     total_minor: number;
     /** POST-tax buckets only (refundable + excess). */

@@ -75,6 +75,43 @@ const nextOffsetProp = {
   description: "Present only while has_more; the same opaque token as next_cursor — pass as offset",
 };
 
+/** `created_through` on a record's retrieve: what created it, from its creation event. */
+const createdThroughSchema = {
+  type: "object",
+  nullable: true,
+  description:
+    "What created this record, read from its creation event. `source` is `api`, `dashboard`, `assistant`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system` or `hubspot`. `actor` is the member's email for `dashboard`, the gateway key for `webhook`, an API key id for `api`, and null when none applies. Null on the whole object when no creation was recorded. Retrieve only, not on lists.",
+  properties: {
+    source: { type: "string" },
+    actor: { type: "string", nullable: true },
+  },
+};
+
+/** `initiated_by` on a payment record: what started the payment. */
+const initiatedBySchema = {
+  type: "object",
+  nullable: true,
+  description:
+    "What started the payment: `{ trigger, actor }`. `trigger` is `billing_clock`, `dashboard`, `portal`, `checkout`, `new_payment_method`, `offline`, `webhook`, `mcp` or `api`. `actor` is the member for `dashboard` and `offline`, and the gateway key for `webhook`. Null when nothing recorded it.",
+  properties: {
+    trigger: {
+      type: "string",
+      enum: [
+        "billing_clock",
+        "dashboard",
+        "portal",
+        "checkout",
+        "new_payment_method",
+        "offline",
+        "webhook",
+        "mcp",
+        "api",
+      ],
+    },
+    actor: { type: "string", nullable: true },
+  },
+};
+
 /**
  * A cursor-paginated list (docs/GUIDE.md §3.4). `next_cursor` is OPAQUE — pass it
  * back as `starting_after` (or `next_offset` as `offset`). `total` is the filtered count
@@ -588,6 +625,109 @@ const errResp = (description: string) => ({
   content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
 });
 
+/** The invoice list grammar, shared with the Orders list. */
+const INVOICE_LIST_OPTS: Parameters<typeof listParams>[0] = {
+  // Mirrors INVOICE_SORT_FIELDS / INVOICE_FILTER_OPS
+  // (src/modules/invoicing/service.ts) — asserted equal in
+  // test/unit/openapi-filters.test.ts.
+  sortFields: [
+    "created_at",
+    "number",
+    "status",
+    "subtotal_minor",
+    "total_minor",
+    "period_start",
+    "period_end",
+    "due_date",
+    "paid_at",
+  ],
+  search:
+    "Free-text over invoice id / number / status / customer id, any name column (name, first/last, company), email",
+  includeDeleted:
+    "Accepted; invoices are never deleted (a void keeps the row), so it changes nothing.",
+  filters: {
+    id: "text",
+    number: "text",
+    status: "enum",
+    dunning_status: "enum",
+    ar_bucket: "enum",
+    currency: "enum",
+    channel: "enum",
+    imported: "bool",
+    written_off: "bool",
+    subtotal_minor: "number",
+    total_minor: "number",
+    promotional_discount_minor: "number",
+    credits_applied_minor: "number",
+    amount_paid_minor: "number",
+    amount_due_minor: "number",
+    withholding_minor: "number",
+    attempt_count: "number",
+    created_at: "date",
+    period_start: "date",
+    period_end: "date",
+    due_date: "date",
+    paid_at: "date",
+    voided_at: "date",
+    next_attempt_at: "date",
+    dunning_exhausted_at: "date",
+    expected_payment_date: "date",
+    po_number: "text",
+    exchange_rate: "number",
+    exchange_rate_base: "enum",
+    seller_state_code: "enum",
+    place_of_supply_code: "enum",
+    tax_treatment: "enum",
+    tax_note: "text",
+    customer: "text",
+    customer_name: "text",
+    customer_email: "text",
+    subscription: "text",
+    recurring: "bool",
+  },
+  filterNotes: {
+    dunning_status:
+      "One of `in_progress`, `parked`, `succeeded`, `exhausted`, `stopped`. The old " +
+      "spelling `success` is still accepted as a deprecated alias and matches the same rows.",
+    recurring:
+      "`true`: raised for a subscription; `false`: a one-off invoice. Same predicate as `subscription[is_present]`.",
+    customer_name:
+      "Compares the customer's RESOLVED display name — `first_name last_name`, else " +
+      "`company`, else the legacy `name` — the same string `customer_name` is " +
+      "reported as, so `contains=priya raghunathan` matches a customer who has only " +
+      "the two structured columns. Not a column: `is_present=false` means no name of " +
+      "any kind (filter `customer_email` for the address a nameless row displays " +
+      "instead).",
+    amount_due_minor:
+      "Narrows on the LIVE balance the response prints, not the stored issue-time " +
+      "collectible — the two differ once payments land.",
+    period_end:
+      "Narrows on the INCLUSIVE boundary the response prints, not the stored " + "exclusive one.",
+    ar_bucket:
+      "Which rung of the receivables ageing ladder, derived from `due_date` against " +
+      "the time of the request rather than stored. The standard ladder's rungs are " +
+      "`Current` (not yet due, or no due date), `1-30 days`, `31-60 days`, " +
+      "`61-90 days`, `91-120 days`, `121-150 days`, `151-180 days`, `181-365 days`, " +
+      "`365+ days`. The rung names use an en dash, exactly as the receivables report " +
+      "prints them. The boundaries come from the NAME — `Current`, `<from>-<to> days` " +
+      "or `<from>+ days` — so a ladder built at another rung width (the report's " +
+      "`aging_interval`) drills through this same filter; a value that is not a rung " +
+      "at all is a 400 rather than an empty page. Ageing only: combine it with " +
+      "`status[in]=posted,payment_due,not_paid` and `written_off[is]=false` to match " +
+      "the report's own population.",
+    customer:
+      "Joins on `customers.public_id`. The bare `?customer=cus_…` scope above is " +
+      "cheaper (it filters the invoice's own FK) — prefer it for a single customer.",
+    subscription:
+      "Joins on `subscriptions.public_id`; prefer the bare `?subscription=sub_…` scope.",
+    exchange_rate:
+      "The issue-time FX snapshot. `exchange_rate[is_present]=false` is the useful " +
+      "one — the invoices a converted report cannot account for. Comparisons accept " +
+      "decimals (`exchange_rate[gt]=95`), and the stored value is exact, so prefer " +
+      "`gt`/`lt`/`between` over `is` on a rate.",
+  },
+};
+
 const openapiSpec = {
   openapi: "3.1.0",
   info: {
@@ -1019,6 +1159,27 @@ const openapiSpec = {
         security: [],
         parameters: [countryCodeParam],
         responses: { "200": ok("SubdivisionList"), "404": errResp("No such country") },
+      },
+    },
+    "/v1/countries/{code}/postal-codes/{postal}": {
+      get: {
+        tags: ["Reference"],
+        summary: "Look up the state and places for a postal code",
+        description:
+          "Postal data: GeoNames (https://www.geonames.org), licensed CC BY 4.0. Answers 404 when the code is unknown.",
+        security: [],
+        parameters: [
+          countryCodeParam,
+          {
+            name: "postal",
+            in: "path",
+            required: true,
+            schema: { type: "string", maxLength: 20 },
+            example: "600001",
+            description: "The postal code. Spaces and hyphens do not matter.",
+          },
+        ],
+        responses: { "200": ok("PostalCodeLookup"), "404": errResp("Unknown postal code") },
       },
     },
     "/v1/me": {
@@ -1543,13 +1704,24 @@ const openapiSpec = {
         tags: ["Customers"],
         summary: "Payments holding the customer's excess credit",
         description:
-          "Each payment that left money on the customer's excess balance and still holds some: " +
-          "`held_minor` is what it put there less what its refunds drew out; `refundable_minor` " +
-          "caps that by the customer's excess balance in that currency now. Refund one with " +
-          "`POST …/payments/{pay}/refund`. Integer minor units.",
+          "Each payment that left money on the customer's excess balance and still holds some. " +
+          "`held_minor` is what it put there less what its refunds drew out. Invoices draw the " +
+          "balance oldest payment first, so `remaining_minor` is what is still on the balance " +
+          "from this payment; the `remaining_minor` values sum to the customer's excess balance " +
+          "in that currency, and a payment with nothing left is not listed. `refundable_minor` is " +
+          "what a refund of this payment can take now, never more than `remaining_minor`. Refund one with " +
+          "`POST …/payments/{pay}/refund`. Integer minor units. `include_used=true` also lists " +
+          "the payments whose excess invoices used up (`remaining_minor` 0).",
         parameters: [
           bizParam,
           { name: "cus", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "include_used",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["true", "false"] },
+            description: "`true`: also list payments whose excess is all used.",
+          },
         ],
         responses: {
           "200": { description: "A list of excess_payment objects" },
@@ -1581,6 +1753,12 @@ const openapiSpec = {
                   address: { type: "object", nullable: true },
                   metadata: { type: "object", nullable: true },
                   active: { type: "boolean" },
+                  new_method_gateway_account: {
+                    type: "string",
+                    nullable: true,
+                    description:
+                      "gwa_… a new payment method of this customer goes to (portal Pay now and Add a payment method), ahead of the business routing. null = the business setting. Saved methods stay on the gateway that holds them.",
+                  },
                   email_notifications: {
                     type: "boolean",
                     description: "false stops automatic billing emails to this customer.",
@@ -3109,6 +3287,226 @@ const openapiSpec = {
         },
       },
     },
+    "/v1/businesses/{biz}/checkout_report": {
+      get: {
+        tags: ["Organization"],
+        summary: "Checkout report: opens, the funnel, payments and recovery",
+        description:
+          "Hosted checkout sessions (new sign-ups and purchases) first opened in [`start`, `end`] (civil days in the business timezone). The funnel counts a session at a step when it reached that step or a later one, as the `checkout_funnel` report does; conversion is completed ÷ opened, as `checkout_conversion`. Revenue is the paid total of each completed checkout's purchase invoice or its subscription's first invoice. Recovery counts sessions CREATED in the window that completed after a reminder email, as `checkout_reminders` and `checkout_recovered_revenue` do. With `compare=true`, `previous` holds the same figures for the same number of days just before. Money is integer minor units in `currency` (the business currency unless `currency` is set), converted at each amount's day; a currency with no rate is left out and named in `missing_rates`. `live` ignores the window: sessions used in the last 5 minutes and opened in the last 30. `tracking` holds first-party visit figures (no cookies; GPC and DNT honoured): only visits whose page ran in a browser count, with the referrer host, UTM tags, device, browser and the edge's country; `tracking.since` is the first tracked view, so a window that starts earlier is partly untracked. `country` and `device` narrow every figure to sessions with a matching tracked visit.",
+        parameters: [
+          bizParam,
+          {
+            name: "start",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "First civil day of the window, in the business timezone",
+          },
+          {
+            name: "end",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "Last civil day of the window, inclusive. At most 366 days.",
+          },
+          {
+            name: "compare",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["true", "false"] },
+            description: "Also return the previous window of the same length",
+          },
+          {
+            name: "currency",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Report in this currency only. Default: every currency, converted into the business currency",
+          },
+          {
+            name: "payment_link",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only sessions from this payment link (`plink_…`)",
+          },
+          {
+            name: "product",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Only sessions with an item of this product: a plan, a one-time charge or a credit pack",
+          },
+          {
+            name: "plan",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "The same filter as `product`, under its earlier name",
+          },
+          {
+            name: "country",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Only sessions with a tracked visit from this country (ISO 3166-1 alpha-2, from the visitor's request)",
+          },
+          {
+            name: "device",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["desktop", "mobile", "tablet"] },
+            description: "Only sessions with a tracked visit from this device category",
+          },
+        ],
+        responses: {
+          "200": { description: "The checkout report" },
+          "400": errResp("Invalid window, unknown payment link or product"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/portal_report": {
+      get: {
+        tags: ["Organization"],
+        summary: "Portal report: visits, actions, payments and saves",
+        description:
+          "Customer portal sessions signed in during [`start`, `end`] (civil days in the business timezone), and the actions they took, read from the events each session emitted. `arrival` is how the link was made: an email link carries the type of the email that sent it (`email` when none is recorded), `email_code` a sign-in with an email code, `api` every other link (the dashboard uses the API). Payments are the payments a portal session made, by the day they happened; `recovered_from_failed_emails_minor` is the part paid in visits that arrived from a failed-payment email (`payment_failed`, `payment_authentication_required`, `dunning_action_required`). Cancellations and the save rate come from the portal cancel flow, as the `cancellation_saves` report counts them, and are narrowed by `plan` only (not by `arrived_from`, `country` or `device`). `tracking` holds first-party visit figures (no cookies; GPC and DNT honoured): sections viewed, countries, devices, browsers and invoice PDF downloads; `tracking.since` is the first tracked view. `country` and `device` narrow the other figures to sessions with a matching tracked visit. With `compare=true`, `previous` holds the same figures for the window just before. Money is integer minor units in `currency`.",
+        parameters: [
+          bizParam,
+          {
+            name: "start",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "First civil day of the window, in the business timezone",
+          },
+          {
+            name: "end",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "Last civil day of the window, inclusive. At most 366 days.",
+          },
+          {
+            name: "compare",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["true", "false"] },
+            description: "Also return the previous window of the same length",
+          },
+          {
+            name: "currency",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Report in this currency only. Default: every currency, converted into the business currency",
+          },
+          {
+            name: "arrived_from",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Only visits that arrived this way: an arrival key from `options.arrivals`",
+          },
+          {
+            name: "plan",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only customers with a subscription on this plan product",
+          },
+          {
+            name: "country",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Only sessions with a tracked visit from this country (ISO 3166-1 alpha-2, from the visitor's request)",
+          },
+          {
+            name: "device",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["desktop", "mobile", "tablet"] },
+            description: "Only sessions with a tracked visit from this device category",
+          },
+        ],
+        responses: {
+          "200": { description: "The portal report" },
+          "400": errResp("Invalid window or unknown plan"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/email_report": {
+      get: {
+        tags: ["Organization"],
+        summary: "Email report: delivery, failures, portal visits and recovery",
+        description:
+          "Billing emails queued in [`start`, `end`] (civil days in the business timezone). Status counts are the delivery report's: `delivered` is an email marked sent on a transport that delivers (`smtp`, `ses`, `esp`); `bounced` excludes complaints, which count as `complained`; the rates divide by `attempted` (delivered + bounced + complained + failed). `link_visits` counts portal visits whose link came from an email, as the portal report's `arrival` does, and `recovered_minor` is the portal report's `recovered_from_failed_emails_minor`; both are null under a `transport` filter. `paid_after` counts invoices paid within `dunning.hold_days` days after a delivered email that asked for payment. Reasons hold stored provider and server responses with addresses removed; recipient domains are domains only. `tracked`, `opened`, `clicked`, `open_bps` and `click_bps` cover delivered emails sent while the business had `email_config.trackEngagement` on, once per email; a person's click counts as an open, and machine opens (mail privacy proxies, security scanners, prefetch) are counted apart in `machine_opened`. `tracking.covers_period` is false when the window starts before tracking began. `top_links` ranks links by people's clicks; link paths hold plain words only (ids and tokens show as `:id`) and no query string. With `compare=true`, `previous` holds the same figures for the same number of days just before. Money is integer minor units in `currency`.",
+        parameters: [
+          bizParam,
+          {
+            name: "start",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "First civil day of the window, in the business timezone",
+          },
+          {
+            name: "end",
+            in: "query",
+            required: true,
+            schema: { type: "string", format: "date" },
+            description: "Last civil day of the window, inclusive. At most 366 days.",
+          },
+          {
+            name: "compare",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["true", "false"] },
+            description: "Also return the previous window of the same length",
+          },
+          {
+            name: "currency",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Report money in this currency only. Default: converted into the business currency",
+          },
+          {
+            name: "type",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only emails of this type, for example `payment_failed`",
+          },
+          {
+            name: "transport",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only emails sent by this transport; `unknown` = not recorded",
+          },
+          {
+            name: "recent",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 500 },
+            description: "How many recent emails to return (default 10)",
+          },
+        ],
+        responses: {
+          "200": { description: "The email report" },
+          "400": errResp("Invalid window"),
+        },
+      },
+    },
     "/v1/analytics/sync": {
       get: {
         tags: ["Analytics"],
@@ -3140,7 +3538,7 @@ const openapiSpec = {
           "Each entry says what the number MEANS, whether it is a value at an instant (`kind: stock`) " +
           "or a sum over a window (`kind: flow`), what unit it is in, which dimensions it may be split " +
           "by, which grains it may be shown at, and whether a comparison window is meaningful. A client " +
-          "that renders its picker from this payload cannot offer a cut the engine would refuse.",
+          "that renders its picker from this payload cannot offer a cut the engine would refuse. `model` names the shelf the measure belongs to: `all`, `subscriptions`, `one_time`, `usage`, `credits` or `payments`.",
         responses: { "200": { description: "The measure registry" } },
       },
     },
@@ -3280,7 +3678,8 @@ const openapiSpec = {
             description:
               "ISO 4217 code to state the figures in. Nothing is converted here: this SELECTS the " +
               "currency the figures were recorded in. Omit it when only one currency is present; a money " +
-              "measure with several is refused until you name one.",
+              "measure with several is refused until you name one. A count ignores it and answers " +
+              "across currencies (`currency_basis: across_currencies`).",
           },
           {
             name: "compare",
@@ -3386,6 +3785,73 @@ const openapiSpec = {
         responses: { "200": { description: "List of events" } },
       },
     },
+    "/v1/businesses/{biz}/orders": {
+      get: {
+        tags: ["Invoices"],
+        summary: "List orders (paginated)",
+        description:
+          "Invoices for one-time products: no subscription, at least one one-time line that is " +
+          "not a credit pack, and a status of posted, payment_due, not_paid or paid. Same paging, " +
+          "sort and filter grammar as the invoice list. `status` is what the list shows: `paid`, " +
+          "`due`, `refunded` or `partly_refunded`; `invoice_status` is the invoice's own status. " +
+          "`?customer=cus_a` scopes the list to one customer. A custom field of the customer " +
+          "filters as `cf_<api_name>`.",
+        parameters: [
+          bizParam,
+          ...listParams({
+            ...INVOICE_LIST_OPTS,
+            search: INVOICE_LIST_OPTS.search,
+            filters: {
+              ...INVOICE_LIST_OPTS.filters,
+              order_status: "enum",
+              product: "enum",
+              coupon: "text",
+              gateway: "enum",
+              payment_method_type: "enum",
+              customer_country: "enum",
+              refunded_minor: "number",
+              tax_minor: "number",
+              discount_minor: "number",
+            },
+            filterNotes: {
+              ...INVOICE_LIST_OPTS.filterNotes,
+              order_status:
+                "One of `paid`, `due`, `refunded`, `partly_refunded`. Refunds are the succeeded " +
+                "refunds of the invoice's payments: all of the payment back is `refunded`.",
+              product:
+                "A product id. Matches an order with a one-time line for that product. " +
+                "Credit pack lines do not count.",
+              coupon: "A coupon code. Matches an order that a discount from that coupon reduced.",
+              gateway: "A gateway key. Matches an order that a succeeded payment through it paid.",
+              payment_method_type:
+                "A payment method type, for example `card`. Matches the method of a succeeded payment.",
+              customer_country: "The customer's billing country, ISO 3166-1 alpha-2.",
+              refunded_minor: "Succeeded refunds on the order, in minor units.",
+              tax_minor: "Tax on the order, in minor units.",
+              discount_minor: "Discounts on the order's lines, in minor units.",
+            },
+          }),
+        ],
+        responses: {
+          "200": ok("OrderList"),
+          "400": errResp("Bad limit / unknown query parameter, filter field, operator or sort key"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/orders/{id}": {
+      get: {
+        tags: ["Invoices"],
+        summary: "Get an order",
+        description:
+          "The order as the list shows it, plus every payment attempt (`payments`) and every " +
+          "refund (`refunds`). 404 when the invoice is not an order, or is in another business.",
+        parameters: [
+          bizParam,
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { "200": ok("OrderDetail"), "404": errResp("No such order") },
+      },
+    },
     "/v1/businesses/{biz}/invoices": {
       get: {
         tags: ["Invoices"],
@@ -3397,111 +3863,7 @@ const openapiSpec = {
           "described here rather than listed as parameters because they share their names with " +
           "the `customer` and `subscription` filters below, and a parameter name may only be " +
           "declared once. `?customer=cus_a` and `?customer[is]=cus_a` both work.",
-        parameters: [
-          bizParam,
-          ...listParams({
-            // Mirrors INVOICE_SORT_FIELDS / INVOICE_FILTER_OPS
-            // (src/modules/invoicing/service.ts) — asserted equal in
-            // test/unit/openapi-filters.test.ts.
-            sortFields: [
-              "created_at",
-              "number",
-              "status",
-              "subtotal_minor",
-              "total_minor",
-              "period_start",
-              "period_end",
-              "due_date",
-              "paid_at",
-            ],
-            search:
-              "Free-text over invoice id / number / status / customer id, any name column (name, first/last, company), email",
-            includeDeleted:
-              "Accepted; invoices are never deleted (a void keeps the row), so it changes nothing.",
-            filters: {
-              id: "text",
-              number: "text",
-              status: "enum",
-              dunning_status: "enum",
-              ar_bucket: "enum",
-              currency: "enum",
-              channel: "enum",
-              imported: "bool",
-              written_off: "bool",
-              subtotal_minor: "number",
-              total_minor: "number",
-              promotional_discount_minor: "number",
-              credits_applied_minor: "number",
-              amount_paid_minor: "number",
-              amount_due_minor: "number",
-              withholding_minor: "number",
-              attempt_count: "number",
-              created_at: "date",
-              period_start: "date",
-              period_end: "date",
-              due_date: "date",
-              paid_at: "date",
-              voided_at: "date",
-              next_attempt_at: "date",
-              dunning_exhausted_at: "date",
-              expected_payment_date: "date",
-              po_number: "text",
-              exchange_rate: "number",
-              exchange_rate_base: "enum",
-              seller_state_code: "enum",
-              place_of_supply_code: "enum",
-              tax_treatment: "enum",
-              tax_note: "text",
-              customer: "text",
-              customer_name: "text",
-              customer_email: "text",
-              subscription: "text",
-              recurring: "bool",
-            },
-            filterNotes: {
-              dunning_status:
-                "One of `in_progress`, `parked`, `succeeded`, `exhausted`, `stopped`. The old " +
-                "spelling `success` is still accepted as a deprecated alias and matches the same rows.",
-              recurring:
-                "`true`: raised for a subscription; `false`: a one-off invoice. Same predicate as `subscription[is_present]`.",
-              customer_name:
-                "Compares the customer's RESOLVED display name — `first_name last_name`, else " +
-                "`company`, else the legacy `name` — the same string `customer_name` is " +
-                "reported as, so `contains=priya raghunathan` matches a customer who has only " +
-                "the two structured columns. Not a column: `is_present=false` means no name of " +
-                "any kind (filter `customer_email` for the address a nameless row displays " +
-                "instead).",
-              amount_due_minor:
-                "Narrows on the LIVE balance the response prints, not the stored issue-time " +
-                "collectible — the two differ once payments land.",
-              period_end:
-                "Narrows on the INCLUSIVE boundary the response prints, not the stored " +
-                "exclusive one.",
-              ar_bucket:
-                "Which rung of the receivables ageing ladder, derived from `due_date` against " +
-                "the time of the request rather than stored. The standard ladder's rungs are " +
-                "`Current` (not yet due, or no due date), `1-30 days`, `31-60 days`, " +
-                "`61-90 days`, `91-120 days`, `121-150 days`, `151-180 days`, `181-365 days`, " +
-                "`365+ days`. The rung names use an en dash, exactly as the receivables report " +
-                "prints them. The boundaries come from the NAME — `Current`, `<from>-<to> days` " +
-                "or `<from>+ days` — so a ladder built at another rung width (the report's " +
-                "`aging_interval`) drills through this same filter; a value that is not a rung " +
-                "at all is a 400 rather than an empty page. Ageing only: combine it with " +
-                "`status[in]=posted,payment_due,not_paid` and `written_off[is]=false` to match " +
-                "the report's own population.",
-              customer:
-                "Joins on `customers.public_id`. The bare `?customer=cus_…` scope above is " +
-                "cheaper (it filters the invoice's own FK) — prefer it for a single customer.",
-              subscription:
-                "Joins on `subscriptions.public_id`; prefer the bare `?subscription=sub_…` scope.",
-              exchange_rate:
-                "The issue-time FX snapshot. `exchange_rate[is_present]=false` is the useful " +
-                "one — the invoices a converted report cannot account for. Comparisons accept " +
-                "decimals (`exchange_rate[gt]=95`), and the stored value is exact, so prefer " +
-                "`gt`/`lt`/`between` over `is` on a rate.",
-            },
-          }),
-        ],
+        parameters: [bizParam, ...listParams(INVOICE_LIST_OPTS)],
         responses: {
           "200": ok("InvoiceList"),
           "400": errResp("Bad limit / unknown query parameter, filter field, operator or sort key"),
@@ -4107,6 +4469,9 @@ const openapiSpec = {
                               "new_payment_method",
                               "offline",
                               "api",
+                              "checkout",
+                              "webhook",
+                              "mcp",
                               null,
                             ],
                           },
@@ -4138,8 +4503,13 @@ const openapiSpec = {
                             enum: ["retry", "hold", "deadline_attempt", "final_action"],
                           },
                           at: { type: "string", format: "date-time" },
-                          until: { type: "string", format: "date-time" },
-                          reason: { type: "string", enum: ["parked", "network_limit"] },
+                          until: { type: "string", format: "date-time", nullable: true },
+                          reason: {
+                            type: "string",
+                            enum: ["parked", "network_limit", "parked_for_ops"],
+                            description:
+                              "Why the invoice is on hold. `parked_for_ops`: the gateway refused our request. The invoice waits for our team, has no deadline (`until` is null), and no final action runs.",
+                          },
                           invoice: {
                             type: "string",
                             enum: ["not_paid", "void", "write_off", "reverse"],
@@ -4351,6 +4721,11 @@ const openapiSpec = {
                               "The next retry, or the next reminder on a `reminder` row. A time in the past is due: the next clock tick acts on it.",
                           },
                           retry_started_at: { type: "string", format: "date-time" },
+                          written_off: {
+                            type: "boolean",
+                            description:
+                              "Settled by a write-off. `status` is `paid`, but nothing was collected: the row is under `given_up`, not `recovered`.",
+                          },
                           customer: { type: "string", nullable: true, example: "cus_…" },
                           customer_name: { type: "string", nullable: true },
                           customer_email: { type: "string", nullable: true },
@@ -4414,8 +4789,9 @@ const openapiSpec = {
       get: {
         tags: ["Businesses"],
         summary: "List team alert recipients and their confirmation state",
+        deprecated: true,
         description:
-          "One row per address in `team_alerts_config.recipients`. `member`: a team member, gets alerts. `confirmed`: confirmed by email, gets alerts. `pending`: gets no alerts until the address is confirmed.",
+          "Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. This endpoint keeps answering from the business's email destinations until it is removed. One row per address in `team_alerts_config.recipients`. `member`: a team member, gets alerts. `confirmed`: confirmed by email, gets alerts. `pending`: gets no alerts until the address is confirmed.",
         parameters: [bizParam],
         responses: { "200": ok("TeamAlertRecipientList"), "404": errResp("No such business") },
       },
@@ -4424,8 +4800,9 @@ const openapiSpec = {
       post: {
         tags: ["Businesses"],
         summary: "Send the confirmation email to a pending team alert recipient again",
+        deprecated: true,
         description:
-          "The new link replaces the old one. Limited per address: 429 when we sent too many confirmation emails to it.",
+          "Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. The new link replaces the old one. Limited per address: 429 when we sent too many confirmation emails to it.",
         parameters: [bizParam, idempotencyHeader],
         requestBody: {
           required: true,
@@ -5759,6 +6136,8 @@ const openapiSpec = {
       get: {
         tags: ["Receipts"],
         summary: "Get a receipt",
+        description:
+          "`initiated_by` says what started the charge behind the receipt: `{ trigger, actor }`, as on a transaction. Null when nothing recorded it.",
         parameters: [bizParam, pathParam("rcpt")],
         responses: {
           "200": {
@@ -5889,7 +6268,7 @@ const openapiSpec = {
         tags: ["Payment Requests"],
         summary: "Get a payment request",
         description:
-          "`amount_minor` is the live total of the invoices still open. An invoice paid, voided or written off elsewhere drops out (`settled_elsewhere`).",
+          "`amount_minor` is the live total of the invoices still open. An invoice paid, voided or written off elsewhere drops out (`settled_elsewhere`). `created_through` is `{ source, actor }` for who sent the request (a member's email in the dashboard, or the API). `initiated_by` is `{ trigger, actor }` for the charge that paid it, set only when the request is paid. Both are null when nothing recorded them.",
         parameters: [bizParam, pathParam("preq")],
         responses: {
           "200": {
@@ -7233,10 +7612,11 @@ const openapiSpec = {
         description:
           "A payment on an invoice is refunded as revenue (contra-revenue, capped by what that " +
           "invoice's credit notes do not already claim). A payment on NO invoice is held as the " +
-          "customer's excess credit — it is refunded out of that credit instead, capped by what " +
-          "the payment still holds and by the customer's current excess balance (some may already " +
-          "have been applied to invoices). A payment that is neither is refused with a 400. " +
-          "`GET …/customers/{cus}/excess_payments` lists what is refundable this way.",
+          "customer's excess credit — it is refunded out of that credit instead, capped by the " +
+          "payment's `remaining_minor` in `GET …/customers/{cus}/excess_payments` (invoices draw " +
+          "the excess balance oldest payment first) and by the customer's current excess balance. " +
+          "A refund above that cap is refused with a 400. A payment that is neither is refused " +
+          "with a 400. That list's `refundable_minor` is what is refundable this way.",
         parameters: [
           bizParam,
           {
@@ -7258,6 +7638,9 @@ const openapiSpec = {
           "201": created("Refund"),
           "400": errResp("Not refundable / over-refund"),
           "404": errResp("No such payment"),
+          "409": errResp(
+            "Possible repeat: this payment already has a pending or succeeded refund of the same amount from the last 10 minutes (`error.code` is `possible_duplicate`). Nothing is booked. Send the request again with `confirm_repeat: true` to send the refund anyway.",
+          ),
         },
       },
     },
@@ -7627,6 +8010,39 @@ const openapiSpec = {
           "201": created("ListView"),
           "404": errResp("No such view, or not visible to you"),
           "409": errResp("You already have a view by that name on this list"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/billing_models": {
+      get: {
+        tags: ["Analytics"],
+        summary: "The billing models a business has data for",
+        description:
+          "Which of `subscriptions`, `one_time`, `usage` and `credits` this business had figures for in the last 90 days. Screens use it to show a model's reports and boards only when there is something to show. An empty list means no model has data yet.",
+        parameters: [bizParam],
+        responses: {
+          "200": {
+            description: "Success",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["billing_models"] },
+                    business: { type: "string", description: "The business id." },
+                    models: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        enum: ["subscriptions", "one_time", "usage", "credits"],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "404": errResp("No such business"),
         },
       },
     },
@@ -10152,10 +10568,26 @@ const openapiSpec = {
         summary: "List payment intents (paginated)",
         description:
           "Cursor-paginated. `status` and `purpose` narrow in SQL and are VALIDATED — an " +
-          "unrecognised value is a 400 naming the vocabulary, never an empty page. Every row carries " +
-          "`attempt_count` (the “Payment Attempts” column). No other query parameter is accepted.",
+          "unrecognised value is a 400 naming the vocabulary, never an empty page. `customer` and " +
+          "`invoice` narrow to one record of this business; an id that matches nothing returns an " +
+          "empty page. Every row carries `attempt_count` (the “Payment Attempts” column) and " +
+          "`last_error`. No other query parameter is accepted.",
         parameters: [
           bizParam,
+          {
+            name: "customer",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only this customer's intents (`cus_…`).",
+          },
+          {
+            name: "invoice",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Only the intents collecting for this invoice (its public id).",
+          },
           {
             name: "status",
             in: "query",
@@ -11341,12 +11773,18 @@ const openapiSpec = {
                   processor_reference: {
                     type: "string",
                     maxLength: 200,
-                    description: "Optional. The case number that your processor gave the dispute.",
+                    description:
+                      "Optional. The case number that your processor gave the dispute. A second dispute with the same case number in this business is refused with 409. When the gateway reports the same case later, it updates this dispute and does not record a new one.",
                   },
                   opened_at: {
                     type: "integer",
                     description:
                       "When the processor opened the dispute, in Unix seconds. Default now. It must not be in the future.",
+                  },
+                  evidence_due_by: {
+                    type: "integer",
+                    description:
+                      "Optional. The processor's deadline for evidence, in Unix seconds. It must not be before `opened_at`.",
                   },
                 },
               },
@@ -11357,7 +11795,9 @@ const openapiSpec = {
           "201": { description: "Recorded" },
           "400": errResp("The gateway reports disputes, or the amount is not correct"),
           "404": errResp("No such payment"),
-          "409": errResp("The gateway already reported a dispute on this payment"),
+          "409": errResp(
+            "The gateway already reported a dispute on this payment, or a dispute with this case number exists",
+          ),
         },
       },
     },
@@ -12755,6 +13195,9 @@ const openapiSpec = {
           "200": ok("CreditNote"),
           "400": errResp("Nothing to refund / exceeds available"),
           "404": errResp("No such credit note"),
+          "409": errResp(
+            "Possible repeat: this payment already has a pending or succeeded refund of the same amount from the last 10 minutes (`error.code` is `possible_duplicate`). Nothing is booked. Send the request again with `confirm_repeat: true` to send the refund anyway.",
+          ),
         },
       },
     },
@@ -12778,6 +13221,11 @@ const openapiSpec = {
                     type: "integer",
                     description:
                       "Amount to refund in minor units; defaults to the full available amount",
+                  },
+                  confirm_repeat: {
+                    type: "boolean",
+                    description:
+                      "Set to true to send a refund that repeats one sent in the last 10 minutes (same payment, same amount). Without it, the repeat is refused with a 409 `possible_duplicate`.",
                   },
                 },
               },
@@ -14421,6 +14869,12 @@ const openapiSpec = {
                     description:
                       "#RRGGBB. Accent on the hosted portal/checkout and the button fill in billing email.",
                   },
+                  button_text_color: {
+                    type: "string",
+                    nullable: true,
+                    description:
+                      "#RRGGBB. The label color on brand-color buttons on the hosted portal, checkout and billing emails. When set, it is used as given, whatever its contrast. When null, the label is white, near-black or black, whichever reaches 4.5:1 on `brand_color`.",
+                  },
                   allow_customer_coupons: {
                     type: "boolean",
                     description:
@@ -15609,6 +16063,29 @@ const openapiSpec = {
                         type: "boolean",
                         description: "The portal does not list voided invoices. Default false.",
                       },
+                      portal_save_new_method: {
+                        type: "string",
+                        enum: ["offer", "always", "never"],
+                        description:
+                          "Portal Pay now with a new card: `offer` shows the buyer a box to save it for later invoices (ticked when they have no working payment method), `always` saves it and shows the consent text, `never` pays without saving it. Unset means offer. Only on gateways that can save a method while they charge.",
+                      },
+                      payment_routing: {
+                        type: "object",
+                        description:
+                          "Where new payment methods go and in what order, per currency (key: ISO currency code). `order` lists payment methods first-to-last in the portal (saved methods always come first); `gateways` maps a method (`card`, `upi`, `paypal`…) to the gwa_… that takes it. A currency without an entry uses the automatic choice: the buyer's primary gateway, then the business default, then the oldest account that offers the method.",
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            order: { type: "array", items: { type: "string" } },
+                            gateways: { type: "object", additionalProperties: { type: "string" } },
+                          },
+                        },
+                      },
+                      portal_ask_delete_reason: {
+                        type: "boolean",
+                        description:
+                          "Ask why when a buyer deletes their last payment method in the portal (four reasons, optional). The answer rides on the `payment_source_deleted` event as `deletion_reason`. Unset means off.",
+                      },
                       portal_actions: {
                         type: "object",
                         description:
@@ -15752,6 +16229,11 @@ const openapiSpec = {
                         description:
                           "Where the links and the button in billing emails go. `portal` (default): a signed-in link to the hosted billing portal. `merchant_url`: `merchantUrl`, as it is, with no portal session.",
                       },
+                      trackEngagement: {
+                        type: "boolean",
+                        description:
+                          "Record opens and clicks of billing emails. We add a 1x1 image to the HTML part and send each link through a redirect on our API host. We store the time, a device and browser family, and the link; never the IP address, the full user agent or the recipient address. Default false for a business that existed before this setting; true for a business a person creates.",
+                      },
                       merchantUrl: {
                         type: "string",
                         nullable: true,
@@ -15764,8 +16246,9 @@ const openapiSpec = {
                   team_alerts_config: {
                     allOf: [{ $ref: "#/components/schemas/TeamAlertsConfig" }],
                     nullable: true,
+                    deprecated: true,
                     description:
-                      "Mail to your own team: overdue high-value invoices, failed webhooks and a daily summary. Replaces the stored value. `null` turns every alert off.",
+                      "Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications. Mail to your own team: overdue high-value invoices, failed webhooks and a daily summary. Each recipient becomes an email destination of this business. Replaces the stored value. `null` turns every alert off.",
                   },
                   credit_note_prefix: { type: "string" },
                   credit_note_next_number: { type: "integer", minimum: 1 },
@@ -15971,11 +16454,17 @@ const openapiSpec = {
             type: ["string", "null"],
             description:
               "Who acted: an API key id, a member's email, `billing_clock`, `system`, or the id of the " +
-              "checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from.",
+              "checkout session (`cosess_…`) or portal session (`psess_…`) a customer acted from, or the " +
+              "key of the gateway that sent a notification (`stripe`, `razorpay`).",
           },
           source: {
             type: "string",
-            description: "Where the action came from, e.g. `api`, `dashboard`.",
+            description:
+              "Where the action came from: `api`, `dashboard`, `portal` (the customer portal), " +
+              "`checkout` (hosted checkout), `webhook` (a gateway notification), `mcp` (an AI agent " +
+              "over OAuth), `scheduled_job` (the billing clock), `migration`, `system`, `hubspot` " +
+              "or `assistant`. Rows written before `portal`, `checkout`, `webhook` and `mcp` " +
+              "existed keep `api`.",
           },
           action: { type: "string", description: "What happened, e.g. `subscription.cancel`." },
           resource_type: { type: ["string", "null"], description: "The kind of resource changed." },
@@ -17784,6 +18273,29 @@ const openapiSpec = {
           subdivision_strict: { type: "boolean" },
         },
       },
+      PostalCodeLookup: {
+        type: "object",
+        required: ["object", "country", "postal_code", "state_code", "state_name", "cities"],
+        properties: {
+          object: { type: "string", enum: ["postal_code"] },
+          country: { type: "string", example: "IN" },
+          postal_code: { type: "string", example: "600001" },
+          state_code: {
+            type: "string",
+            nullable: true,
+            description:
+              "Our subdivision code (the `state_code` an address stores), or null if none matched.",
+            example: "TN",
+          },
+          state_name: { type: "string", nullable: true, example: "Tamil Nadu" },
+          cities: {
+            type: "array",
+            items: { type: "string" },
+            description: "The distinct place names for the code.",
+            example: ["Chennai"],
+          },
+        },
+      },
       BusinessCreate: {
         type: "object",
         required: ["name", "default_currency"],
@@ -17808,7 +18320,7 @@ const openapiSpec = {
       TeamAlertsConfig: {
         type: "object",
         description:
-          "Team alerts. Each alert sends only when it is enabled and `recipients` has at least one address. Mail comes from the platform sender, not from the business mail settings.",
+          "Deprecated team alerts. Team notifications replace them: owners and admins set them up in the dashboard under Settings → Team notifications. Each alert sends only when it is enabled and `recipients` has at least one address. Mail comes from the platform sender, not from the business mail settings.",
         required: ["recipients"],
         properties: {
           recipients: {
@@ -17821,14 +18333,14 @@ const openapiSpec = {
           overdue: {
             type: "object",
             description:
-              "An alert when an unpaid invoice passes its due date and the amount due is at or above the limit for its currency. Checked every hour. An invoice in a currency with no limit gets no alert.",
+              "An alert when an unpaid invoice passes its due date and the amount due is at or above the limit for its currency. Checked every hour.",
             properties: {
               enabled: { type: "boolean", description: "Send this alert." },
               thresholds: {
                 type: "object",
                 additionalProperties: { type: "integer", minimum: 0 },
                 description:
-                  "Limit per currency, in minor units, keyed by ISO-4217 code. At least one when `enabled`.",
+                  "Limit per currency, in minor units, keyed by ISO-4217 code. At least one when `enabled`. An invoice in a currency with no limit gets an alert at every amount.",
               },
             },
           },
@@ -17921,7 +18433,12 @@ const openapiSpec = {
             additionalProperties: { $ref: "#/components/schemas/PortalFieldState" },
           },
           address_field_locks: { $ref: "#/components/schemas/AddressFieldLocks" },
-          team_alerts_config: { $ref: "#/components/schemas/TeamAlertsConfig" },
+          team_alerts_config: {
+            allOf: [{ $ref: "#/components/schemas/TeamAlertsConfig" }],
+            deprecated: true,
+            description:
+              "Deprecated. Team notifications replace team alerts: owners and admins set them up in the dashboard under Settings → Team notifications.",
+          },
           created_at: { type: "string", format: "date-time" },
         },
       },
@@ -18910,6 +19427,7 @@ const openapiSpec = {
         type: "object",
         required: ["object", "id", "email", "name"],
         properties: {
+          created_through: createdThroughSchema,
           discounts: {
             type: "array",
             readOnly: true,
@@ -18945,7 +19463,7 @@ const openapiSpec = {
             type: "array",
             readOnly: true,
             description:
-              "DERIVED, read-only: cash collected from this customer, one entry per currency — succeeded payments minus succeeded refunds. Credits applied to invoices are not cash and are excluded. Emitted by GET (detail) only.",
+              "DERIVED, read-only: cash collected from this customer, one entry per currency — succeeded payments minus succeeded refunds, tax included. Credit is not cash and is excluded: promotional credit, plan credits and a credit pack's credit when it pays a later invoice (the pack counts once, when its own invoice is paid). A credit note reduces it only when it is refunded as money. This is cash, not `revenue_billed` (net, before tax). Emitted by GET (detail) only.",
             items: {
               type: "object",
               properties: {
@@ -18953,6 +19471,68 @@ const openapiSpec = {
                 amount_minor: { type: "integer" },
                 paid_invoices_count: { type: "integer" },
                 first_paid_at: { type: "string", format: "date-time", nullable: true },
+              },
+            },
+          },
+          revenue_billed: {
+            type: "array",
+            readOnly: true,
+            description:
+              "DERIVED, read-only: this customer's lifetime net billed revenue, one entry per currency. Before tax, less discounts, promotional and plan credits, usage paid by a credit pack at its cost, and credit notes. Credit notes are deducted on their own issue date, so a total can be negative. Emitted by GET (detail) only.",
+            items: {
+              type: "object",
+              properties: {
+                currency: { type: "string" },
+                amount_minor: { type: "integer" },
+              },
+            },
+          },
+          balances: {
+            type: "array",
+            readOnly: true,
+            description:
+              "DERIVED, read-only: the customer's credit, one entry per currency. Lists every currency the customer has ever held credit in (promotional, refundable or excess), with 0 where a balance is used up. A currency the customer never held credit in is not listed, so a missing entry means no credit ever, and an entry of zeros means the credit is used up. Sorted by currency code. Emitted by GET (detail) and in event content; absent from the list and from create/patch responses.",
+            example: [
+              {
+                currency_code: "INR",
+                promotional_credits: 0,
+                refundable_credits: 0,
+                excess_payments: 0,
+              },
+              {
+                currency_code: "USD",
+                promotional_credits: 2500,
+                refundable_credits: 0,
+                excess_payments: 1000,
+              },
+            ],
+            items: {
+              type: "object",
+              required: [
+                "currency_code",
+                "promotional_credits",
+                "refundable_credits",
+                "excess_payments",
+              ],
+              properties: {
+                currency_code: {
+                  type: "string",
+                  description: "The currency of this entry (ISO-4217 code).",
+                },
+                promotional_credits: {
+                  type: "integer",
+                  description:
+                    "Promotional credit left, in minor units. Applies before tax; never refunded.",
+                },
+                refundable_credits: {
+                  type: "integer",
+                  description: "Refundable credit left from credit notes, in minor units.",
+                },
+                excess_payments: {
+                  type: "integer",
+                  description:
+                    "Excess payment credit left, in minor units: what overpayments put on the balance less what invoices and refunds used.",
+                },
               },
             },
           },
@@ -19121,6 +19701,12 @@ const openapiSpec = {
           total: { type: "integer", nullable: true },
           segment: { type: "string", nullable: true },
           mrr_by_currency: { type: "object", additionalProperties: { type: "integer" } },
+          revenue_billed_by_currency: {
+            type: "object",
+            additionalProperties: { type: "integer" },
+            description:
+              "Revenue billed to the whole population in the last 12 months, before tax and net of discounts and credits (credit notes not deducted), every revenue type: ISO code \u2192 integer minor units.",
+          },
         },
       },
       CustomerList: pagedList("Customer"),
@@ -19768,6 +20354,7 @@ const openapiSpec = {
         type: "object",
         required: ["object", "id", "status", "currency", "current_period_end"],
         properties: {
+          created_through: createdThroughSchema,
           object: { type: "string" },
           id: { type: "string", example: "sub_…" },
           status: {
@@ -19900,11 +20487,17 @@ const openapiSpec = {
             description:
               "What one billing period charges for the recurring items, in minor units, net of discounts that last more than one period and before tax; null when cancelled or when an item recurs on a different cadence than the subscription",
           },
+          revenue_billed_minor: {
+            type: "integer",
+            readOnly: true,
+            description:
+              "DERIVED, read-only: this subscription's lifetime net billed revenue in its currency. Before tax, less discounts, promotional and plan credits, usage paid by a credit pack at its cost, and credit notes. Credit notes are deducted on their own issue date, so the total can be negative. Emitted by GET (detail) only.",
+          },
           revenue_to_date_minor: {
             type: "integer",
             readOnly: true,
             description:
-              "DERIVED, read-only: cash collected on this subscription's invoices, in its currency — succeeded payments minus succeeded refunds. Credits applied to invoices are excluded. Emitted by GET (detail) only.",
+              "DERIVED, read-only: cash collected on this subscription's invoices, in its currency — succeeded payments minus succeeded refunds, tax included. Credit applied to its invoices is excluded: promotional credit, plan credits, credit pack credit and account credit. A credit note reduces it only when it is refunded as money. This is cash, not `revenue_billed` (net, before tax). Emitted by GET (detail) only.",
           },
           revenue_paid_invoices_count: {
             type: "integer",
@@ -20566,6 +21159,123 @@ const openapiSpec = {
           customer: { type: "string", example: "cus_…" },
         },
       },
+      Order: {
+        type: "object",
+        required: ["object", "id", "status", "currency", "total_minor"],
+        description:
+          "An order: an invoice for one-time products, with no subscription. Money is integer " +
+          "minor units in `currency`.",
+        properties: {
+          object: { type: "string", enum: ["order"] },
+          id: { type: "string", description: "The invoice id." },
+          number: { type: "string", nullable: true, description: "The invoice number." },
+          customer: {
+            type: "object",
+            properties: {
+              id: { type: "string", nullable: true },
+              name: { type: "string", nullable: true },
+              email: { type: "string", nullable: true },
+              country: { type: "string", nullable: true, description: "Billing country." },
+              custom_fields: { type: "object", nullable: true, additionalProperties: true },
+            },
+          },
+          products: {
+            type: "array",
+            description: "The products on the one-time lines. Credit pack lines are not listed.",
+            items: {
+              type: "object",
+              properties: {
+                id: {
+                  type: "string",
+                  nullable: true,
+                  description: "Product id, if the line has one.",
+                },
+                name: { type: "string" },
+                units: { type: "integer", description: "Total quantity across lines." },
+              },
+            },
+          },
+          total_minor: { type: "integer", description: "The invoice total." },
+          currency: { type: "string" },
+          status: {
+            type: "string",
+            enum: ["paid", "due", "refunded", "partly_refunded"],
+            description: "`due` covers posted, payment_due and not_paid.",
+          },
+          invoice_status: { type: "string", description: "The invoice's own status." },
+          refunded_minor: { type: "integer", description: "Succeeded refunds on its payments." },
+          discount_minor: { type: "integer", description: "Discounts on the order's lines." },
+          tax_minor: { type: "integer", description: "Tax on the order." },
+          created_at: { type: "string", format: "date-time" },
+          paid_at: { type: "string", format: "date-time", nullable: true },
+          due_date: { type: "string", format: "date-time", nullable: true },
+          channel: {
+            type: "string",
+            nullable: true,
+            description: "api, dashboard, system or import.",
+          },
+          payment_method: {
+            type: "object",
+            nullable: true,
+            description: "The method of the payment that paid the order, if any.",
+            properties: {
+              type: { type: "string" },
+              brand: { type: "string", nullable: true },
+              last4: { type: "string", nullable: true },
+            },
+          },
+          gateway: { type: "string", nullable: true, description: "Gateway of that payment." },
+          coupons: {
+            type: "array",
+            items: { type: "string" },
+            description: "Codes of the coupons that reduced the order.",
+          },
+        },
+      },
+      OrderDetail: {
+        allOf: [
+          { $ref: "#/components/schemas/Order" },
+          {
+            type: "object",
+            properties: {
+              created_through: createdThroughSchema,
+              payments: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    status: { type: "string" },
+                    amount_minor: { type: "integer" },
+                    currency: { type: "string" },
+                    gateway: { type: "string" },
+                    payment_method: { type: "object", nullable: true, additionalProperties: true },
+                    failure_code: { type: "string", nullable: true },
+                    failure_message: { type: "string", nullable: true },
+                    created_at: { type: "string", format: "date-time" },
+                  },
+                },
+              },
+              refunds: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    payment: { type: "string" },
+                    status: { type: "string" },
+                    amount_minor: { type: "integer" },
+                    currency: { type: "string" },
+                    reason: { type: "string", nullable: true },
+                    gateway: { type: "string" },
+                    created_at: { type: "string", format: "date-time" },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
       Invoice: {
         type: "object",
         required: ["object", "id", "status", "currency", "total_minor"],
@@ -20585,6 +21295,7 @@ const openapiSpec = {
           "today. It is **null on invoices raised before that date** and wherever no rate " +
           "was configured — never assume 1.",
         properties: {
+          created_through: createdThroughSchema,
           object: { type: "string" },
           id: { type: "string", example: "inv_…" },
           status: {
@@ -20694,6 +21405,16 @@ const openapiSpec = {
             type: "integer",
             description:
               "POST-tax customer-balance credit consumed at generation: the refundable + excess buckets. The promotional bucket is applied pre-tax and is reported as `promotional_discount_minor`, already inside `total_minor` — counting it here too would subtract it twice.",
+          },
+          refundable_credits_applied_minor: {
+            type: "integer",
+            description:
+              "The refundable-credit part of `credits_applied_minor`: credit from refundable credit notes.",
+          },
+          excess_payments_applied_minor: {
+            type: "integer",
+            description:
+              "The excess-payment part of `credits_applied_minor`: money the customer paid earlier above what was due.",
           },
           ...GRANT_CREDIT_FIELDS,
           amount_paid_minor: {
@@ -21222,6 +21943,7 @@ const openapiSpec = {
         },
       },
       InvoiceList: pagedList("Invoice"),
+      OrderList: pagedList("Order"),
       WalletTopup: {
         type: "object",
         required: ["amount_minor", "currency"],
@@ -22026,6 +22748,7 @@ const openapiSpec = {
           "currency",
         ],
         properties: {
+          created_through: createdThroughSchema,
           pack_refund: {
             type: "string",
             enum: ["unused", "full"],
@@ -22298,6 +23021,7 @@ const openapiSpec = {
       Transaction: {
         type: "object",
         properties: {
+          initiated_by: initiatedBySchema,
           object: { type: "string" },
           id: { type: "string", example: "txn_…" },
           type: { type: "string" },
@@ -22383,6 +23107,14 @@ const openapiSpec = {
               "It comes from the gateway's answer when the gateway gives one, else from the saved payment method that was charged. " +
               "It can be different from `instrument.type` when one checkout offers several methods. Null when not known.",
           },
+          gateway_code: {
+            type: "string",
+            nullable: true,
+            example: "invalid_account",
+            description:
+              "The gateway's own code for a failed transaction, beside our `error_code`. It comes from the logged gateway response. " +
+              "Set on the single read of a failed transaction only. Null when the response held no code.",
+          },
           pending_debit_cancel: {
             type: "object",
             nullable: true,
@@ -22410,6 +23142,11 @@ const openapiSpec = {
                 type: "integer",
                 description:
                   "The most that a new dispute can claim: the captured amount less refunds and disputes that are not won.",
+              },
+              reported_daily: {
+                type: "boolean",
+                description:
+                  "True when the gateway reports its disputes only in a daily report. A dispute that you record first, with its case number, is not recorded again when the report shows it.",
               },
             },
           },
@@ -22512,6 +23249,7 @@ const openapiSpec = {
         type: "object",
         required: ["object", "id", "status", "purpose", "attempt_count"],
         properties: {
+          initiated_by: initiatedBySchema,
           object: { type: "string", enum: ["payment_intent"] },
           id: { type: "string", example: "pi_…" },
           status: {
@@ -22738,6 +23476,11 @@ const openapiSpec = {
         properties: {
           amount_minor: { type: "integer", description: "Omit for the full remaining amount." },
           reason: { type: "string" },
+          confirm_repeat: {
+            type: "boolean",
+            description:
+              "Set to true to send a refund that repeats one sent in the last 10 minutes (same payment, same amount). Without it, the repeat is refused with a 409 `possible_duplicate`.",
+          },
           on_decline: {
             type: "string",
             enum: ["block", "issue_credit"],
@@ -23613,11 +24356,19 @@ const FIELD_RULES: Array<[string, string]> = [
   ["address.postal_code", "The postal code."],
   ["address.country", "The country (ISO-3166 alpha-2 code)."],
   ["lifetime_revenue.currency", "The currency of this entry (ISO-4217 code)."],
-  ["lifetime_revenue.amount_minor", "Cash collected in this currency, in minor units."],
+  [
+    "lifetime_revenue.amount_minor",
+    "Cash collected in this currency, in minor units: payments less refunds, tax included. Free credit is not included.",
+  ],
   ["lifetime_revenue.paid_invoices_count", "Number of paid invoices in this currency."],
   [
     "lifetime_revenue.first_paid_at",
     "When the first invoice in this currency was paid (ISO-8601 UTC).",
+  ],
+  ["revenue_billed.currency", "The currency of this entry (ISO-4217 code)."],
+  [
+    "revenue_billed.amount_minor",
+    "Net billed revenue in this currency, in minor units: before tax and less credit notes.",
   ],
   ["Customer tax_exempt", "True if the customer is exempt from tax."],
   ["Customer email_notifications", "Whether the customer gets billing emails."],
@@ -25145,7 +25896,10 @@ const FIELD_RULES: Array<[string, string]> = [
   ["OP GET /events PARAM:type", "Only events of this type."],
   ["OP GET /events PARAM:resource_type", "Only events about this kind of resource."],
   ["OP GET /events PARAM:resource_id", "Only events about this resource."],
-  ["OP GET /events PARAM:source", "Only events from this source."],
+  [
+    "OP GET /events PARAM:source",
+    "Only events from this source: `api`, `dashboard`, `portal`, `checkout`, `webhook`, `mcp`, `scheduled_job`, `migration`, `system`, `hubspot` or `assistant`.",
+  ],
   ["OP GET /events PARAM:occurred_after", "Only events after this time (ISO-8601 UTC)."],
   ["OP GET /events PARAM:occurred_before", "Only events before this time (ISO-8601 UTC)."],
   ["OP GET /events PARAM:limit", "Maximum number of events to return."],
@@ -26265,14 +27019,27 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
       invoice: nstr("The invoice the payment was made against.", { example: "inv_XXXXXXXXXXXX01" }),
       currency: str("The currency code.", { example: "USD" }),
       payment_amount_minor: int("The payment amount in minor units.", { example: 5000 }),
-      held_minor: int("The part of the payment still held as excess credit, in minor units.", {
-        example: 1200,
-      }),
+      held_minor: int(
+        "What the payment put on the excess balance, less its own refunds, in minor units.",
+        { example: 1200 },
+      ),
+      remaining_minor: int(
+        "What is still on the excess balance from this payment after invoices used credit, oldest payment first, in minor units.",
+        { example: 1200 },
+      ),
       refundable_minor: int("The part that you can refund now, in minor units.", { example: 1200 }),
       gateway: nstr("The payment gateway key.", { example: "stripe" }),
       created_at: dt("When the payment was created."),
     },
-    ["object", "payment", "currency", "payment_amount_minor", "held_minor", "refundable_minor"],
+    [
+      "object",
+      "payment",
+      "currency",
+      "payment_amount_minor",
+      "held_minor",
+      "remaining_minor",
+      "refundable_minor",
+    ],
   ),
   ExcessPaymentList: listOf("ExcessPayment", "Payments that hold the customer's excess credit."),
   DeletedPaymentMethod: deletedOf(
@@ -27362,6 +28129,367 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
       "breakdowns",
     ],
   ),
+  CheckoutReport: obj(
+    "Hosted checkout figures for a window of business days.",
+    {
+      object: objectTag("checkout_report"),
+      business: str("The business id.", { example: "biz_XXXXXXXXXXXX01" }),
+      start: str("The first day of the window (YYYY-MM-DD).", { example: "2026-10-22" }),
+      end: str("The last day of the window (YYYY-MM-DD).", { example: "2026-11-18" }),
+      previous_start: str("The first day of the previous window.", { example: "2026-09-24" }),
+      previous_end: str("The last day of the previous window.", { example: "2026-10-21" }),
+      timezone: str("The business time zone.", { example: "America/New_York" }),
+      currency: str("The currency of the money figures.", { example: "USD" }),
+      missing_rates: arrOf(
+        str("A currency code."),
+        "Currencies with no exchange rate, left out of the money figures.",
+      ),
+      totals: obj("The window's figures.", {
+        opened: int("Sessions first opened in the window.", { example: 120 }),
+        completed: int("Of those, the sessions completed.", { example: 30 }),
+        conversion_bps: int("Completed ÷ opened, in basis points.", {
+          nullable: true,
+          example: 2500,
+        }),
+        revenue_minor: int("Paid revenue of the completed sessions, minor units.", {
+          example: 297000,
+        }),
+        aov_minor: int("Revenue ÷ completed, minor units.", { nullable: true, example: 9900 }),
+        abandoned: int("Sessions with details entered, not paid, idle for an hour.", {
+          example: 20,
+        }),
+        recovered: int("Sessions created in the window that completed after a reminder.", {
+          example: 4,
+        }),
+        recovered_revenue_minor: int("Their paid revenue, minor units.", { example: 39600 }),
+        median_complete_seconds: int("Median seconds from opened to paid.", {
+          nullable: true,
+          example: 161,
+        }),
+      }),
+      previous: obj(
+        "The same figures for the previous window; null unless `compare=true`.",
+        {},
+        undefined,
+        { nullable: true },
+      ),
+      live: obj("Right now, whatever the window.", {
+        active_now: int("Open sessions used in the last 5 minutes.", { example: 2 }),
+        opened_last_30_minutes: int("Sessions first opened in the last 30 minutes.", {
+          example: 5,
+        }),
+        per_minute: arrOf(
+          int("Sessions opened in one minute."),
+          "The last 30 minutes, oldest first.",
+        ),
+      }),
+      days: arrOf(
+        obj("A day of the window.", { date: str("The day."), label: str("Its axis label.") }),
+        "The window's days, in order.",
+      ),
+      series: obj("Per-day figures, one per day in `days`.", {}),
+      funnel: arrOf(
+        obj("A funnel step.", {
+          step: str("The step."),
+          label: str("Its name."),
+          sessions: int("Sessions at this step."),
+          median_seconds_from_previous: int("Median seconds from the previous step.", {
+            nullable: true,
+          }),
+        }),
+        "The funnel, in order.",
+      ),
+      links: arrOf(
+        obj("Figures for one payment link (`payment_link` null: sessions made by the API).", {}),
+        "By payment link, by revenue.",
+      ),
+      payment_methods: arrOf(
+        obj(
+          "Completed sessions paid with one method on one gateway (`none`: no payment taken).",
+          {},
+        ),
+        "By method.",
+      ),
+      failures: obj("Payment attempts and the newest refusal of each session.", {}),
+      recovery: obj("Reminder emails and the checkouts they recovered.", {}),
+      coupons: obj("Sessions with and without a coupon, and the codes used.", {}),
+      countries: arrOf(
+        obj("Completed sessions by the customer's billing country.", {}),
+        "By country.",
+      ),
+      time_to_complete: arrOf(
+        obj("Completed sessions in one time band.", {}),
+        "Time from opened to paid.",
+      ),
+      tracking: obj(
+        "First-party visit tracking over the window (sessions whose page ran in a browser).",
+        {
+          since: str("The first tracked view of any window; null before tracking began.", {
+            nullable: true,
+            example: "2026-11-19T10:00:00.000Z",
+          }),
+          views: int("Tracked views in the window.", { example: 96 }),
+          completed: int("Of those, the sessions completed.", { example: 24 }),
+          channels: arrOf(
+            obj("Views, completions and revenue for one channel, source, medium and campaign.", {}),
+            "Where buyers come from, by revenue.",
+          ),
+          countries: arrOf(
+            obj("Views and completions by the visitor's country (`key` null: unknown).", {}),
+            "By visitor country.",
+          ),
+          devices: arrOf(obj("Views and completions by device category.", {}), "By device."),
+          browsers: arrOf(obj("Views and completions by browser family.", {}), "By browser."),
+          step_time: arrOf(
+            obj("Median visible milliseconds on one step, over the visits that showed it.", {}),
+            "By step.",
+          ),
+        },
+      ),
+    },
+    ["object", "business", "start", "end", "currency", "totals", "funnel"],
+  ),
+  PortalReport: obj(
+    "Customer portal figures for a window of business days.",
+    {
+      object: objectTag("portal_report"),
+      business: str("The business id.", { example: "biz_XXXXXXXXXXXX01" }),
+      start: str("The first day of the window (YYYY-MM-DD).", { example: "2026-10-22" }),
+      end: str("The last day of the window (YYYY-MM-DD).", { example: "2026-11-18" }),
+      previous_start: str("The first day of the previous window.", { example: "2026-09-24" }),
+      previous_end: str("The last day of the previous window.", { example: "2026-10-21" }),
+      timezone: str("The business time zone.", { example: "America/New_York" }),
+      currency: str("The currency of the money figures.", { example: "USD" }),
+      missing_rates: arrOf(
+        str("A currency code."),
+        "Currencies with no exchange rate, left out of the money figures.",
+      ),
+      options: obj("Filter values seen in the window.", {
+        arrivals: arrOf(str("An arrival key."), "Arrival keys."),
+      }),
+      totals: obj("The window's figures.", {
+        visits: int("Portal sessions signed in during the window.", { example: 90 }),
+        customers: int("Customers behind those visits.", { example: 60 }),
+        visits_with_action: int("Visits with at least one action.", { example: 40 }),
+        action_rate_bps: int("Visits with an action ÷ visits, in basis points.", {
+          nullable: true,
+          example: 4444,
+        }),
+        paid_minor: int("Paid in portal sessions, minor units.", { example: 120000 }),
+        invoices_paid: int("Invoices those payments paid.", { example: 12 }),
+        recovered_from_failed_emails_minor: int(
+          "Paid in visits from a failed-payment email, minor units.",
+          { example: 50000 },
+        ),
+        methods_added: int("Payment methods added in the portal.", { example: 8 }),
+        cancellations: int("Cancellations through the portal cancel flow.", { example: 3 }),
+        save_rate_bps: int("Saves ÷ (saves + lost), basis points, as `cancellation_saves`.", {
+          nullable: true,
+          example: 3000,
+        }),
+      }),
+      previous: obj(
+        "The same figures for the previous window; null unless `compare=true`.",
+        {},
+        undefined,
+        { nullable: true },
+      ),
+      live: obj("Right now, whatever the window.", {
+        active_now: int("Sessions used in the last 5 minutes.", { example: 1 }),
+        visits_last_30_minutes: int("Sessions signed in during the last 30 minutes.", {
+          example: 3,
+        }),
+        per_minute: arrOf(int("Visits in one minute."), "The last 30 minutes, oldest first."),
+      }),
+      days: arrOf(
+        obj("A day of the window.", { date: str("The day."), label: str("Its axis label.") }),
+        "The window's days, in order.",
+      ),
+      series: obj("Per-day figures, one per day in `days`.", {}),
+      funnel: arrOf(
+        obj("A funnel step over links made in the window.", {
+          step: str("The step."),
+          label: str("Its name."),
+          sessions: int("Links at this step."),
+        }),
+        "Made, opened, took an action.",
+      ),
+      arrivals: arrOf(obj("Visits that arrived one way.", {}), "By arrival."),
+      actions: arrOf(
+        obj("One kind of action and how often it happened.", {}),
+        "Completed actions.",
+      ),
+      payments: obj("Portal payments by method, and saved versus new methods.", {}),
+      payment_methods: obj("Methods added, deleted and made primary, and delete reasons.", {}),
+      plan_changes: obj("Plan changes, pauses and cancellations made in the portal.", {}),
+      retention: obj("The cancel flow: started, saw an offer, took one, saved; with reasons.", {}),
+      recent: arrOf(obj("A recent visit.", {}), "The newest ten visits in the window."),
+      tracking: obj(
+        "First-party visit tracking over the window (visits whose page ran in a browser).",
+        {
+          since: str("The first tracked view of any window; null before tracking began.", {
+            nullable: true,
+            example: "2026-11-19T10:00:00.000Z",
+          }),
+          visits: int("Tracked visits in the window.", { example: 80 }),
+          sections: arrOf(
+            obj("Visits that showed one section for at least a second.", {}),
+            "Sections viewed.",
+          ),
+          countries: arrOf(
+            obj("Visits by the visitor's country (`key` null: unknown).", {}),
+            "By visitor country.",
+          ),
+          devices: arrOf(obj("Visits by device category.", {}), "By device."),
+          browsers: arrOf(obj("Visits by browser family.", {}), "By browser."),
+          pdf_downloads: int("Invoice PDF downloads.", { example: 12 }),
+          visits_with_pdf: int("Visits with at least one invoice PDF download.", { example: 9 }),
+        },
+      ),
+    },
+    ["object", "business", "start", "end", "currency", "totals", "funnel"],
+  ),
+  EmailReport: obj(
+    "Billing email figures for a window of business days.",
+    {
+      object: objectTag("email_report"),
+      business: str("The business id.", { example: "biz_XXXXXXXXXXXX01" }),
+      start: str("The first day of the window (YYYY-MM-DD).", { example: "2026-10-22" }),
+      end: str("The last day of the window (YYYY-MM-DD).", { example: "2026-11-18" }),
+      previous_start: str("The first day of the previous window.", { example: "2026-09-24" }),
+      previous_end: str("The last day of the previous window.", { example: "2026-10-21" }),
+      timezone: str("The business time zone.", { example: "America/New_York" }),
+      currency: str("The currency of the money figures.", { example: "USD" }),
+      missing_rates: arrOf(
+        str("A currency code."),
+        "Currencies with no exchange rate, left out of the money figures.",
+      ),
+      filters: obj("The filters applied.", {
+        type: str("The email type.", { nullable: true }),
+        transport: str("The transport.", { nullable: true }),
+      }),
+      options: obj("Filter values seen in the window and the one before.", {
+        types: arrOf(str("An email type."), "Email types."),
+        transports: arrOf(str("A transport name."), "Transports."),
+      }),
+      totals: obj("The window's figures.", {
+        queued: int("Emails queued in the window.", { example: 400 }),
+        delivered: int("Sent on a transport that delivers.", { example: 380 }),
+        not_sent: int("Marked sent with no mail server behind it.", { example: 0 }),
+        pending: int("Still waiting to be sent.", { example: 2 }),
+        failed: int("Out of retries.", { example: 3 }),
+        bounced: int("Refused by the recipient's server, complaints excluded.", { example: 10 }),
+        complained: int("Marked as spam by the recipient.", { example: 1 }),
+        skipped: int("Not sent, for a reason on the email.", { example: 4 }),
+        attempted: int("Delivered + bounced + complained + failed.", { example: 394 }),
+        delivered_bps: int("Delivered ÷ attempted, in basis points.", {
+          nullable: true,
+          example: 9645,
+        }),
+        bounce_bps: int("Bounced ÷ attempted, in basis points.", { nullable: true, example: 254 }),
+        complaint_bps: int("Complained ÷ attempted, in basis points.", {
+          nullable: true,
+          example: 25,
+        }),
+        link_visits: int(
+          "Portal visits whose link came from an email; null under a transport filter.",
+          { nullable: true, example: 60 },
+        ),
+        recovered_minor: int(
+          "Paid in visits from a failed-payment email, minor units; null under a transport filter.",
+          { nullable: true, example: 50000 },
+        ),
+        tracked: int(
+          "Delivered emails sent with open and click tracking on. The rates below are taken over these.",
+          { example: 300 },
+        ),
+        opened: int(
+          "Of those, opened by a person. A click counts as an open. Machine opens are not included.",
+          { example: 120 },
+        ),
+        clicked: int("Of those, clicked by a person.", { example: 45 }),
+        machine_opened: int(
+          "Of those, opened only or also by a mail privacy proxy, scanner or prefetch. Not in `opened`.",
+          { example: 80 },
+        ),
+        open_bps: int("Opened ÷ tracked, in basis points; null with no tracked email.", {
+          nullable: true,
+          example: 4000,
+        }),
+        click_bps: int("Clicked ÷ tracked, in basis points; null with no tracked email.", {
+          nullable: true,
+          example: 1500,
+        }),
+      }),
+      previous: obj(
+        "The same figures for the previous window; null unless `compare=true`.",
+        {},
+        undefined,
+        { nullable: true },
+      ),
+      tracking: obj("Open and click tracking for this business.", {
+        enabled: bool("The business setting `email_config.trackEngagement` now."),
+        since: str("The first send with tracking on; null when there never was one.", {
+          nullable: true,
+          example: "2026-11-19T10:00:00.000Z",
+        }),
+        covers_period: bool(
+          "False when the window starts before `since`, so the rates cover only part of it.",
+        ),
+      }),
+      top_links: arrOf(
+        obj(
+          "A link that people clicked: its label and host, the masked path, the clicks and the emails.",
+          {},
+        ),
+        "The most-clicked links of the window, by people's clicks.",
+      ),
+      live: obj("Right now, whatever the window.", {
+        waiting: int("Emails waiting to be sent.", { example: 1 }),
+        queued_last_30_minutes: int("Emails queued in the last 30 minutes.", { example: 3 }),
+        per_minute: arrOf(
+          int("Emails queued in one minute."),
+          "The last 30 minutes, oldest first.",
+        ),
+      }),
+      days: arrOf(
+        obj("A day of the window.", { date: str("The day."), label: str("Its axis label.") }),
+        "The window's days, in order.",
+      ),
+      series: obj("Per-day figures, one per day in `days`.", {}),
+      funnel: arrOf(
+        obj("A funnel step.", {
+          step: str("The step."),
+          label: str("Its name."),
+          sessions: int("Emails (or invoices, at `paid`) at this step."),
+        }),
+        "Queued, delivered, opened, clicked, portal link opened, paid. Opened and clicked appear only when the window has tracked emails.",
+      ),
+      by_type: arrOf(
+        obj("Counts, rates, portal visits and paid invoices for one email type.", {}),
+        "By email type.",
+      ),
+      by_transport: arrOf(obj("Counts and rates for one transport.", {}), "By transport."),
+      by_domain: arrOf(
+        obj("Counts and rates for one recipient domain (domain only).", {}),
+        "The ten busiest recipient domains.",
+      ),
+      reasons: arrOf(
+        obj("A stored failure or bounce response and how often it happened.", {}),
+        "Top reasons.",
+      ),
+      skipped_reasons: arrOf(
+        obj("A reason an email was skipped, as stored.", {}),
+        "Skipped by reason.",
+      ),
+      dunning: obj(
+        "The failed-payment email sequence: how many were sent at each position and how many invoices were paid after it.",
+        {},
+      ),
+      recent: arrOf(obj("A recent email.", {}), "The newest emails in the window."),
+    },
+    ["object", "business", "start", "end", "currency", "totals", "funnel"],
+  ),
   BusinessCancellationAnalytics: obj(
     "What cancellations cost, why they happened and who left.",
     {
@@ -28170,6 +29298,9 @@ const RESPONSE_BINDINGS: Array<[string, string, unknown]> = [
   ["get /v1/businesses/{biz}/analytics", "200", rref("BusinessAnalytics")],
   ["get /v1/businesses/{biz}/payments_analytics", "200", rref("BusinessPaymentsAnalytics")],
   ["get /v1/businesses/{biz}/cancellation_analytics", "200", rref("BusinessCancellationAnalytics")],
+  ["get /v1/businesses/{biz}/checkout_report", "200", rref("CheckoutReport")],
+  ["get /v1/businesses/{biz}/portal_report", "200", rref("PortalReport")],
+  ["get /v1/businesses/{biz}/email_report", "200", rref("EmailReport")],
   ["get /v1/analytics/sync", "200", rref("AnalyticsSync")],
   ["get /v1/analytics/measures", "200", rref("AnalyticsMeasureList")],
   ["get /v1/events", "200", rref("EventList")],

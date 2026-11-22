@@ -641,8 +641,8 @@
         "invoicing",
         "ledger",
         "metering",
+        "notifications",
         "subscriptions",
-        "team-alerts",
         "usage-controls",
         "webhooks"
       ]
@@ -970,21 +970,42 @@
       ]
     },
     {
-      "id": "team-alerts",
+      "id": "notifications",
       "layer": "billing",
-      "responsibility": "Opt-in mail to a business's own staff (team_alerts_config): high-value overdue invoices and failed webhook deliveries every hour, and a daily summary of payments, dunning and expiring cards; hourly cron fan-out to one queued send per business and kind, through the deployment mailer.",
-      "tables": [],
+      "responsibility": "Tells the merchant's own team what happened: each member picks billing events (Instant, in the daily summary, or off) and channels (push, email, the in-app bell); owners and admins add Google Chat spaces and outside email addresses. An in-transaction sink queues matching events; fan-out, grouping, quiet hours, delivery, hourly clocks and daily/weekly summaries run as worker jobs. Also answers the deprecated team-alerts API.",
+      "tables": [
+        "notification_preferences",
+        "notification_settings_org",
+        "notification_settings",
+        "push_subscriptions",
+        "notifications",
+        "notification_queue",
+        "notification_deliveries",
+        "notification_groups",
+        "notification_destinations",
+        "notification_digests"
+      ],
+      "routeFile": "notification-routes.ts",
       "keyFunctions": [
-        "resolveTeamAlertsConfig",
-        "planTeamAlerts",
-        "runTeamAlertsFanout",
-        "sendTeamAlert"
+        "enqueueNotification",
+        "fanOutPending",
+        "deliverPendingNotifications",
+        "runNotificationClocks",
+        "runDigestBuilder",
+        "runDigestSender",
+        "savePreferences",
+        "legacyTeamAlertsConfig",
+        "runTeamAlertsNotice"
       ],
       "emits": [],
       "dependsOn": [
+        "auth",
+        "customers",
         "emails",
+        "events",
         "invoicing",
-        "metering"
+        "metering",
+        "subscriptions"
       ]
     },
     {
@@ -1100,6 +1121,28 @@
         "payment-methods",
         "subscriptions",
         "tax",
+        "tenancy"
+      ]
+    },
+    {
+      "id": "storefront-analytics",
+      "layer": "customer",
+      "responsibility": "First-party, cookie-free analytics for hosted checkout and portal pages: one storefront_visits row per buyer session (no IP, no full user agent, GPC/DNT honoured, bots dropped); referrer host + UTM first touch, device/browser/OS, edge country, time per step/section, PDF downloads; traffic aggregations for the checkout and portal reports; 13-month retention.",
+      "tables": [
+        "storefront-analytics(storefront_visits)"
+      ],
+      "routeFile": "storefront-visit-routes.ts",
+      "routes": 2,
+      "keyFunctions": [
+        "recordVisitEvent",
+        "checkoutTracking",
+        "portalTracking",
+        "sweepStorefrontVisits"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "checkout",
+        "customer-portal",
         "tenancy"
       ]
     },

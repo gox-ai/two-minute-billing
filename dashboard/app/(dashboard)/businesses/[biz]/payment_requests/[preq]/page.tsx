@@ -14,6 +14,8 @@ import { getPaymentRequest, type PaymentRequestLine } from "@/lib/api/payment-re
 import { listReceipts } from "@/lib/api/receipts";
 import { requirePermission } from "@/lib/session";
 import { accountHolderName } from "@/lib/names";
+import { createdThroughLabel } from "@/lib/created-through";
+import { paymentSourceText } from "@/lib/payment-trigger";
 import { StatusChip, IdChip, Chip } from "@/components/patterns/chip";
 import {
   RecordCrumbs,
@@ -39,6 +41,7 @@ import { ReceiptsCard } from "@/components/receipts/receipts-card";
 import {
   CancelRequestButton,
   ChargeRequestButton,
+  CopyRequestLinkButton,
   RecordRequestPaymentButton,
   SendRequestButton,
 } from "@/components/payment-requests/payment-request-actions";
@@ -148,6 +151,7 @@ export default async function PaymentRequestPage({
               ) : (
                 <SendRequestButton {...ids} trigger="primary" defaultTo={sendTo} />
               )}
+              <CopyRequestLinkButton biz={biz} cus={r.customer} />
               <MoreMenu>
                 <MoreSection heading="Payment request">
                   <RecordRequestPaymentButton
@@ -256,6 +260,11 @@ export default async function PaymentRequestPage({
                 !!r.paid_at && { label: "Paid", value: fmtDateTime(r.paid_at, tz) },
                 !!r.cancel_reason && { label: "Cancel reason", value: r.cancel_reason },
                 { label: "Created", value: fmtDateTime(r.created_at, tz) },
+                { label: "Sent by", value: createdThroughLabel(r.created_through) },
+                r.status === "paid" && {
+                  label: "Source",
+                  value: paymentSourceText(r.initiated_by),
+                },
               ]}
             />
           </RecordCard>

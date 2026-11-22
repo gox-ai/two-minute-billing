@@ -318,6 +318,21 @@ const note = (type: string, object: Record<string, unknown>, id = "obj"): Square
       { locationId: "LXXXXXXXXXXX1" },
     )[0]!.ownership === "foreign",
   );
+  // A link payment we do not act on keeps the link's intent id, so the attempt finds it.
+  const hostedPending = normalizeSquareNotification(
+    note("payment.updated", {
+      payment: payment({ status: "PENDING", order_id: "OXXXXXXXXXXXXXXXXXXXXXXX02" }),
+    }),
+    "e1",
+    null,
+    { hostedRef: "pi_XXXXXXXXXXXX01" },
+  )[0]!;
+  ok(
+    "event: an unacted link payment keeps the link's intent id and the payment id",
+    hostedPending.type === "unknown" &&
+      hostedPending.providerIntentId === `${SQUARE_HOSTED_PREFIX}OXXXXXXXXXXXXXXXXXXXXXXX02` &&
+      hostedPending.providerChargeId === payment().id,
+  );
   ok(
     "event: no reference_id → foreign",
     one(note("payment.updated", { payment: payment({ reference_id: undefined }) })).ownership ===
@@ -805,9 +820,21 @@ try {
     status: 401,
     body: { errors: [{ code: "UNAUTHORIZED", category: "AUTHENTICATION_ERROR" }] },
   }));
+  const unauthorized = await sq.charge(chargeInput);
   ok(
-    "charge: a refused token throws",
-    (await throws(() => sq.charge(chargeInput))) instanceof Error,
+    "charge: a refused token is a failed charge of our setup, not a throw",
+    unauthorized.status === "failed" &&
+      unauthorized.failure?.code === "gateway_request_rejected" &&
+      unauthorized.failure?.ruleId === "square.code.unauthorized",
+  );
+  reset(() => ({
+    status: 403,
+    body: { errors: [{ code: "INSUFFICIENT_SCOPES", category: "AUTHENTICATION_ERROR" }] },
+  }));
+  const forbidden = await sq.charge(chargeInput);
+  ok(
+    "charge: a 403 is a failed charge of our setup",
+    forbidden.status === "failed" && forbidden.failure?.code === "gateway_request_rejected",
   );
 
   // lost answers
@@ -1055,7 +1082,8 @@ try {
   });
   ok(
     "sdk: a refused card (measured INVALID_CARD_DATA) fails the setup",
-    bad.status === "failed" && bad.failure?.code === "incorrect_number",
+    // Square's generic "card data is invalid": a soft card_declined, not a dead number.
+    bad.status === "failed" && bad.failure?.code === "card_declined",
   );
   const junk = await sq.submitClientResult({
     intentId: setup.intentId,
@@ -1205,6 +1233,43 @@ try {
       foreignEvents[0]!.ownership === "foreign",
     JSON.stringify(foreignEvents, (_k, v) => (typeof v === "bigint" ? String(v) : v)),
   );
+  for (const [status, code] of [
+    ["FAILED", "insufficient_funds"],
+    ["CANCELED", "payment_abandoned"],
+  ] as const) {
+    const tryNote = {
+      ...linkNote,
+      data: {
+        ...linkNote.data,
+        object: {
+          payment: {
+            ...linkPayment,
+            status,
+            card_details: {
+              errors: [{ code: "INSUFFICIENT_FUNDS", category: "PAYMENT_METHOD_ERROR" }],
+            },
+          },
+        },
+      },
+    } as SquareNotification;
+    const tryBody = JSON.stringify(tryNote);
+    reset(() => ({
+      body: { order: { id: "OXXXXXXXXXXXXXXXXXXXXXXX01", reference_id: orderRef } },
+    }));
+    const [tryEvent] = await adapter({ notificationUrl: URL_ }).normalizeWebhook({
+      payload: tryBody,
+      headers: { "x-square-hmacsha256-signature": signSquarePayload(KEY, URL_, tryBody) },
+      notificationUrl: URL_,
+    });
+    ok(
+      `apple pay: a ${status} try on the link keeps its reason on the open intent`,
+      tryEvent?.type === "charge.failed" &&
+        tryEvent.providerIntentId === linkIntent.intentId &&
+        tryEvent.ownershipRef === "pi_XXXXXXXXXXXXXXXXXXXXXXXX" &&
+        tryEvent.failureCode === code,
+      JSON.stringify(tryEvent, (_k, v) => (typeof v === "bigint" ? String(v) : v)),
+    );
+  }
   reset(() => ({ body: {} }));
   normalizeSquareNotification(
     {

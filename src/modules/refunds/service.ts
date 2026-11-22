@@ -53,10 +53,10 @@ export class RefundError extends Error {
    * to cover a validation refusal would turn a 400 into a 404 and destroy the error
    * contract while leaving every gate green.
    */
-  readonly code?: "not_found";
+  readonly code?: "not_found" | "possible_duplicate";
   /** True when `refundPayment` already emitted this failure's `refund_failed` event. */
   eventEmitted = false;
-  constructor(message: string, code?: "not_found") {
+  constructor(message: string, code?: "not_found" | "possible_duplicate") {
     super(message);
     this.name = "RefundError";
     this.code = code;
@@ -255,6 +255,11 @@ async function refundPaymentInSpan(input: {
    * honours it. Omitted = the business rule (`declined_refund`).
    */
   onDecline?: DeclinedRefundOutcome;
+  /**
+   * Refuse (`possible_duplicate`) when this payment already has a pending or succeeded refund of
+   * the SAME amount in the last 10 minutes. Opt-in: operator routes set it; automated callers do not.
+   */
+  guardRepeat?: boolean;
 }): Promise<Refund> {
   const { organizationId, businessId } = input;
 
@@ -332,6 +337,36 @@ async function refundPaymentInSpan(input: {
       throw new RefundError(
         `Refund ${amount} exceeds the remaining refundable amount ${remaining}. The payment is ${pay.amountMinor}, and ${refunded} is already refunded.`,
       );
+    }
+
+    // Repeat guard. Under the payment lock, so two concurrent clicks cannot both pass.
+    // DB time, never a JS Date in raw sql.
+    if (input.guardRepeat) {
+      const [dup] = await tx
+        .select({
+          secs: sql<string>`extract(epoch from (app_now() - ${refunds.createdAt}))`,
+        })
+        .from(refunds)
+        .where(
+          and(
+            eq(refunds.paymentId, pay.id),
+            eq(refunds.amountMinor, amount),
+            inArray(refunds.status, ["succeeded", "pending"]),
+            sql`${refunds.createdAt} > app_now() - interval '10 minutes'`,
+          ),
+        )
+        .orderBy(sql`${refunds.createdAt} desc`)
+        .limit(1);
+      if (dup) {
+        const mins = Math.max(0, Math.floor(Number(dup.secs) / 60));
+        const ago =
+          mins < 1 ? "less than a minute ago" : mins === 1 ? "1 minute ago" : `${mins} minutes ago`;
+        throw new RefundError(
+          `A refund of ${formatMoney(amount, pay.currency)} for this payment was sent ${ago}. ` +
+            `To send another refund of the same amount, confirm it.`,
+          "possible_duplicate",
+        );
+      }
     }
 
     // A DIRECT revenue refund must also respect what LIVE CREDIT NOTES already claim

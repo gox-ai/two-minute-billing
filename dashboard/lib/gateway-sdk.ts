@@ -6,6 +6,7 @@
  * through this (see `razorpay-checkout.ts`).
  */
 import { contactBusiness } from "./gateway-errors";
+import { clearActiveIntent, setActiveGateway } from "./buyer-error-report";
 
 /** `next_action.sdk` / `vault_setup.sdk`: the provider and the params its browser SDK takes. */
 export interface GatewaySdkDescriptor {
@@ -39,6 +40,11 @@ export interface GatewaySdkContext {
   };
   /** What the dialog's commit button says, so it matches the page ("Subscribe and pay $X"). */
   confirmLabel?: string;
+  /**
+   * Draw the gateway's form inside this element (the open row of Pay now or Add a payment
+   * method) instead of in its own dialog. Only gateways whose fields can sit in our page.
+   */
+  inline?: HTMLElement;
 }
 
 /**
@@ -89,6 +95,8 @@ export async function openGatewaySdk(
   sdk: GatewaySdkDescriptor,
   context: GatewaySdkContext,
 ): Promise<GatewaySdkResult> {
+  // Kept after the form closes: the error it returns is shown, and reported, after that.
+  setActiveGateway(sdk.provider);
   const loader = LOADERS[sdk.provider];
   if (!loader) {
     return {
@@ -97,7 +105,10 @@ export async function openGatewaySdk(
     };
   }
   try {
-    return await loader(sdk.params ?? {}, context);
+    const result = await loader(sdk.params ?? {}, context);
+    // Completed or closed: the flow is over. A failure keeps the intent for its report.
+    if (result.status !== "failed") clearActiveIntent();
+    return result;
   } catch (e) {
     // A loader's own sentence ("We could not load the payment form. …") is the better one.
     const said = e instanceof Error ? e.message : "";

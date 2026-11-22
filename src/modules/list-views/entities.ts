@@ -1,6 +1,6 @@
 import { CUSTOMER_FILTER_OPS } from "@/modules/customers/service";
 import { SUBSCRIPTION_FILTER_OPS } from "@/modules/subscriptions/service";
-import { INVOICE_FILTER_OPS } from "@/modules/invoicing/service";
+import { INVOICE_FILTER_OPS, ORDER_FILTER_OPS } from "@/modules/invoicing/service";
 import { CREDIT_NOTE_FILTER_OPS } from "@/modules/credit-notes/service";
 import { TRANSACTION_FILTER_OPS } from "@/modules/transactions/service";
 import { EVENT_FILTER_OPS } from "@/modules/events/service";
@@ -25,6 +25,7 @@ export const LIST_VIEW_ENTITIES = [
   "customers",
   "subscriptions",
   "invoices",
+  "orders",
   "credit_notes",
   "transactions",
   "payment_intents",
@@ -68,6 +69,7 @@ const SERVER_FIELD_OPS: Partial<Record<ListViewEntity, Record<string, readonly s
   customers: CUSTOMER_FILTER_OPS,
   subscriptions: SUBSCRIPTION_FILTER_OPS,
   invoices: INVOICE_FILTER_OPS,
+  orders: ORDER_FILTER_OPS,
   credit_notes: CREDIT_NOTE_FILTER_OPS,
   transactions: TRANSACTION_FILTER_OPS,
   events: EVENT_FILTER_OPS,

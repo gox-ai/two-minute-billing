@@ -10,6 +10,7 @@ import { publicId } from "@/platform/ids";
 import { stampNow } from "@/platform/clock";
 import { disputes, payments, refunds } from "@db/schema";
 import {
+  disputesArriveByReport,
   operatorRecordsDisputes,
   operatorRecordsDisputeOutcome,
   gatewayDefinition,
@@ -17,6 +18,7 @@ import {
 import { writeAuditLog } from "@/modules/audit/service";
 import {
   applyDisputeTransition,
+  disputeWithReference,
   lockDispute,
   OPEN_DISPUTE_STATUSES,
   runChargebackPolicy,
@@ -80,6 +82,8 @@ export interface DisputeRecording {
   paymentPublicId: string;
   /** The most a new dispute may claim. */
   availableMinor: bigint;
+  /** The gateway's chargebacks arrive later from a polled report (`disputeReport`). */
+  reportedDaily: boolean;
 }
 
 /**
@@ -101,7 +105,11 @@ export async function disputeRecordingFor(
     if (!pay || pay.status !== "succeeded" || !operatorRecordsDisputes(pay.providerKey))
       return null;
     if (await hasGatewayDispute(tx, pay.id)) return null;
-    return { paymentPublicId: pay.publicId, availableMinor: await disputableMinor(tx, pay) };
+    return {
+      paymentPublicId: pay.publicId,
+      availableMinor: await disputableMinor(tx, pay),
+      reportedDaily: disputesArriveByReport(pay.providerKey),
+    };
   });
 }
 
@@ -119,8 +127,13 @@ export async function recordOperatorDispute(input: {
   processorReference?: string | null;
   /** When the processor opened the case. Default now. */
   openedAt?: Date;
+  /** The processor's deadline for evidence, if it gave one. */
+  evidenceDueBy?: Date | null;
 }): Promise<DisputeRow> {
+  const reference = input.processorReference?.trim() || null;
   const out = await withTenant(input.organizationId, async (tx) => {
+    // The key the gateway path locks for this case, taken before the payment row as there.
+    if (reference) await lockDispute(tx, input.organizationId, reference);
     // Serializes with refunds and other records on this payment, which read the same caps.
     const [pay] = await tx
       .select()
@@ -134,6 +147,14 @@ export async function recordOperatorDispute(input: {
       .limit(1)
       .for("update");
     if (!pay) throw new DisputeError("not_found", `No such payment: ${input.paymentPublicId}`);
+    if (
+      reference &&
+      (await disputeWithReference(tx, input.organizationId, input.businessId, reference))
+    )
+      throw new DisputeError(
+        "conflict",
+        `A dispute with the case reference ${reference} is already recorded. You cannot record it again.`,
+      );
     if (pay.status !== "succeeded")
       throw new DisputeError("invalid", "You can record a dispute only on a succeeded payment.");
     if (!operatorRecordsDisputes(pay.providerKey)) {
@@ -146,7 +167,7 @@ export async function recordOperatorDispute(input: {
     if (await hasGatewayDispute(tx, pay.id))
       throw new DisputeError(
         "conflict",
-        "The gateway already reported a dispute on this payment. Record the outcome at the gateway.",
+        "The gateway already reported a dispute on this payment. Open it in Disputes.",
       );
     if (input.amountMinor <= 0n)
       throw new DisputeError("invalid", "The dispute amount must be more than zero.");
@@ -162,6 +183,8 @@ export async function recordOperatorDispute(input: {
       throw new DisputeError("invalid", "The dispute date cannot be in the future.");
     if (openedAt.getTime() < pay.createdAt.getTime() - 24 * 3600_000)
       throw new DisputeError("invalid", "The dispute date cannot be before the payment date.");
+    if (input.evidenceDueBy && input.evidenceDueBy.getTime() < openedAt.getTime())
+      throw new DisputeError("invalid", "The evidence due date cannot be before the dispute date.");
 
     const pid = publicId("dsp");
     await lockDispute(tx, input.organizationId, pid);
@@ -183,8 +206,9 @@ export async function recordOperatorDispute(input: {
         amountMinor: input.amountMinor,
         currency: pay.currency,
         openedAt,
+        evidenceDueBy: input.evidenceDueBy ?? null,
         source: "operator",
-        processorReference: input.processorReference?.trim() || null,
+        processorReference: reference,
       })
       .returning();
     const dispute = row!;

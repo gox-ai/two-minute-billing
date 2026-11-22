@@ -23,8 +23,11 @@ import {
   mergeTaxSettings,
   serializeTaxSettings,
 } from "@/modules/tax/settings";
-import { resolveTeamAlertsConfig, serializeTeamAlertsConfig } from "@/modules/team-alerts/config";
-import { syncTeamAlertRecipients } from "@/modules/team-alerts/recipients";
+import {
+  applyLegacyTeamAlertsConfig,
+  legacyTeamAlertsConfig,
+  legacyTeamAlertsConfigs,
+} from "@/modules/notifications/service";
 import { checkField } from "@/modules/emails/template-lang";
 import {
   initialStorefrontConfig,
@@ -178,12 +181,15 @@ import { registerCouponRoutes } from "./coupon-routes";
 import { registerCatalogStatsRoutes } from "./catalog-stats-routes";
 import { registerWalletRoutes } from "./wallet-routes";
 import { registerTeamAlertRoutes } from "./team-alert-routes";
+import { registerNotificationRoutes } from "./notification-routes";
 import { registerCreditNoteRoutes } from "./credit-note-routes";
 import { registerEntitlementRoutes } from "./entitlement-routes";
 import { registerPortalRoutes } from "./portal-routes";
 import { registerCustomerPortalRoutes } from "./customer-portal-routes";
 import { registerPortalCreditRoutes } from "./portal-credit-routes";
 import { registerCheckoutRoutes } from "./checkout-routes";
+import { registerBuyerClientErrorRoutes } from "./buyer-client-error-routes";
+import { registerStorefrontVisitRoutes } from "./storefront-visit-routes";
 import { registerPaymentLinkRoutes } from "./payment-link-routes";
 import { registerMetricsRoutes } from "./metrics-routes";
 import { registerMcpRoutes } from "./mcp-routes";
@@ -193,6 +199,7 @@ import { registerAnalyticsRoutes } from "./analytics-routes";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerWebhookRoutes } from "./webhook-routes";
 import { registerEmailWebhookRoutes } from "./email-webhook-routes";
+import { registerEmailTrackingRoutes } from "./email-tracking-routes";
 import { registerEventRoutes } from "./events-routes";
 import { registerGatewayRoutes } from "./gateway-routes";
 import { registerDeclineRuleRoutes } from "./decline-rule-routes";
@@ -645,7 +652,7 @@ export const updateBusinessBody = z.object({
   //
   /**
    * Scheme-restricted to http(s) as of 0246 (SR-2026-016 Finding 3). It was NOT, on the
-   * grounds that `loadLogo` (`modules/invoicing/invoice-pdf.ts`) branches on
+   * grounds that `loadLogo` (`modules/invoicing/pdf-branding.ts`) branches on
    * `url.startsWith("data:")` to inline a logo into the PDF. Three things were then
    * measured, and together they made the restriction safe:
    *
@@ -676,6 +683,12 @@ export const updateBusinessBody = z.object({
   brand_color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "Must be a 6-digit hex color, e.g. #FF6700")
+    .nullable()
+    .optional(),
+  // The label on a brand-colour button. Null = automatic. Same hex-only rule as brand_color.
+  button_text_color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, "Must be a 6-digit hex color, e.g. #FFFFFF")
     .nullable()
     .optional(),
   /**
@@ -1217,6 +1230,20 @@ export const updateBusinessBody = z.object({
       portal_hide_cancelled_subscriptions: z.boolean().optional(),
       portal_hide_zero_invoices: z.boolean().optional(),
       portal_hide_voided_invoices: z.boolean().optional(),
+      // Portal Pay now with a new card: offer the buyer a save box, always save, or never.
+      portal_save_new_method: z.enum(["offer", "always", "never"]).optional(),
+      // Where new payment methods go and in what order, per currency (Settings → Gateways).
+      payment_routing: z
+        .record(
+          z.string().regex(/^[A-Z]{3}$/),
+          z.object({
+            order: z.array(z.string().max(40)).max(20),
+            gateways: z.record(z.string().max(40), z.string().max(64)),
+          }),
+        )
+        .optional(),
+      // Ask why when a buyer deletes their last payment method. Unset = off.
+      portal_ask_delete_reason: z.boolean().optional(),
       // Single-action links (Phase 4b). All on = today's links; off = the link opens the portal home.
       portal_actions: z
         .object({
@@ -1324,6 +1351,8 @@ export const updateBusinessBody = z.object({
       attachReceiptPdf: z.boolean().optional(),
       // Where email links go. `merchant_url` needs an http(s) `merchantUrl`.
       linkTarget: z.enum(["portal", "merchant_url"]).optional(),
+      // Record opens and clicks (0548). Unset = off for a business that existed before it.
+      trackEngagement: z.boolean().optional(),
       merchantUrl: z
         .string()
         .trim()
@@ -1569,11 +1598,14 @@ export function serializeOrganization(o: {
 }
 
 type BusinessPair = { liveBusinessId: string | null; testBusinessId: string | null };
+/** Deprecated `team_alerts_config`, read from the business's notification destinations. */
+type LegacyTeamAlerts = Awaited<ReturnType<typeof legacyTeamAlertsConfig>>;
 
 function serializeBusiness(
   b: typeof businessesTable.$inferSelect,
-  locks: AddressFieldLocks = NO_ADDRESS_FIELD_LOCKS,
-  pair: BusinessPair | undefined = undefined,
+  locks: AddressFieldLocks,
+  pair: BusinessPair | undefined,
+  teamAlerts: LegacyTeamAlerts,
 ) {
   return {
     object: "business",
@@ -1617,6 +1649,7 @@ function serializeBusiness(
     icon_url: b.iconUrl,
     favicon_url: b.faviconUrl,
     brand_color: b.brandColor,
+    button_text_color: b.buttonTextColor,
     allow_customer_coupons: b.allowCustomerCoupons,
     max_customer_coupon_codes: b.maxCustomerCouponCodes,
     timezone: b.timezone,
@@ -1672,8 +1705,8 @@ function serializeBusiness(
     default_tax_behavior: b.defaultTaxBehavior,
     ...serializeTaxSettings(b.taxSettings),
     email_config: withoutLegacyEmailKeys(b.emailConfig ?? null),
-    /** Resolved: every key present, off when unset. */
-    team_alerts_config: serializeTeamAlertsConfig(resolveTeamAlertsConfig(b)),
+    /** Deprecated: every key present, off when unset. Team notifications replace it. */
+    team_alerts_config: teamAlerts,
     credit_note_prefix: b.creditNotePrefix,
     credit_note_next_number: Number(b.creditNoteNextNumber),
     receipt_prefix: b.receiptPrefix,
@@ -1865,7 +1898,16 @@ export async function registerRoutes(app: FastifyInstance) {
         creditConfig: initialCreditConfig(req),
       });
       const pairs = await businessPairs(req.organization!.id);
-      return reply.code(201).send(serializeBusiness(business, undefined, pairs.get(business.id)));
+      return reply
+        .code(201)
+        .send(
+          serializeBusiness(
+            business,
+            NO_ADDRESS_FIELD_LOCKS,
+            pairs.get(business.id),
+            await legacyTeamAlertsConfig(req.organization!.id, business.id),
+          ),
+        );
     },
   );
 
@@ -1882,9 +1924,20 @@ export async function registerRoutes(app: FastifyInstance) {
         visible.map((b) => b.id),
       );
       const pairs = await businessPairs(req.organization!.id);
+      const alerts = await legacyTeamAlertsConfigs(
+        req.organization!.id,
+        visible.map((b) => b.id),
+      );
       return {
         object: "list",
-        data: visible.map((b) => serializeBusiness(b, locks.get(b.id), pairs.get(b.id))),
+        data: visible.map((b) =>
+          serializeBusiness(
+            b,
+            locks.get(b.id) ?? NO_ADDRESS_FIELD_LOCKS,
+            pairs.get(b.id),
+            alerts.get(b.id)!,
+          ),
+        ),
       };
     },
   );
@@ -1906,7 +1959,12 @@ export async function registerRoutes(app: FastifyInstance) {
         });
       const locks = await addressFieldLocksByBusiness(req.organization!.id, [b.id]);
       const pairs = await businessPairs(req.organization!.id);
-      return serializeBusiness(b, locks.get(b.id), pairs.get(b.id));
+      return serializeBusiness(
+        b,
+        locks.get(b.id) ?? NO_ADDRESS_FIELD_LOCKS,
+        pairs.get(b.id),
+        await legacyTeamAlertsConfig(req.organization!.id, b.id),
+      );
     },
   );
 
@@ -1936,7 +1994,12 @@ export async function registerRoutes(app: FastifyInstance) {
       const twin = await ensureTestTwin(req.organization!.id, live.id);
       const locks = await addressFieldLocksByBusiness(req.organization!.id, [twin.id]);
       const pairs = await businessPairs(req.organization!.id);
-      return serializeBusiness(twin, locks.get(twin.id), pairs.get(twin.id));
+      return serializeBusiness(
+        twin,
+        locks.get(twin.id) ?? NO_ADDRESS_FIELD_LOCKS,
+        pairs.get(twin.id),
+        await legacyTeamAlertsConfig(req.organization!.id, twin.id),
+      );
     },
   );
 
@@ -2076,6 +2139,7 @@ export async function registerRoutes(app: FastifyInstance) {
           iconUrl: d.icon_url,
           faviconUrl: d.favicon_url,
           brandColor: d.brand_color,
+          buttonTextColor: d.button_text_color,
           allowCustomerCoupons: d.allow_customer_coupons,
           maxCustomerCouponCodes: d.max_customer_coupon_codes,
           timezone: d.timezone,
@@ -2145,7 +2209,6 @@ export async function registerRoutes(app: FastifyInstance) {
           defaultTaxBehavior: d.default_tax_behavior,
           taxSettings: mergeTaxSettings(bizRow?.taxSettings, d),
           emailConfig: d.email_config,
-          teamAlertsConfig: d.team_alerts_config,
           creditNotePrefix: d.credit_note_prefix,
           creditNoteNextNumber: d.credit_note_next_number,
           receiptPrefix: d.receipt_prefix,
@@ -2173,17 +2236,14 @@ export async function registerRoutes(app: FastifyInstance) {
           businessId: b.id,
         });
       }
-      // New outside addresses get a confirmation mail; removed ones must confirm again.
-      if (d.team_alerts_config !== undefined)
-        await syncTeamAlertRecipients({
-          organizationId: req.organization!.id,
-          businessId: b.id,
-          businessName: b.name,
-          before: resolveTeamAlertsConfig(bizRow).recipients,
-          after: resolveTeamAlertsConfig(b).recipients,
-        });
+      // Deprecated: written as this business's email destinations. New outside addresses get
+      // a confirmation email; members are active at once.
+      const teamAlerts =
+        d.team_alerts_config !== undefined
+          ? await applyLegacyTeamAlertsConfig(req.organization!.id, b.id, d.team_alerts_config)
+          : await legacyTeamAlertsConfig(req.organization!.id, b.id);
       const pairs = await businessPairs(req.organization!.id);
-      return serializeBusiness(b, locks, pairs.get(b.id));
+      return serializeBusiness(b, locks ?? NO_ADDRESS_FIELD_LOCKS, pairs.get(b.id), teamAlerts);
     },
   );
 
@@ -3283,12 +3343,15 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerCatalogStatsRoutes(app);
   await registerWalletRoutes(app);
   await registerTeamAlertRoutes(app);
+  await registerNotificationRoutes(app);
   await registerCreditNoteRoutes(app);
   await registerEntitlementRoutes(app);
   await registerPortalRoutes(app);
   await registerCustomerPortalRoutes(app);
   await registerPortalCreditRoutes(app);
   await registerCheckoutRoutes(app);
+  await registerBuyerClientErrorRoutes(app);
+  await registerStorefrontVisitRoutes(app);
   await registerPaymentLinkRoutes(app);
   await registerMetricsRoutes(app);
   await registerMcpRoutes(app);
@@ -3300,6 +3363,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // SES delivery feedback over SNS. Separate registration because it needs its own raw
   // body parser for `text/plain` — SNS posts JSON under that content type.
   await registerEmailWebhookRoutes(app);
+  await registerEmailTrackingRoutes(app);
   await registerEventRoutes(app);
   await registerGatewayRoutes(app);
   await registerDeclineRuleRoutes(app);

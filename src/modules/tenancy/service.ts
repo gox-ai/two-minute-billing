@@ -565,6 +565,8 @@ export async function updateBusiness(
     iconUrl?: string | null;
     faviconUrl?: string | null;
     brandColor?: string | null;
+    /** 0542 — label on a brand-colour button; null = automatic. */
+    buttonTextColor?: string | null;
     /** 0238 — may a buyer type a coupon code on the hosted pages? */
     allowCustomerCoupons?: boolean;
     /** 0495 — coupon codes a buyer can enter on one checkout or subscription (1–10). */
@@ -637,8 +639,6 @@ export async function updateBusiness(
     taxSettings?: Record<string, unknown>;
     /** Customer-facing email settings; see modules/emails/config.ts. null disables. */
     emailConfig?: unknown;
-    /** Staff alerts and the daily digest (0489); see ops/team-alerts-config.ts. null = off. */
-    teamAlertsConfig?: unknown;
     creditNotePrefix?: string;
     creditNoteNextNumber?: number;
     receiptPrefix?: string;
@@ -690,6 +690,7 @@ export async function updateBusiness(
     if (patch.iconUrl !== undefined) set.iconUrl = patch.iconUrl;
     if (patch.faviconUrl !== undefined) set.faviconUrl = patch.faviconUrl;
     if (patch.brandColor !== undefined) set.brandColor = patch.brandColor;
+    if (patch.buttonTextColor !== undefined) set.buttonTextColor = patch.buttonTextColor;
     if (patch.allowCustomerCoupons !== undefined)
       set.allowCustomerCoupons = patch.allowCustomerCoupons;
     if (patch.maxCustomerCouponCodes !== undefined)
@@ -793,7 +794,6 @@ export async function updateBusiness(
     if (patch.defaultTaxBehavior !== undefined) set.defaultTaxBehavior = patch.defaultTaxBehavior;
     if (patch.taxSettings !== undefined) set.taxSettings = patch.taxSettings;
     if (patch.emailConfig !== undefined) set.emailConfig = patch.emailConfig;
-    if (patch.teamAlertsConfig !== undefined) set.teamAlertsConfig = patch.teamAlertsConfig;
     if (patch.creditNotePrefix != null) set.creditNotePrefix = patch.creditNotePrefix;
     if (patch.receiptPrefix != null) set.receiptPrefix = patch.receiptPrefix;
     if (patch.creditNoteNextNumber != null)

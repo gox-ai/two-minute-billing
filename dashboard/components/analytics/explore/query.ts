@@ -153,8 +153,10 @@ export function parseQuery(input: {
   all: MeasureMeta[];
   byId: Map<string, MeasureMeta>;
   knownCurrencies: string[];
+  /** The business has no subscriptions: the default view is revenue billed by type, not MRR. */
+  noSubscriptions?: boolean;
 }): ExploreQuery {
-  const { searchParams: sp, all, byId, knownCurrencies } = input;
+  const { searchParams: sp, all, byId, knownCurrencies, noSubscriptions } = input;
 
   // `measure=` is the board tile's older spelling of one column. Kept so a tile's "Explore"
   // link lands on the measure it names rather than on a default.
@@ -176,8 +178,9 @@ export function parseQuery(input: {
   }
   // An empty selection still has to show something, so the default is resolved here and
   // written into every link on the page — it is a resolved default, not hidden state.
+  const fallbackId = noSubscriptions && byId.has("revenue_billed") ? "revenue_billed" : "mrr";
   const measures =
-    picked.length > 0 ? picked : [byId.get("mrr") ?? all[0]].filter((m) => m != null);
+    picked.length > 0 ? picked : [byId.get(fallbackId) ?? all[0]].filter((m) => m != null);
 
   const grainUnion = measures.filter((m) => m.grains.length > 0);
   const grainOk = (g: string): g is Grain => grainUnion.every((m) => m.grains.includes(g as Grain));
@@ -190,6 +193,10 @@ export function parseQuery(input: {
         : ((measures[0]?.grains.find((g) => grainOk(g)) ?? "month") as Grain);
 
   let dimension = one(sp.dim) ?? null;
+  // Nothing was named: the default view also carries its cut.
+  if (picked.length === 0 && fallbackId === "revenue_billed" && !dimension) {
+    dimension = "revenue_type";
+  }
   let droppedDimension: ExploreQuery["droppedDimension"];
   if (dimension) {
     const missing = measures.find((m) => !m.dimensions.includes(dimension!));

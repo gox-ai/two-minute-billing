@@ -4,24 +4,31 @@
 .roll-word {
   white-space: nowrap;
 }
-/* One digit's slot: as wide and as tall as the real digit (the ghost), clipped top and bottom
-   only, so a wider glyph mid-roll is not cut at the sides. */
+/* One digit's slot: as wide and as tall as the real digit (the ghost), so it keeps the plain
+   string's width and baseline. No overflow on the slot itself: Safari puts the baseline of an
+   inline-block with any overflow at its bottom edge, which lifted every digit above the "$",
+   "." and "%" beside it. */
 .roll-digit {
   position: relative;
   display: inline-block;
-  clip-path: inset(0 -0.25em);
-  /* clip-path alone still counts as scroll overflow: a hidden digit column hung ~280px below
-     the figure and gave every board tile a scrollbar. */
-  overflow-y: clip;
 }
 .roll-ghost {
   color: transparent;
+}
+/* Clips the column top and bottom only, so a wider glyph mid-roll is not cut at the sides. Out
+   of flow, so it neither moves the baseline nor hangs the hidden column below the figure as
+   scroll overflow (that gave every board tile a scrollbar). */
+.roll-window {
+  position: absolute;
+  inset: 0 -0.25em;
+  overflow: hidden;
 }
 /* The 0–9 column, one line per digit; -10% of its height is one digit. It rests on the final
    digit, so a skipped animation lands there. */
 .roll-column {
   position: absolute;
-  inset-inline: 0;
+  /* The window is 0.25em wider each side; this puts the column back over the slot. */
+  inset-inline: 0.25em;
   top: 0;
   display: flex;
   flex-direction: column;

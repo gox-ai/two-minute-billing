@@ -9,11 +9,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // The brand fill. Gradient, top highlight and the 1px darker edge are all mixed
-        // from `--solid`, so a storefront's merchant colour (lib/brand.ts) restyles every
-        // part of it. `--primary` stays the link colour. Focus swaps the edge for the ring.
-        default:
-          "bg-solid bg-linear-to-b from-solid to-solid-bottom text-solid-foreground shadow-xs ring-1 inset-shadow-[0_1px_0_rgb(255_255_255/0.3)] ring-solid-edge hover:brightness-106",
+        // The brand fill: one flat colour, no gradient or highlight (decided 2026-11-17). The
+        // 1px edge is mixed from `--solid` too, so a storefront's merchant colour (lib/brand.ts)
+        // restyles all of it, and a pale merchant colour still reads as a button on white.
+        // `--primary` stays the link colour. Focus swaps the edge for the ring.
+        default: "bg-solid text-solid-foreground ring-1 ring-solid-edge hover:brightness-106",
         // Dark hover goes to /70, not /90: white on /90 over the card is 3.91:1, on /70 5.56:1.
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 hover:dark:bg-destructive/70 focus-visible:dark:ring-destructive/40",

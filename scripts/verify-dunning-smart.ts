@@ -33,6 +33,7 @@ import {
 import { publicId } from "@/platform/ids";
 import { getDunningJourney } from "@/modules/invoicing/dunning-journey";
 import {
+  CARD_ATTEMPT_LIMIT_CODE,
   CARD_CAP_30D,
   RAIL_LIMIT_CODE,
   RAIL_SPACING_CODE,
@@ -814,7 +815,8 @@ const newestPayment = (orgId: string, invoiceId: string) =>
   );
 }
 {
-  // The park's deadline attempt presents the card too, then the window closes.
+  // A card a hard decline marked invalid is held: the deadline attempt does not present it,
+  // and the window still closes (user decision 2026-11-17).
   const c = await setup("RepresentDeadline", EXPIRED, "smart");
   const before = await presented(c.orgId, c.invoiceId);
   const anchor = (await getInv(c.orgId, c.invoiceId)).dunningParkedAt!;
@@ -822,8 +824,8 @@ const newestPayment = (orgId: string, invoiceId: string) =>
   const inv = await getInv(c.orgId, c.invoiceId);
   const after = await presented(c.orgId, c.invoiceId);
   check(
-    "network rules: the deadline attempt presents an expired card, and still closes",
-    after === before + 1 && inv.status === "not_paid" && inv.dunningStatus === "exhausted",
+    "dead card: the deadline attempt does not present an invalid card, and still closes",
+    after === before && inv.status === "not_paid" && inv.dunningStatus === "exhausted",
     `presented ${before}→${after} invoice=${inv.status}/${inv.dunningStatus}`,
   );
 }
@@ -903,6 +905,37 @@ const backdatePresentations = (orgId: string, invoiceId: string, days: number) =
   );
 }
 {
+  // An India card mandate: 1 + 2 notice cycles per invoice. A 4th is refused before the gateway.
+  const c = await onRail("IndiaCardCap", "card");
+  const inv0 = await getInv(c.orgId, c.invoiceId);
+  await withTenant(c.orgId, async (tx) => {
+    for (let i = 0; i < 2; i++)
+      await tx.insert(payments).values({
+        organizationId: c.orgId,
+        businessId: c.bizId,
+        customerId: inv0.customerId,
+        invoiceId: c.invoiceId,
+        paymentMethodId: c.first.paymentMethodId,
+        publicId: publicId("pay"),
+        status: "failed",
+        amountMinor: 5000n,
+        currency: "USD",
+        providerKey: c.first.providerKey,
+        failureCode: "insufficient_funds",
+        createdAt: new Date(Date.now() - (i + 2) * 86_400_000),
+      });
+  });
+  const before = await presented(c.orgId, c.invoiceId);
+  await collectByHand(c);
+  const after = await presented(c.orgId, c.invoiceId);
+  const newest = await newestPayment(c.orgId, c.invoiceId);
+  check(
+    "India card: a card mandate at 1 + 2 presentations is not presented again",
+    after === before && newest.providerKey === "none" && newest.failureCode === RAIL_LIMIT_CODE,
+    `presented ${before}→${after} newest=${newest.providerKey}/${newest.failureCode}`,
+  );
+}
+{
   // NACH: no re-presentation within 3 days of a return; allowed after it.
   const c = await onRail("NachGap", "nach");
   const before = await presented(c.orgId, c.invoiceId);
@@ -926,7 +959,8 @@ const backdatePresentations = (orgId: string, invoiceId: string, days: number) =
   );
 }
 {
-  // Per-card cap: a card already at its 30-day limit is not retried; the retry waits.
+  // Per-card cap: a card already at its 30-day limit is not presented; the rung is booked
+  // without a charge and the schedule goes on.
   const c = await setup("CardCap", SOFT, "smart");
   const inv0 = await getInv(c.orgId, c.invoiceId);
   const first = await newestPayment(c.orgId, c.invoiceId);
@@ -956,10 +990,15 @@ const backdatePresentations = (orgId: string, invoiceId: string, days: number) =
   await runWithClockScope({ onlyBusinessId: c.bizId, now }, () => runDunningPass(now));
   const inv = await getInv(c.orgId, c.invoiceId);
   const after = await presented(c.orgId, c.invoiceId);
+  const newest = await newestPayment(c.orgId, c.invoiceId);
   check(
-    "network rules: a card at its 30-day attempt limit is not retried; the retry is deferred",
-    after === before && inv.nextAttemptAt != null && inv.nextAttemptAt > now,
-    `presented ${before}→${after} next=${inv.nextAttemptAt?.toISOString() ?? "null"}`,
+    "network rules: a card at its 30-day attempt limit is not presented; the schedule goes on",
+    after === before &&
+      newest.providerKey === "none" &&
+      newest.failureCode === CARD_ATTEMPT_LIMIT_CODE &&
+      inv.nextAttemptAt != null &&
+      inv.nextAttemptAt > now,
+    `presented ${before}→${after} newest=${newest.providerKey}/${newest.failureCode} next=${inv.nextAttemptAt?.toISOString() ?? "null"}`,
   );
 }
 

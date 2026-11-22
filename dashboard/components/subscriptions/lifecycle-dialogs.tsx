@@ -54,6 +54,7 @@ import type { CancelEstimate } from "@/lib/api/subscriptions";
 import { SelectField } from "@/components/ui/select-field";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { useDefaultState } from "@/lib/use-default-state";
+import { splitTax } from "@/lib/tax-rows";
 import {
   CREDIT_CANCEL_LABELS,
   CREDIT_PAUSE_LABELS,
@@ -384,6 +385,7 @@ function CancelOutcome({
   if (estimate) {
     const u = estimate.unbilled_charges;
     if (u.action === "invoice" && u.count > 0) {
+      const tax = splitTax(u.tax_minor, u.tax_lines);
       details.push(
         <>
           Invoices {u.count} unbilled charge{u.count === 1 ? "" : "s"} of{" "}
@@ -394,8 +396,9 @@ function CancelOutcome({
           {u.promotional_discount_minor > 0 ? (
             <> less {money(u.promotional_discount_minor, currency)} promotional credit</>
           ) : null}
-          {u.tax_minor > 0 ? <> plus {money(u.tax_minor, currency)} tax</> : null}. The invoice
-          stays open with {money(u.amount_due_minor, currency)} due
+          {tax.addedMinor > 0 ? <> plus {money(tax.addedMinor, currency)} tax</> : null}
+          {tax.includedMinor > 0 ? <>, including {money(tax.includedMinor, currency)} tax</> : null}
+          . The invoice stays open with {money(u.amount_due_minor, currency)} due
         </>,
       );
     } else if (u.action === "delete" && u.count > 0) {

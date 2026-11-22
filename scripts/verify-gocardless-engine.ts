@@ -482,6 +482,12 @@ try {
         row.status === "invalid",
       `results=${res.results} ${row.mandateStatus}/${row.status}`,
     );
+    ok(
+      "mandate: the cause is stored on the payment method for the operator",
+      row.mandateFailureCode === "bank_account_closed" &&
+        row.mandateFailureText === "The bank account is closed.",
+      `${row.mandateFailureCode} / ${row.mandateFailureText}`,
+    );
   }
 
   // ── 6b. a batch delivered newest first keeps the newest status ─────────────

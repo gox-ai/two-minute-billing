@@ -12,8 +12,8 @@ import { MERCHANT_SIDE_PARK, classifyDecline } from "@/modules/subscriptions/dec
  * #63 and reachable for RazorPay from 2026-09-10, when `BAD_REQUEST_ERROR` was corrected from
  * `card_declined` to this code.
  *
- * The code stays non-retriable — an identical rejected request cannot succeed — so what had
- * to change is the instrument verdict, not the retry verdict.
+ * Since 2026-11-17 the code also RETRIES on the schedule on every gateway, and the
+ * `gateway_request_faults` ops alert names it so the cause is corrected.
  */
 describe("a rejected request is never the instrument's fault", () => {
   const failed = (code: string, retriable: boolean) => ({
@@ -29,9 +29,9 @@ describe("a rejected request is never the instrument's fault", () => {
     expect(shouldTryBackup(failed("gateway_request_rejected", false))).toBe(true);
   });
 
-  it("stays non-retriable and parks, so dunning surfaces it instead of looping", () => {
-    expect(classifyDecline("gateway_request_rejected")).toBe("park");
-    expect(MERCHANT_SIDE_PARK.has("gateway_request_rejected")).toBe(true);
+  it("retries on the schedule and is not a park", () => {
+    expect(classifyDecline("gateway_request_rejected")).toBe("retry");
+    expect(MERCHANT_SIDE_PARK.has("gateway_request_rejected")).toBe(false);
   });
 
   it("holds for the RazorPay envelope code that reaches it", () => {
@@ -39,7 +39,7 @@ describe("a rejected request is never the instrument's fault", () => {
     // ambiguous request-level case lands here.
     const n = normalizeRazorpayDecline({ code: "BAD_REQUEST_ERROR" });
     expect(n.code).toBe("gateway_request_rejected");
-    expect(n.retriable).toBe(false);
+    expect(n.retriable).toBe(true);
     expect(isHardDecline(failed(n.code, n.retriable))).toBe(false);
   });
 

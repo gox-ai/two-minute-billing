@@ -1,4 +1,5 @@
 import { isOrder } from "@/modules/metrics/daily/order-predicate";
+import { RUNWAY_AMOUNT, RUNWAY_POOL } from "@/modules/metrics/daily/credit-runway";
 import { and, desc, eq, inArray, sql, type Column, type SQL } from "drizzle-orm";
 import { deleteCustomerRequestLogs } from "@/modules/request-log/service";
 import { afterCommit, withTenant, type Tx } from "@/platform/db";
@@ -77,6 +78,7 @@ import {
   legacyShippingMirror,
   setDefaultShippingFromLegacy,
 } from "./addresses";
+import { fillAddressFromPostal } from "./postal-fill";
 
 export class CustomerError extends Error {
   constructor(message: string) {
@@ -121,9 +123,13 @@ export interface CustomerFields {
   currency?: string | null;
   locale?: string | null;
   autoCollection?: "on" | "off";
+  /** gwa_… for this customer's new payment methods; null = the business setting. */
+  newMethodGatewayAccount?: string | null;
   netTermDays?: number;
   invoiceNotes?: string | null;
   address?: CustomerAddress | null;
+  /** Fill an empty state and city from the postal code on save. Default on; the importer opts out. */
+  fillFromPostal?: boolean;
   shippingAddress?: Record<string, unknown> | null;
   taxExempt?: boolean;
   /** false = no automatic billing emails to this customer. */
@@ -194,6 +200,8 @@ function applyAddress(
 export async function createCustomer(
   input: { organizationId: string; businessId: string } & CustomerFields,
 ): Promise<typeof customers.$inferSelect> {
+  const address =
+    input.fillFromPostal === false ? input.address : await fillAddressFromPostal(input.address);
   return withTenant(input.organizationId, async (tx) => {
     const values: typeof customers.$inferInsert = {
       organizationId: input.organizationId,
@@ -226,7 +234,7 @@ export async function createCustomer(
       taxRegistrationNumber: input.taxRegistrationNumber ?? null,
       metadata: input.metadata ?? null,
     };
-    applyAddress(values, input.address);
+    applyAddress(values, address);
     await assertTestBusinessRoom(tx, input.businessId, "customers");
     await enforceMetadataRules(tx, input.businessId, "customer", input.metadata ?? null, {
       mode: "create",
@@ -568,13 +576,16 @@ const FILTERS: Record<string, FilterSpec> = {
     kind: "number",
   },
   // Days the balance lasts at the last 7 days' average use; null with no use in that time.
+  // Per pool (`credit-runway.ts`): a unit with no money rate counts units, not face value.
   credit_runway_days: {
-    column: sql`(SELECT CASE WHEN used > 0 THEN round(bal * 7.0 / used, 1) END FROM (
-      SELECT coalesce(sum(m.face_minor) FILTER (WHERE g.status = 'active'), 0) AS bal,
-        coalesce(-sum(m.face_minor) FILTER (WHERE m.kind = 'draw'
+    column: sql`(SELECT min(CASE WHEN used > 0 THEN round(bal * 7.0 / used, 1) END) FROM (
+      SELECT ${RUNWAY_POOL} AS pool,
+        coalesce(sum(${RUNWAY_AMOUNT}) FILTER (WHERE g.status = 'active'), 0) AS bal,
+        coalesce(-sum(${RUNWAY_AMOUNT}) FILTER (WHERE m.kind = 'draw'
           AND m.created_at > now() - interval '7 days'), 0) AS used
       FROM credit_grant_movements m JOIN credit_grants g ON g.id = m.grant_id
-      WHERE g.customer_id = ${customers.id}) s)`,
+      WHERE g.customer_id = ${customers.id}
+      GROUP BY 1) s WHERE bal > 0 OR used > 0)`,
     kind: "number",
   },
   next_credit_expiry_at: {
@@ -1212,6 +1223,8 @@ export async function updateCustomer(
   if (input.currency !== undefined) set.currency = input.currency?.toUpperCase() ?? null;
   if (input.locale !== undefined) set.locale = input.locale;
   if (input.autoCollection !== undefined) set.autoCollection = input.autoCollection;
+  if (input.newMethodGatewayAccount !== undefined)
+    set.newMethodGatewayAccount = input.newMethodGatewayAccount;
   if (input.netTermDays !== undefined) set.netTermDays = input.netTermDays;
   if (input.invoiceNotes !== undefined) set.invoiceNotes = input.invoiceNotes;
   if (input.shippingAddress !== undefined)
@@ -1238,7 +1251,10 @@ export async function updateCustomer(
   if (input.taxRegistrationNumber !== undefined)
     set.taxRegistrationNumber = input.taxRegistrationNumber;
   if (input.metadata !== undefined) set.metadata = input.metadata;
-  applyAddress(set, input.address);
+  applyAddress(
+    set,
+    input.fillFromPostal === false ? input.address : await fillAddressFromPostal(input.address),
+  );
   return withTenant(input.organizationId, async (tx) => {
     const [current] = await tx
       .select()

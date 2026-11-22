@@ -17,7 +17,7 @@
  */
 import { eq } from "drizzle-orm";
 import { closeDb, withTenant } from "@/platform/db";
-import { taxonomyCodes } from "@/platform/error-taxonomy";
+import { ENGINE_BOOKED_CODES, resolveErrorId, taxonomyCodes } from "@/platform/error-taxonomy";
 import {
   ALL_DECLINE_RULES,
   knownDeclineCodesWithoutRules,
@@ -578,7 +578,13 @@ async function main() {
       "no override: our failure stays hidden",
       (await payer(hidden)) === PAYER_SAFE_INTERNAL_FAILURE,
     );
-    ok("no override: the gateway reason is shown", (await payer(shown)) === shown.message);
+    // The gateway's words never reach the payer (2026-11-17): our sentence for the code does.
+    const plain = await payer(shown);
+    ok(
+      "no override: the payer reads our sentence for the code, not the gateway's",
+      plain !== shown.message && /^Your bank declined the payment because/.test(plain),
+      plain,
+    );
 
     await withTenant(orgA.id, (tx) =>
       setDeclineOverride(tx, {
@@ -655,6 +661,20 @@ async function main() {
       `every code the engine emits has a family (${emitted.size})`,
       unnamed.length === 0,
       unnamed.join(", ") || "none",
+    );
+    // …and by its CANONICAL name, not only through a table that happens to map it.
+    const direct = [...emitted].filter((c) => !resolveErrorId(c).known);
+    ok(
+      "every emitted canonical code resolves directly",
+      direct.length === 0,
+      direct.join(", ") || "none",
+    );
+    // The literals booked outside any rule or table (`async_failed`, `setup_failed`, …).
+    const literals = ENGINE_BOOKED_CODES.filter((c) => !resolveErrorId(c).known);
+    ok(
+      `every code literal the engine books has a family (${ENGINE_BOOKED_CODES.length})`,
+      literals.length === 0,
+      literals.join(", ") || "none",
     );
 
     // A gateway family must be one of the eleven we define. A typo in the map would

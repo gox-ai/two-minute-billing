@@ -243,6 +243,21 @@ export interface StorefrontConfig {
   /** Hides invoices with a zero total. An invoice with an amount due is never hidden. */
   portalHideZeroInvoices: boolean;
   portalHideVoidedInvoices: boolean;
+  /**
+   * Portal Pay now with a new card: keep it for later charges? `offer` shows the buyer a box
+   * (ticked when they have no working method), `always` saves it with the consent text, and
+   * `never` pays without saving. Unset = `never` (today's behaviour); a new business starts
+   * with `offer` (user decision 2026-11-18, `NEW_BUSINESS_STOREFRONT_CONFIG`).
+   */
+  portalSaveNewMethod: "offer" | "always" | "never";
+  /**
+   * Where new payment methods go and in what order, per currency (Settings → Gateways):
+   * `order` lists rails first-to-last (saved methods always come first); `gateways` maps a
+   * rail to the gwa_… that takes it. Absent for a currency = the automatic choice.
+   */
+  paymentRouting: Record<string, { order: string[]; gateways: Record<string, string> }>;
+  /** Ask why when a buyer deletes their last payment method (off by default). */
+  portalAskDeleteReason: boolean;
   /** Single-action links (Phase 4b): which tasks a link may open on. All on = today's links work as before. */
   portalActions: { payInvoice: boolean; updateCard: boolean; changePlan: boolean; cancel: boolean };
   /** Where the portal sends the customer back to. Null = `defaultReturnUrl`. */
@@ -304,6 +319,10 @@ export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
   portalHideCancelledSubscriptions: false,
   portalHideZeroInvoices: false,
   portalHideVoidedInvoices: false,
+  // Unset = offer for every business (user decision 2026-11-19).
+  portalSaveNewMethod: "offer",
+  paymentRouting: {},
+  portalAskDeleteReason: false,
   portalActions: { payInvoice: true, updateCard: true, changePlan: true, cancel: true },
   portalReturnUrl: null,
 };
@@ -329,6 +348,7 @@ export const NEW_BUSINESS_STOREFRONT_CONFIG = {
   portal_hide_zero_invoices: true,
   portal_hide_voided_invoices: true,
   allow_restart: true,
+  portal_save_new_method: "offer",
 } as const;
 
 /**
@@ -397,6 +417,9 @@ interface StoredStorefrontConfig {
   portal_hide_cancelled_subscriptions?: unknown;
   portal_hide_zero_invoices?: unknown;
   portal_hide_voided_invoices?: unknown;
+  portal_save_new_method?: unknown;
+  payment_routing?: unknown;
+  portal_ask_delete_reason?: unknown;
   portal_actions?: unknown;
   portal_return_url?: unknown;
 }
@@ -613,6 +636,17 @@ export function resolveStorefrontConfig(
       raw?.portal_hide_voided_invoices,
       DEFAULT_STOREFRONT_CONFIG.portalHideVoidedInvoices,
     ),
+    portalSaveNewMethod:
+      raw?.portal_save_new_method === "offer" ||
+      raw?.portal_save_new_method === "always" ||
+      raw?.portal_save_new_method === "never"
+        ? raw.portal_save_new_method
+        : DEFAULT_STOREFRONT_CONFIG.portalSaveNewMethod,
+    paymentRouting: readPaymentRouting(raw?.payment_routing),
+    portalAskDeleteReason: flag(
+      raw?.portal_ask_delete_reason,
+      DEFAULT_STOREFRONT_CONFIG.portalAskDeleteReason,
+    ),
     portalActions: ((a) => ({
       payInvoice: flag(a?.pay_invoice, true),
       updateCard: flag(a?.update_card, true),
@@ -669,4 +703,25 @@ export function resolveCheckoutRedirect(
   const cancelUrl = explicit.cancelUrl ?? config.defaultCancelUrl;
   if (!returnUrl || !cancelUrl) return null;
   return { returnUrl, cancelUrl };
+}
+
+/** `payment_routing` as stored, keeping only well-formed entries (unknown keys dropped). */
+function readPaymentRouting(
+  raw: unknown,
+): Record<string, { order: string[]; gateways: Record<string, string> }> {
+  const out: Record<string, { order: string[]; gateways: Record<string, string> }> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [cur, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^[A-Z]{3}$/.test(cur) || !v || typeof v !== "object") continue;
+    const e = v as { order?: unknown; gateways?: unknown };
+    const order = Array.isArray(e.order)
+      ? e.order.filter((m): m is string => typeof m === "string")
+      : [];
+    const gateways: Record<string, string> = {};
+    if (e.gateways && typeof e.gateways === "object")
+      for (const [m, g] of Object.entries(e.gateways as Record<string, unknown>))
+        if (typeof g === "string" && g.startsWith("gwa_")) gateways[m] = g;
+    out[cur] = { order, gateways };
+  }
+  return out;
 }

@@ -176,20 +176,91 @@ export function dropUnverifiedLinks(answer: string, unverified: string[]): strin
     .replace(/[ \t]+$/gm, "");
 }
 
-/** Dashboard pages of the records a turn read, which an answer may link. */
-export function recordPaths(business: string, ids: Iterable<string>): string[] {
-  const route: Record<string, string> = {
-    inv: "invoices",
-    cus: "customers",
-    sub: "subscriptions",
-    cn: "credit_notes",
-    txn: "transactions",
-    pi: "payment_intents",
+const PREFIX_ROUTES: Record<string, string> = {
+  inv: "invoices",
+  cus: "customers",
+  sub: "subscriptions",
+  cn: "credit_notes",
+  txn: "transactions",
+  pi: "payment_intents",
+};
+/** Dashboard folders by the API's `object` name (and the page's record type). */
+const OBJECT_ROUTES: Record<string, string> = {
+  invoice: "invoices",
+  customer: "customers",
+  subscription: "subscriptions",
+  credit_note: "credit_notes",
+  "credit note": "credit_notes",
+  transaction: "transactions",
+  payment_intent: "payment_intents",
+  payment: "payment_intents",
+};
+/** Objects whose `customer` field names the customer's id. */
+const HAS_CUSTOMER = new Set(["invoice", "subscription", "credit_note", "transaction"]);
+const OPAQUE_ID = /^[A-Za-z0-9_-]{2,100}$/;
+
+/** The folder of a record type ("customer", "credit note", "payment_intent"), else null. */
+export const routeForType = (type: string): string | null => OBJECT_ROUTES[type] ?? null;
+
+/**
+ * Records a turn read, id → dashboard folder, named by the API object each came in. An
+ * imported record keeps its source id with no prefix, so where it came from is the only
+ * way to know its page.
+ */
+export function recordRoutes(results: unknown[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      const kind = typeof o.object === "string" ? o.object : null;
+      const route = kind ? OBJECT_ROUTES[kind] : undefined;
+      if (route && typeof o.id === "string" && OPAQUE_ID.test(o.id)) out.set(o.id, route);
+      if (kind && HAS_CUSTOMER.has(kind) && typeof o.customer === "string")
+        if (OPAQUE_ID.test(o.customer)) out.set(o.customer, "customers");
+      Object.values(o).forEach(walk);
+    }
   };
+  results.forEach(walk);
+  return out;
+}
+
+/** The folder of a record id: its prefix, else where it came from. */
+export function routeOf(id: string, routes?: ReadonlyMap<string, string>): string | null {
+  const byPrefix = /^([a-z]+)_/.exec(id)?.[1];
+  return (byPrefix && PREFIX_ROUTES[byPrefix]) || routes?.get(id) || null;
+}
+
+/** Dashboard pages of the records a turn read, which an answer may link. */
+export function recordPaths(
+  business: string,
+  ids: Iterable<string>,
+  routes?: ReadonlyMap<string, string>,
+): string[] {
   const out: string[] = [];
   for (const id of ids) {
-    const r = route[id.split("_")[0]!];
+    const r = routeOf(id, routes);
     if (r) out.push(`/businesses/${business}/${r}/${id}`);
+  }
+  return out;
+}
+
+/**
+ * Ids in the answer that only their origin can route (no prefix), id → folder, for the panel
+ * to link. A prefixed id needs no entry: the panel routes it by its prefix.
+ */
+export function unprefixedRecordLinks(
+  answer: string,
+  routes: ReadonlyMap<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [id, route] of routes) {
+    if (id.length < 6 || routeOf(id)) continue;
+    const at = answer.indexOf(id);
+    if (at < 0) continue;
+    const before = answer[at - 1] ?? " ";
+    const after = answer[at + id.length] ?? " ";
+    if (!/[A-Za-z0-9_-]/.test(before) && !/[A-Za-z0-9_-]/.test(after)) out[id] = route;
   }
   return out;
 }

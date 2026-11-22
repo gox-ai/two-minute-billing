@@ -852,7 +852,9 @@ if (lifecycle)
   ok(
     "payment_method_invalid: with no live subscription it says so, not 'keep it active'",
     invalid.length === 1 &&
-      invalid[0]!.bodyText.includes("Your subscription is not active. If you want to restart it") &&
+      invalid[0]!.bodyText.includes(
+        "Your subscription is not active. If you want to reactivate it",
+      ) &&
       !invalid[0]!.bodyText.includes("To keep your subscription active"),
     invalid[0]?.bodyText.slice(0, 300),
   );

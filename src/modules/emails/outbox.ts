@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, lte, ne, sql } from "drizzle-orm";
+import { trackedHtmlFor } from "./tracking-service";
 import { notDeleted } from "@/modules/subscriptions/deleted-sql";
 import { systemDb, type Tx } from "@/platform/db";
 import { scanBusinessFilterNullable, fairShareFor } from "@/platform/clock";
@@ -59,6 +60,8 @@ import { isPayableOfflineInvoice } from "./payable";
 import { paysForLiveSubscription } from "./charged-card";
 import { createLogger } from "@/platform/logger";
 import { spendLimitMailVars, usageAlertMailVars } from "@/modules/usage-controls/mail";
+import { invoiceParkedOnOurRequest } from "@/modules/invoicing/request-fault-park";
+import { PAYER_REASON_WITHHELD } from "@/providers/decline-codes";
 
 const log = createLogger("emails.outbox");
 
@@ -228,6 +231,8 @@ export function emailTypeForEvent(ev: EventRow): EmailType | null {
     // A debit we cancelled is not a failure the payer caused or must act on.
     case "payment_failed":
       if (resourceOf(ev).code === "debit_cancelled") return null;
+      // The payer left the payment page: nothing failed that they must act on.
+      if (resourceOf(ev).code === "payment_abandoned") return null;
       return invoiceRefOf(ev) || resourceOf(ev).code === "late_failure" ? "payment_failed" : null;
     case "payment_authentication_required":
       return "payment_authentication_required";
@@ -521,7 +526,8 @@ async function resolvePayment(c: EventCtx, emailType: EmailType): Promise<TypeVa
     amount = formatMoney(data.amount_minor, currency);
   const declineMessage =
     emailType === "payment_failed"
-      ? (str(data.message) ?? str(data.code) ?? "card declined")
+      ? // Every emitter sets a payer sentence; never fall back to a raw code.
+        (str(data.message) ?? PAYER_REASON_WITHHELD)
       : undefined;
   /**
    * When collections will try again — present only when the failure actually armed a
@@ -773,10 +779,14 @@ async function resolveCard(c: EventCtx, emailType: EmailType): Promise<TypeVars 
       .limit(1);
     if (!live) subscriptionEnded = "yes";
   }
+  // The backup paid in the same collection: the email says the payment is complete.
+  const backupPaid =
+    emailType === "payment_method_invalid" && c.raw.backup_paid === true ? "yes" : undefined;
   return {
     customerId: pm.customerId,
     vars: {
       ...(subscriptionEnded ? { subscriptionEnded } : {}),
+      ...(backupPaid ? { backupPaid } : {}),
       // "The {{cardBrand}} card ending …" — an unbranded method still has to read as a
       // sentence, so fall back to a word rather than to nothing.
       cardBrand: brandWords(pm.brand) ?? "payment",
@@ -1125,6 +1135,7 @@ async function resolveRecipient(
     logoUrl: string | null;
     iconUrl: string | null;
     brandColor: string | null;
+    buttonTextColor: string | null;
     /** The merchant's sign-off, rendered by the shell on every email. */
     footerNote?: string | null;
     /** The merchant's page for links and the button (`merchantLink`); null = the portal. */
@@ -1245,6 +1256,7 @@ async function resolveRecipient(
     logoUrl: business.logoUrl ?? undefined,
     iconUrl: business.iconUrl ?? undefined,
     brandColor: business.brandColor ?? undefined,
+    buttonTextColor: business.buttonTextColor ?? undefined,
     portalUrl: business.merchantUrl ?? portalEntryUrl(),
     ...(business.footerNote ? { footerNote: business.footerNote } : {}),
     ...part.vars,
@@ -1291,6 +1303,14 @@ async function resolveRecipient(
  * gates first — unmapped event types and email-disabled businesses cost no lookup
  * past the switch / one business read. Registered as an event sink below.
  */
+/** The payer's dunning mail, held while an invoice is parked on our refused request. */
+const PARKED_REQUEST_FAULT_SILENCES: ReadonlySet<EmailType> = new Set<EmailType>([
+  "payment_failed",
+  "dunning_action_required",
+  "payment_due_reminder",
+  "invoice_overdue",
+]);
+
 export async function enqueueEmails(tx: Tx, event: EventRow): Promise<void> {
   let emailType = emailTypeForEvent(event);
   if (!emailType || !event.businessId) return;
@@ -1374,6 +1394,20 @@ export async function enqueueEmails(tx: Tx, event: EventRow): Promise<void> {
     const pmId = str(resourceOf(event).id) ?? event.resourceId;
     if (!pmId || !(await paysForLiveSubscription(tx, event.businessId, pmId))) return;
   }
+  // An invoice parked because a gateway refused OUR request: the payer did nothing wrong
+  // and can do nothing, so no dunning mail goes out. Mail resumes once collection runs
+  // again (paid, or parked for a reason the payer can clear).
+  if (PARKED_REQUEST_FAULT_SILENCES.has(emailType)) {
+    const pid =
+      emailType === "payment_failed"
+        ? invoiceRefOf(event)
+        : (str(resourceOf(event).id) ?? event.resourceId);
+    if (
+      pid &&
+      (await invoiceParkedOnOurRequest(tx, { businessId: event.businessId, invoicePublicId: pid }))
+    )
+      return;
+  }
   if (!isEmailTypeEnabled(cfg, emailType)) return;
 
   /**
@@ -1431,6 +1465,7 @@ export async function enqueueEmails(tx: Tx, event: EventRow): Promise<void> {
     logoUrl: biz.logoUrl,
     iconUrl: biz.iconUrl,
     brandColor: biz.brandColor,
+    buttonTextColor: biz.buttonTextColor,
     footerNote: cfg.footerNote,
     merchantUrl: merchantLink(cfg),
   });
@@ -1825,6 +1860,9 @@ export async function deliverPendingEmails(now: Date): Promise<{
           [...customerBcc, ...(sender.bcc ?? [])],
           [row.toAddress, ...cc],
         );
+        // Pixel and link redirects go into the HTML part at send time. The stored body stays
+        // as rendered, so a resend and the preview are clean.
+        const tracked = await trackedHtmlFor(row, cfg);
         const res = await mailer.send({
           to: row.toAddress,
           ...sender,
@@ -1833,7 +1871,7 @@ export async function deliverPendingEmails(now: Date): Promise<{
           // Already prefixed at enqueue — deliberately NOT re-applied here, or a resend
           // would stack "[Fernhill] [Fernhill] …".
           subject: row.subject,
-          html: row.bodyHtml,
+          html: tracked.html,
           text: row.bodyText,
           idempotencyKey: row.publicId,
           ...(attachments.length ? { attachments } : {}),
@@ -1849,6 +1887,7 @@ export async function deliverPendingEmails(now: Date): Promise<{
             attempts,
             lastAttemptAt: now,
             sentAt: now,
+            ...(tracked.tracked ? { engagementTrackedAt: now } : {}),
             durationMs: Date.now() - attemptStartedAt,
             providerMessageId: res.providerMessageId,
             lastError: null,

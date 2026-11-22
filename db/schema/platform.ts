@@ -155,6 +155,12 @@ export const providerEvents = pgTable(
      * in full: db/migrations/0141_gateway_webhook_http_exchange.sql.
      */
     transactionPublicId: text("transaction_public_id"),
+    /**
+     * The payment intent and attempt this event is about, resolved when it is applied
+     * (`webhooks/event-link.ts`). No FK, for the same reason as `transactionPublicId` (0540).
+     */
+    paymentIntentId: uuid("payment_intent_id"),
+    paymentAttemptId: uuid("payment_attempt_id"),
     receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
@@ -172,6 +178,12 @@ export const providerEvents = pgTable(
     index("provider_events_error_received_idx")
       .on(t.receivedAt)
       .where(sql`${t.outcome} = 'error'`),
+    index("provider_events_payment_intent_idx")
+      .on(t.paymentIntentId)
+      .where(sql`payment_intent_id is not null`),
+    index("provider_events_payment_attempt_idx")
+      .on(t.paymentAttemptId)
+      .where(sql`payment_attempt_id is not null`),
   ],
 );
 

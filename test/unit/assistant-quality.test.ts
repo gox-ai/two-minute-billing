@@ -528,13 +528,32 @@ describe("get_timeline", () => {
     ]);
   });
 
-  it("reads events by resource for a subscription, and refuses an unknown id", async () => {
+  it("reads events by resource for a subscription, and asks the kind of an unknown id", async () => {
     const calls: string[] = [];
     await tool("get_timeline").run(fakeCtx({ events: { data: [] } }, calls), { record: "sub_9" });
     expect(calls).toEqual(["events?resource_type=subscription&resource_id=sub_9&limit=40"]);
     await expect(tool("get_timeline").run(fakeCtx({}), { record: "zz_1" })).rejects.toThrow(
-      /cus_, sub_, inv_, pi_ or txn_/,
+      /Give the record's kind/,
     );
+  });
+
+  it("a missing id says to use it as given, never to read another record", async () => {
+    const ctx: ToolContext = {
+      ...fakeCtx({}),
+      get: async () => ({ status: 404, body: { error: { message: "No such customer" } } }),
+    };
+    await expect(tool("get_customer").run(ctx, { customer: "cus_XXXXXXXXXXXX01" })).rejects.toThrow(
+      /exactly as it was given.*Do not read a different record/,
+    );
+  });
+
+  it("reads an imported id with no prefix as given, with its kind", async () => {
+    const calls: string[] = [];
+    await tool("get_timeline").run(fakeCtx({ events: { data: [] } }, calls), {
+      record: "Qx7LmN2pRt4VwY9Za",
+      kind: "customer",
+    });
+    expect(calls[0]).toBe("events?customer=Qx7LmN2pRt4VwY9Za&limit=40");
   });
 });
 

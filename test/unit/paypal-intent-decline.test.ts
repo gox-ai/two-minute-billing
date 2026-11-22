@@ -57,7 +57,7 @@ describe("paypal createIntent: a decline the classifier knows comes back as data
     // decline-shaped result would bury it.
     const ourBug = {
       name: "INVALID_REQUEST",
-      details: [{ issue: "MALFORMED_REQUEST_JSON", description: "nope" }],
+      details: [{ issue: "AN_ISSUE_NOT_YET_DOCUMENTED", description: "nope" }],
     };
     await expect(providerAnswering(400, ourBug).createIntent(INPUT)).rejects.toThrow(
       /PayPal payment intent failed/i,

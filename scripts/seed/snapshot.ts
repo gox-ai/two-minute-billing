@@ -59,10 +59,13 @@ export const EXCLUDED = new Set([
   "countries",
   "country_subdivisions",
   "country_subdivision_aliases",
+  "postal_codes",
   "reference_data_sources",
   "model_price_models",
   "model_prices",
   "model_price_notices",
+  // A singleton the retention migration (0357) inserts: a fresh database already has the row.
+  "retention_defaults",
 ]);
 
 /**

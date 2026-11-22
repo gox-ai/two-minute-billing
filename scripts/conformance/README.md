@@ -1,6 +1,6 @@
 # Gateway conformance (`verify:gateway-conformance`)
 
-One set of scenarios (S1–S14) runs against every payment gateway adapter. It runs through the
+One set of scenarios (S1–S15) runs against every payment gateway adapter. It runs through the
 real adapter, which talks to a fake API, and through the real engine and the real webhook route.
 It checks the ledger after each scenario. The suite proves two things: a gateway books money the
 way its docs say, and every open defect is written down.
@@ -50,7 +50,7 @@ sandbox, real webhooks included.
 | File | What it is |
 |---|---|
 | `types.ts` | `GatewayFixture`, `GatewayDriver`, `SCENARIOS`: the contract a fixture module fills in |
-| `scenarios.ts` | S1–S14, written once. Each check is a row such as `S3.second-at-own-amount` |
+| `scenarios.ts` | S1–S15, written once. Each check is a row such as `S3.second-at-own-amount` |
 | `harness.ts` | One world per scenario: its own business, a gateway account on the fake, `bill()`, `deliver()`, ledger checks |
 | `fake-http.ts` | One `fetch` replacement that routes by host to each fake. It records calls and injects faults |
 | `verdict.ts` | Pure: rows against the known gaps, and the coverage gate (unit-tested in `test/unit/gateway-conformance.test.ts`) |
@@ -95,6 +95,9 @@ passes, so it shows a finished gateway: refund records, `locateCharge`, location
    over-long text only where an operator or customer writes it (description, email, refund
    reason); engine-made keys and refs keep their real shape. `currencyAmounts` lists every
    currency where the gateway's unit differs from ISO 4217.
+8a. **S15 needs nothing new.** It reuses `bill`, `paymentFailed` and the first `{ none }` status
+   about a payment: an open intent addressed by the id the failure names must keep the reason
+   on its attempt, and both deliveries must be linked to that attempt.
 8b. **Signatures inside the body.** When the gateway signs inside the payload (Adyen's
    per-item HMAC, Braintree's `bt_signature`), implement `signBody` on the driver: it returns the
    body as posted, and `sign()` then signs that body.

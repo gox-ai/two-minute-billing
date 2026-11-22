@@ -95,7 +95,44 @@ attempt's span by it (`webhooks/event-span.ts`).
   future work).
 
 ## Changelog
+- **2026-11-22** — List and detail return `initiated_by`: what created the intent, from its creation event (one query per page).
 
+- **2026-11-21** — The RazorPay sheet now reports EVERY `payment.failed` (with its `source` and
+  `step`) through the storefront error report, not only the last one when the sheet closes. A
+  browser-reported refusal on an open setup attempt is posted by the back-office setup-failure
+  alert at once, marked "(reported by the buyer's browser)", once per attempt. No new endpoint:
+  `POST /checkout|portal/v1/client_errors` with `payment_intent` already books on the open attempt.
+- **2026-11-19 (0545)** — `payment_intents.method_type`: the rail the buyer selected; passed to
+  the adapter on every payment (not only saves), reused by a retry.
+- **2026-11-19 (Phase C, all methods)** — A saving intent passes its one rail to the adapter
+  (`methodTypes`) and stores it as `save_consent.methodType`, so a retry saves the same rail;
+  the card limit applies only when that rail is a card.
+- **2026-11-19 (Phase C)** — Pay and save: `CreatePaymentIntentInput.saveForFuture` +
+  `saveConsent` (migration 0544 `save_method`, `save_consent`), refused as `save_not_supported`
+  without consent or capability; ceiling from `deriveMandateCeiling`; retry re-sends it.
+  Consume books first, then `savePaidMethod` (result `savedPaymentMethod` / `saveFailed`).
+- **2026-11-19** — `applyClientResult` maps an adapter's `ClientResultUnsupportedError`
+  (`providers/types.ts`) to `client_result_unsupported`, as a missing `submitClientResult` does.
+- **2026-11-18 (portal pay-and-save)** — Migration **0543** `saved_method_chosen` (set on create:
+  `!letBuyerChooseMethod` for payments, NULL for setup and older rows). `releaseRefusedCapture`:
+  voids an `authorized` intent whose last attempt failed, so the portal mints a fresh payment
+  instead of replaying the refused capture (same consume key). Only where the gateway can void.
+- **2026-11-17 (feat/customer-payment-intents)** — `GET …/payment_intents?customer=cus_…`
+  (`listPaymentIntentsPage` `customerPublicId`): one customer's intents, resolved within the
+  business; an id that matches nothing is an empty page, as `invoice` is. Migration **0541**
+  adds `payment_intents_customer_created_idx (customer_id, created_at DESC, public_id DESC)`.
+  OpenAPI now documents `customer` and `invoice`. `verify:list-pagination` covers it.
+- **2026-11-17** — A refusal the gateway gave the buyer's BROWSER (Stripe.js confirm, the RazorPay
+  sheet, Drop-in, Adyen, Checkout.com, Square, Microform, Accept, Cashfree) is booked on the
+  intent's open attempt: `recordBrowserFailureOnOpenIntent`, from the storefront's error report
+  (`POST /checkout|portal/v1/client_errors` with `payment_intent`). Code from the gateway's own
+  normaliser (`browser-failure.ts`; Stripe `invalid_request_error` + `param: card` + no code =
+  `card_restricted`), text = the gateway's words + "Reported by the customer's browser.", status
+  unchanged. Only the session's own intent, on its gateway, with an open attempt; never over a
+  reason a webhook or the server wrote; field errors are not booked. A `customer_browser` row
+  (method `BROWSER`, no HTTP status) goes to `gateway_request_logs` under the attempt's span. The
+  list's Last error now also shows a refusal on an attempt that is still open. Proof:
+  `verify:buyer-client-errors` § book, `test/unit/browser-failure.test.ts`.
 - **2026-11-13** — A browser `client_result` the gateway refuses throws "We could not take your
   payment. <reason>. We did not charge you." for a payment and "We could not save your payment
   method. <reason>." for a setup (was "We could not complete the payment. <reason>" for both).
@@ -704,3 +741,28 @@ attempt's span by it (`webhooks/event-span.ts`).
 - **2026-11-04** — `createPaymentIntent` books a refusal from the vault step (`ensureProviderCustomer`) exactly like a `createIntent` rejection: intent + failed `gateway_request_rejected` attempt, then rethrown; a `ProviderIndeterminateError` is rethrown with nothing booked. `assertIntentCurrency` (public route only) refuses a currency outside the business default, its currency list and the named invoice's or subscription's currency. `amount_minor` and `max_amount_minor` at most 10^12. tmtest credential `ensure_customer_fault` (`reject` / `indeterminate`). Gate: `verify:gateway` C63+ and PI currency.
 - **2026-11-15** — The attempt's span opens before the provider-customer lookup (create, retry
   and the setup consume), so `ensure_customer` shows in the attempt's Request/response logs.
+- **2026-11-17** — A gateway failure on an attempt the buyer is still completing (a refused 3-D
+  Secure check confirmed in the browser) is kept: `charge.failed` with no transaction now writes
+  its code and text on the open attempt (`recordGatewayFailureOnOpenIntent`), status unchanged so
+  the buyer can pay with another card, and the expiry sweep closes the attempt with that reason
+  instead of `intent_expired`. It used to be `ignored`, and the Payment intents list and the
+  attempt said "The intent expired before it was consumed". Cover: `verify:gateway` C7.
+- **2026-11-17** — Polls keep the reason. `FetchedIntent.failure` (code, providerCode,
+  message, retriable, ruleId, exposedToPayer) is written on the open attempt when a poll finds
+  the intent refused (`confirmAuthorizationWithGateway`, `resumeVerdictFromGateway`), and the
+  expiry sweep closes the attempt with it instead of `intent_expired`. Filled by tmtest and
+  Mollie today. `recordGatewayFailureOnOpenIntent` also matches by `ownershipRef`
+  (`openIntentForGatewayFailure`). Setup intents keep failing the attempt on
+  `intent.setup_failed`: `retryPaymentIntent` and the `payment_intent_failed` event depend on
+  it. `applyClientResult` returns operator text plus `exposedToPayer`; callers derive the
+  payer's sentence. Intent refusals booked `gateway_request_rejected` are retriable. Cover:
+  `verify:gateway` C7-widen, C7-poll.
+- **2026-11-17** — `failPaymentIntentFromGateway` with `payment_abandoned` (the payer left the
+  page, or it expired) also closes the intent as `expired`, so it no longer holds the invoice
+  against collection; an authorized hold is left to the expiry path.
+- **2026-11-17** — The Adyen Drop-in race: a browser result with no reason
+  (`GENERIC_CLIENT_REFUSAL`, fixed `card_declined`) no longer hides the webhook's real reason. A
+  later gateway failure replaces it on the failed attempt (`recordGatewayFailureOnOpenIntent`), and
+  a reasonless browser failure keeps a reason the webhook already wrote
+  (`failPaymentIntentFromGateway`). A failed attempt with a named reason is never overwritten.
+  Cover: `verify:gateway` C7-race.

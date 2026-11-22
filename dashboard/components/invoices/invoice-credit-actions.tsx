@@ -5,6 +5,7 @@ import * as React from "react";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { DateTimeField } from "@/components/form/datetime-field";
+import { RepeatRefundNotice, useRepeatRefund } from "@/components/form/repeat-refund";
 import { SubmitButton } from "@/components/form/submit-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -218,6 +219,7 @@ export function IssueRefundDialog({
   gatewayAccount?: { id: string; name: string } | null;
 }) {
   const [open, setOpen] = React.useState(false);
+  const repeat = useRepeatRefund();
   return (
     <>
       <Button
@@ -243,6 +245,7 @@ export function IssueRefundDialog({
           <ActionForm
             action={refundInvoiceAction}
             onSuccess={() => setOpen(false)}
+            onRefused={repeat.onRefused}
             className="space-y-4"
           >
             <input type="hidden" name="biz" value={biz} />
@@ -261,6 +264,7 @@ export function IssueRefundDialog({
               help={`Up to ${money(refundableMinor, currency)} is creditable. You can refund only the cash that we collected. If the card paid less, we show the exact amount.`}
             />
             <ReasonFields required={requiredReasons} />
+            <RepeatRefundNotice message={repeat.message} onClear={repeat.clear} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel

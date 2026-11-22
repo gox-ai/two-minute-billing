@@ -26,6 +26,7 @@ import {
   type TransactionDetailed,
 } from "@/modules/transactions/service";
 import { parseRequest } from "./strict-params";
+import { attributeTransaction, attributeTransactions } from "@/modules/invoicing/dunning-journey";
 
 // `success` / `failure` are the deprecated pre-0321 spellings, still accepted.
 const reconcileBody = z.object({
@@ -142,7 +143,16 @@ export async function registerTransactionRoutes(app: FastifyInstance) {
         ...parsed,
         ...ids,
       });
-      return listResponse(page, serializeDetailed);
+      // One audit query for the whole page, not one per row.
+      const by = await attributeTransactions(
+        req.organization!.id,
+        page.data.map((r) => r.txn),
+      );
+      const bySource = new Map(page.data.map((r, i) => [r, by[i]!]));
+      return listResponse(page, (r) => {
+        const a = bySource.get(r)!;
+        return { ...serializeDetailed(r), initiated_by: a.trigger ? a : null };
+      });
     },
   );
 
@@ -155,7 +165,8 @@ export async function registerTransactionRoutes(app: FastifyInstance) {
       const { txn } = req.params as { txn: string };
       const row = await getTransactionDetailed(req.organization!.id, business.id, txn);
       if (!row) return notFound(reply, "Transaction not found");
-      return serializeDetailed(row);
+      const by = await attributeTransaction(req.organization!.id, row.txn);
+      return { ...serializeDetailed(row), initiated_by: by.trigger ? by : null };
     },
   );
 

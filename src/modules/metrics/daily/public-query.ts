@@ -20,7 +20,7 @@ import {
   yearLabel,
   type BusinessCalendar,
 } from "@/platform/business-calendar";
-import { businesses, meters, metricDaily, organizations, products } from "@db/schema";
+import { businesses, coupons, meters, metricDaily, organizations, products } from "@db/schema";
 import {
   MeasureRefused,
   readMetricSeries,
@@ -642,8 +642,9 @@ const num = (v: bigint | null): number | null => (v == null ? null : Number(v));
  *    naming every currency that had no rate. Without a base currency, refuse and name the
  *    options — a total that silently drops a currency is the dishonesty this layer removes.
  *
- * A count is never converted: a subscription has exactly one currency, so counting across
- * currencies counts each subscription once.
+ * A count is never converted, and never filtered by an asked currency: it answers
+ * `across_currencies`, with `currency: null`. A subscription has exactly one currency, so
+ * counting across currencies counts each subscription once.
  */
 export interface CurrencyChoice {
   currency: string | null;
@@ -666,6 +667,9 @@ function chooseCurrency(
   },
 ): CurrencyChoice {
   const none = { rates: null, missingRates: [] as string[] };
+  // Counts, and rates of counts, combine across currencies as they are — and ignore an asked
+  // currency: a count is stored as XXX, so filtering it by one read as no data at all.
+  if (!hasMoneyHalves(m)) return { currency: null, basis: "across_currencies", ...none };
   if (asked) {
     const want = asked.toUpperCase();
     if (present.length > 0 && !present.includes(want)) {
@@ -675,9 +679,8 @@ function chooseCurrency(
     }
     return { currency: want, basis: "per_currency", ...none };
   }
-  // Counts, and rates of counts, combine across currencies as they are. Anything built from
-  // money — a rate of money included — converts, or its halves weigh raw minor units.
-  if (!hasMoneyHalves(m)) return { currency: null, basis: "across_currencies", ...none };
+  // Anything built from money — a rate of money included — converts, or its halves weigh raw
+  // minor units.
   if (present.length <= 1) {
     return { currency: present[0] ?? null, basis: "per_currency", ...none };
   }
@@ -1597,6 +1600,13 @@ async function nameSplitRows(
       one_time: "One-time sales",
       credit_pack: "Credit packs",
     },
+    revenue_deduction: {
+      coupon: "Discounts",
+      promotional_credit: "Promotional credit",
+      plan_credit: "Plan credits",
+      prepaid_credit: "Paid with prepaid credit",
+      credit_note: "Credit notes",
+    },
     // An open set: a gateway not named here shows its own key.
     gateway: {
       stripe: "Stripe",
@@ -1609,6 +1619,14 @@ async function nameSplitRows(
     },
     billing_interval: BILLING_INTERVAL_LABELS,
     region: REGION_LABELS,
+    buyer_type: { first: "First order", returning: "Returning buyer" },
+    runway_band: {
+      "0_7": "0–7 days",
+      "8_30": "8–30 days",
+      "31_90": "31–90 days",
+      "90_plus": "More than 90 days",
+      no_recent_use: "No use in the last 7 days",
+    },
   };
   // The column holds raw provider spellings (`BAD_REQUEST_ERROR`) beside our own codes; read
   // each through the decline vocabulary so one refusal is one sentence whatever the rail said.
@@ -1633,6 +1651,24 @@ async function nameSplitRows(
   }
 
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (dimension === "coupon") {
+    for (const row of dimensionRows) {
+      if (row.key === "none") row.label = "No coupon";
+      else if (row.key === "manual") row.label = "Manual discount";
+      else if (row.key === "multiple") row.label = "More than one coupon";
+    }
+    const ids = dimensionRows.map((r) => r.key).filter((k) => UUID.test(k));
+    if (ids.length === 0) return;
+    const named = await withTenant(scope.organizationId, (tx) =>
+      tx
+        .select({ id: coupons.id, name: coupons.name, code: coupons.code })
+        .from(coupons)
+        .where(inArray(coupons.id, ids)),
+    );
+    const names = new Map(named.map((r) => [r.id, r.name ?? r.code]));
+    for (const row of dimensionRows) row.label = names.get(row.key) ?? row.label;
+    return;
+  }
   if (dimension === "meter") {
     const ids = dimensionRows.map((r) => r.key).filter((k) => UUID.test(k));
     if (ids.length === 0) return;

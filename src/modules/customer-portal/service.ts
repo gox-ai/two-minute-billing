@@ -367,6 +367,7 @@ export async function getPortalLinkNotice(businessPublicId: string) {
     iconUrl: b.iconUrl,
     faviconUrl: b.faviconUrl,
     brandColor: b.brandColor,
+    buttonTextColor: b.buttonTextColor,
     supportEmail: b.supportEmail,
     website: b.website,
     hasPricingPage: await businessHasPricingPage(b.id),

@@ -19,6 +19,7 @@ import {
 } from "@/modules/payments/pending-debit";
 import {
   planFailureRearm,
+  retryRailOf,
   heldRetry,
   nextParkedReminderAt,
   retryDaysForMethod,
@@ -53,11 +54,15 @@ import {
   getCurrentAttempt,
   repointAttemptAtGateway,
   markPaymentIntentVoidedFromGateway,
+  openIntentForGatewayFailure,
   PaymentIntentConflictError,
   PaymentIntentError,
 } from "@/modules/payment-intents/service";
 // The checkout a harvested SETUP intent may belong to — see `harvestSetupIntent`.
-import { completeCheckoutForSetupIntent } from "@/modules/checkout/service";
+import {
+  completeCheckoutForPaymentIntent,
+  completeCheckoutForSetupIntent,
+} from "@/modules/checkout/service";
 import { createLogger } from "@/platform/logger";
 import { applyGatewayNoticeUpdate } from "@/modules/invoicing/pre-debit";
 import { isOpenInvoiceStatus } from "@/modules/invoicing/status";
@@ -86,10 +91,17 @@ import type {
   ProviderRefundRecord,
 } from "@/providers/types";
 import { gatewayDefinition } from "@/providers/gateway-catalog";
+import {
+  isOurRequestFault,
+  operatorFailureText,
+  payerDeclineMessage,
+  withBuiltInRetry,
+} from "@/providers/decline-codes";
 import { refundUnappliedExcess } from "@/modules/refunds/excess";
 import { adoptTraceLogsIntoSpan } from "@/providers/http";
 import { getTraceId, joinSpan } from "@/platform/trace";
 import { spanForProviderEvent } from "./event-span";
+import { resolveEventLink, type EventLink } from "./event-link";
 
 const log = createLogger("webhooks.inbound");
 
@@ -340,6 +352,20 @@ export function providerEventKey(
   );
 }
 
+/** The intent and attempt a stored event is about, as of the delivery's `received_at`. */
+async function linkStoredEvent(
+  providerKey: string,
+  ev: NormalizedProviderEvent,
+  businessId: string | null,
+): Promise<EventLink> {
+  const [row] = await systemDb
+    .select({ receivedAt: providerEvents.receivedAt })
+    .from(providerEvents)
+    .where(providerEventKey(providerKey, ev.providerEventId, businessId))
+    .limit(1);
+  return resolveEventLink(ev, businessId, row?.receivedAt ?? new Date());
+}
+
 /**
  * Process one normalized provider webhook event idempotently:
  *  1. dedup by (provider_key, business_id, provider_event_id) — replays are a no-op,
@@ -431,8 +457,32 @@ async function applyProviderEvent(
       if (result === "ignored") await nudgeSetupAuthRefundFor(providerKey, ev.providerChargeId);
     } else if (ev.type === "charge.succeeded" && ev.providerChargeId) {
       result = await reconcileChargeSucceeded(providerKey, ev, ctx?.businessId ?? null);
-    } else if (ev.type === "charge.failed" && ev.providerChargeId) {
-      result = await reconcileChargeFailed(providerKey, ev, ctx?.businessId ?? null);
+    } else if (
+      ev.type === "charge.failed" &&
+      (ev.providerChargeId || ev.providerIntentId || ev.ownershipRef)
+    ) {
+      if (ev.providerChargeId)
+        result = await reconcileChargeFailed(providerKey, ev, ctx?.businessId ?? null);
+      // No transaction yet: an attempt the buyer is still completing. Keep the reason on it,
+      // with a generic code when the gateway gave none.
+      if (result === "ignored" && ev.ownership !== "foreign") {
+        const { recordGatewayFailureOnOpenIntent } =
+          await import("@/modules/payment-intents/service");
+        const failureCode = ev.failureCode ?? "charge_failed";
+        const recorded = await recordGatewayFailureOnOpenIntent({
+          intentAtGateway: ev.providerIntentId ?? ev.providerChargeId ?? null,
+          ownershipRef: ev.ownershipRef ?? null,
+          eventIds: [ev.providerIntentId, ev.providerChargeId, ev.gatewayIntentId],
+          businessId: ctx?.businessId ?? null,
+          failureCode,
+          failureMessage: operatorFailureText({
+            code: failureCode,
+            providerCode: ev.providerFailureCode,
+            message: ev.failureMessage,
+          }),
+        });
+        if (recorded) result = "processed";
+      }
     } else if (ev.type === "payment_method.updated" && ev.providerPaymentMethodId) {
       result = await applyPaymentMethodUpdate(providerKey, ev, ctx?.businessId ?? null);
     } else if (ev.type === "payment_method.mandate_updated" && ev.providerPaymentMethodId) {
@@ -468,7 +518,10 @@ async function applyProviderEvent(
       result = "ignored";
     } else if (ev.type === "intent.requires_action") {
       result = await applyActionRequired(providerKey, ev, ctx?.businessId ?? null);
-    } else if (ev.type.startsWith("intent.") && ev.providerIntentId) {
+    } else if (
+      ev.type.startsWith("intent.") &&
+      (ev.providerIntentId || (isIntentFailure(ev.type) && ev.ownershipRef))
+    ) {
       result = await applyIntentEvent(ev, ctx?.businessId ?? null, providerKey);
     } else if (ev.type.startsWith("dispute.")) {
       result = await handleDisputeEvent(ev, {
@@ -494,7 +547,15 @@ async function applyProviderEvent(
     // The row keeps the message so the Gateway Webhooks screen can show it; the log
     // keeps the stack. This is inbound money reconciliation — a refund or a charge
     // outcome that failed to apply is a divergence between us and the gateway.
-    log.error(e, { event: "inbound_event_apply_failed", type: ev.type, provider: providerKey });
+    if (e instanceof CaptureInFlightError)
+      log.info("a capture arrived while its consume was booking it; retrying", {
+        event: "capture_consume_in_flight",
+        type: ev.type,
+        provider: providerKey,
+        charge: ev.providerChargeId ?? null,
+      });
+    else
+      log.error(e, { event: "inbound_event_apply_failed", type: ev.type, provider: providerKey });
   }
 
   // P2: which transaction did this callback affect? The Gateway Webhooks log's
@@ -524,6 +585,18 @@ async function applyProviderEvent(
     transactionPublicId = txn?.publicId ?? null;
   }
 
+  // Read after the handler, so an attempt it re-pointed is found. Never fails the event.
+  const link = await linkStoredEvent(providerKey, ev, ctx?.businessId ?? null).catch(
+    (e: unknown) => {
+      log.warn("could not link a gateway event to its payment intent", {
+        type: ev.type,
+        provider: providerKey,
+        error: String(e),
+      });
+      return {};
+    },
+  );
+
   await systemDb
     .update(providerEvents)
     .set({
@@ -531,6 +604,7 @@ async function applyProviderEvent(
       outcome: result,
       error,
       transactionPublicId,
+      ...link,
       // Also on the UPDATE path, so a redelivery backfills a row written before this
       // column existed — otherwise a legacy event could error, be redelivered, and
       // still end up un-replayable.
@@ -930,6 +1004,65 @@ async function captureAccountedFor(
  * to predict that a live capture would sit as credit — it had already been refunded.
  * A comment on a money path that contradicts the code 70 lines below it is a defect.
  */
+/** How long after its claim a consumed intent's capture is left to the consume to book. */
+export const CONSUME_IN_FLIGHT_MS = 2 * 60 * 1000;
+
+/** A capture its own consume is still booking: retried, not booked as stray money. */
+export class CaptureInFlightError extends Error {
+  constructor(intent: string) {
+    super(`The capture of ${intent} is still being booked by its own request; retrying.`);
+    this.name = "CaptureInFlightError";
+  }
+}
+
+/**
+ * How long a capture carrying OUR tag, with no record yet, is treated as "our charge is still
+ * being written" rather than lost money. A mandate debit's charge call returns after the
+ * gateway has already sent its capture event (measured: 0.5 s ahead of our commit), so the
+ * event must wait for the row. Past this, the lost-money path below runs as before.
+ */
+export const UNBOOKED_OWN_CHARGE_WAIT_MS = 15 * 60_000;
+
+/**
+ * Gateways measured sending the capture before our charge call returned. Elsewhere an
+ * unmatched tagged capture (a PayPal order, for one) is not our write in progress, so it is
+ * handled at once as before.
+ */
+const CAPTURE_MAY_BEAT_OUR_ROW = new Set(["razorpay"]);
+
+export class OwnChargeNotBookedYetError extends Error {
+  constructor(charge: string) {
+    super(`The charge ${charge} carries our tag and is still being booked; retrying.`);
+    this.name = "OwnChargeNotBookedYetError";
+  }
+}
+
+/**
+ * True while a consume holds the intent's claim and has booked nothing for this charge.
+ * `app_now()` on both sides: `bump_row_version` stamps the claim's `updated_at` with it.
+ * Past the window, a consume that crashed after its capture is booked here as before.
+ */
+async function consumeStillBooking(
+  pi: { id: string; organizationId: string; businessId: string; status: string },
+  chargeId: string,
+): Promise<boolean> {
+  if (pi.status !== "consumed") return false;
+  const rows = await withTenant(pi.organizationId, (tx) =>
+    tx.execute(sql`
+      select 1 from payment_intents
+      where id = ${pi.id}
+        and status = 'consumed'
+        and updated_at > app_now() - make_interval(secs => ${CONSUME_IN_FLIGHT_MS / 1000})
+        and not exists (
+          select 1 from payments
+          where business_id = ${pi.businessId} and provider_charge_id = ${chargeId}
+        )
+      limit 1`),
+  );
+  const list = Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] }).rows ?? []);
+  return list.length > 0;
+}
+
 async function reconcileUnmatchedCapture(
   providerKey: string,
   ev: NormalizedProviderEvent,
@@ -986,6 +1119,14 @@ async function reconcileUnmatchedCapture(
       });
       return "ignored";
     }
+    // Ours, and young: the request that made this charge has not committed its row yet.
+    // Error so our retry job (or the gateway) runs it again once the row exists.
+    if (
+      CAPTURE_MAY_BEAT_OUR_ROW.has(providerKey) &&
+      classifyUnmatchedCapture(ev) === "ours_unattributed" &&
+      Date.now() - ev.occurredAt.getTime() < UNBOOKED_OWN_CHARGE_WAIT_MS
+    )
+      throw new OwnChargeNotBookedYetError(chargeId);
     const provenance = classifyUnmatchedCapture(ev);
     const facts = {
       charge: chargeId,
@@ -1028,6 +1169,11 @@ async function reconcileUnmatchedCapture(
       });
     return "ignored";
   }
+  // The consume that captured this money may still be booking it: it claims the intent
+  // (`consumed`) before the capture call and books after, and the gateway's capture event
+  // can land in between. Booking it here as stray money makes the consume's own booking
+  // fail and refunds the buyer's purchase. Error out so the retry finds the consume's row.
+  if (await consumeStillBooking(pi, chargeId)) throw new CaptureInFlightError(pi.publicId);
   /**
    * WHY this money cannot be applied — the cause an operator reads on the alert, and the
    * sentence the refund is worded from.
@@ -1043,6 +1189,29 @@ async function reconcileUnmatchedCapture(
    *   anything else    ⇒ the intent was live; the money simply has no room on the invoice,
    *                      which is a duplicate payment however it came about.
    */
+  /**
+   * A checkout's own first charge, captured on the gateway's page and reported before that
+   * page came back (PayU sends its notification as the buyer is redirected). It is the
+   * buyer's one payment, not a duplicate: complete the checkout with it. No grace wait,
+   * because the money has moved. When the page's second leg holds the claim, its consume
+   * books the payment.
+   */
+  if (
+    pi.purpose === "payment" &&
+    !pi.invoiceId &&
+    pi.status !== "consumed" &&
+    pi.status !== "expired" &&
+    pi.status !== "voided" &&
+    pi.voidedAt == null
+  ) {
+    const outcome = await completeCheckoutForPaymentIntent({
+      organizationId: pi.organizationId,
+      businessId: pi.businessId,
+      intentPublicId: pi.publicId,
+      graceMs: 0,
+    });
+    if (outcome === "completed" || outcome === "in_progress") return "processed";
+  }
   const cause =
     pi.status === "expired" || pi.voidedAt != null ? "late_authorization" : "second_checkout";
   const { settleUnmatchedGatewayCapture } = await import("@/modules/payments/settlement");
@@ -1081,9 +1250,11 @@ async function reconcileUnmatchedCapture(
     await refundUnappliedExcess(
       { organizationId: pi.organizationId, businessId: pi.businessId },
       res,
-      cause === "second_checkout"
-        ? "Duplicate payment for an invoice that was already settled"
-        : "Authorization captured after its intent had expired, with no invoice to apply it to",
+      cause === "late_authorization"
+        ? "Authorization captured after its intent had expired, with no invoice to apply it to"
+        : pi.invoiceId
+          ? "Duplicate payment for an invoice that was already settled"
+          : "Payment captured with no invoice to apply it to",
     );
   /**
    * ── #26 · AND CLOSE THE INTENT THE MONEY CAME FROM ──────────────────────────
@@ -1488,7 +1659,10 @@ async function reconcileChargeFailed(
         data: buildEventData("payment_failed", {
           id: txn.publicId,
           code: "late_failure",
-          message: "Charge reversed after settlement",
+          message: payerDeclineMessage(
+            { code: "late_failure", message: null },
+            "We could not complete the payment.",
+          ),
           retriable: reversalRetriable,
         }),
       });
@@ -1523,7 +1697,17 @@ async function reconcileChargeFailed(
     // The placeholder remains the fallback: an adapter that could not classify the
     // failure must not have one invented for it.
     const errorCode = ev.failureCode ?? "async_failed";
-    const errorText = ev.providerFailureCode ?? null;
+    // Operator text: the gateway's or our rule's sentence, else the code's label with the
+    // gateway's own code beside it. The payer's sentence is derived later
+    // (`payerDeclineMessage`), so a raw `E308` never reaches them.
+    const errorText =
+      ev.failureCode || ev.providerFailureCode || ev.failureMessage
+        ? operatorFailureText({
+            code: errorCode,
+            providerCode: ev.providerFailureCode,
+            message: ev.failureMessage,
+          })
+        : null;
     await withTenant(txn.organizationId, async (tx) => {
       await setTransactionStatus(tx, txn.organizationId, txn.id, "failed", {
         errorCode,
@@ -1538,7 +1722,8 @@ async function reconcileChargeFailed(
         txn: { ...txn, errorCode, ...(errorText ? { errorText } : {}) },
         // Unknown stays retriable — treating an unclassified async failure as hard
         // would mark a working instrument `invalid` and burn the backup card.
-        retriable: ev.failureRetriable ?? true,
+        retriable: withBuiltInRetry({ code: errorCode, retriable: ev.failureRetriable ?? true })
+          .retriable,
       });
     });
     return "processed";
@@ -1948,15 +2133,35 @@ async function queueRefusedRegistrationFromEvent(
   });
 }
 
+/** A buyer-side refusal: the gateway declined an authorization or a card save. */
+const isIntentFailure = (type: string) =>
+  type === "intent.failed" || type === "intent.setup_failed";
+
 async function applyIntentEvent(
   ev: NormalizedProviderEvent,
   /** The business the webhook was DELIVERED by — the correlation scope, not the row's own. */
   deliveredByBusinessId?: string | null,
   providerKey?: string,
 ): Promise<HandleResult> {
-  const pi = await findPaymentIntentByGatewayIntentId(ev.providerIntentId!, {
-    businessId: deliveredByBusinessId,
-  });
+  const byGatewayId = ev.providerIntentId
+    ? await findPaymentIntentByGatewayIntentId(ev.providerIntentId, {
+        businessId: deliveredByBusinessId,
+      })
+    : null;
+  /**
+   * A refusal under an id we do not hold (Adyen's pspReference, a hosted page's own payment
+   * id): find the intent by OUR id on the gateway object, so the reason reaches the attempt.
+   * Only for failures, and only when the id matched nothing.
+   */
+  const byOwnership =
+    !byGatewayId && isIntentFailure(ev.type) && ev.ownershipRef && ev.ownership !== "foreign"
+      ? await openIntentForGatewayFailure({
+          ownershipRef: ev.ownershipRef,
+          eventIds: [ev.providerIntentId, ev.providerChargeId, ev.gatewayIntentId],
+          businessId: deliveredByBusinessId ?? null,
+        })
+      : null;
+  const pi = byGatewayId ?? byOwnership?.pi ?? null;
   // A refused registration that still took money is refunded, intent row or not.
   if (ev.type === "intent.setup_failed" && ev.setupAuthCharge && providerKey)
     await queueRefusedRegistrationFromEvent(providerKey, ev, pi, deliveredByBusinessId ?? null);
@@ -1967,6 +2172,7 @@ async function applyIntentEvent(
   // Stale: this callback belongs to an attempt a retry has already superseded. An attempt
   // already re-pointed to the payment this event names is the same attempt.
   if (
+    !byOwnership &&
     attempt?.idAtGateway &&
     attempt.idAtGateway !== ev.providerIntentId &&
     attempt.idAtGateway !== ev.gatewayIntentId
@@ -2145,7 +2351,7 @@ async function applyIntentEvent(
         //
         // Safe precisely BECAUSE the intent carries an invoice: "capturing money needs
         // a target" was the objection to consuming payment intents here, and the target
-        // is right there on the row. An intent with no invoice is still left alone.
+        // is right there on the row.
         if (pi.invoiceId)
           return await harvestInvoiceIntent(
             organizationId,
@@ -2155,6 +2361,14 @@ async function applyIntentEvent(
             pi,
             ev.providerChargeId,
           );
+        // No invoice yet: a hosted checkout's first charge, which the checkout raises the
+        // invoice for. A no-op unless a session recorded this intent at its 402 leg.
+        if ((pi.purpose as IntentPurpose | null) === "payment")
+          await completeCheckoutForPaymentIntent({
+            organizationId,
+            businessId,
+            intentPublicId: piPublicId,
+          });
         return "processed";
       }
       // Refused. Never read a provider code out of `raw`: dunning expects a normalized one.
@@ -2175,7 +2389,11 @@ async function applyIntentEvent(
           (ev.type === "intent.setup_failed" ? "setup_failed" : "authorization_failed");
         const res = await failPaymentIntentFromGateway(organizationId, businessId, piPublicId, {
           code,
-          message: ev.failureMessage ?? "The gateway refused the authorization",
+          message: operatorFailureText({
+            code,
+            providerCode: ev.providerFailureCode,
+            message: ev.failureMessage,
+          }),
         });
         return res ? "processed" : "ignored";
       }
@@ -2254,6 +2472,24 @@ async function applyPaymentMethodUpdate(
       }),
     });
   });
+  // A method automatic collection held (a hard decline) or that had expired is chargeable
+  // again: collect the customer's open invoices on it now, as adding a new method does.
+  if (pm.status === "invalid" || pm.status === "expired") {
+    try {
+      await collectOutstandingForNewPaymentMethod({
+        organizationId: pm.organizationId,
+        businessId: pm.businessId,
+        customerId: pm.customerId,
+        paymentMethodPublicId: pm.publicId,
+      });
+    } catch (e) {
+      log.warn("collect after a card update failed", {
+        event: "card_updated_collect_failed",
+        paymentMethod: pm.publicId,
+        detail: (e as Error).message,
+      });
+    }
+  }
   return "processed";
 }
 
@@ -2630,7 +2866,21 @@ async function applyMandateUpdate(
   if (!current) return "ignored";
   // `status` is narrowed by the guard above; the cast carries that to the signature, which
   // requires it so the guarantee lives in the type rather than in a second runtime check.
-  return applyMandateStatus(current, m as ProviderMandate & { status: string }, ev.occurredAt);
+  return applyMandateStatus(
+    current,
+    m as ProviderMandate & { status: string },
+    ev.occurredAt,
+    ev.failureCode
+      ? {
+          code: ev.failureCode,
+          text: operatorFailureText({
+            code: ev.failureCode,
+            providerCode: ev.providerFailureCode,
+            message: ev.failureMessage,
+          }),
+        }
+      : undefined,
+  );
 }
 
 /**
@@ -2744,6 +2994,8 @@ export async function applyMandateStatus(
    * applied. Absent (a poll of the current state) = now.
    */
   at: Date = new Date(),
+  /** Why a dead mandate died, when the gateway's event says. Kept for the operator. */
+  failure?: { code: string; text: string },
 ): Promise<HandleResult> {
   const set: Partial<typeof paymentMethods.$inferInsert> = {
     mandateStatus: m.status,
@@ -2763,6 +3015,13 @@ export async function applyMandateStatus(
   // `invalid` set by the card updater or a hard decline.
   const dead = DEAD_MANDATE_STATUSES.has(m.status.toLowerCase());
   if (dead) set.status = "invalid";
+  if (dead && failure) {
+    set.mandateFailureCode = failure.code;
+    set.mandateFailureText = failure.text;
+  } else if (!dead) {
+    set.mandateFailureCode = null;
+    set.mandateFailureText = null;
+  }
 
   /**
    * ── The whole update, under a row lock ───────────────────────────────────────────
@@ -3755,6 +4014,7 @@ export async function rearmReversedInvoice(
         .select({
           rail: paymentMethods.mandateRail,
           type: paymentMethods.type,
+          issuerCountry: paymentMethods.issuerCountry,
           issuerZones: countries.timezones,
         })
         .from(paymentMethods)
@@ -3762,6 +4022,7 @@ export async function rearmReversedInvoice(
         .where(eq(paymentMethods.id, input.paymentMethodId))
         .limit(1)
     : [];
+  const retryRail = retryRailOf(railRow ? { ...railRow, mandateRail: railRow.rail } : null);
   const plan = planFailureRearm({
     dunningStatus: inv0.dunningStatus,
     currentNextAttemptAt: inv0.nextAttemptAt,
@@ -3772,13 +4033,15 @@ export async function rearmReversedInvoice(
     now: input.occurredAt,
     mode: dunningCfg.mode,
     declineCode,
+    requestFault: isOurRequestFault({ code: declineCode }),
     skipRetriesForHardFailures: dunningCfg.skipRetriesForHardFailures,
     parkHardDeclines: dunningCfg.parkHardDeclines,
     // Master switch + the trial/future and one-time-invoice scope toggles.
     dunningApplies: !startHeld && dunningAppliesTo(dunningCfg, dunCtx),
     periodEndsAt: dunningPeriodEndsAt(dunningCfg, dunningAnchor(inv0)),
     dueDate: dunningAnchor(inv0),
-    mandateRail: railRow?.rail ?? null,
+    mandateRail: retryRail,
+    issuerCountry: railRow?.issuerCountry ?? null,
     adaptiveTiming: dunningCfg.adaptiveTiming,
     timezone: biz?.timezone ?? null,
     issuerZones: railRow?.issuerZones ?? null,

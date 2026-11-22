@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { withTenant, type Tx } from "@/platform/db";
 import { postEntries } from "@/modules/ledger/service";
 import { createLogger } from "@/platform/logger";
@@ -8,7 +8,9 @@ import {
   EXCESS_REFUND_PENDING,
   lockCustomerBalances,
 } from "@/modules/customers/balances-read";
-import { paymentMethods, payments } from "@db/schema";
+import { invoices, paymentMethods, payments } from "@db/schema";
+import { allocateExcess, type PaymentExcess } from "./excess-allocation";
+import { formatMoney } from "@/platform/currency";
 import { BANK_DEBIT_METHODS } from "@/providers/method-types";
 import { UNAPPLIED_CAPTURE_KEY as UNAPPLIED_KEY } from "@/modules/payments/unapplied-capture-key";
 import { refundPayment, RefundError, type Refund } from "./service";
@@ -183,6 +185,26 @@ export async function refundableExcess(
   return { held, bucket, refundable: held < bucket ? held : bucket };
 }
 
+/**
+ * What an operator refund of this payment may take: `refundableExcess`, and for a recorded card
+ * overpayment never into bank-debit or offline money.
+ */
+async function operatorRefundableExcess(
+  tx: Tx,
+  pay: { publicId: string; customerId: string | null; currency: string; metadata?: unknown },
+  r?: { bucket: bigint; refundable: bigint },
+): Promise<bigint> {
+  const { bucket, refundable } = r ?? (await refundableExcess(tx, pay));
+  if (
+    overpayAbsorbed(pay.metadata) === null ||
+    !pay.customerId ||
+    !(await isCardPayment(tx, pay.publicId))
+  )
+    return refundable;
+  const room = bucket - (await nonCardHeld(tx, pay.customerId, pay.currency));
+  return room < refundable ? (room > 0n ? room : 0n) : refundable;
+}
+
 const move = (
   tx: Tx,
   pay: {
@@ -237,6 +259,68 @@ const move = (
   );
 
 /**
+ * Each payment's lot in one customer's excess balance, with what is left of it after every
+ * draw, oldest lot first (`allocateExcess`). The one source of "Still held": the customer
+ * page lists it and an operator refund is capped by it.
+ */
+async function excessLots(
+  tx: Tx,
+  businessId: string,
+  customerId: string,
+): Promise<PaymentExcess[]> {
+  const entries = (await tx.execute(sql`
+    select le.id::text as id, le.direction, le.amount_minor, le.currency, le.source_type,
+           le.source_id, (p.id is not null) as is_payment
+    from ledger_entries le
+    left join payments p on p.public_id = le.source_id and p.business_id = ${businessId}
+    where le.customer_id = ${customerId} and le.account = ${EXCESS_PAYMENT}
+  `)) as unknown as Array<{
+    id: string;
+    direction: "credit" | "debit";
+    amount_minor: string | number;
+    currency: string;
+    source_type: string;
+    source_id: string;
+    is_payment: boolean;
+  }>;
+  const absorbs = (await tx.execute(sql`
+    select p.public_id, p.metadata ->> 'overpay_absorb_entry' as entry
+    from payments p
+    where p.customer_id = ${customerId} and p.business_id = ${businessId}
+      and p.metadata ? 'overpay_absorb_entry'
+  `)) as unknown as Array<{ public_id: string; entry: string }>;
+  const paymentIds = new Set(entries.filter((e) => e.is_payment).map((e) => e.source_id));
+  for (const a of absorbs) paymentIds.add(a.public_id);
+  return allocateExcess(
+    entries.map((e) => ({
+      id: e.id,
+      direction: e.direction,
+      amountMinor: BigInt(e.amount_minor),
+      currency: e.currency.trim(),
+      sourceType: e.source_type,
+      sourceId: e.source_id,
+    })),
+    paymentIds,
+    new Map(absorbs.map((a) => [a.entry, a.public_id])),
+  );
+}
+
+/** What this payment still holds of the customer's excess credit (its "Still held"). */
+async function stillHeld(
+  tx: Tx,
+  businessId: string,
+  customerId: string,
+  pay: { publicId: string; currency: string },
+): Promise<bigint> {
+  const lot = (await excessLots(tx, businessId, customerId)).find(
+    (l) => l.paymentPublicId === pay.publicId && l.currency === pay.currency.trim(),
+  );
+  return lot?.remainingMinor ?? 0n;
+}
+
+const min = (a: bigint, b: bigint) => (a < b ? a : b);
+
+/**
  * Pay a customer back money a payment left on their excess balance — a charge that landed
  * on a voided invoice, an overpayment, an abandoned debit that settled.
  *
@@ -251,6 +335,8 @@ export async function refundExcessPayment(input: {
   reason?: string;
   /** Cap at `ownUnappliedExcess` (the automatic and the customer's own refunds). */
   ownLeftoverOnly?: boolean;
+  /** Refuse a same-amount repeat within 10 minutes. See `refundPayment`. */
+  guardRepeat?: boolean;
 }): Promise<Refund> {
   const reserved = await withTenant(input.organizationId, async (tx) => {
     const [pay] = await tx
@@ -268,32 +354,26 @@ export async function refundExcessPayment(input: {
     if (!pay.customerId) throw new RefundError(`Payment ${pay.publicId} has no customer to repay`);
     await lockCustomerBalances(tx, pay.customerId);
     const r = await refundableExcess(tx, pay);
-    const { held, bucket } = r;
-    let refundable = input.ownLeftoverOnly ? await ownUnappliedExcess(tx, pay) : r.refundable;
-    // An operator refund of a recorded card overpayment: never into bank-debit or offline money.
-    if (
-      !input.ownLeftoverOnly &&
-      overpayAbsorbed(pay.metadata) !== null &&
-      pay.customerId &&
-      (await isCardPayment(tx, pay.publicId))
-    ) {
-      const room = bucket - (await nonCardHeld(tx, pay.customerId, pay.currency));
-      if (room < refundable) refundable = room > 0n ? room : 0n;
-    }
-    if (held === 0n) {
+    if (r.held === 0n) {
       throw new RefundError(`Payment ${pay.publicId} holds no excess credit for this customer`);
     }
+    // An operator refund takes no more than the customer page shows as "Still held".
+    const refundable = input.ownLeftoverOnly
+      ? await ownUnappliedExcess(tx, pay)
+      : min(
+          await operatorRefundableExcess(tx, pay, r),
+          await stillHeld(tx, input.businessId, pay.customerId, pay),
+        );
     if (refundable === 0n) {
       throw new RefundError(
-        `The ${pay.currency} excess from this payment is already applied to invoices. Nothing is left to refund.`,
+        "We could not refund this payment. Invoices already used all of its excess credit.",
       );
     }
     const amount = input.amountMinor != null ? BigInt(input.amountMinor) : refundable;
     if (amount <= 0n) throw new RefundError("Refund amount must be positive");
     if (amount > refundable) {
       throw new RefundError(
-        `Refund ${amount} exceeds the ${refundable} this payment still holds as customer credit` +
-          (bucket < held ? `. The rest is applied to invoices.` : ""),
+        `We could not refund ${formatMoney(amount, pay.currency)}. You can refund up to ${formatMoney(refundable, pay.currency)} from this payment.`,
       );
     }
     await move(
@@ -324,6 +404,7 @@ export async function refundExcessPayment(input: {
       amountMinor: Number(amount),
       reason: input.reason,
       contraAccount: EXCESS_REFUND_PENDING,
+      guardRepeat: input.guardRepeat,
     });
   } catch (e) {
     // A RefundError is a definitive no: nothing left the business, so the credit goes back.
@@ -348,61 +429,65 @@ export interface ExcessPaymentRow {
   invoicePublicId: string | null;
   currency: string;
   paymentAmountMinor: bigint;
+  /** What the payment put on the excess balance, less its own refunds. */
   heldMinor: bigint;
-  /** `heldMinor` capped by the customer's excess balance in that currency right now. */
+  /** What is still on the balance from this payment after invoices used credit, oldest first. */
+  remainingMinor: bigint;
+  /** What a refund of this payment may take now: `remainingMinor` under the refund path's caps. */
   refundableMinor: bigint;
   gateway: string | null;
   createdAt: Date;
 }
 
-/** The payments still holding part of a customer's excess credit, newest first. */
+/**
+ * The payments that still hold part of a customer's excess credit, newest first. Invoice
+ * draws come off the oldest payment first (`allocateExcess`), so the remaining amounts sum
+ * to the customer's excess balance and a payment whose credit is all used is not listed.
+ */
 export async function listExcessPayments(
   organizationId: string,
   businessId: string,
   customerId: string,
+  /** Also list payments whose credit invoices used up (`remainingMinor` 0): the history. */
+  opts: { includeUsed?: boolean } = {},
 ): Promise<ExcessPaymentRow[]> {
   return withTenant(organizationId, async (tx) => {
-    const rows = (await tx.execute(sql`
-      select p.public_id, i.public_id as invoice_public_id, p.currency, p.amount_minor,
-             p.provider_key, p.created_at,
-             sum(case when le.direction = 'credit' then le.amount_minor else -le.amount_minor end)::bigint as held
-      from ledger_entries le
-      join payments p on p.public_id = le.source_id and p.business_id = ${businessId}
-      left join invoices i on i.id = p.invoice_id
-      where le.customer_id = ${customerId}
-        and le.account = ${EXCESS_PAYMENT}
-        and le.source_type in (${HELD}, ${RESERVED}, ${RELEASED})
-      group by p.id, i.public_id
-      having sum(case when le.direction = 'credit' then le.amount_minor else -le.amount_minor end) > 0
-      order by p.created_at desc
-    `)) as unknown as Array<{
-      public_id: string;
-      invoice_public_id: string | null;
-      currency: string;
-      amount_minor: string | number;
-      provider_key: string | null;
-      created_at: string | Date;
-      held: string | number;
-    }>;
-    const buckets = new Map<string, bigint>();
-    for (const r of rows) {
-      if (!buckets.has(r.currency))
-        buckets.set(r.currency, await bucketBalance(tx, customerId, EXCESS_PAYMENT, r.currency));
+    const lots = (await excessLots(tx, businessId, customerId)).filter((l) =>
+      opts.includeUsed ? l.ownMinor > 0n : l.remainingMinor > 0n,
+    );
+    if (lots.length === 0) return [];
+    const pays = await tx
+      .select({ pay: payments, invoicePublicId: invoices.publicId })
+      .from(payments)
+      .leftJoin(invoices, eq(invoices.id, payments.invoiceId))
+      .where(
+        and(
+          eq(payments.businessId, businessId),
+          inArray(
+            payments.publicId,
+            lots.map((l) => l.paymentPublicId),
+          ),
+        ),
+      );
+    const byId = new Map(pays.map((p) => [p.pay.publicId, p]));
+    const rows: ExcessPaymentRow[] = [];
+    for (const l of lots) {
+      const p = byId.get(l.paymentPublicId);
+      if (!p) continue;
+      const cap = await operatorRefundableExcess(tx, p.pay);
+      rows.push({
+        paymentPublicId: l.paymentPublicId,
+        invoicePublicId: p.invoicePublicId,
+        currency: l.currency,
+        paymentAmountMinor: BigInt(p.pay.amountMinor),
+        heldMinor: l.ownMinor,
+        remainingMinor: l.remainingMinor,
+        refundableMinor: l.remainingMinor < cap ? l.remainingMinor : cap,
+        gateway: p.pay.providerKey,
+        createdAt: new Date(p.pay.createdAt),
+      });
     }
-    return rows.map((r) => {
-      const held = BigInt(r.held);
-      const bucket = buckets.get(r.currency) ?? 0n;
-      return {
-        paymentPublicId: r.public_id,
-        invoicePublicId: r.invoice_public_id,
-        currency: r.currency,
-        paymentAmountMinor: BigInt(r.amount_minor),
-        heldMinor: held,
-        refundableMinor: held < bucket ? held : bucket,
-        gateway: r.provider_key,
-        createdAt: new Date(r.created_at),
-      };
-    });
+    return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   });
 }
 

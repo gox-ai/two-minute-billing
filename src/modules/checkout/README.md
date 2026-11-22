@@ -111,6 +111,31 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
 - Changing to the price the plan is *already* on is a no-op success (a double-submit is harmless).
 
 ## Changelog
+- **2026-11-19** — Hosted checkout (dashboard): the gateway picker is "Pay with" and names what
+  each gateway accepts, never the provider (same set = one row); a decline on a step that also
+  charges leads "We could not take your payment."; the processing card no longer names the bank.
+- **2026-11-19** — `storefront_config.payment_routing` (per currency: rail order, rail → gwa_…)
+  and `portal_ask_delete_reason` (off by default).
+- **2026-11-19** — `storefront_config.portal_save_new_method` offer|always|never (unset =
+  offer, every business: user decision 2026-11-19): portal Pay now with a new method saves it.
+- **2026-11-17** — `POST /checkout/v1/client_errors` (checkout token, no idempotency key): the
+  storefront reports each payment error it shows the buyer, through `/checkout/client-error` on the
+  dashboard, into `buyer_client_errors` (ops module). Telemetry only; a failed report never reaches
+  the buyer.
+- **2026-11-17** — Payer wording for refusals a buyer can reach at completion: a second completion
+  ("Your payment is already in progress …"), no method ("Add a payment method …"), a removed saved
+  method ("We could not find that payment method …"), a coupon in another currency (code quoted,
+  no API phrasing), the routes' "<param> is required" refusals ("Enter your email address." …). A 4xx to a buyer session goes through `api/buyer-error-text.ts`: operator text
+  (public id, backtick, snake_case, "Unknown parameter") becomes a generic payer sentence; the
+  original goes to `buyer_request_rejections`. Gate: `test/unit/buyer-error-text.test.ts`.
+- **2026-11-17** — A first charge that answers 402 records its intent and leg-1 completion on the
+  session (0537: `charge_payment_intent`, `charge_completion`). `completeCheckoutForPaymentIntent`
+  finishes the checkout from the authorization webhook when the page never posts leg 2 (shares
+  `sessionLeftToWebhook` with the setup path). Storefront routes send COOP
+  `same-origin-allow-popups`, so Razorpay's bank popup reaches its sheet. Gate:
+  `verify:gateway-sdk-modes` (h).
+- **2026-11-16** — A reactivation's change preview carries `couponDiscountMinor`: the fresh term's lines
+  are gross and the subscription's own coupons still discount its invoice, so the card can show the row.
 - **2026-11-13** — A declined first charge on a create-mode completion reads "We could not start
   your subscription. <reason>. We did not charge you. Try again, or use a different payment
   method." (was "Your payment was declined, so we did not create the subscription: <reason>").
@@ -884,3 +909,23 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
   carries the expiry, and the page shows "This change waits for payment" with the amount and the
   time in the business timezone. A session for a different change shows nothing (its confirm
   replaces the hold). Gate: `verify:pending-change` §12.
+- **2026-11-17 (0542)** — The checkout view and the pricing page carry the business's
+  `button_text_color` beside `brand_color`, so hosted buttons use the merchant's text color
+  as set (automatic when unset).
+- **2026-11-20 (0549)** — Minimal buyer address. Defaults: only country, postal code and (for
+  GST) state are required; `billing.line1`, `billing.city` and portal `customer.phone` are
+  `show`. Stored configs keep their values. `billingDetailsMissing` (address-field-rules.ts)
+  replaces the name + line1 + country check: it runs `addressRequirementIssues`, so the add-card
+  gate, the save and the inline form agree. Postal code to state + city autofill:
+  `GET /v1/countries/:code/postal-codes/:postal` over `postal_codes` (GeoNames, CC BY 4.0,
+  `pnpm postal:seed`, not in the default seed). The checkout customer response carries
+  `billing_details_missing`. `AddressFields` order is now country, postal code, city, state,
+  then street lines.
+- **2026-11-20 (0549)** — Postal sources: places and regions come from GeoNames (CC BY 4.0); for
+  India the STATE comes from dr5hn India Post pincodes (`csv-postcodes.csv.gz`, release pinned as
+  `DR5HN_POSTCODES_TAG` in `scripts/seed-postal-codes.ts`, ODbL), which gives Ladakh. GeoNames
+  fills a pincode that data lacks. A hidden or empty City and State are also filled on save
+  (`modules/customers/postal-fill.ts`, called by `createCustomer` and `updateCustomer`, so the
+  portal, checkout and API paths all get it): a set value is never overwritten, and the city
+  fills only when one place matches. The migration importer opts out (`fillFromPostal: false`).
+- **2026-11-21** — Every `/checkout/v1` request now carries event source `checkout` (actor = the checkout session id once authenticated). Stored channel stays `api`. Cover: `verify:checkout` (provenance check after `/complete`).

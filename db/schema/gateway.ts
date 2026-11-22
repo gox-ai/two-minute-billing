@@ -95,6 +95,11 @@ export const gatewayAccounts = pgTable(
  * Secrets are REDACTED at capture time (src/providers/http.ts): auth headers,
  * card/secret body fields, and query-string secrets never reach this table.
  * Bodies are truncated to 16KB.
+ *
+ * One exception, `source = 'customer_browser'`: a refusal the gateway gave the buyer's
+ * browser, reported by the storefront and booked on the attempt. We did not make that call:
+ * `method` is `BROWSER`, `status` is null and `error` is null, and `response_body` is the
+ * gateway's error as the browser got it.
  */
 export const gatewayRequestLogs = pgTable(
   "gateway_request_logs",
@@ -107,7 +112,7 @@ export const gatewayRequestLogs = pgTable(
     gatewayKey: text("gateway_key").notNull(), // tmtest | stripe | paypal | razorpay
     method: text("method").notNull(), // GET | POST | …
     url: text("url").notNull(), // query-string secrets masked
-    status: integer("status"), // null = network error (no response)
+    status: integer("status"), // null = no response (network error), or a customer_browser row
     durationMs: integer("duration_ms"),
     operation: text("operation"), // charge | refund | ensure_customer | vault | health_check | oauth_token | normalize_webhook | …
     source: text("source"), // api | dashboard | scheduled_job | migration | system

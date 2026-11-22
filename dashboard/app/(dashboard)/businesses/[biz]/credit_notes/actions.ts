@@ -174,8 +174,16 @@ export async function refundCreditNoteAction(
   // Carried by the dialog purely so the partial-refund message below can render real
   // money rather than minor units.
   const currency = String(formData.get("currency") ?? "").trim() || "USD";
-  const res = await refundCreditNote(biz, cn, { amount_minor, reason: reason || undefined });
+  const res = await refundCreditNote(biz, cn, {
+    amount_minor,
+    reason: reason || undefined,
+    ...(formData.get("confirm_repeat") === "true" ? { confirm_repeat: true } : {}),
+  });
   if (!res.ok) {
+    if (res.status === 409 && res.code === "possible_duplicate")
+      return actionError(res.error ?? "This refund repeats a refund sent a short time ago.", {
+        code: "possible_duplicate",
+      });
     if (res.status === 409) return actionError(res.error ?? "Conflict", { code: "conflict" });
     return actionError(res.error ?? "We could not issue the refund.");
   }
@@ -476,8 +484,13 @@ export async function refundInvoiceAction(
   const res = await refundCreditNote(biz, cn, {
     amount_minor: amt.amount,
     reason: reason || undefined,
+    ...(formData.get("confirm_repeat") === "true" ? { confirm_repeat: true } : {}),
   });
   if (!res.ok) {
+    if (res.status === 409 && res.code === "possible_duplicate")
+      return actionError(res.error ?? "This refund repeats a refund sent a short time ago.", {
+        code: "possible_duplicate",
+      });
     // The credit note is intentionally left standing — it shows as `refund_due` on
     // the invoice so the payout can be retried without re-crediting.
     return actionError(

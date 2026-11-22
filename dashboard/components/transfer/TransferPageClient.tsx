@@ -94,7 +94,7 @@ export function TransferPageClient({
   const [formKey, setFormKey] = React.useState(0);
   const topRef = React.useRef<HTMLDivElement>(null);
   const runRef = React.useRef(run);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     runRef.current = run;
   }, [run]);
   const urlRun = useSearchParams().get("run");

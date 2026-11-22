@@ -4,7 +4,8 @@
  *
  * Covers HTTP Signature building, the webhook signature, event mapping, the charge initiator
  * → stored-credential fields, eCheck SEC codes, decline mapping, idempotency through
- * Transaction Search, capabilities, the catalog and the `sdk` intent flow.
+ * Transaction Search, capabilities, the catalog, the `sdk` intent flow and the chargeback
+ * report poll (§ 9; a fixture built from the Reporting field reference).
  *
  *   pnpm verify:cybersource
  */
@@ -260,7 +261,7 @@ const TX = "7900000000000000000001";
   ok(
     "decline: MISSING_FIELD is our side, hidden from the payer",
     missing.code === "gateway_request_rejected" &&
-      !missing.retriable &&
+      missing.retriable &&
       missing.ruleId === "cybersource.code.missing_field" &&
       declineHiddenFromPayer(missing.code),
   );
@@ -289,8 +290,8 @@ const TX = "7900000000000000000001";
     }).retryAfterMs === 3_600_000,
   );
   ok(
-    "decline: an unknown reason passes through, retriable",
-    n("SOMETHING_NEW").code === "SOMETHING_NEW" && n("SOMETHING_NEW").retriable,
+    "decline: an unknown reason books charge_failed, retriable",
+    n("SOMETHING_NEW").code === "charge_failed" && n("SOMETHING_NEW").retriable,
   );
   ok("decline: the set is registered", DECLINE_SETS.cybersource.rules.length > 0);
   const ids = DECLINE_SETS.cybersource.rules.map((r) => r.id);
@@ -591,6 +592,23 @@ const TX = "7900000000000000000001";
     "events: an unread event type → unknown",
     normalizeCybersourceNotification(n("invoicing.customer.invoice.paid", {}), "e9", {})[0]!
       .type === "unknown",
+  );
+  // The attempt finds an event we do not act on by the transaction id it names.
+  const unacted = normalizeCybersourceNotification(
+    n("payments.reversals.accepted", txPayload),
+    "e9b",
+    {},
+    { tx: ours },
+  );
+  ok(
+    "events: an unacted payment event keeps its transaction id and our reference",
+    unacted[0]!.type === "unknown" &&
+      unacted[0]!.providerChargeId === TX &&
+      unacted[0]!.ownership === "ours",
+  );
+  ok(
+    "events: a failed debit names the transaction the attempt is addressed by",
+    ret[0]!.providerChargeId === TX,
   );
   const a = cybersourceEventId(n("risk.profile.decision.review", txPayload));
   const retry = cybersourceEventId({
@@ -929,6 +947,42 @@ try {
         idempotencyKey: "k4",
       }),
     )) instanceof ProviderIndeterminateError,
+  );
+
+  // A 502 naming our merchant setup: refused at once, no read-back loop.
+  answer = (method, path) =>
+    path === "/pts/v2/payments"
+      ? { __status: 502, status: "SERVER_ERROR", reason: "INVALID_OR_MISSING_CONFIG" }
+      : { __status: 404 };
+  sent.length = 0;
+  const cfg = await adapter.charge({
+    amountMinor: 100n,
+    currency: "USD",
+    customer,
+    paymentMethod: pm,
+    idempotencyKey: "k4c",
+  });
+  ok(
+    "INVALID_OR_MISSING_CONFIG (502) → failed gateway_request_rejected, no lookup",
+    cfg.status === "failed" &&
+      cfg.failure?.code === "gateway_request_rejected" &&
+      !sent.some((s) => s.path.startsWith("/tss/")),
+  );
+
+  // A poll of a declined authorization keeps the reason.
+  answer = (method, path) =>
+    path === `/tss/v2/transactions/${TX}`
+      ? tssOf([{ name: "ics_auth", rCode: "0", rFlag: "DINVALIDCARD" }])
+      : { __status: 404 };
+  const polled = await adapter.submitClientResult({
+    intentId: TX,
+    purpose: "payment",
+    clientResult: {},
+    idempotencyKey: "k4p",
+  });
+  ok(
+    "poll: a declined authorization carries its failure",
+    polled.status === "failed" && polled.failure?.code === "incorrect_number",
   );
 
   // Lost answer → found by reference.
@@ -1518,6 +1572,70 @@ try {
     "webhook: the event id is stable without a signature check",
     adapter.webhookEventId({ payload: body, headers: {} }).startsWith("cybs_"),
   );
+
+  // ── 9 · chargeback report poll (fixture: field names from the Reporting guide) ──
+  {
+    ok(
+      "chargeback report: polled once a day over up to 72 hours",
+      adapter.capabilities.settlementReport?.intervalMinutes === 1440 &&
+        adapter.capabilities.settlementReport.maxWindowHours === 72 &&
+        typeof adapter.pollSettlements === "function",
+    );
+    const ours = `tm${"b".repeat(28)}`;
+    const csv = [
+      "Chargeback And Retrieval Detail Report,1.0",
+      "Request.RequestID,Request.MerchantReferenceNumber,CaseNumber,ChargebackAmount,ChargebackCurrency,ChargebackReasonCode,ChargebackTime,RespondByDate,FinancialImpact,FinancialImpactType",
+      `${TX},${ours},CASE9001,12.34,USD,13.1,2026-11-15T08:00:00Z,2026-12-05,Y,Debit`,
+      `${TX},${ours},CASE9002,1.00,USD,,2026-11-15T09:00:00Z,,N,None`,
+    ].join("\n");
+    answer = (_m, path) =>
+      path.startsWith("/reporting/v3/report-downloads") && path.includes("reportDate=2026-11-15")
+        ? csv
+        : { __status: 404 };
+    sent.length = 0;
+    const events = await adapter.pollSettlements!({
+      since: new Date("2026-11-16T06:00:00Z"),
+      until: new Date("2026-11-17T06:00:00Z"),
+    });
+    const dates = sent.map((r) => new URLSearchParams(r.path.split("?")[1]).get("reportDate"));
+    ok(
+      "chargeback report: reads the last three report dates, ending yesterday",
+      JSON.stringify(dates) === JSON.stringify(["2026-11-14", "2026-11-15", "2026-11-16"]),
+      JSON.stringify(dates),
+    );
+    const q = new URLSearchParams(sent[0]?.path.split("?")[1] ?? "");
+    ok(
+      "chargeback report: names the subscription and the organization, asks for CSV",
+      q.get("reportName") === "tmbilling_chargebacks" &&
+        q.get("organizationId") === ORG &&
+        /text\/csv/.test(sent[0]?.headers.Accept ?? ""),
+    );
+    ok(
+      "chargeback report: a debit row opens the case and takes the money; a retrieval gives nothing",
+      events.map((e) => `${e.type}:${e.providerDisputeId}`).join() ===
+        "dispute.created:CASE9001,dispute.funds_withdrawn:CASE9001" &&
+        events[0]!.providerChargeId === TX &&
+        events[0]!.disputeAmountMinor === 1234n,
+    );
+    answer = () => "<?xml version='1.0'?><Report/>";
+    ok(
+      "chargeback report: an XML subscription is refused with a clear error",
+      String(
+        await throws(() =>
+          adapter.pollSettlements!({
+            since: new Date("2026-11-16T06:00:00Z"),
+            until: new Date("2026-11-17T06:00:00Z"),
+          }),
+        ),
+      ).includes("CSV"),
+    );
+    answer = () => ({ __status: 500 });
+    ok(
+      "chargeback report: a server error is indeterminate (the cursor stays)",
+      (await throws(() => adapter.downloadChargebackReport("2026-11-15"))) instanceof
+        ProviderIndeterminateError,
+    );
+  }
 } finally {
   globalThis.fetch = realFetch;
 }

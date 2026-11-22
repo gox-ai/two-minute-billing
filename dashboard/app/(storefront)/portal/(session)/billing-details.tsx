@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { MapPin, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import type { Country } from "@/lib/api/geo";
 import type { PortalMe } from "@/lib/portal-api";
 import { invoiceContactName } from "@/lib/names";
 import { portalUpdateMeAction } from "./actions";
-import { Glyph, MetaField } from "../../chrome";
+import { MetaField } from "../../chrome";
 
 /**
  * The buyer's own billing name + address, viewable and editable from the portal.
@@ -65,7 +65,7 @@ const ADDRESS_KEYS: Record<AddressFieldKey, string> = {
 };
 
 /** The business's portal rules per field; none from an older engine, so the defaults hold. */
-function portalFieldStates(
+export function portalFieldStates(
   cfg: PortalMe["field_config"],
 ): Partial<Record<AddressFieldKey, AddressFieldState>> | undefined {
   if (!cfg) return undefined;
@@ -165,9 +165,6 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <Glyph>
-          <MapPin />
-        </Glyph>
         <div className="flex min-w-0 flex-col gap-3">
           {/* What the PDF prints, resolved by the same precedence the engine uses —
               so this line and the document cannot disagree about who is billed. */}
@@ -223,7 +220,7 @@ export function taxIdHelp(country: string | null | undefined, mandatory: boolean
  * holder's, which is what "Billed to" already shows (the same fallback the invoice uses),
  * and an empty phone from the customer's own.
  */
-function prefilled(me: PortalMe): PortalMe["customer"]["address"] {
+export function prefilled(me: PortalMe): PortalMe["customer"]["address"] {
   const a = me.customer.address;
   const noContact = !a.first_name && !a.last_name;
   return {

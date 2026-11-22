@@ -388,6 +388,13 @@ export async function reactivateAndBill(input: {
         // balance moved in between). Nothing was invoiced; give the money back and undo.
         const taken = preCharge.current;
         preCharge.current = undefined;
+        log.error("reactivation charge did not match the invoice; refunding", {
+          event: "reactivation_charge_amount_mismatch",
+          subscription: subscription.publicId,
+          currency: preCharge.currency ?? subscription.currency,
+          charged_minor: e.chargedMinor,
+          amount_due_minor: e.committedMinor,
+        });
         await refundPreInvoiceCharge({
           organizationId,
           businessId,

@@ -468,6 +468,24 @@ const txnFailure = (t: PayuTxn) =>
     message: t.error_Message && t.error_Message !== "NO ERROR" ? t.error_Message : t.field9,
   });
 
+/**
+ * A `status: 0` si_transaction refusal that made no transaction. A documented request fault
+ * keeps its rule; any other text is booked as a generic failure, hidden from the payer.
+ */
+/** PayU's own fault, not a refusal of our request. */
+const PAYU_INTERNAL_FAULT =
+  /something went wrong|internal|server error|try again|temporar|timed? ?out|unavailable/i;
+
+export function payuRequestRefused(message: string): Failure {
+  const f = failureFrom({ message: message || null });
+  if (f.ruleId) return f;
+  return {
+    code: "gateway_error",
+    message: `PayU refused the debit request${message ? `: ${message}` : "."}`,
+    retriable: true,
+  };
+}
+
 type TxnState = "succeeded" | "failed" | "pending" | "not_found";
 
 /** A `verify_payment` row's outcome. Only `success` is success (PayU docs). */
@@ -493,12 +511,27 @@ function ownershipOf(
   return udf1 ? { ownership: "ours", ownershipRef: udf1 } : { ownership: "unknown" };
 }
 
+/** PayU's `card_type` codes → the brand names every other adapter stores. */
+const PAYU_BRAND: Record<string, string> = {
+  mast: "mastercard",
+  visa: "visa",
+  amex: "amex",
+  dinr: "diners",
+  diners: "diners",
+  rupay: "rupay",
+  maes: "maestro",
+  smae: "maestro",
+  jcb: "jcb",
+  disc: "discover",
+};
+export const payuBrand = (b: string) => PAYU_BRAND[b.toLowerCase()] ?? b.toLowerCase();
+
 function describeTxn(t: PayuTxn): ProviderPaymentMethodRef["display"] {
   const rail = railOfMode(t.mode);
   const last4 = (t.card_no ?? "").replace(/[^0-9]/g, "").slice(-4);
   return {
     type: METHOD_OF_RAIL[rail],
-    ...(rail === "card" && t.card_type ? { brand: t.card_type.toLowerCase() } : {}),
+    ...(rail === "card" && t.card_type ? { brand: payuBrand(t.card_type) } : {}),
     ...(last4.length === 4 ? { last4 } : {}),
   };
 }
@@ -1221,7 +1254,9 @@ export class PayuProvider implements PaymentProvider {
       ...(input.email && input.email.length <= 50 ? { email: input.email } : {}),
       udf1: (input.ownershipRef ?? input.idempotencyKey).slice(0, 255),
     });
-    let r: CommandAnswer & { details?: Record<string, { status?: string; field9?: string }> };
+    let r: CommandAnswer & {
+      details?: Record<string, { status?: string; field9?: string; error_code?: string }>;
+    };
     try {
       r = await this.command("charge", "si_transaction", var1);
     } catch (e) {
@@ -1238,10 +1273,23 @@ export class PayuProvider implements PaymentProvider {
     }
     const d = r.details?.[txnid];
     if (!d) {
-      // A refusal of the request ("Invalid Hash."): definite only when a rule names it.
+      // A refusal of the request ("Invalid Hash."): definite when a rule names it.
       const message = String(r.msg ?? r.message ?? "");
       const failure = failureFrom({ message: message || null });
       if (failure.ruleId) return { status: "failed", providerChargeId: txnid, failure, raw: r };
+      // `status: 0` with no details: PayU made no transaction. One read proves it. An
+      // internal-fault text ("Something went wrong") stays unknown: the debit may still land.
+      if (Number(r.status) === 0 && !PAYU_INTERNAL_FAULT.test(message)) {
+        const t = await this.verifyTxn(txnid, "charge_lookup").catch(() => undefined);
+        if (t && payuTxnState(t) !== "not_found") return this.chargeFromTxn(txnid, t);
+        if (t)
+          return {
+            status: "failed",
+            providerChargeId: txnid,
+            failure: payuRequestRefused(message),
+            raw: r,
+          };
+      }
       throw markStrandedObject(
         new ProviderIndeterminateError(
           `PayU answered debit ${txnid} without its outcome${message ? `: ${message}` : ""}.`,
@@ -1253,13 +1301,13 @@ export class PayuProvider implements PaymentProvider {
     if (s === "captured") return { status: "succeeded", providerChargeId: txnid, raw: r };
     if (s === "pending" || s === "in progress" || s === "in-progress")
       return { status: "pending", providerChargeId: txnid, raw: r };
-    // `failed` or blank: failed (PayU docs).
-    return {
-      status: "failed",
-      providerChargeId: txnid,
-      failure: failureFrom({ message: d.field9 ?? null }),
-      raw: r,
-    };
+    // `failed` or blank: failed (PayU docs). The E-code is only on the transaction row.
+    const t = await this.verifyTxn(txnid, "charge_failure").catch(() => undefined);
+    const failure =
+      t && payuTxnState(t) === "failed" && t.error_code && t.error_code !== "E000"
+        ? txnFailure(t)
+        : failureFrom({ code: d.error_code ?? null, message: d.field9 ?? null });
+    return { status: "failed", providerChargeId: txnid, failure, raw: r };
   }
 
   async fetchChargeStatus(input: { providerChargeId: string }): Promise<ChargeResult> {
@@ -1420,7 +1468,16 @@ export class PayuProvider implements PaymentProvider {
     if (json.notificationType) return [{ ...base, ...(await this.mandateEvent(json)), raw: json }];
     if (json.request_id != null || String(json.action ?? "").toLowerCase() === "refund")
       return [{ ...base, ...(await this.refundEvent(json)), occurredAt: new Date(), raw: json }];
-    return [{ ...base, type: "unknown", occurredAt: new Date(), raw: json }];
+    const txnid = typeof json.txnid === "string" && json.txnid ? json.txnid : undefined;
+    return [
+      {
+        ...base,
+        type: "unknown",
+        ...(txnid ? { providerIntentId: txnid } : {}),
+        occurredAt: new Date(),
+        raw: json,
+      },
+    ];
   }
 
   verifyPaymentHash(f: Record<string, string>): void {
@@ -1638,10 +1695,20 @@ export function normalizePayuPayment(f: Record<string, string>): Mapped {
     if (state === "pending") return { type: "unknown", providerIntentId: txnid, ...own };
     const ok = state === "succeeded" && isRegistration(t);
     const paid = ok ? undefined : unmandatedPayment(txnid, { ...t, amt: f.amount });
+    // A refused registration keeps PayU's code and words, not a bare `setup_failed`.
+    const why = state === "failed" ? txnFailure(t) : undefined;
     return {
       type: ok ? "intent.setup_succeeded" : "intent.setup_failed",
       providerIntentId: txnid,
       ...(paid ? { setupAuthCharge: paid } : {}),
+      ...(why
+        ? {
+            failureCode: why.code,
+            failureRetriable: why.retriable,
+            ...(why.message ? { failureMessage: why.message } : {}),
+            ...(why.providerCode ? { providerFailureCode: why.providerCode } : {}),
+          }
+        : {}),
       ...own,
       ...at,
     };

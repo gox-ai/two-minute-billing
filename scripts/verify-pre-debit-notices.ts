@@ -690,7 +690,7 @@ const attemptKey = (invPublicId: string, n: number, pm: Pm) =>
   const later = await paymentsFor(inv.id);
   const pm = await pmRow(s.pm.id);
   ok(
-    "(d5) still refused after 8 notices: one attempt, parked as ours (gateway_request_rejected); the instrument stays valid",
+    "(d5) still refused after 8 notices: one attempt, booked as ours (gateway_request_rejected); the instrument stays valid",
     later.length === 1 &&
       later[0]!.failureCode === "gateway_request_rejected" &&
       pm?.status === "valid",

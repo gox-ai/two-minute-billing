@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
+/** Request-logged sources: an API key, the dashboard, Billy (through the dashboard), an AI agent. */
+const LOGGED_REQUEST_SOURCES = new Set(["api", "dashboard", "assistant", "mcp"]);
+
 /**
  * P4 / 0149 — the Activity Log drill-in: who did what, from where, and — per resource
  * the action touched — which fields moved, in the context of the whole record.
@@ -185,9 +188,9 @@ export default async function AuditLogDetailPage({
                           <span className="font-mono text-xs wrap-anywhere">{record.trace_id}</span>
                           <CopyButton value={record.trace_id} className="shrink-0" />
                         </span>
-                        {/* Only an API or dashboard action came from a logged request. */}
+                        {/* Only these sources come from a request the request log keeps. */}
                         {allows(me, "api_logs:view", "developer") &&
-                        (record.source === "api" || record.source === "dashboard") ? (
+                        LOGGED_REQUEST_SOURCES.has(record.source) ? (
                           <Link
                             href={`/developer/logs?trace_id=${encodeURIComponent(record.trace_id)}`}
                             className="text-primary hover:underline"

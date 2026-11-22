@@ -131,7 +131,17 @@ export async function loadSnapshot(input: {
     }
     for (const k of m.apiKeys) rm.addUuid(k, String(key!.id));
     const fresh = new Map<string, { id: string; publicId: string; tz: string }>();
-    for (const b of m.businesses) {
+    // A business is a live/test PAIR (`createBusiness` makes both), and the capture keys both
+    // halves by the business's name. So: one pair per key, the TEST half carries the book
+    // (the generator bills in test mode), and every captured row maps onto its own half.
+    const keys = [...new Set(m.businesses.map((b) => b.key))];
+    const primaryOf = (key: string) =>
+      m.businesses.find((b) => b.key === key && b.row.livemode !== "live") ??
+      m.businesses.find((b) => b.key === key)!;
+    /** Fresh row id for each captured business row, both halves of every pair. */
+    const freshIdOf = new Map<string, string>();
+    for (const key of keys) {
+      const b = primaryOf(key);
       const biz = await createBusiness({
         organizationId: orgId,
         name: b.name,
@@ -140,6 +150,24 @@ export async function loadSnapshot(input: {
         ...(b.timezone ? { timezone: b.timezone } : {}),
       });
       fresh.set(b.key, { id: biz.id, publicId: biz.publicId, tz: b.timezone ?? "UTC" });
+      freshIdOf.set(b.id, biz.id);
+      // The live half of the pair, mapped onto the live business created alongside.
+      const live = m.businesses.find((x) => x.key === key && x !== b);
+      if (live && biz.liveBusinessId) {
+        const [lb] = await sql<Array<{ id: string; public_id: string }>>`
+          select id, public_id from businesses where id = ${biz.liveBusinessId}`;
+        rm.addUuid(live.id, lb!.id);
+        rm.addToken(live.publicId, lb!.public_id);
+        freshIdOf.set(live.id, lb!.id);
+        const liveGwas = await sql<Array<{ id: string; public_id: string; gateway_key: string }>>`
+          select id, public_id, gateway_key from gateway_accounts where business_id = ${lb!.id}`;
+        for (const g of live.gatewayAccounts) {
+          const fg = liveGwas.find((x) => x.gateway_key === g.gatewayKey);
+          if (!fg) continue; // a live business opens with no test gateway; nothing to map
+          rm.addUuid(g.id, fg.id);
+          rm.addToken(g.publicId, fg.public_id);
+        }
+      }
       // Same as the generator: magic amounts would park renewals whose total ends in …13.
       for (const gwa of await listGatewayAccounts(orgId, biz.id))
         if (gwa.gatewayKey === "tmtest")
@@ -170,14 +198,13 @@ export async function loadSnapshot(input: {
     const now = Date.now();
     const capturedAt = Date.parse(m.capturedAt);
     const shiftDays: Record<string, number> = { org: shiftDaysFor(capturedAt, now, "UTC") };
-    for (const b of m.businesses)
-      shiftDays[b.key] = shiftDaysFor(capturedAt, now, fresh.get(b.key)!.tz);
+    for (const key of keys) shiftDays[key] = shiftDaysFor(capturedAt, now, fresh.get(key)!.tz);
     const tzOf = (scope: string) => (scope === "org" ? "UTC" : fresh.get(scope)!.tz);
 
     // metric_daily is rebuilt by child processes (the day fill is CPU-bound JS). They boot
     // now, while the rows are remapped and inserted, and pull jobs once the rows are in.
     const at = new Date();
-    const plans = m.businesses.map((b) => {
+    const plans = keys.map(primaryOf).map((b) => {
       const f = fresh.get(b.key)!;
       const genesis = shiftInstant(Date.parse(String(b.row.created_at)), shiftDays[b.key]!, f.tz);
       return { f, days: daysThroughYesterday(new Date(genesis), f.tz) };
@@ -267,9 +294,13 @@ export async function loadSnapshot(input: {
         });
     });
     const perBiz = await Promise.all(
-      m.businesses.map((b) =>
+      keys.map(primaryOf).map((b) =>
         sql.begin(async (tx) => {
           const f = fresh.get(b.key)!;
+          // Both halves of the pair get their captured settings; the live half first, since
+          // the test half's `live_business_id` points at it.
+          for (const half of m.businesses.filter((x) => x.key === b.key && x !== b))
+            await patch(tx, "businesses", freshIdOf.get(half.id)!, half.row, b.key);
           await patch(tx, "businesses", f.id, b.row, b.key);
           const tables = byScope.get(b.key);
           const genesis = shiftInstant(
@@ -321,7 +352,7 @@ export async function loadSnapshot(input: {
     mark("reporting", tp);
 
     const businesses: SeededBusiness[] = [];
-    for (const b of m.businesses) {
+    for (const b of keys.map(primaryOf)) {
       const f = fresh.get(b.key)!;
       const summary: BizSummary = await summarise(f.id);
       const showcase = ((b.summary as { showcase?: string[] } | null)?.showcase ?? []).map((l) =>

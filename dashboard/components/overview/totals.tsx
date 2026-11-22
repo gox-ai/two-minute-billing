@@ -1,25 +1,38 @@
 import type * as React from "react";
-import { CircleDollarSign, Hourglass, TrendingDown, Users } from "lucide-react";
+
 import { Grid } from "@/components/analytics/layout";
 import { Headline, seriesChange, trialHalves } from "@/components/analytics/home/parts";
+import { CurrentCards } from "@/components/analytics/home/current-cards";
 import { ok, splitByKey } from "@/components/analytics/org/conversion";
 import { orgPerformanceQueries } from "@/components/analytics/org/performance";
-import { measureValueCompact } from "@/components/analytics/format";
 import { explain } from "@/components/analytics/card-info";
 import { G } from "@/components/analytics/glossary";
 import { EMPTY_FIGURE } from "@/components/patterns/record-page";
 import { money, moneyCompact, pctFromBps } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { SegmentBar } from "@/components/charts/segment-bar";
 import type { AnalyticsQuery, AnalyticsResult, BatchEntry } from "@/lib/analytics-api";
 
 /** The as-at reading Metrics' Current zone uses: the last point of a 7-day daily window. */
 const READING = { grain: "day", range: "7d" } as const;
 
 /**
- * The four current totals: the same questions, windows and conversion as the Current zone on
+ * The current totals: the same questions, windows and conversion as the Current zone on
  * `/metrics` (`portfolioQueries`), so the two pages show the same figures. Money is converted
  * into the organization's base currency unless the batch names one.
  */
-const CARD_KEYS = new Set(["p_churn", "p_new", "p_trial_conv"]);
+const CARD_KEYS = new Set(["p_churn", "p_trial_conv", "p_new"]);
+
+/**
+ * Revenue types in the order the card names them: the engine's keys, our words, their colour.
+ * The colours are Business Home's revenue mix, so a type is one colour on every page.
+ */
+const REVENUE_TYPES: ReadonlyArray<readonly [string, string, string]> = [
+  ["recurring", "Subscriptions", "bg-chart-1"],
+  ["one_time", "One-time", "bg-chart-4"],
+  ["usage", "Usage", "bg-chart-2"],
+  ["credit_pack", "Credit packs", "bg-chart-3"],
+];
 
 export function totalsQueries(businessCount: number): AnalyticsQuery[] {
   const byBiz = { split: "business", split_limit: Math.max(businessCount, 1) };
@@ -41,33 +54,34 @@ export function totalsQueries(businessCount: number): AnalyticsQuery[] {
  */
 export function windowQueries(opts: {
   businessCount: number;
-  soleBusiness: string | null;
   currency?: string;
 }): AnalyticsQuery[] {
   const reporting = opts.currency ? { currency: opts.currency } : {};
   const byBiz = { split: "business", split_limit: Math.max(opts.businessCount, 1) };
-  const sole = opts.soleBusiness;
   return [
     { key: "mrr", measure: "mrr", compare: "previous", ...reporting },
-    // One business: ARPC and customer churn name it, because the organization scope refuses them.
-    ...(sole
-      ? [
-          { key: "sole_cmrr", measure: "cmrr", business: sole, ...reporting },
-          {
-            key: "sole_cust_churn",
-            measure: "customer_churn_rate",
-            business: sole,
-            range: "30d",
-            grain: "month" as const,
-          },
-          {
-            key: "sole_arpa",
-            measure: "revenue_per_paying_customer",
-            business: sole,
-            ...reporting,
-          },
-        ]
-      : []),
+    { key: "cmrr", measure: "cmrr", ...reporting },
+    { key: "arpc", measure: "revenue_per_paying_customer", ...reporting },
+    // Customer churn leads the churn card, as on a business Home. Its halves are counts of
+    // customers, which add up across businesses at month grain.
+    { key: "cust_churn", measure: "customer_churn_rate", range: "30d", grain: "month" as const },
+    // Every billing model: what was invoiced, by type and by business, and who paid.
+    { key: "rev", measure: "revenue_billed", compare: "previous", ...reporting },
+    {
+      key: "rev_type",
+      measure: "revenue_billed",
+      split: "revenue_type",
+      split_limit: 4,
+      shape: "totals",
+      ...reporting,
+    },
+    { key: "rev_biz", measure: "revenue_billed", ...byBiz, shape: "totals", ...reporting },
+    { key: "paying_all", measure: "paying_customers_all", compare: "previous" },
+    // What each business sells, for its card: one reading per model.
+    { key: "orders_biz", measure: "orders", ...byBiz, shape: "totals" },
+    { key: "aov_biz", measure: "average_order_value", ...byBiz, shape: "totals", ...reporting },
+    { key: "usage_biz", measure: "usage_events", ...byBiz, shape: "totals" },
+    { key: "credits_biz", measure: "credits_used", ...byBiz, shape: "totals", ...reporting },
     { key: "paying_customers", measure: "paying_customers" },
     { key: "paying", measure: "paying_subscriptions" },
     { key: "renewing", measure: "renewing_subscriptions" },
@@ -84,222 +98,232 @@ export function windowQueries(opts: {
 export type Answers = Map<string, BatchEntry>;
 
 const count = (n: number) => n.toLocaleString("en-US");
-/** A split's total; null only when the question itself was refused or failed. */
-const sum = (a: Answers, key: string) => {
-  const result = ok(a.get(key));
-  if (!result) return null;
-  return [...splitByKey(result).values()].reduce((s, r) => s + (r.total ?? 0), 0);
-};
 
 /**
- * Four cards: what the book is now and what moved in 30 days. Two by two
- * on a phone, three in a row from a wide column.
+ * The organization's totals. With subscriptions: the four cards at the head of Business Home
+ * (MRR, Paying customers, Churn, Trial conversion), then Revenue of every type in a row of
+ * its own. Without: Revenue and everyone who paid, as a business without subscriptions shows.
  */
 export function OrgTotals({
   answers,
   window: w,
-  businessCount,
-  includedCount,
   soleBusiness,
+  hasSubscriptions,
   bare = false,
+  revenueRow = true,
 }: {
   /** The Metrics-basis totals (`totalsQueries`). */
   answers: Answers;
   /** The 30-day answers (`windowQueries`). */
   window: Answers;
-  businessCount: number;
-  /** Businesses the conversion could include: the rest have no reporting rate. */
-  includedCount: number;
-  /** With one business its figures link into its lists, and ARPC and customer churn show. */
+  /** With one business its figures link into its lists. */
   soleBusiness: string | null;
+  /** Some business has subscriptions: MRR and churn mean nothing without any. */
+  hasSubscriptions: boolean;
   /** Cells inside a surface that already draws the card: the one-business panel. */
   bare?: boolean;
+  /** Draw the Revenue row under the four cards. The panel's page draws it itself. */
+  revenueRow?: boolean;
 }) {
-  // Four across, as the page always had them.
-  const cell = { span: bare ? null : (3 as const), bare };
-  const mrr = ok(answers.get("mrr"));
-  const arr = ok(answers.get("arr"));
-  const payingTotal = sum(answers, "paying_biz");
-  // A refused or uncomputed figure is unknown: a dash, never a zero.
-  const moneyFigure = (minor: number | null | undefined, cur: string | null | undefined) =>
-    minor != null && cur ? moneyCompact(minor, cur) : EMPTY_FIGURE;
-  const moneyTitle = (minor: number | null | undefined, cur: string | null | undefined) =>
-    minor != null && cur ? money(minor, cur) : undefined;
-  const cur = mrr?.currency ?? null;
-
   const wr = (key: string) => ok(w.get(key));
   const wt = (key: string) => wr(key)?.total ?? null;
-  const only = soleBusiness != null;
-  const subsHref = only ? `/businesses/${soleBusiness}/subscriptions` : null;
+  const mrr = ok(answers.get("mrr"));
   const wMrr = wr("mrr");
-  const soleCmrr = wr("sole_cmrr");
-  const soleArpa = wr("sole_arpa");
-  const soleCustChurn = wr("sole_cust_churn");
+  const cur = mrr?.currency ?? wMrr?.currency ?? null;
+  const sole = soleBusiness;
+  const subsHref = sole ? `/businesses/${sole}/subscriptions` : null;
   const cancelResult = wr("cancel_mrr");
-  // Every band, not just the next 30 days: the link lists them all.
-  const cancelling = cancelResult?.total ?? 0;
-  const paying = wr("paying");
-  const renewing = wr("renewing");
-  const hTrial = trialHalves(wr("p_trial_conv"));
-  const hTrialConv = wt("p_trial_conv");
-  const hMrrNew = wt("p_new");
-  const hChurned = wt("p_churn");
-  const hMrrChurn = wr("p_churn_rate");
-  const wCur = wMrr?.currency ?? cur;
+  const paying = wr("paying_customers");
+  const series = (r: ReturnType<typeof wr>) => (r?.series ?? []).map((p) => p.value ?? null);
 
-  const cards = [
-    <Headline
-      key="mrr"
-      {...cell}
-      icon={CircleDollarSign}
-      label={businessCount > 1 ? "Consolidated MRR" : "MRR"}
-      info={
-        only
-          ? explain(G.mrr, G.arr, G.cmrr, G.cancelling)
-          : explain(G.consolidatedMrr, G.businesses, G.cancelling)
-      }
-      change={seriesChange(wMrr as unknown as AnalyticsResult, "30 days")}
-      value={moneyFigure(mrr?.total, cur)}
-      title={moneyTitle(mrr?.total, cur)}
-      stats={[
-        { label: "ARR", value: arr?.total != null && cur ? moneyCompact(arr.total, cur) : null },
-        only
+  if (!hasSubscriptions) {
+    // Everyone who paid, for any kind of revenue. Each business's customer is its own account,
+    // so the counts add.
+    const payingAll = wt("paying_all");
+    const half = { span: bare ? null : (6 as const), bare };
+    return (
+      <Cells bare={bare}>
+        <RevenueCard window={w} {...half} />
+        <Headline
+          {...half}
+          label="Paying customers"
+          info={explain(G.customersWhoPaid)}
+          change={seriesChange(wr("paying_all") as unknown as AnalyticsResult, "30 days", "count")}
+          value={payingAll != null ? count(payingAll) : EMPTY_FIGURE}
+        />
+      </Cells>
+    );
+  }
+
+  const cards = (
+    <CurrentCards
+      span={bare ? null : 3}
+      bare={bare}
+      data={{
+        cur,
+        mrr: mrr?.total ?? null,
+        mrrChange: seriesChange(wMrr as unknown as AnalyticsResult, "30 days"),
+        mrrSpark: series(wMrr),
+        arr: ok(answers.get("arr"))?.total ?? null,
+        cmrr: wt("cmrr"),
+        // Every band, not just the next 30 days: the link lists them all.
+        cancelling: cancelResult?.total ?? null,
+        cancelCur: cancelResult?.currency ?? cur,
+        paying: paying?.total ?? null,
+        payingChange: seriesChange(paying as unknown as AnalyticsResult, "30 days", "count"),
+        payingSpark: series(paying),
+        arpc: wr("arpc"),
+        payingSubs: wt("paying"),
+        renewingSubs: wt("renewing"),
+        custChurn: wr("cust_churn"),
+        mrrChurn: wr("p_churn_rate"),
+        mrrLost: wt("p_churn"),
+        trial: trialHalves(wr("p_trial_conv")),
+        trialConv: wt("p_trial_conv"),
+        mrrNew: wt("p_new"),
+        links: subsHref
           ? {
-              label: "Committed",
-              value:
-                soleCmrr?.total != null
-                  ? measureValueCompact(soleCmrr.total, soleCmrr.unit, soleCmrr.currency)
-                  : null,
-              title:
-                soleCmrr?.total != null && soleCmrr.currency
-                  ? money(soleCmrr.total, soleCmrr.currency)
-                  : undefined,
+              cancelling: `${subsHref}?status=non_renewing`,
+              payingSubs: `${subsHref}?filter=status:in:active,non_renewing&filter=mrr:gt:0`,
+              renewing: `${subsHref}?filter=status:is:active&filter=mrr:gt:0`,
+              mrrLost: `/businesses/${sole}/reports/cancellations`,
+              newMrr: `/businesses/${sole}?tab=recurring`,
             }
-          : {
-              label: "Businesses",
-              value: mrr?.total ? `${includedCount} of ${businessCount}` : null,
-            },
-        {
-          label: "Cancelling",
-          href: subsHref ? `${subsHref}?status=non_renewing` : undefined,
-          value:
-            cancelling > 0
-              ? measureValueCompact(cancelling, "money", cancelResult?.currency ?? null)
-              : null,
-          title:
-            cancelling > 0 && cancelResult?.currency
-              ? `${money(cancelling, cancelResult.currency)} of MRR booked to cancel`
-              : undefined,
-        },
-      ]}
-    />,
-    /* Customers are the paying unit; subscriptions are the detail beneath. Each business's
-        customer is its own account, so the counts add. */
-    <Headline
-      key="paying"
-      {...cell}
-      icon={Users}
-      label="Paying customers"
-      info={explain(G.payingCustomers, only ? G.arpa : null, G.payingSubs, G.renewing)}
-      change={seriesChange(
-        wr("paying_customers") as unknown as AnalyticsResult,
-        "30 days",
-        "count",
-      )}
-      value={payingTotal != null ? count(payingTotal) : EMPTY_FIGURE}
-      stats={[
-        ...(only
-          ? [
-              {
-                label: "ARPC",
-                value:
-                  soleArpa?.total != null && soleArpa.currency
-                    ? money(Math.round(soleArpa.total), soleArpa.currency)
-                    : null,
-              },
-            ]
-          : []),
-        {
-          label: "Paying subs",
-          value: paying?.total ? count(paying.total) : null,
-          href: subsHref
-            ? `${subsHref}?filter=status:in:active,non_renewing&filter=mrr:gt:0`
-            : undefined,
-        },
-        {
-          label: "Renewing",
-          value: renewing?.total ? count(renewing.total) : null,
-          href: subsHref ? `${subsHref}?filter=status:is:active&filter=mrr:gt:0` : undefined,
-        },
-      ]}
-    />,
-    <Headline
-      key="trial"
-      {...cell}
-      icon={Hourglass}
-      label="Trial conversion, 30 days"
-      info={explain(G.trialConversion, G.trialsConverted, G.trialsEnded, G.newMrr30)}
-      value={hTrialConv == null ? EMPTY_FIGURE : pctFromBps(hTrialConv, 1)}
-      stats={[
-        {
-          label: "Converted",
-          value: hTrial.converted == null ? null : count(hTrial.converted),
-        },
-        { label: "Ended", value: hTrial.ended == null ? null : count(hTrial.ended) },
-        {
-          label: "New MRR",
-          value: hMrrNew == null || !wCur ? null : measureValueCompact(hMrrNew, "money", wCur),
-          title: hMrrNew == null || !wCur ? undefined : money(hMrrNew, wCur),
-        },
-      ]}
-    />,
-    /* Customer churn does not add up across businesses, so with several the card leads
-        with MRR churn, which does. */
-    <Headline
-      key="churn"
-      {...cell}
-      icon={TrendingDown}
-      label={soleCustChurn ? "Churn, 30 days" : "MRR churn, 30 days"}
-      info={
-        soleCustChurn
-          ? explain(G.customerChurn, G.churned, G.mrrChurnRate, G.mrrLost)
-          : explain(G.mrrChurnRate, G.mrrLost)
-      }
-      value={
-        soleCustChurn?.total != null
-          ? pctFromBps(soleCustChurn.total, 1)
-          : hMrrChurn?.total != null
-            ? pctFromBps(hMrrChurn.total, 1)
-            : EMPTY_FIGURE
-      }
-      stats={[
-        ...(soleCustChurn
-          ? [
-              {
-                label: "Churned",
-                value:
-                  soleCustChurn.total_basis === "window" && soleCustChurn.total_numerator != null
-                    ? count(soleCustChurn.total_numerator)
-                    : null,
-              },
-              {
-                label: "MRR churn",
-                value: hMrrChurn?.total == null ? null : pctFromBps(hMrrChurn.total, 1),
-              },
-            ]
-          : []),
-        {
-          label: "MRR lost",
-          value: hChurned == null || !wCur ? null : measureValueCompact(hChurned, "money", wCur),
-          title: hChurned == null || !wCur ? undefined : money(hChurned, wCur),
-        },
-      ]}
-    />,
-  ];
+          : undefined,
+      }}
+    />
+  );
+  return (
+    <>
+      <Cells bare={bare}>{cards}</Cells>
+      {revenueRow ? <OrgRevenueRow window={w} /> : null}
+    </>
+  );
+}
 
-  // Churn before trial conversion: the order the first row always had.
-  const ordered = [cards[0], cards[1], cards[3], cards[2]];
-  return <Cells bare={bare}>{ordered}</Cells>;
+/** Revenue of every type in its own row, under the four cards. */
+export function OrgRevenueRow({ window: w }: { window: Answers }) {
+  return (
+    <Grid>
+      <RevenueCard window={w} span={12} />
+    </Grid>
+  );
+}
+
+/** What was invoiced in 30 days, whatever the billing model, split by type. */
+function RevenueCard({
+  window: w,
+  span,
+  bare = false,
+}: {
+  window: Answers;
+  span: 6 | 12 | null;
+  bare?: boolean;
+}) {
+  const rev = ok(w.get("rev"));
+  const revCur = rev?.currency ?? ok(w.get("mrr"))?.currency ?? null;
+  const revByType = new Map(
+    [...splitByKey(ok(w.get("rev_type"))).values()].map((r) => [r.key, r.total]),
+  );
+  const revChange = rev?.compare?.change_bps;
+  // A refused or uncomputed figure is unknown: a dash, never a zero.
+  const known = rev?.total != null && revCur;
+  // A row of its own: the trend and the share of each type fill the width.
+  const wide = span === 12 && !bare;
+  return (
+    <Headline
+      span={span}
+      bare={bare}
+      wide={wide}
+      spark={wide ? (rev?.series ?? []).map((p) => p.value ?? null) : undefined}
+      aside={
+        wide && revCur ? (
+          <RevenueMix
+            cur={revCur}
+            parts={REVENUE_TYPES.map(([key, label, swatch]) => ({
+              label,
+              swatch,
+              value: revByType.get(key) ?? null,
+            }))}
+          />
+        ) : undefined
+      }
+      label="Revenue, 30 days"
+      info={explain(G.revenueBilled)}
+      change={
+        revChange == null
+          ? null
+          : {
+              value: pctFromBps(Math.abs(revChange), 1),
+              direction: revChange > 0 ? "up" : revChange < 0 ? "down" : "flat",
+              tone: revChange > 0 ? "good" : revChange < 0 ? "bad" : "neutral",
+              context: "vs the 30 days before",
+            }
+      }
+      value={known ? moneyCompact(rev.total!, revCur) : EMPTY_FIGURE}
+      title={known ? money(rev.total!, revCur) : undefined}
+      stats={REVENUE_TYPES.map(([key, label]) => {
+        const v = revByType.get(key);
+        return {
+          label,
+          value: v != null && v > 0 && revCur ? moneyCompact(v, revCur) : null,
+          title: v != null && v > 0 && revCur ? money(v, revCur) : undefined,
+        };
+      })}
+    />
+  );
+}
+
+/**
+ * Each type's share of the revenue: one bar, then a labelled row per type. The bar shows
+ * only when every part is positive; a credit note can take a type below zero, and a share
+ * of a negative total means nothing.
+ */
+function RevenueMix({
+  cur,
+  parts,
+}: {
+  cur: string;
+  parts: Array<{ label: string; swatch: string; value: number | null }>;
+}) {
+  const shown = parts.filter((p) => p.value != null && p.value !== 0) as Array<{
+    label: string;
+    swatch: string;
+    value: number;
+  }>;
+  if (shown.length === 0) return null;
+  const sum = shown.reduce((s, p) => s + p.value, 0);
+  const bar = sum > 0 && shown.every((p) => p.value > 0);
+  const pct = (v: number) => {
+    const p = (v / sum) * 100;
+    return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      {bar ? (
+        <SegmentBar
+          label="Revenue by type"
+          parts={shown.map((p) => ({ key: p.label, value: p.value, fill: p.swatch }))}
+        />
+      ) : null}
+      <dl className="flex flex-col gap-1.5 text-sm">
+        {shown.map((p) => (
+          <div key={p.label} className="flex items-center gap-2">
+            <span className={cn("size-2 shrink-0 rounded-full", p.swatch)} aria-hidden />
+            <dt className="min-w-0 flex-1 truncate text-muted-foreground">{p.label}</dt>
+            <dd className="font-medium whitespace-nowrap tabular-nums">
+              {moneyCompact(p.value, cur)}
+            </dd>
+            {bar ? (
+              <dd className="w-10 text-end text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                {pct(p.value)}
+              </dd>
+            ) : null}
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 /** The card grid, or nothing around the cells when the panel draws the grid. */

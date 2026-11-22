@@ -16,7 +16,11 @@ import { createSubscription } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod } from "@/modules/invoicing/service";
 import { recordOfflinePayment } from "@/modules/invoicing/ops";
 import { handleProviderEvent } from "@/modules/webhooks/inbound";
-import { createReceiptForPayment, numberUnnumberedReceipts } from "@/modules/receipts/service";
+import {
+  createReceiptForPayment,
+  numberUnnumberedReceipts,
+  type ReceiptSnapshot,
+} from "@/modules/receipts/service";
 import { renderReceiptPdf } from "@/modules/receipts/pdf";
 import { businesses, events, payments, receipts, transactions } from "@db/schema";
 import type { NormalizedProviderEvent } from "@/providers/types";
@@ -293,6 +297,32 @@ const B = await setupBusiness("B");
     "PDF renders",
     pdf.subarray(0, 4).toString() === "%PDF" && pdf.length > 1000,
     `${pdf.length} bytes`,
+  );
+  // Brand marks: frozen on new receipts; an old snapshot prints the current logo.
+  const snapBiz = (first.snapshot as ReceiptSnapshot).business;
+  check(
+    "snapshot carries logo_url and icon_url",
+    "logo_url" in snapBiz && "icon_url" in snapBiz,
+    JSON.stringify({ logo_url: snapBiz.logo_url, icon_url: snapBiz.icon_url }),
+  );
+  const images = (b: Buffer) => b.toString("latin1").split("/Subtype /Image").length - 1;
+  const PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  await systemDb.update(businesses).set({ logoUrl: PNG }).where(eq(businesses.id, A.bizId));
+  const { logo_url: _l, icon_url: _i, ...oldBiz } = snapBiz;
+  const oldShape = { ...first, snapshot: { ...(first.snapshot as object), business: oldBiz } };
+  const oldPdf = await renderReceiptPdf(oldShape);
+  const frozenPdf = await renderReceiptPdf(first);
+  await systemDb.update(businesses).set({ logoUrl: null }).where(eq(businesses.id, A.bizId));
+  check(
+    "old snapshot (no logo fields) prints the current logo",
+    images(oldPdf) > 0,
+    `${images(oldPdf)} image objects`,
+  );
+  check(
+    "a snapshot frozen without a logo ignores the one added later",
+    images(frozenPdf) === 0,
+    `${images(frozenPdf)} image objects`,
   );
 
   const app = await buildApp({ logger: false });

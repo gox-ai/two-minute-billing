@@ -109,6 +109,7 @@ import { makeEstimateLineFormatter } from "@/lib/estimate-lines";
 import { SelectField } from "@/components/ui/select-field";
 import { changeEditKey, policyReady, prorateToSend } from "@/lib/change-policy-view";
 import { useDefaultState } from "@/lib/use-default-state";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 import { CheckboxField } from "@/components/ui/checkbox";
 import {
   ALLOWANCE_UPGRADE_LABELS,
@@ -1334,7 +1335,10 @@ export function SubscriptionChangeForm({
   // estimate produced before `invoice_total_minor` existed.
   const invoiceTotalMinor =
     estimate?.invoice_total_minor ??
-    chargesMinor - couponDiscountMinor - promotionalDiscountMinor + (estimate?.tax_minor ?? 0);
+    chargesMinor -
+      couponDiscountMinor -
+      promotionalDiscountMinor +
+      splitTax(estimate?.tax_minor, estimate?.tax_lines).addedMinor;
   const creditNoteMinor = estimate?.credit_note_total_minor ?? 0;
   // ── THE SHAPE, 2026-08-31 ────────────────────────────────────────────────────
   // The ladder subtracts ONE credit figure: `credits_applied`, the slice that offsets this
@@ -1507,6 +1511,14 @@ export function SubscriptionChangeForm({
               taxLines: reactMoney.tax_lines,
             }
           : { minor: reactivationTermMinor, label: "Subtotal" };
+  const reactIncludedTaxMinor = splitTax(
+    reactSummary.taxMinor,
+    reactSummary.taxLines,
+  ).includedMinor;
+  const reactIncludedTaxRow =
+    reactIncludedTaxMinor > 0
+      ? [{ label: INCLUDED_TAX_LABEL, amountMinor: reactIncludedTaxMinor, kind: "muted" as const }]
+      : [];
 
   /**
    * THE REACTIVATION RAIL'S LADDER — the in-page box #56 was actually measured on. It
@@ -1549,8 +1561,8 @@ export function SubscriptionChangeForm({
         // the fallback for a jurisdiction whose vector is one component, never a collapse
         // of several: the buyer meets the split on the document and has to be able to tie
         // it back to this quote.
-        ...((reactSummary.taxLines ?? []).length > 0
-          ? reactSummary.taxLines!.map((t) => ({
+        ...(reactSummary.taxLines
+          ? reactSummary.taxLines.map((t) => ({
               label: t.label,
               amountMinor: t.amount_minor,
               kind: "muted" as const,
@@ -1558,6 +1570,7 @@ export function SubscriptionChangeForm({
           : (reactSummary.taxMinor ?? 0) > 0
             ? [{ label: "Tax", amountMinor: reactSummary.taxMinor!, kind: "muted" as const }]
             : []),
+        ...reactIncludedTaxRow,
         ...((reactBalanceCreditsMinor ?? 0) > 0
           ? [
               {
@@ -1600,6 +1613,7 @@ export function SubscriptionChangeForm({
             amountMinor: t.amount_minor,
             kind: "muted" as const,
           })),
+          ...reactIncludedTaxRow,
           { label: reactSummary.label, amountMinor: reactSummary.minor, kind: "total" as const },
         ];
 
@@ -3462,7 +3476,7 @@ export function SubscriptionChangeForm({
                       connecting it to this quote. Falls back to one row only when the
                       engine names no components. */}
                                     {estimate.tax_minor > 0 ? (
-                                      estimate.tax_lines?.length ? (
+                                      estimate.tax_lines ? (
                                         estimate.tax_lines.map((t) => (
                                           <tr
                                             key={t.label}
@@ -3482,6 +3496,19 @@ export function SubscriptionChangeForm({
                                           </td>
                                         </tr>
                                       )
+                                    ) : null}
+                                    {splitTax(estimate.tax_minor, estimate.tax_lines)
+                                      .includedMinor > 0 ? (
+                                      <tr className="border-b text-muted-foreground">
+                                        <td className="py-1.5">{INCLUDED_TAX_LABEL}</td>
+                                        <td className="py-1.5 text-right tabular-nums">
+                                          {money(
+                                            splitTax(estimate.tax_minor, estimate.tax_lines)
+                                              .includedMinor,
+                                            estimate.currency,
+                                          )}
+                                        </td>
+                                      </tr>
                                     ) : null}
                                     {/* THIS INVOICE ONLY. `Invoice total` then
                       `credits_applied`, and nothing else: the gross note and its other

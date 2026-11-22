@@ -205,10 +205,26 @@ describe("lost answers and 704", () => {
     const keys = stubPayments([
       {
         status: 422,
-        json: { status: 422, errorCode: "137", message: "Field 'amount' is not valid" },
+        json: {
+          status: 422,
+          errorCode: "100",
+          message: "Required object 'amount' is not provided",
+        },
       },
     ]);
     await expect(adyen().charge(chargeIn)).rejects.toBeInstanceOf(AdyenApiError);
+    expect(keys).toHaveLength(1);
+  });
+
+  it("a ruled 422 is a failed charge, not retried", async () => {
+    const keys = stubPayments([
+      {
+        status: 422,
+        json: { status: 422, errorCode: "137", message: "Field 'amount' is not valid" },
+      },
+    ]);
+    const r = await adyen().charge(chargeIn);
+    expect([r.status, r.failure?.code]).toEqual(["failed", "gateway_request_rejected"]);
     expect(keys).toHaveLength(1);
   });
 });

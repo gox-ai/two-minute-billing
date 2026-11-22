@@ -32,6 +32,7 @@ import { refreshTransactionAction } from "./refresh-action";
 import { GatewayLabel } from "@/components/partner-logo";
 import { gatewayLogsHref } from "@/lib/gateway-logs-href";
 import { cn } from "@/lib/utils";
+import { paymentSourceText } from "@/lib/payment-trigger";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -238,6 +239,7 @@ export function TransactionDetailView({
               </Row>
               <Row label="Date">{fmtDateTime(t.occurred_at ?? t.created_at, tz)}</Row>
               <Row label="Amount">{money(t.amount_minor, t.currency)}</Row>
+              <Row label="Source">{paymentSourceText(t.initiated_by)}</Row>
               <Row label="Customer">
                 {t.customer ? (
                   <Link
@@ -331,6 +333,10 @@ export function TransactionDetailView({
                   <span className="text-destructive">
                     {t.error_code}
                     {t.error_text ? ` — ${t.error_text}` : ""}
+                    {/* The gateway's own code beside our reading, when it differs. */}
+                    {t.gateway_code && t.gateway_code !== t.error_code
+                      ? ` · ${gatewayName} code: ${t.gateway_code}`
+                      : ""}
                   </span>
                 ) : (
                   "—"
@@ -471,6 +477,7 @@ export function TransactionDetailView({
                     availableMinor={recording.available_minor}
                     currency={t.currency}
                     gatewayName={gatewayName}
+                    reportedDaily={recording.reported_daily === true}
                   />
                 ) : null
               }

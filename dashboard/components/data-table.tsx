@@ -291,7 +291,8 @@ function headerLabel(header: unknown): string {
  * In a card narrower than 52.5rem (`list-narrow`, globals.css) the same rows render as a
  * stacked list (`li[data-slot=list-row]`), placed by each column's `meta.phone`; no table, no
  * head row, no sideways scroll. The card is the size container, not the window, so a list
- * beside Billy's panel or on a small laptop stacks too.
+ * beside Billy's panel or on a small laptop stacks too. A wider card stacks its rows the same
+ * way while its table, with long names or large amounts, would not fit it.
  */
 export function DataTable<TData, TValue>({
   columns,
@@ -326,7 +327,7 @@ export function DataTable<TData, TValue>({
 }: DataTableProps<TData, TValue>) {
   const router = useRouter();
   const probe = React.useRef<HTMLDivElement>(null);
-  const layout = useListLayout(probe);
+  const body = React.useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = React.useState<SortingState>(() =>
     resolveDefaultSort(columns, defaultSort),
   );
@@ -439,8 +440,9 @@ export function DataTable<TData, TValue>({
       enableHiding: false,
       meta: { align: "right", width: "w-12" },
       cell: ({ row }) => (
-        // Stop propagation so opening the menu doesn't trigger the row link.
-        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+        // Stop propagation so opening the menu doesn't trigger the row link. `-my-1` sets the
+        // 32px row buttons (the ⋯, Inspect) on the cells' 24px first line, in both layouts.
+        <div className="-my-1 flex justify-end" onClick={(e) => e.stopPropagation()}>
           {rowMenu?.(row.original)}
         </div>
       ),
@@ -502,6 +504,9 @@ export function DataTable<TData, TValue>({
   });
 
   const rows = table.getRowModel().rows;
+  // A new identity when the rows or the visible columns change: a stacked list tries the table.
+  const content = React.useMemo(() => ({ rows, hiddenKey }), [rows, hiddenKey]);
+  const layout = useListLayout(probe, body, content);
   const dataColumns = table
     .getVisibleLeafColumns()
     .filter((c) => c.id !== "__select" && c.id !== "__menu");
@@ -843,7 +848,12 @@ export function DataTable<TData, TValue>({
             >
               {/* Stacked rows have no head row, so select-all lives here. */}
               {selectAllHeader && layout !== "table" ? (
-                <span className="hidden items-center list-narrow:flex">
+                <span
+                  className={cn(
+                    "items-center",
+                    layout === "phone" ? "flex" : "hidden list-narrow:flex",
+                  )}
+                >
                   {flexRender(
                     selectAllHeader.column.columnDef.header,
                     selectAllHeader.getContext(),
@@ -890,6 +900,7 @@ export function DataTable<TData, TValue>({
             // `useListLayout` mounts one layout; until it can (SSR, hydration) CSS picks it.
             "list-narrow:[&>[data-slot=table-container]]:hidden",
           )}
+          ref={body}
           data-list-layout={layout}
           aria-busy={manual?.loading || undefined}
         >
@@ -1028,7 +1039,9 @@ export function DataTable<TData, TValue>({
                       data-pressable={href ? true : undefined}
                       data-state={row.getIsSelected() ? "selected" : undefined}
                       className={cn(
-                        "flex gap-3 px-3.5 py-3 hover:bg-muted/70 has-aria-expanded:bg-muted/70 data-[state=selected]:bg-muted",
+                        // text-sm: the table's own size. Without it the values took the 16px body
+                        // size and read larger than the same cells in the table.
+                        "flex gap-3 px-3.5 py-3 text-sm hover:bg-muted/70 has-aria-expanded:bg-muted/70 data-[state=selected]:bg-muted",
                         PHONE_LINES,
                         href && "cursor-pointer",
                       )}
@@ -1040,12 +1053,14 @@ export function DataTable<TData, TValue>({
                         </div>
                       ) : null}
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-start gap-3">
-                          <div className="min-w-0 flex-1 wrap-anywhere">
+                        {/* A figure or status too wide to sit beside a 6rem title takes its
+                            own line, right-aligned: it never squeezes the title or overflows. */}
+                        <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
+                          <div className="min-w-0 flex-[1_1_6rem] wrap-anywhere">
                             {render(phonePlan.title)}
                           </div>
                           {phonePlan.aside.length ? (
-                            <div className="flex max-w-1/2 shrink-0 flex-col items-end gap-0.5 text-right wrap-anywhere">
+                            <div className="ms-auto flex max-w-full shrink-0 flex-col items-end gap-0.5 text-right wrap-anywhere">
                               {phonePlan.aside.map((id) => (
                                 <div key={id} className="flex min-h-6 items-center">
                                   {render(id)}
@@ -1073,9 +1088,9 @@ export function DataTable<TData, TValue>({
                           </div>
                         ) : null}
                       </div>
-                      {/* The ⋯ (a 32px button) centred on the 24px first line. */}
+                      {/* The menu cell centres its 32px buttons on the 24px first line. */}
                       {cells.has("__menu") ? (
-                        <div className="-my-1 -me-2 shrink-0">{render("__menu")}</div>
+                        <div className="-me-2 shrink-0">{render("__menu")}</div>
                       ) : null}
                     </li>
                   );

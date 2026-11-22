@@ -1,6 +1,7 @@
 "use client";
 
-import { PortalSectionButton } from "./section-link";
+import { paymentMethodTypeLabel } from "@/lib/filter-options";
+import { CLOSE_ADD_METHOD_EVENT } from "./section-link";
 import * as React from "react";
 import { money } from "@/lib/format";
 import { useRouter } from "next/navigation";
@@ -8,7 +9,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
+import type { Country } from "@/lib/api/geo";
+import { InlineBillingDetails } from "./inline-billing-details";
 import { portalBeginSetupAction, portalCompleteVaultAction } from "./actions";
+import { AddMethodResult } from "./add-method-result";
+import type { AddMethodOutcome } from "./portal-state";
 import { savePendingVaultSetup, clearPendingVaultSetup } from "@/lib/pending-vault-setup";
 import {
   openRazorpayCheckout,
@@ -23,8 +28,11 @@ import {
 } from "@/lib/gateway-sdk";
 import type { PortalMe, PortalVaultSetup, PortalGateway } from "@/lib/portal-api";
 import { accountHolderName } from "@/lib/names";
+import { clearActiveIntent, setActiveIntent } from "@/lib/buyer-error-report";
 import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
-import { MethodTypeChoice, railsForCurrency, type MethodType } from "../../method-choice";
+import { Landmark } from "lucide-react";
+import { PaymentMark, type PaymentMarkKey } from "@/components/brand/payment-mark";
+import { railsForCurrency, type MethodType } from "../../method-choice";
 import { useReportInstrument } from "../../storefront-footer";
 import { CommitBar } from "../../chrome";
 import { AchAuthorization } from "../../ach-authorization";
@@ -33,9 +41,73 @@ import {
   PaymentDialogFooter,
   PaymentPrivacyNote,
   RefusalAlert,
+  SdkFrame,
   StripeIntentForm,
+  useInlineFrame,
   refusalMessage,
 } from "../../payment-dialog";
+
+/** A one-rail account is named by its rail; several rails keep the account label. */
+/** One row of Add a payment method: a rail, and the account that takes it. */
+type AddRow = {
+  key: string;
+  gateway: string;
+  gatewayKey: string;
+  method: MethodType;
+  label: string;
+  marks: PaymentMarkKey[];
+  bank: boolean;
+  note: string | null;
+  /** A card form we draw in our page: it opens inside the row, with no second step. */
+  formHere: boolean;
+};
+const BANK_RAILS = new Set(["us_bank_account", "sepa_debit", "bank_transfer", "bacs_debit"]);
+/** Gateways whose form opens in their own window, not in our page. */
+const OWN_WINDOW = new Set(["razorpay", "cashfree", "authorizenet"]);
+/** Gateways whose own card form shows the card logos before anything is typed: an open row of
+ * theirs hides ours, so the logos do not show twice. */
+const FORM_SHOWS_CARD_LOGOS = new Set(["stripe", "braintree", "checkoutcom"]);
+
+/** Gateways that take the buyer to their own page and back. */
+const REDIRECTS = new Set(["paypal", "mollie", "gocardless", "payu"]);
+
+function addRowLabel(method: string, gatewayKey: string): string {
+  if (method === "card") return "Credit or debit card";
+  if (method === "upi") return "UPI Autopay";
+  if (method === "paypal") return "PayPal";
+  if (method === "us_bank_account") return "US bank account";
+  if (method === "bank_transfer" && gatewayKey === "razorpay") return "Netbanking e-Mandate";
+  return paymentMethodTypeLabel(method);
+}
+
+/** Stripe India takes Visa and Mastercard on INR (no Amex, no RuPay): see pay-invoice.tsx. */
+function addRowMarks(
+  method: string,
+  gatewayKey: string,
+  currency?: string | null,
+): PaymentMarkKey[] {
+  if (method === "card")
+    return gatewayKey === "razorpay"
+      ? ["visa", "mastercard", "rupay"]
+      : gatewayKey === "stripe" && (currency ?? "").toUpperCase() !== "INR"
+        ? ["visa", "mastercard", "amex"]
+        : ["visa", "mastercard"];
+  if (method === "upi") return ["upi"];
+  if (method === "paypal") return ["paypal"];
+  return [];
+}
+
+/** The open row's one line, where the buyer leaves our page; null where the form is ours. */
+function addRowNote(method: string, gatewayKey: string): string | null {
+  if (method === "paypal") return "You continue on PayPal, then come back here.";
+  if (method === "upi") return "You approve it in your UPI app.";
+  if (method === "bank_transfer" && gatewayKey === "razorpay")
+    return "You approve the mandate on your bank's page.";
+  if (OWN_WINDOW.has(gatewayKey)) return "You enter your card in a secure window.";
+  if (REDIRECTS.has(gatewayKey))
+    return "You continue on the provider's secure page, then come back here.";
+  return null;
+}
 
 /**
  * Buyer add-card flow (P14). First lets the buyer pick WHICH of the business's
@@ -61,7 +133,13 @@ export function AddCard({
   expectedDebitMinor,
   unattendedLimitMinor,
   currency,
+  routes,
+  countries,
 }: {
+  /** For the inline billing details form, shown while details are missing. */
+  countries: Country[];
+  /** The server's rail → account routing (order, business routing, customer override). */
+  routes?: { method: string; gateway_account: string }[] | null;
   /** Non-secret per-buyer key for the redirect-leg stash — see lib/pending-vault-setup.ts. */
   scope: string;
   /** The currency this buyer is billed in, when known: a rail that cannot move it is not offered. */
@@ -75,36 +153,64 @@ export function AddCard({
 }) {
   const router = useRouter();
   const [setup, setSetup] = React.useState<PortalVaultSetup | null>(null);
+  /** What the new method did to the open invoices, shown once it is saved. */
+  const [outcome, setOutcome] = React.useState<AddMethodOutcome | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [selected, setSelected] = React.useState<string | null>(gateways[0]?.id ?? null);
-  const [methodType, setMethodType] = React.useState<MethodType>("card");
+  /**
+   * One row per METHOD across every account (option C), never per provider: the first
+   * account that offers a rail takes it (the server lists the business default first).
+   */
+  const methodRows = React.useMemo(() => {
+    const rows: AddRow[] = [];
+    // The server's routing, when it sent one: its order and its account for each rail.
+    if (routes?.length) {
+      for (const r of routes) {
+        const g = gateways.find((x) => x.id === r.gateway_account);
+        if (!g || rows.some((x) => x.method === r.method)) continue;
+        rows.push({
+          key: `${g.id}:${r.method}`,
+          gateway: g.id,
+          gatewayKey: g.gateway_key,
+          method: r.method as MethodType,
+          label: addRowLabel(r.method, g.gateway_key),
+          marks: addRowMarks(r.method, g.gateway_key, currency),
+          bank: BANK_RAILS.has(r.method),
+          note: addRowNote(r.method, g.gateway_key),
+          formHere: r.method === "card" && addRowNote(r.method, g.gateway_key) == null,
+        });
+      }
+      if (rows.length) return rows;
+    }
+    for (const g of gateways) {
+      const rails =
+        g.gateway_key === "paypal"
+          ? ["paypal"]
+          : railsForCurrency(g.method_types?.length ? g.method_types : ["card"], currency);
+      for (const m of rails) {
+        if (rows.some((r) => r.method === m)) continue;
+        rows.push({
+          key: `${g.id}:${m}`,
+          gateway: g.id,
+          gatewayKey: g.gateway_key,
+          method: m as MethodType,
+          label: addRowLabel(m, g.gateway_key),
+          marks: addRowMarks(m, g.gateway_key, currency),
+          bank: BANK_RAILS.has(m),
+          note: addRowNote(m, g.gateway_key),
+          formHere: m === "card" && addRowNote(m, g.gateway_key) == null,
+        });
+      }
+    }
+    return rows.sort((a, b) => Number(b.method === "card") - Number(a.method === "card"));
+  }, [gateways, currency, routes]);
+  const [selectedKey, setSelectedKey] = React.useState<string | null>(methodRows[0]?.key ?? null);
+  const selectedRow = methodRows.find((r) => r.key === selectedKey) ?? methodRows[0];
+  /** gwa_… of the selected row: where the setup runs. */
+  const selected = selectedRow?.gateway ?? null;
   const selectedGw = gateways.find((g) => g.id === selected);
   const selectedGwKey = selectedGw?.gateway_key;
-  /**
-   * What THIS gateway can offer for THIS currency — resolved server-side by
-   * `effectiveMethodTypes`, so the storefront never guesses.
-   *
-   * The fallback used to be `['card','upi','bank_transfer']`, which is the Indian set: on a
-   * Stripe account with nothing configured it would have offered UPI. `card` is the only
-   * honest guess when the server told us nothing, and one option renders no chooser at all.
-   */
-  const gatewayRails =
-    selectedGw?.method_types && selectedGw.method_types.length > 0
-      ? selectedGw.method_types
-      : ["card"];
-  // UPI moves only rupees: a buyer billed in dollars is not offered it.
-  const currencyRails = railsForCurrency(gatewayRails, currency);
-  const allowedMethodTypes = currencyRails.length > 0 ? currencyRails : ["card"];
-  /**
-   * DERIVED, never the raw state: switching gateway would otherwise submit a rail the new
-   * one cannot do — pick SEPA on Stripe, switch to RazorPay, and the state still says
-   * `sepa_debit` while the chooser shows nothing selected. Deriving keeps the value that
-   * is submitted and the value that is rendered as one thing.
-   */
-  const activeMethodType = (
-    allowedMethodTypes.includes(methodType) ? methodType : (allowedMethodTypes[0] ?? "card")
-  ) as MethodType;
+  const activeMethodType = (selectedRow?.method ?? "card") as MethodType;
   useReportInstrument(activeMethodType);
   /** Our bank debit authorization, when this gateway leaves it to us and a bank account is picked. */
   const achText =
@@ -117,40 +223,25 @@ export function AddCard({
    */
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const [awaitingMandate, setAwaitingMandate] = React.useState<string | null>(null);
-
-  // Card networks (and Indian gateways in particular — export regulations)
-  // need a billing name + address before an instrument can be vaulted.
-  //
-  // This used to render its own copy of the name + address form. It no longer does:
-  // the "Billing details" section above this one is now the single editor for them
-  // (see `billing-details.tsx`), and it opens itself when they are missing. Two
-  // identical forms on one page is two places for the buyer to submit the same
-  // change and two places for the field set to drift — which is why the gate is a
-  // POINTER at that section rather than a second form. `billing_details_complete`
-  // (`hasBillingName` + line1 + country, server-side) is the only condition, so what
-  // this refuses and what that form collects cannot disagree.
-  if (!me.customer.billing_details_complete) {
-    return (
-      /* A BUTTON, not a sentence with a link in it. This is the fallback path now —
-         `SetupCard` at the top of the page routes a buyer here in the right order — but
-         it is still what someone sees if they tap the tab directly, and a prose
-         cross-reference is the weakest affordance we have standing in front of the one
-         thing this section exists to do. The pointer names no direction for the reason
-         `PortalSectionLink` documents: this section is a different column on a desktop
-         and a different tab on a phone. */
-      <div className="flex flex-col items-start gap-3">
-        <p className="text-sm text-muted-foreground">
-          Card networks require a billing name and address before you can save a payment method.
-        </p>
-        {/* OUTLINE. `SetupCard` at the top of the page renders the same destination as
-            the page's one filled call to action, and both are on screen together here —
-            a second brand-filled button beside it makes neither read as the primary. */}
-        <PortalSectionButton section="details" variant="outline" size="sm">
-          Add billing details
-        </PortalSectionButton>
-      </div>
-    );
-  }
+  /** The row whose gateway form is mounted in place (option C), and its host element. */
+  const [inlineKey, setInlineKey] = React.useState<string | null>(null);
+  const inlineHost = React.useRef<HTMLDivElement | null>(null);
+  /** The current setup draws in the open row, not in the dialog. */
+  const [setupInline, setSetupInline] = React.useState(false);
+  const inlineSig = selectedRow?.formHere ? selectedRow.key : null;
+  const beginRef = React.useRef<((inlineFor?: string) => Promise<void>) | null>(null);
+  /** Details missing: the buyer fills them in first, then this row starts its setup. */
+  const complete = me.customer.billing_details_complete;
+  React.useEffect(() => {
+    setRefusal(null);
+    setSetup(null);
+    setSetupInline(false);
+    if (!inlineSig || !complete) return void setInlineKey(null);
+    setInlineKey(inlineSig);
+    // After the row's host element is in the DOM.
+    const t = setTimeout(() => void beginRef.current?.(inlineSig), 0);
+    return () => clearTimeout(t);
+  }, [inlineSig, complete]);
 
   /**
    * Finish a setup that was authorized on our own page (a Stripe `pm_…`, a RazorPay
@@ -175,7 +266,12 @@ export function AddCard({
       selected ?? undefined,
     );
     if (!res.ok) return res.error ?? "We could not save your payment method.";
-    toast.success("Payment method added");
+    clearActiveIntent();
+    if (res.outcome) setOutcome(res.outcome);
+    else {
+      toast.success("Payment method added.");
+      window.dispatchEvent(new Event(CLOSE_ADD_METHOD_EVENT));
+    }
     setSetup(null);
     router.refresh();
     return null;
@@ -195,7 +291,7 @@ export function AddCard({
       ).trim(),
     );
 
-  const begin = async () => {
+  const begin = async (inlineFor?: string) => {
     if (!selected) return;
     /**
      * The buyer's pick, whatever the gateway. This pinned `card` for every non-RazorPay
@@ -237,6 +333,7 @@ export function AddCard({
       authTab?.close();
       return void refuse(res.error);
     }
+    setActiveIntent(res.setup.payment_intent);
     if (strandedRail && res.setup.mode === "redirect" && res.setup.approval_url) {
       // The panel renders the link as an anchor too, so a blocked popup is a non-event —
       // navigating this tab instead would put the buyer back out of their own portal.
@@ -293,14 +390,19 @@ export function AddCard({
         ...(selected ? { gateway: selected } : {}),
         ...(res.setup.payment_intent ? { paymentIntent: res.setup.payment_intent } : {}),
       });
-      await runGatewaySdk(res.setup.sdk, res.setup.payment_intent);
+      await runGatewaySdk(res.setup.sdk, res.setup.payment_intent, inlineFor != null);
       return;
     }
+    setSetupInline(inlineFor != null);
     setSetup(res.setup);
   };
 
   /** `runEmbeddedCheckout`'s stash rules, for a gateway's own browser client. */
-  const runGatewaySdk = async (sdk: GatewaySdkDescriptor, paymentIntent?: string) => {
+  const runGatewaySdk = async (
+    sdk: GatewaySdkDescriptor,
+    paymentIntent?: string,
+    inline = false,
+  ) => {
     const result = await openGatewaySdk(sdk, {
       businessName: me.business.name,
       purpose: "setup",
@@ -318,6 +420,7 @@ export function AddCard({
         },
       },
       confirmLabel: "Save payment method",
+      ...(inline && inlineHost.current ? { inline: inlineHost.current } : {}),
     });
     if (result.status === "dismissed") {
       clearPendingVaultSetup(scope);
@@ -371,10 +474,25 @@ export function AddCard({
     // A setup always names its payment; "unconfirmed" is only for a charge.
     if (result.status !== "authorized") return;
     setSaving(true);
-    await completeVaultInline(result.paymentId, paymentIntent);
+    await completeVaultInline(result.paymentId, paymentIntent, result.clientResult);
     clearPendingVaultSetup(scope);
     setSaving(false);
   };
+
+  React.useLayoutEffect(() => {
+    beginRef.current = begin;
+  });
+
+  // Card networks (and Indian gateways in particular — export regulations) need a billing name
+  // and the address fields this portal requires before an instrument can be vaulted.
+  //
+  // The missing ones are asked HERE, inline, by `InlineBillingDetails`: the same fields, the same
+  // `portalUpdateMeAction` and the same engine check (`billing_details_missing`) as the Billing
+  // details editor, so what this refuses and what that form collects cannot disagree. A save
+  // refreshes `me`; `complete` flips and the effect above continues into the gateway form.
+  if (!complete) {
+    return <InlineBillingDetails me={me} countries={countries} />;
+  }
 
   // No gateway configured for this business — nothing to add a card through.
   if (gateways.length === 0) {
@@ -435,191 +553,221 @@ export function AddCard({
     );
   }
 
+  /** The setup's form: in the dialog, or inside the open row when the row draws its form. */
+  const setupBody = (
+    <>
+      {stripeSetup ? <PaymentPrivacyNote business={me.business.name} /> : null}
+      {stripeSetup ? (
+        // No publishable key means Elements cannot mount. Say so, rather than
+        // falling through to the token box: that box is the TM Test gateway's
+        // magic-token input, it cannot vault a Stripe card, and a buyer shown it on
+        // a real Stripe gateway has no way to know the control is inert. Measured
+        // 2026-08-14 — the key was missing for months behind exactly this fallback.
+        stripeSetup.publishable_key ? (
+          <StripeIntentForm
+            purpose="setup"
+            clientSecret={stripeSetup.client_secret!}
+            publishableKey={stripeSetup.publishable_key}
+            brandColor={me.business.brand_color}
+            confirmLabel="Save card"
+            busyLabel="Saving…"
+            returnUrl={`${window.location.origin}/portal?setup=return`}
+            // A method that redirects leaves this tab; `SetupReturn` completes it.
+            onBeforeConfirm={() =>
+              savePendingVaultSetup(scope, {
+                setupToken: stripeSetup.setup_token,
+                provider: stripeSetup.provider,
+                ...(selected ? { gateway: selected } : {}),
+                ...(stripeSetup.payment_intent
+                  ? { paymentIntent: stripeSetup.payment_intent }
+                  : {}),
+              })
+            }
+            onCancel={() => setSetup(null)}
+            // A refusal is returned, so the Stripe dialog shows it: it stays open over the page.
+            onAuthorized={async (pm) => {
+              const refused = await completeVault(pm, stripeSetup.payment_intent);
+              clearPendingVaultSetup(scope);
+              return refused
+                ? refusalMessage(
+                    "We could not save your payment method.",
+                    refused,
+                    "Select Save card to try again.",
+                  )
+                : undefined;
+            }}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            The payment setup of {me.business.name} is not complete. You cannot enter a card now.
+            Contact {me.business.name}.
+          </p>
+        )
+      ) : setup ? (
+        // tmtest (and any client_secret provider without a browser SDK): complete
+        // with the typed test token alone. Through the setup intent the gateway saves
+        // its default card and drops this one; the intent is never approved here.
+        <TokenSetup onSubmit={(value) => completeVault(value)} onCancel={() => setSetup(null)} />
+      ) : null}
+    </>
+  );
+
   return (
     <>
       <div className="flex flex-col gap-5">
-        {/* ONE gateway is not a choice — a single-option radio group is a control that
-            cannot do anything, so it is omitted and the id still rides along on `begin`.
-            (The checkout has always done this; the portal used to render the group
-            regardless, which is how a buyer with one gateway was asked to pick it.) */}
-        {gateways.length > 1 ? (
-          <div className="flex flex-col gap-2">
-            <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-              Payment provider
-            </div>
-            {/* Selectable rows rather than a plain list: the whole row is the target, and
-                the chosen one carries a ring. RadioGroup owns keyboard handling.
-                ⚠️ The gateway KEY is deliberately not rendered. "RAZORPAY" / "TMTEST" is
-                our routing detail, means nothing to a payer, and reads like an unfinished
-                screen — the account's own label is the only part addressed to them. */}
-            <RadioGroup
-              value={selected}
-              onValueChange={(v) => {
-                setSelected(v);
-                setRefusal(null);
-              }}
-              aria-label="Payment provider"
-              className="flex flex-col gap-2"
+        {/* One list (the payment element pattern): every way to pay is a row with its logos,
+            the selected row opens in place with what the buyer must read before the
+            gateway's step; one button below. */}
+        <RadioGroup
+          value={selectedRow?.key ?? ""}
+          onValueChange={(v) => {
+            setSelectedKey(v);
+            setRefusal(null);
+          }}
+          aria-label="Payment method"
+          className="flex flex-col gap-0 overflow-hidden rounded-xl border"
+        >
+          {methodRows.map((r) => {
+            const open = r.key === selectedRow?.key;
+            const afa =
+              open &&
+              needsAuthPerDebit &&
+              (r.method === "card" || r.method === "upi") &&
+              unattendedLimitMinor != null;
+            return (
+              <div
+                key={r.key}
+                className={`border-b px-3.5 py-3 transition-colors last:border-b-0 ${
+                  open ? "bg-muted/40 ring-1 ring-primary/50 ring-inset" : "hover:bg-muted/50"
+                }`}
+              >
+                <RadioOption
+                  value={r.key}
+                  label={
+                    <span className="flex w-full items-center gap-2">
+                      <span className="wrap-break-word">{r.label}</span>
+                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                        {/* The open row's gateway form shows its own card logos. */}
+                        {open && r.formHere && FORM_SHOWS_CARD_LOGOS.has(r.gatewayKey)
+                          ? null
+                          : r.marks.map((m) => <PaymentMark key={m} mark={m} />)}
+                        {r.bank ? (
+                          <Landmark className="size-4 text-muted-foreground" aria-hidden />
+                        ) : null}
+                      </span>
+                    </span>
+                  }
+                />
+                {open && (r.note || afa || achText || r.formHere) ? (
+                  <div className="mt-3 flex flex-col gap-3 pl-7">
+                    {r.note ? <p className="text-xs text-muted-foreground">{r.note}</p> : null}
+                    {/* Above ₹15,000 a card or UPI mandate needs the payer's approval on every
+                        debit (RBI); a netbanking e-mandate does not. Advice, never a block. */}
+                    {afa ? (
+                      <Alert tone="warning" title="You must approve every payment.">
+                        Banks can auto-debit{" "}
+                        {r.method === "upi" ? "a UPI Autopay mandate" : "a card"} only up to{" "}
+                        {money(unattendedLimitMinor!, "INR")}. Your renewal is{" "}
+                        {money(expectedDebitMinor, "INR")}, so you must approve each payment. If you
+                        use Netbanking e-Mandate, you approve it once on this page. After that,
+                        payments are automatic.
+                      </Alert>
+                    ) : null}
+                    {achText ? (
+                      <AchAuthorization
+                        text={achText}
+                        accepted={achAccepted}
+                        onAcceptedChange={setAchAccepted}
+                      />
+                    ) : null}
+                    {r.formHere && inlineKey === r.key ? (
+                      <>
+                        <RefusalAlert message={refusal} step="add_method" />
+                        {refusal && !starting && !saving ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="self-start"
+                            onClick={() => {
+                              setRefusal(null);
+                              setSetup(null);
+                              setSetupInline(false);
+                              void begin(r.key);
+                            }}
+                          >
+                            Try again
+                          </Button>
+                        ) : null}
+                        {starting ? (
+                          <p className="text-xs text-muted-foreground">Loading the secure form…</p>
+                        ) : null}
+                        {saving ? <p className="text-xs text-muted-foreground">Saving…</p> : null}
+                        {setup && setupInline ? (
+                          <SdkFrame inline open onClose={() => undefined} title="">
+                            {setupBody}
+                          </SdkFrame>
+                        ) : (
+                          <div ref={inlineHost} />
+                        )}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </RadioGroup>
+
+        {/* The commit bar — shared with the checkout's card step, see `CommitBar`. A row
+            that draws its form in place has that form's own button instead. */}
+        {selectedRow?.formHere ? null : (
+          <CommitBar>
+            <Button
+              onClick={() => void begin()}
+              disabled={starting || saving || !selected || (achText != null && !achAccepted)}
+              className="sm:shrink-0"
             >
-              {gateways.map((g) => (
-                <div
-                  key={g.id}
-                  className={`rounded-md border px-3.5 py-3 transition-colors ${
-                    // A SUB-group ring, lighter than the row that owns it — same weight as
-                    // the method-type group beneath it and as checkout's provider group.
-                    // At full strength the portal painted two selection rings stacked with
-                    // nothing saying the lower exists because of the upper (measured over
-                    // CDP, 2026-09-01: both read rgb(191,77,0) at alpha 1).
-                    selected === g.id
-                      ? "border-primary/70 ring-1 ring-primary/30"
-                      : "hover:bg-muted/50"
-                  }`}
-                >
-                  <RadioOption value={g.id} label={<span className="truncate">{g.label}</span>} />
-                </div>
-              ))}
-            </RadioGroup>
-          </div>
-        ) : null}
-
-        {/* Offered whenever this gateway has more than one rail — not only for RazorPay.
-            One option is not a choice, so a single-rail gateway still renders nothing. */}
-        {allowedMethodTypes.length > 1 ? (
-          <MethodTypeChoice
-            value={activeMethodType}
-            onValueChange={(v) => {
-              setMethodType(v);
-              setRefusal(null);
-            }}
-            allowed={allowedMethodTypes}
-            currency={currency}
-            /* No visible heading: the block's own "Choose how you would like to pay for
-               future invoices." says it one line above. The checkout, which has no such
-               line, passes one. */
-            notice={
-              /* Above ₹15,000 these three rails stop being interchangeable, and the
-                 buyer is the one who pays for the difference: on a card or UPI mandate
-                 RBI makes them approve EVERY debit, while a netbanking e-mandate
-                 authenticates once here and then collects unattended (measured —
-                 ₹66,025 off-session on HDFC). Nobody was told, so someone picking
-                 "card" for a ₹56,715 plan was choosing an OTP a month unknowingly.
-                 Advice, never a block: all three work, and it is their choice. It sits
-                 inside the chosen card now, because it is a fact about THAT rail. */
-              needsAuthPerDebit && activeMethodType !== "bank_transfer" ? (
-                /* Lead with what happens TO THE BUYER, then why. The old lead —
-                   "Your payment is above ₹15,000" — put the CEILING where the amount
-                   goes, so the one number on screen looked like the sum being charged.
-                   Both numbers are named now: the cap, and their own debit. */
-                <Alert tone="warning" title="You must approve every payment.">
-                  Banks can auto-debit{" "}
-                  {activeMethodType === "upi" ? "a UPI Autopay mandate" : "a card"} only up to{" "}
-                  {money(unattendedLimitMinor!, "INR")}. Your renewal is{" "}
-                  {money(expectedDebitMinor, "INR")}, so you must approve each payment. If you use
-                  Netbanking e-Mandate, you approve it once on this page. After that, payments are
-                  automatic.
-                </Alert>
-              ) : null
-            }
-          />
-        ) : null}
-
-        {achText ? (
-          <AchAuthorization
-            text={achText}
-            accepted={achAccepted}
-            onAcceptedChange={setAchAccepted}
-          />
-        ) : null}
-
-        {/* The commit bar — shared with the checkout's card step, see `CommitBar`. */}
-        <CommitBar>
-          <Button
-            onClick={begin}
-            disabled={starting || saving || !selected || (achText != null && !achAccepted)}
-            className="sm:shrink-0"
-          >
-            {starting
-              ? "Starting…"
-              : saving
-                ? "Saving…"
-                : selectedGwKey === "paypal" || activeMethodType === "paypal"
-                  ? "Continue with PayPal"
-                  : activeMethodType === "venmo"
-                    ? "Continue with Venmo"
-                    : selectedGwKey === "gocardless"
-                      ? "Set up Direct Debit"
-                      : selectedGwKey === "mollie"
-                        ? "Continue to Mollie"
-                        : activeMethodType === "upi"
-                          ? "Authorize UPI Autopay"
-                          : selectedGwKey === "razorpay" && activeMethodType === "bank_transfer"
-                            ? "Authorize Netbanking e-Mandate"
-                            : achText
-                              ? "Add bank account"
-                              : "Add card"}
-          </Button>
-        </CommitBar>
-        <RefusalAlert message={refusal} />
+              {starting
+                ? "Starting…"
+                : saving
+                  ? "Saving…"
+                  : selectedGwKey === "paypal" || activeMethodType === "paypal"
+                    ? "Continue with PayPal"
+                    : activeMethodType === "venmo"
+                      ? "Continue with Venmo"
+                      : selectedGwKey === "gocardless"
+                        ? "Set up Direct Debit"
+                        : selectedGwKey === "mollie"
+                          ? "Continue to Mollie"
+                          : activeMethodType === "upi"
+                            ? "Authorize UPI Autopay"
+                            : selectedGwKey === "razorpay" && activeMethodType === "bank_transfer"
+                              ? "Authorize Netbanking e-Mandate"
+                              : achText
+                                ? "Add bank account"
+                                : "Add card"}
+            </Button>
+          </CommitBar>
+        )}
+        {selectedRow?.formHere ? null : <RefusalAlert message={refusal} step="add_method" />}
       </div>
 
+      <AddMethodResult
+        outcome={outcome}
+        onClose={() => {
+          setOutcome(null);
+          window.dispatchEvent(new Event(CLOSE_ADD_METHOD_EVENT));
+        }}
+        me={me}
+        scope={scope}
+      />
+
       <PaymentDialog
-        open={setup != null}
+        open={setup != null && !setupInline}
         onClose={() => setSetup(null)}
         title="Add a payment method"
       >
-        {stripeSetup ? <PaymentPrivacyNote business={me.business.name} /> : null}
-        {stripeSetup ? (
-          // No publishable key means Elements cannot mount. Say so, rather than
-          // falling through to the token box: that box is the TM Test gateway's
-          // magic-token input, it cannot vault a Stripe card, and a buyer shown it on
-          // a real Stripe gateway has no way to know the control is inert. Measured
-          // 2026-08-14 — the key was missing for months behind exactly this fallback.
-          stripeSetup.publishable_key ? (
-            <StripeIntentForm
-              purpose="setup"
-              clientSecret={stripeSetup.client_secret!}
-              publishableKey={stripeSetup.publishable_key}
-              brandColor={me.business.brand_color}
-              confirmLabel="Save card"
-              busyLabel="Saving…"
-              returnUrl={`${window.location.origin}/portal?setup=return`}
-              // A method that redirects leaves this tab; `SetupReturn` completes it.
-              onBeforeConfirm={() =>
-                savePendingVaultSetup(scope, {
-                  setupToken: stripeSetup.setup_token,
-                  provider: stripeSetup.provider,
-                  ...(selected ? { gateway: selected } : {}),
-                  ...(stripeSetup.payment_intent
-                    ? { paymentIntent: stripeSetup.payment_intent }
-                    : {}),
-                })
-              }
-              onCancel={() => setSetup(null)}
-              // A refusal is returned, so the Stripe dialog shows it: it stays open over the page.
-              onAuthorized={async (pm) => {
-                const refused = await completeVault(pm, stripeSetup.payment_intent);
-                clearPendingVaultSetup(scope);
-                return refused
-                  ? refusalMessage(
-                      "We could not save your payment method.",
-                      refused,
-                      "Select Save card to try again.",
-                    )
-                  : undefined;
-              }}
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              The payment setup of {me.business.name} is not complete. You cannot enter a card now.
-              Contact {me.business.name}.
-            </p>
-          )
-        ) : setup ? (
-          // tmtest (and any client_secret provider without a browser SDK): complete
-          // with the typed test token alone. Through the setup intent the gateway saves
-          // its default card and drops this one; the intent is never approved here.
-          <TokenSetup onSubmit={(value) => completeVault(value)} onCancel={() => setSetup(null)} />
-        ) : null}
+        {setupBody}
       </PaymentDialog>
     </>
   );
@@ -634,6 +782,7 @@ function TokenSetup({
   onSubmit: (value: string) => Promise<string | null>;
   onCancel: () => void;
 }) {
+  const inline = useInlineFrame();
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -674,11 +823,13 @@ function TokenSetup({
           example 4242424242424242.
         </p>
       </div>
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} step="add_method" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={onCancel} disabled={busy}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        )}
         <Button onClick={submit} disabled={busy || !value.trim()}>
           {busy ? "Saving…" : "Save card"}
         </Button>

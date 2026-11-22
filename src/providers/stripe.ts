@@ -33,6 +33,7 @@ import type {
 import { minorToDecimalString } from "@/platform/currency";
 import { markStrandedObject, ProviderIndeterminateError, ProviderRefusalError } from "./types";
 import type { CancelPendingChargeInput, CancelPendingChargeResult } from "./types";
+import type { MethodType } from "./method-types";
 
 /**
  * Errors after which Stripe may still have charged: the connection dropped, Stripe answered
@@ -75,6 +76,7 @@ import {
   AUTHENTICATION_REQUIRED_CODE,
   normalizeStripeDecline,
   STRIPE_CODE_TABLE,
+  STRIPE_REFUND_REFUSALS,
   type DeclineSignal,
   type NormalizedDecline,
 } from "./decline-codes";
@@ -583,6 +585,72 @@ const stripeDeclineSignal = (err: {
   };
 };
 
+/** The fields of a webhook's PaymentIntent or Charge that hold a decline. */
+export interface StripeWebhookDeclineSource {
+  last_payment_error?: {
+    code?: string;
+    decline_code?: string;
+    message?: string;
+    type?: string;
+    network_decline_code?: string;
+    network_advice_code?: string;
+    advice_code?: string;
+    payment_method?: { card?: { brand?: string | null } | null } | string | null;
+  } | null;
+  failure_code?: string | null;
+  failure_message?: string | null;
+  outcome?: {
+    type?: string | null;
+    reason?: string | null;
+    network_decline_code?: string | null;
+    network_advice_code?: string | null;
+    advice_code?: string | null;
+  } | null;
+  payment_method_details?: { [rail: string]: unknown } | null;
+  latest_charge?: unknown;
+}
+
+/**
+ * The full decline signal of a `charge.failed` webhook, the same fields
+ * `stripeDeclineSignal` gives the synchronous path. A bare code cannot fire the rules on
+ * `decline_code`, network codes or advice codes.
+ *
+ * PaymentIntent: `last_payment_error`. Charge: `failure_code`, `failure_message` and
+ * `outcome`; on an issuer decline `outcome.reason` is the issuer's reason and beats the
+ * generic `card_declined`.
+ */
+export function stripeWebhookDeclineSignal(
+  obj: StripeWebhookDeclineSource,
+): DeclineSignal | undefined {
+  const err = obj.last_payment_error;
+  if (err && (err.code || err.decline_code)) {
+    const sig = stripeDeclineSignal({ ...err, payment_intent: obj });
+    const pm = typeof err.payment_method === "object" ? err.payment_method : null;
+    return {
+      ...sig,
+      networkMessage: sig.networkMessage ?? err.network_decline_code ?? null,
+      recommendationCode:
+        sig.recommendationCode ?? err.network_advice_code ?? err.advice_code ?? null,
+      cardBrand: sig.cardBrand ?? pm?.card?.brand ?? null,
+    };
+  }
+  const o = obj.outcome;
+  const issuerReason = o?.type === "issuer_declined" ? (o.reason ?? null) : null;
+  const generic = !obj.failure_code || obj.failure_code === "card_declined";
+  const code = (generic && issuerReason) || obj.failure_code || o?.reason || undefined;
+  if (!code) return undefined;
+  return {
+    code,
+    declineCode: issuerReason,
+    message: obj.failure_message ?? null,
+    category: null,
+    networkMessage: o?.network_decline_code ?? o?.reason ?? null,
+    recommendationCode: o?.network_advice_code ?? o?.advice_code ?? null,
+    cardBrand:
+      (obj.payment_method_details?.card as { brand?: string | null } | undefined)?.brand ?? null,
+  };
+}
+
 /**
  * The largest per-debit ceiling an India CARD mandate can register, in paise (₹10,00,000).
  *
@@ -757,12 +825,14 @@ function chargeResultFromReadIntent(pi: Stripe.PaymentIntent): ChargeResult {
   if (pi.status === "requires_payment_method" && pi.last_payment_error) {
     const err = pi.last_payment_error;
     const f = normalizeFailure(stripeDeclineSignal(err));
+    const providerCode = stripeDeclineReason(err);
     return {
       status: "failed",
       providerChargeId: pi.id,
       failure: {
         code: f.code,
-        ...(err.code ? { providerCode: err.code } : {}),
+        // The issuer's reason (`decline_code`), not the generic `card_declined`.
+        ...(providerCode ? { providerCode } : {}),
         message: f.message ?? err.message ?? "Stripe refused this payment",
         retriable: f.retriable,
         ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}),
@@ -964,10 +1034,11 @@ function isMissingMandateRefusal(message: string): boolean {
  * `payment_intent_mandate_inactive` threw in production on 2026-09-10 (INV-100004) against
  * a rule that already existed. Adding another rule now needs no change here.
  *
- * Only the CODE is offered to the rules — never `stripeDeclineSignal`, whose `category`
- * would match the `invalid_request_error` catch-all and turn every one of our own bugs
- * into a booked decline. `undefined` means the rules do not name this code, and the caller
- * must throw.
+ * Only the CODE and the MESSAGE are offered to the rules — never `stripeDeclineSignal`,
+ * whose `category` would match the `invalid_request_error` catch-all and turn every one of
+ * our own bugs into a booked decline. The message lets "No such PaymentMethod" (code
+ * `resource_missing`) reach `payment_method_not_found` before the code rule calls it ours.
+ * `undefined` means the rules do not name this code, and the caller must throw.
  *
  * ⚠️ WE TAKE WHATEVER VERDICT THE RULES GIVE, not one particular token. It gated on
  * `gateway_request_rejected` alone until 2026-09-10, and that lost the remedy on the very
@@ -985,7 +1056,7 @@ function isMissingMandateRefusal(message: string): boolean {
 function classifiedThrowFailure(
   err: Stripe.errors.StripeInvalidRequestError,
 ): ChargeResult["failure"] | undefined {
-  const f = normalizeFailure(err.code);
+  const f = normalizeFailure({ code: err.code, message: err.message });
   const recognised = f.ruleId != null || (err.code != null && err.code in STRIPE_CODE_TABLE);
   if (!recognised) return undefined;
   // The missing-mandate refusal keeps its own code: the remedy is the customer authorizing
@@ -1025,7 +1096,8 @@ function chargeResultFromCardError(err: Stripe.errors.StripeCardError): ChargeRe
     ...(used ? { methodUsed: used } : {}),
     failure: {
       code: f.code,
-      providerCode: err.code,
+      // The issuer's reason (`decline_code`), not the generic `card_declined`.
+      providerCode: stripeDeclineReason(err) ?? err.code,
       // OUR sentence when a rule wrote one (#69 stage 2). A gateway's own text is
       // written for a developer reading an API response and it reaches a payer's
       // inbox unedited as `declineMessage`.
@@ -1280,6 +1352,14 @@ export function stripeRefundRecord(r: StripeRefundLike): ProviderRefundRecord | 
  */
 /** Account country per secret-key hash — an account's country does not change. */
 const ACCOUNT_COUNTRY_BY_KEY = new Map<string, Promise<string | null>>();
+/** Per secret key: the methods the account has active (`capabilities`), read once. */
+const ACCOUNT_METHODS_BY_KEY = new Map<string, Promise<MethodType[] | null>>();
+/** Stripe account capability → our method. */
+const CAPABILITY_METHOD: Record<string, MethodType> = {
+  card_payments: "card",
+  us_bank_account_ach_payments: "us_bank_account",
+  sepa_debit_payments: "sepa_debit",
+};
 
 export class StripeProvider implements PaymentProvider {
   readonly key = "stripe" as const;
@@ -1309,6 +1389,10 @@ export class StripeProvider implements PaymentProvider {
     // unlike RazorPay we can honestly advertise `intentVoid`.
     intents: true,
     intentPurposes: ["payment", "setup"],
+    // A buyer-picks payment also saves the method (`setup_future_usage`). A card on INR
+    // registers the India e-mandate in the same step (proved in test mode, 2026-11-18);
+    // a bank debit registers its own mandate in the Payment Element.
+    paymentSavesMethod: ["card", "us_bank_account", "sepa_debit"],
     intentVoid: true,
     // A pay-now bank debit captures at confirm and sends no authorization webhook, so
     // the buyer's second leg must be able to ask (`fetchIntent`).
@@ -1787,6 +1871,23 @@ export class StripeProvider implements PaymentProvider {
     };
   }
 
+  /** The methods this account has active, read once per secret key for the process. */
+  activeMethodTypes(): Promise<MethodType[] | null> {
+    let hit = ACCOUNT_METHODS_BY_KEY.get(this.keyHash);
+    if (!hit) {
+      hit = this.stripe.accounts.retrieveCurrent().then((a) => {
+        const caps = (a.capabilities ?? {}) as Record<string, string | undefined>;
+        return Object.entries(CAPABILITY_METHOD)
+          .filter(([cap]) => caps[cap] === "active")
+          .map(([, m]) => m);
+      });
+      // A failed read is not cached — the next caller asks again.
+      hit.catch(() => ACCOUNT_METHODS_BY_KEY.delete(this.keyHash));
+      ACCOUNT_METHODS_BY_KEY.set(this.keyHash, hit);
+    }
+    return hit;
+  }
+
   /** The account's country, read once per secret key for the process. */
   private accountCountry(): Promise<string | null> {
     let hit = ACCOUNT_COUNTRY_BY_KEY.get(this.keyHash);
@@ -2189,8 +2290,14 @@ export class StripeProvider implements PaymentProvider {
     } catch (err) {
       // A validation refusal created nothing, so the engine may release the reservation.
       // 409 and 429 stay plain throws: the refund may exist.
-      if (isStripeRefundRefusal(err))
-        throw new ProviderRefusalError(`Stripe refused the refund. ${(err as Error).message}`);
+      if (isStripeRefundRefusal(err)) {
+        const code = (err as { code?: string }).code ?? "";
+        throw new ProviderRefusalError(
+          Object.hasOwn(STRIPE_REFUND_REFUSALS, code)
+            ? STRIPE_REFUND_REFUSALS[code]!
+            : `Stripe refused the refund. ${(err as Error).message}`,
+        );
+      }
       throw err;
     }
     return {
@@ -2253,7 +2360,23 @@ export class StripeProvider implements PaymentProvider {
     // So a buyer-picks-the-method pay-now captures automatically, with cards and Link kept
     // on authorize-then-capture. Everything else (a server-side confirm, a checkout with
     // no invoice yet) keeps manual capture.
-    const captureOnConfirm = input.captureOnConfirm === true && !confirm && !input.methodTypes;
+    // Pay and save: the buyer enters ONE method in Elements and Stripe keeps it for
+    // off-session use. A card is held and captured on consume; a bank debit cannot be held,
+    // so Stripe takes it at confirm and consume books it (`capturedOnConfirmResult`).
+    const saveTypes =
+      input.saveForFuture === true && !confirm
+        ? this.mapMethodTypes(input.methodTypes?.length ? input.methodTypes : ["card"])
+        : null;
+    const saveCard = saveTypes?.includes("card") === true;
+    const captureOnConfirm =
+      !saveTypes && input.captureOnConfirm === true && !confirm && !input.methodTypes;
+    // The buyer selected a bank-debit row (option C): it cannot be held, so Stripe takes it at
+    // confirm, like a pay-and-save bank debit. A card row keeps authorize-then-capture.
+    const pinnedBankDebit =
+      !confirm &&
+      !saveTypes &&
+      Boolean(input.methodTypes?.length) &&
+      !this.mapMethodTypes(input.methodTypes).includes("card");
     try {
       const pi = await this.stripe.paymentIntents.create(
         {
@@ -2274,12 +2397,21 @@ export class StripeProvider implements PaymentProvider {
                   link: { capture_method: "manual" as const },
                 },
               }
-            : { capture_method: "manual" as const }),
+            : (saveTypes && !saveCard) || pinnedBankDebit
+              ? { capture_method: "automatic" as const }
+              : { capture_method: "manual" as const }),
           ...(confirm
             ? { confirm: true as const, off_session: input.session === "off_session" }
             : {}),
           ...(input.methodTypes
             ? { payment_method_types: this.mapMethodTypes(input.methodTypes) }
+            : {}),
+          ...(saveTypes
+            ? {
+                setup_future_usage: "off_session" as const,
+                payment_method_types: saveTypes,
+                ...(saveCard ? this.indiaPaymentMandateOptions(input) : {}),
+              }
             : {}),
           /**
            * ONLY WITH `confirm`. Stripe rejects it outright otherwise:
@@ -2493,18 +2625,101 @@ export class StripeProvider implements PaymentProvider {
         },
         { idempotencyKey: input.idempotencyKey },
       );
-      return { purpose: "payment", charge: chargeResultFromPaymentIntent(pi) };
+      const charge = chargeResultFromPaymentIntent(pi);
+      const saved =
+        pi.setup_future_usage === "off_session" && charge.status !== "failed"
+          ? await this.savedFromPaymentIntent(pi.id)
+          : undefined;
+      return { purpose: "payment", charge, ...(saved ? { paymentMethod: saved } : {}) };
     } catch (err) {
       if (err instanceof Stripe.errors.StripeCardError) {
         return { purpose: "payment", charge: chargeResultFromCardError(err) };
       }
       // Captured at the buyer's confirm, so there is nothing to capture: book what is.
+      // A pay-and-save bank debit lands here too: its method is kept while it settles.
       if (isStripeUnexpectedState(err)) {
-        const charge = await this.capturedOnConfirmResult(input);
-        if (charge) return { purpose: "payment", charge };
+        const captured = await this.capturedOnConfirmResult(input);
+        if (captured) {
+          const { charge, saving } = captured;
+          const saved =
+            saving && charge.status !== "failed"
+              ? await this.savedFromPaymentIntent(input.intentId)
+              : undefined;
+          return { purpose: "payment", charge, ...(saved ? { paymentMethod: saved } : {}) };
+        }
       }
       throw err;
     }
+  }
+
+  /**
+   * The India e-mandate for a pay-and-save INR card payment: the SetupIntent's
+   * `mandate_options` minus `currency`, which a PaymentIntent refuses (400, measured
+   * 2026-11-18). Without it the card is saved with no mandate and every renewal is refused
+   * ("parameter mandate is not provided").
+   */
+  private indiaPaymentMandateOptions(input: CreateIntentInput): {
+    payment_method_options?: Stripe.PaymentIntentCreateParams.PaymentMethodOptions;
+  } {
+    const o = this.indiaCardMandateOptions(
+      input.customer.providerCustomerId,
+      ["card"],
+      input.currency,
+      input.maxAmountMinor,
+    ).payment_method_options?.card?.mandate_options;
+    if (!o) return {};
+    const { currency: _currency, ...mandate } = o;
+    return {
+      payment_method_options: {
+        card: {
+          mandate_options:
+            mandate as Stripe.PaymentIntentCreateParams.PaymentMethodOptions.Card.MandateOptions,
+        },
+      },
+    };
+  }
+
+  /**
+   * The card a pay-and-save payment kept, with its India mandate when it registered one
+   * (the mandate id is on the charge, its ceiling on the intent's `mandate_options`).
+   */
+  private async savedFromPaymentIntent(id: string): Promise<ProviderPaymentMethodRef | undefined> {
+    const pi = await this.stripe.paymentIntents.retrieve(id, {
+      expand: ["payment_method", "latest_charge"],
+    });
+    const pm =
+      typeof pi.payment_method === "string"
+        ? await this.stripe.paymentMethods.retrieve(pi.payment_method)
+        : pi.payment_method;
+    // Only an intent that asked Stripe to keep the method (a captured-on-confirm one may not).
+    if (!pm || pi.setup_future_usage !== "off_session") return undefined;
+    const charge = typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+    const details = charge?.payment_method_details;
+    const mandateId =
+      details?.card?.mandate ??
+      (details?.us_bank_account as { mandate?: string } | undefined)?.mandate ??
+      (details?.sepa_debit as { mandate?: string } | undefined)?.mandate ??
+      null;
+    const mandate = describeStripeMandate(
+      mandateId ? await this.stripe.mandates.retrieve(mandateId) : null,
+      (pi.payment_method_options?.card?.mandate_options ?? null) as Parameters<
+        typeof describeStripeMandate
+      >[1],
+    );
+    const bound = pm.customer
+      ? typeof pm.customer === "string"
+        ? pm.customer
+        : pm.customer.id
+      : typeof pi.customer === "string"
+        ? pi.customer
+        : pi.customer?.id;
+    return {
+      providerKey: this.key,
+      providerPaymentMethodId: pm.id,
+      ...(bound ? { providerCustomerId: bound } : {}),
+      display: describeStripePaymentMethod(pm),
+      ...(mandate ? { mandate } : {}),
+    };
   }
 
   /**
@@ -2513,7 +2728,9 @@ export class StripeProvider implements PaymentProvider {
    * rethrows the original refusal. Only reached after a capture was refused, so the
    * card path makes no extra call.
    */
-  private async capturedOnConfirmResult(input: ConsumeIntentInput): Promise<ChargeResult | null> {
+  private async capturedOnConfirmResult(
+    input: ConsumeIntentInput,
+  ): Promise<{ charge: ChargeResult; saving: boolean } | null> {
     const pi = await this.stripe.paymentIntents.retrieve(input.intentId, {
       expand: ["latest_charge"],
     });
@@ -2524,7 +2741,10 @@ export class StripeProvider implements PaymentProvider {
       throw new Error(
         `Stripe captured ${pi.amount} on ${pi.id} at confirm, but consume expected ${input.amountMinor}`,
       );
-    return chargeResultFromPaymentIntent(pi);
+    return {
+      charge: chargeResultFromPaymentIntent(pi),
+      saving: pi.setup_future_usage === "off_session",
+    };
   }
 
   /**
@@ -2739,8 +2959,19 @@ export class StripeProvider implements PaymentProvider {
     return { removed };
   }
 
-  async provisionWebhookEndpoint(input: { url: string }): Promise<ProvisionedWebhook> {
+  async provisionWebhookEndpoint(input: {
+    url: string;
+    previousUrl?: string;
+  }): Promise<ProvisionedWebhook> {
     const existing = await this.stripe.webhookEndpoints.list({ limit: 100 });
+    // A move keeps the endpoint and its signing secret; only the URL changes.
+    const atPrevious = input.previousUrl
+      ? existing.data.find((ep) => ep.url === input.previousUrl)
+      : undefined;
+    if (atPrevious && !existing.data.some((ep) => ep.url === input.url)) {
+      const moved = await this.stripe.webhookEndpoints.update(atPrevious.id, { url: input.url });
+      return { providerEndpointId: moved.id, movedFromPreviousUrl: true };
+    }
     for (const ep of existing.data) {
       if (ep.url === input.url) await this.stripe.webhookEndpoints.del(ep.id);
     }
@@ -3077,11 +3308,12 @@ export class StripeProvider implements PaymentProvider {
       // PaymentIntent reports it under `last_payment_error`; a Charge under
       // `failure_code` (with `outcome.reason` as the network's own wording).
       // `decline_code` is the issuer's specific reason and beats the generic `code`.
-      last_payment_error?: { code?: string; decline_code?: string };
+      last_payment_error?: StripeWebhookDeclineSource["last_payment_error"];
       // A SetupIntent's refusal, on `setup_intent.setup_failed`.
       last_setup_error?: { code?: string; decline_code?: string; message?: string; type?: string };
       failure_code?: string;
-      outcome?: { reason?: string };
+      failure_message?: string;
+      outcome?: StripeWebhookDeclineSource["outcome"];
     };
 
     // ── Read the object at our pinned version ─────────────────────────────────
@@ -3586,12 +3818,11 @@ export class StripeProvider implements PaymentProvider {
     // pre-debit notification, so the verdict — including
     // `india_recurring_payment_mandate_canceled` and `payment_intent_mandate_invalid`
     // — only ever arrives here, never in the original call.
-    const err = obj.last_payment_error;
-    const providerFailureCode: string | undefined =
-      type === "charge.failed"
-        ? (err?.decline_code ?? err?.code ?? obj.failure_code ?? obj.outcome?.reason ?? undefined)
-        : undefined;
-    const norm = providerFailureCode ? normalizeFailure(providerFailureCode) : undefined;
+    const signal = type === "charge.failed" ? stripeWebhookDeclineSignal(obj) : undefined;
+    const providerFailureCode = signal?.code ?? undefined;
+    const norm = signal ? normalizeFailure(signal) : undefined;
+    // Our rule's wording when one names the code, else Stripe's own sentence.
+    const failureMessage = norm ? (norm.message ?? signal?.message ?? undefined) : undefined;
     const captured = type === "charge.succeeded" ? stripeCapturedAmount(obj) : undefined;
     return [
       {
@@ -3601,6 +3832,7 @@ export class StripeProvider implements PaymentProvider {
         providerChargeId: obj.payment_intent ?? obj.id,
         ...(captured != null ? { capturedAmountMinor: captured } : {}),
         ...(norm ? { failureCode: norm.code, failureRetriable: norm.retriable } : {}),
+        ...(failureMessage ? { failureMessage } : {}),
         ...(providerFailureCode ? { providerFailureCode } : {}),
         occurredAt: new Date(event.created * 1000),
         raw: event,

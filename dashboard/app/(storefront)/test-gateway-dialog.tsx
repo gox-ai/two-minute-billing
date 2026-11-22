@@ -4,7 +4,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import { PaymentDialog, PaymentDialogFooter } from "./payment-dialog";
+import { PaymentDialogFooter, SdkFrame } from "./payment-dialog";
 
 /** The nonces the test gateway's adapter expects back as `client_result.nonce`. */
 const APPROVE = { nonce: "tmtest_ok" };
@@ -13,14 +13,17 @@ const DECLINE = { nonce: "tmtest_decline" };
 function TestGatewayDialog({
   open,
   purpose,
+  inline,
   onSettle,
 }: {
   open: boolean;
   purpose: GatewaySdkContext["purpose"];
+  inline: boolean;
   onSettle: (result: GatewaySdkResult) => void;
 }) {
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={purpose === "setup" ? "Test payment method" : "Test payment"}
@@ -42,7 +45,7 @@ function TestGatewayDialog({
           Approve
         </Button>
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -56,20 +59,24 @@ export function openTestGatewayDialog(
   context: GatewaySdkContext,
 ): Promise<GatewaySdkResult> {
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
+    const view = (open: boolean) => (
+      <TestGatewayDialog open={open} purpose={context.purpose} inline={inline} onSettle={settle} />
+    );
     const settle = (result: GatewaySdkResult) => {
       if (settled) return;
       settled = true;
-      root.render(<TestGatewayDialog open={false} purpose={context.purpose} onSettle={settle} />);
+      root.render(view(false));
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
-    root.render(<TestGatewayDialog open purpose={context.purpose} onSettle={settle} />);
+    root.render(view(true));
   });
 }

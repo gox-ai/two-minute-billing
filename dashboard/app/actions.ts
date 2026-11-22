@@ -19,6 +19,7 @@ import {
   type ActionResult,
 } from "@/lib/action-result";
 import { checkMetadata, metadataFromForm } from "@/lib/metadata-form";
+import { applyCreditsRefusal } from "@/lib/apply-credits";
 import { meterPriceFields } from "@/lib/meter-price-form";
 import { grantsCreditFields } from "@/lib/grants-credit-form";
 
@@ -2084,6 +2085,34 @@ export async function invoiceOpAction(
   };
   if (!res.ok) return actionError(res.error ?? `Could not ${op.replace("_", " ")} the invoice`);
   return actionOk(`Invoice ${labels[op]}`);
+}
+
+const applyCreditsSchema = z.object({
+  biz: z.string().trim().min(1),
+  inv: z.string().trim().min(1),
+  refundable_minor: numberFromForm({ min: 0 }),
+  excess_minor: numberFromForm({ min: 0 }),
+});
+
+/**
+ * Apply the customer's refundable and excess credit to one open invoice. Posts the exact
+ * amounts the dialog showed, so a changed balance is refused, not applied differently.
+ */
+export async function applyCreditsAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  await requirePermission("credit_notes:manage", "manager");
+  const parsed = parseForm(applyCreditsSchema, formData);
+  if (parsed.error) return parsed.error;
+  const { biz, inv, refundable_minor, excess_minor } = parsed.data;
+  const res = await apiPost(`/v1/businesses/${biz}/invoices/${inv}/apply_credits`, {
+    refundable_minor: refundable_minor ?? 0,
+    excess_minor: excess_minor ?? 0,
+  });
+  revalidatePath(invUrlFor(biz, inv));
+  if (!res.ok) return actionError(applyCreditsRefusal(res.status, res.error));
+  return actionOk("Credits applied.");
 }
 
 /**

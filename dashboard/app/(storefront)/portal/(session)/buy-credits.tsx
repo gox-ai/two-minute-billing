@@ -154,7 +154,7 @@ function CouponRow({
       {quote && !shown ? (
         <p className="m-0 text-xs text-muted-foreground tabular-nums">
           {quote.discount_minor > 0
-            ? `Discount −${money(quote.discount_minor, quote.currency)} · You pay ${money(quote.total_minor, quote.currency)}`
+            ? `Discount −\u2060${money(quote.discount_minor, quote.currency)} · You pay ${money(quote.total_minor, quote.currency)}`
             : `This code gives no discount on this pack. You pay ${money(quote.total_minor, quote.currency)}`}
           {quote.tax_minor > 0 ? `, tax included` : ""}
         </p>

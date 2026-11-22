@@ -24,10 +24,13 @@ export default async function CreditNotesPage({
     status?: string;
     msg?: string;
     error?: string;
+    /** `field:op:value`, repeatable (see `urlFilters`). */
+    filter?: string | string[];
   }>;
 }) {
   const { biz } = await params;
-  const { invoice, customer, kind, status, msg, error } = await searchParams;
+  const search = await searchParams;
+  const { invoice, customer, kind, status, msg, error } = search;
   await requirePermission("credit_notes:view", "ops");
 
   /**
@@ -42,7 +45,7 @@ export default async function CreditNotesPage({
    * scope param the source carries.
    */
   const deepLinkFilters = urlFilters(
-    { customer, kind, status },
+    { customer, kind, status, filter: search.filter },
     { customer: true, kind: true, status: true },
   );
 

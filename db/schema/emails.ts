@@ -8,8 +8,11 @@ import {
   boolean,
   uniqueIndex,
   index,
+  smallint,
+  bigint,
+  primaryKey,
 } from "drizzle-orm/pg-core";
-import { organizations } from "./tenancy";
+import { organizations, businesses } from "./tenancy";
 import { events } from "./platform";
 import { invoices } from "./invoices";
 import { creditNotes } from "./credit-notes";
@@ -108,6 +111,12 @@ export const emailMessages = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
     /** When the retention sweep removed the body (D17); the email cannot be resent after. */
     bodyRemovedAt: timestamp("body_removed_at", { withTimezone: true }),
+    /** Set when the send carried the open pixel and tracked links (0548). Null = untracked. */
+    engagementTrackedAt: timestamp("engagement_tracked_at", { withTimezone: true }),
+    /** First open by a person (machine opens do not set it). */
+    firstOpenedAt: timestamp("first_opened_at", { withTimezone: true }),
+    /** First click by a person. */
+    firstClickedAt: timestamp("first_clicked_at", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("email_messages_public_id_uq").on(t.publicId),
@@ -199,4 +208,78 @@ export const emailSuppressions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [index("email_suppressions_org_idx").on(t.organizationId)],
+);
+
+/** The original URL of each tracked link of an email (0548); the redirect reads it from here. */
+export const emailLinks = pgTable(
+  "email_links",
+  {
+    emailMessageId: uuid("email_message_id")
+      .notNull()
+      .references(() => emailMessages.id, { onDelete: "cascade" }),
+    position: smallint("position").notNull(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    label: text("label"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.emailMessageId, t.position] }),
+    index("email_links_org_idx").on(t.organizationId),
+    index("email_links_business_idx").on(t.businessId),
+    index("email_links_created_idx").on(t.createdAt),
+  ],
+);
+
+/**
+ * One row per open or click (0548). Holds a device, browser and OS family and the link's host
+ * and masked path. Never the IP address, the full user agent, the recipient address or a
+ * query string.
+ */
+export const emailEngagements = pgTable(
+  "email_engagements",
+  {
+    id: uuid("id")
+      .default(sql`uuid_v7()`)
+      .primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    businessId: uuid("business_id")
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    emailMessageId: uuid("email_message_id")
+      .notNull()
+      .references(() => emailMessages.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // open | click
+    /** A mail-privacy proxy, a link scanner or a prefetch, not a person. */
+    machine: boolean("machine").notNull().default(false),
+    linkPosition: smallint("link_position"),
+    linkLabel: text("link_label"),
+    linkHost: text("link_host"),
+    linkPath: text("link_path"),
+    deviceCategory: text("device_category"),
+    browser: text("browser"),
+    os: text("os"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .default(sql`app_now()`)
+      .notNull(),
+    resourceVersion: bigint("resource_version", { mode: "number" }).notNull().default(1),
+  },
+  (t) => [
+    index("email_engagements_business_idx").on(t.businessId, t.createdAt),
+    index("email_engagements_email_idx").on(t.emailMessageId),
+    index("email_engagements_org_idx").on(t.organizationId),
+    index("email_engagements_created_idx").on(t.createdAt),
+  ],
 );

@@ -23,7 +23,10 @@ import { withTenant } from "@/platform/db";
 import { publicId } from "@/platform/ids";
 import { getProvider, resolveAdapter } from "@/providers/registry";
 import { GatewayRouterError, selectGatewayAccount } from "@/modules/gateway/router";
-import { setPaymentMethodStatus } from "@/modules/payment-methods/service";
+import {
+  setPaymentMethodStatus,
+  syncProviderCustomerBeforeCharge,
+} from "@/modules/payment-methods/service";
 // From the LEAF module directly. `payment-methods/service` re-exports it and would work
 // (this file already imports from there), but the mandate vocabulary is pure and the leaf
 // is where it is defined — see that file's header for why the split exists.
@@ -43,7 +46,11 @@ import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import { createLogger } from "@/platform/logger";
 import { applyDeclineOverride } from "@/modules/subscriptions/decline-overrides";
-import { payerDeclineMessage, PAYER_SAFE_INTERNAL_FAILURE } from "@/providers/decline-codes";
+import {
+  payerDeclineMessage,
+  PAYER_SAFE_INTERNAL_FAILURE,
+  withBuiltInRetry,
+} from "@/providers/decline-codes";
 import { formatMoney } from "./document";
 import { providerPaymentMethodRef } from "@/modules/payment-methods/provider-ref";
 import {
@@ -111,6 +118,9 @@ export async function loadChargeContact(
   });
 }
 
+/** A hard-declined method held out of automatic collection (no charge was sent). */
+export const PAYMENT_METHOD_UNUSABLE_CODE = "payment_method_unusable";
+
 /**
  * The ordered collection candidates (C6): the subscription's PM (or the customer's
  * primary-role card) first, then the customer's BACKUPS, each tried when the one
@@ -125,13 +135,11 @@ export async function loadChargeContact(
  * from, and it was previously only exercised incidentally by fixtures that happened to
  * have a single card.
  *
- * ── A DESIGNATED PRIMARY STANDS WHATEVER ITS STATUS ──────────────────────────
- * This is the one place `invalid` is knowingly ignored, and it is deliberate. `invalid`
- * is our BELIEF and it goes stale — a reissued card behind the same token, a
- * mis-classified transient decline, a wrong `payment_source_expired` — and nothing
- * revalidates an instrument except one narrow un-pause path in `applyMandateUpdate`.
- * Charging it is the only route back for a card we wrote off by mistake, and somebody
- * named it on purpose. `shouldTryBackup` is what stops that costing the fallback.
+ * ── A DESIGNATED PRIMARY IS PICKED WHATEVER ITS STATUS ───────────────────────
+ * Picked here, so a manual collect and an explicit choice still reach it. Automatic
+ * collection then HOLDS an `invalid` one (`resolveChargeCandidates({ skipUnusable })`):
+ * a hard-declined method is not charged again until the card updater revalidates it or
+ * the customer adds another (user decision 2026-11-17).
  *
  * ── WITH NOBODY DESIGNATED, THE NEWEST IS NOT AUTOMATICALLY RIGHT ────────────
  * This used to be `rows.find(role === 'primary') ?? rows[0]`. Two things were wrong
@@ -267,7 +275,12 @@ export async function resolveChargeCandidates(input: {
    * (`mandateCurrencyRefusal`) names the reason.
    */
   currency?: string;
-}): Promise<{ primary: Pm | null; backups: Pm[] }> {
+  /**
+   * Automatic collection: a primary a hard decline marked `invalid` is not charged. The
+   * best backup takes its place, or there is no candidate and `held` names it.
+   */
+  skipUnusable?: boolean;
+}): Promise<{ primary: Pm | null; backups: Pm[]; held?: Pm | null }> {
   const { organizationId, customerId } = input;
   return withTenant(organizationId, async (tx) => {
     if (input.paymentMethodOverrideId) {
@@ -306,6 +319,12 @@ export async function resolveChargeCandidates(input: {
       if (other) primaryPm = other;
     }
     const backups = chosenOnly ? [] : orderBackups(primaryPm, fits);
+    if (input.skipUnusable && !chosenOnly && primaryPm?.status === "invalid") {
+      const held = primaryPm;
+      const usable = fits.filter((r) => r.id !== held.id && r.status !== "invalid");
+      const next = pickPrimaryCandidate(usable.filter((r) => r.role !== "none"));
+      return { primary: next, backups: next ? orderBackups(next, usable) : [], held };
+    }
     return { primary: primaryPm, backups };
   });
 }
@@ -504,6 +523,7 @@ export function mandateMissingRefusal(
         "authorization on file, so we cannot charge it automatically. Authorize it " +
         "again to settle this invoice. A retry of this charge cannot succeed.",
       retriable: false,
+      exposedToPayer: true,
     },
     raw: {
       mandate_reference: pm.mandateReference,
@@ -598,6 +618,7 @@ export function mandateExpiredRefusal(
         "longer charge it. Authorize a payment method again to settle this invoice. " +
         "A retry of this charge cannot succeed.",
       retriable: false,
+      exposedToPayer: true,
     },
     raw: {
       mandate_expires_at: pm.mandateExpiresAt?.toISOString() ?? null,
@@ -704,6 +725,7 @@ export function mandateRefusal(
         `payment method${pm.mandateRail ? ` (${pm.mandateRail})` : ""}. ` +
         "A new authorization with a higher limit is necessary. A retry of this charge cannot succeed.",
       retriable: false,
+      exposedToPayer: true,
     },
     raw: {
       mandate_max_amount_minor: ceiling.toString(),
@@ -809,6 +831,7 @@ export function mandatePendingRefusal(
         "Banks usually confirm within one working day. We will try again automatically. " +
         "You do not need to do anything.",
       retriable: true,
+      exposedToPayer: true,
     },
     raw: {
       mandate_status: pm.mandateStatus,
@@ -891,6 +914,7 @@ export function mandateSpentRefusal(
         `used${pm.mandateRail ? ` (${pm.mandateRail})` : ""}, so we cannot charge it again. ` +
         "Authorize a new payment method to settle this invoice.",
       retriable: false,
+      exposedToPayer: true,
     },
     raw: {
       mandate_status: pm.mandateStatus,
@@ -1075,6 +1099,13 @@ export async function chargeWithMethod(input: {
    * it, and the error goes on up unchanged.
    */
   await input.beforeGatewayCall?.();
+  // A name or address saved after the card reaches the gateway before it is charged.
+  await syncProviderCustomerBeforeCharge({
+    organizationId: input.organizationId,
+    customerId: pm.customerId,
+    providerCustomerId: pm.providerCustomerId,
+    provider: adapter,
+  });
   let result: ChargeResult;
   await paceGatewayCharge(account?.id ?? adapter.key);
   try {
@@ -1198,7 +1229,8 @@ export async function chargeWithMethod(input: {
             applyDeclineOverride(tx, {
               businessId: input.businessId,
               gatewayAccountId: account?.id ?? null,
-              decline: result.failure!,
+              // Our built-in answer first (a refused request of ours retries), then theirs.
+              decline: withBuiltInRetry(result.failure!),
             }),
           ),
         }
@@ -1265,8 +1297,8 @@ const NOT_THE_INSTRUMENTS_FAULT: ReadonlySet<string> = new Set([
   MANDATE_MISSING_CODE,
   /**
    * The gateway refused OUR REQUEST, so the issuer was never asked either — and unlike the
-   * four above, this one is not even about the mandate. It is in `MERCHANT_SIDE_PARK`
-   * precisely because nobody but us can clear it.
+   * four above, this one is not even about the mandate. Nobody but us can clear it, which
+   * is what the `gateway_request_faults` ops alert is for.
    *
    * ⚠️ Added 2026-09-10 after the row contradicted itself: every rule that emits this code
    * carries the message "Nothing is wrong with the customer's payment method", and then
@@ -1275,11 +1307,15 @@ const NOT_THE_INSTRUMENTS_FAULT: ReadonlySet<string> = new Set([
    * since #63; reachable for RazorPay the moment `BAD_REQUEST_ERROR` was corrected to this
    * code earlier the same day.
    *
-   * Stays NON-retriable, like the others here: re-presenting an identical rejected request
-   * cannot succeed, so dunning parks rather than loops. The backup is still tried —
-   * `shouldTryBackup`'s call, and a different instrument may route to a different account.
+   * Since 2026-11-17 it is RETRIABLE on every gateway (`withBuiltInRetry`), so it rarely
+   * reaches `isHardDecline` at all; it stays here for an adapter or override that says
+   * otherwise. The backup is still tried — `shouldTryBackup`'s call.
    */
   "gateway_request_rejected",
+  // The payer skipped one mandate debit; the mandate and the method stay good.
+  "debit_cancelled_by_payer",
+  // Not a decline at all: the payer left the page.
+  "payment_abandoned",
 ]);
 
 /**
@@ -1308,6 +1344,10 @@ const STOP_FALLBACK: ReadonlySet<string> = new Set([
   "revocation_of_authorization",
   "debit_not_authorized",
   "fraudulent",
+  // The payer stopped this debit on purpose: another method is a debit they refused.
+  "debit_cancelled_by_payer",
+  // The payer left the page: nothing to fall back from.
+  "payment_abandoned",
 ]);
 
 /**
@@ -1343,6 +1383,8 @@ export async function markPaymentMethodInvalid(
   /** `mandate` when the gateway killed the authorization, not the instrument. Routes the
    * customer to the "renew your authorization" email instead of "add a new method". */
   reason?: "mandate",
+  /** A backup paid in the same pass: the email says so (`backup_paid`). */
+  context?: { backupPaid?: boolean },
 ): Promise<void> {
   await withTenant(organizationId, async (tx) => {
     const [pm] = await tx.select().from(paymentMethods).where(eq(paymentMethods.id, pmId)).limit(1);
@@ -1358,7 +1400,12 @@ export async function markPaymentMethodInvalid(
         undefined,
         // Top-level for the same reason as the sweep's `expiry_reason`: the nested
         // resource is replaced on enrichment.
-        reason ? { invalid_reason: reason } : undefined,
+        reason || context?.backupPaid
+          ? {
+              ...(reason ? { invalid_reason: reason } : {}),
+              ...(context?.backupPaid ? { backup_paid: true } : {}),
+            }
+          : undefined,
       ),
     });
   });

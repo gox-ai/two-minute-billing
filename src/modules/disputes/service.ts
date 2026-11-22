@@ -1,5 +1,5 @@
 import { stampNow } from "@/platform/clock";
-import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import {
   clampLimit,
@@ -326,6 +326,17 @@ export async function handleDisputeEvent(
         ),
       )
       .limit(1);
+    // A case a person already recorded by hand (`recordOperatorDispute`) is that row: the
+    // gateway's later events move it, and nothing is booked twice.
+    if (!row) {
+      row = (await handRecordedTwin(tx, corr, ev)) ?? undefined;
+      if (row)
+        log.info("gateway dispute matches a hand-recorded dispute — no new dispute", {
+          event: "dispute_matched_hand_record",
+          dispute: ev.providerDisputeId,
+          handRecorded: row.publicId,
+        });
+    }
     // A replayed `dispute.created` finds the row and must not re-fire the policy.
     const wasNewRow = !row;
     if (!row) {
@@ -392,6 +403,67 @@ export async function handleDisputeEvent(
     });
   }
   return "processed";
+}
+
+/**
+ * The dispute in this business that already carries this case reference: a hand record with
+ * it, or a gateway dispute keyed by it. Call under `lockDispute(reference)`.
+ */
+export async function disputeWithReference(
+  tx: Tx,
+  organizationId: string,
+  businessId: string,
+  reference: string,
+): Promise<DisputeRow | null> {
+  const [row] = await tx
+    .select()
+    .from(disputes)
+    .where(
+      and(
+        eq(disputes.organizationId, organizationId),
+        eq(disputes.businessId, businessId),
+        or(eq(disputes.processorReference, reference), eq(disputes.providerDisputeId, reference)),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The hand-recorded dispute a gateway case duplicates: one with the case id as its reference,
+ * else the oldest one on the same payment with no reference and the same amount, which then
+ * takes the case id as its reference.
+ */
+async function handRecordedTwin(
+  tx: Tx,
+  corr: Correlation,
+  ev: NormalizedProviderEvent,
+): Promise<DisputeRow | null> {
+  const ref = ev.providerDisputeId!;
+  const byRef = await disputeWithReference(tx, corr.organizationId, corr.businessId, ref);
+  if (byRef?.source === "operator") return byRef;
+  if (!corr.paymentId || ev.disputeAmountMinor == null) return null;
+  const [unnamed] = await tx
+    .select()
+    .from(disputes)
+    .where(
+      and(
+        eq(disputes.organizationId, corr.organizationId),
+        eq(disputes.paymentId, corr.paymentId),
+        eq(disputes.source, "operator"),
+        isNull(disputes.processorReference),
+        eq(disputes.amountMinor, ev.disputeAmountMinor),
+      ),
+    )
+    .orderBy(asc(disputes.createdAt))
+    .limit(1);
+  if (!unnamed) return null;
+  const [named] = await tx
+    .update(disputes)
+    .set({ processorReference: ref })
+    .where(eq(disputes.id, unnamed.id))
+    .returning();
+  return named ?? null;
 }
 
 export type DisputeEventType =

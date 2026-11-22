@@ -6,7 +6,8 @@ import {
   type MethodProblem,
 } from "./portal-state";
 import * as React from "react";
-import { CheckCircle2, Clock, TriangleAlert } from "lucide-react";
+import { RollingNumber } from "@/components/ui/rolling-number";
+import { TriangleAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { money } from "@/lib/format";
 import { fmtDate } from "@/lib/format-date";
@@ -27,11 +28,11 @@ import { Chip, StatusChip } from "@/components/patterns/chip";
 import { PortalCouponBox, PortalCouponRemove } from "./portal-coupon";
 import { PortalSkipRenewal } from "./portal-skip-renewal";
 import { PortalChangePlan } from "./portal-change-plan";
-import { PortalLifecycle } from "./portal-lifecycle";
+import { PortalKeepSubscription, PortalLifecycle } from "./portal-lifecycle";
 import { PortalRestart } from "./portal-restart";
 import { PortalUsage, PortalUsageSkeleton } from "./portal-usage";
 import { PortalShipTo } from "./portal-ship-to";
-import { Package } from "lucide-react";
+import { fitFigure } from "../../fit-figure";
 
 /**
  * Portal-specific presentation. Everything generic to a hosted buyer page
@@ -276,10 +277,13 @@ function addressLines(a: PortalMe["customer"]["address"]): string[] {
  */
 const KIND_LABEL: Record<string, string> = { plan: "Plan", addon: "Add-on", charge: "Charge" };
 
-/** "/ month", "/ 3 months" — the cadence a line is quoted in, or nothing when it has none. */
+/**
+ * "/ month", "/ 3 months" — the cadence a line is quoted in, or nothing when it has none.
+ * No-break spaces inside, so a narrow row wraps it whole under the amount.
+ */
 function cadence(interval: string | null, count: number): string {
   if (!interval) return "";
-  return count > 1 ? ` / ${count} ${interval}s` : ` / ${interval}`;
+  return count > 1 ? ` /\u00a0${count}\u00a0${interval}s` : ` /\u00a0${interval}`;
 }
 
 /**
@@ -361,20 +365,23 @@ export function PlanCard({
   offeredRails = [],
   /** Live shipping addresses; absent when the account has no shipping (0360). */
   shippingAddresses,
+  /** A saved payment method we can charge: decides what Keep's dialog promises. */
+  canCharge = true,
 }: {
   subs: PortalSubscription[];
   tz?: string | null;
   allowCoupons?: boolean;
   offeredRails?: string[];
   shippingAddresses?: PortalShippingAddress[];
+  canCharge?: boolean;
 }) {
   if (subs.length === 0) return null;
   return (
     <>
       {subs.map((sub) => (
-        /* `hideTitle`: only the single-subscription title is redundant with the tab
-           above it. With several, the plan's name tells the cards apart; the
-           subscription id is an internal key and never a buyer-facing label. */
+        /* The plan leads the portal, so its card is titled with the plan's own name; the
+           subscription id is an internal key and never a buyer-facing label. The line under
+           it is a fact, not a slogan (decided 2026-11-17). */
         <StorefrontSection
           key={sub.id}
           title={
@@ -382,29 +389,37 @@ export function PlanCard({
               ? (sub.items.find((it) => it.kind === "plan")?.name ?? "Your plan")
               : "Your plan"
           }
-          hideTitle={subs.length === 1}
+          titleClassName={subs.length > 1 ? undefined : "max-[999px]:sr-only"}
           description={
             sub.status === "cancelled"
               ? sub.ended_at
                 ? `This subscription ended on ${fmtDate(sub.ended_at, tz)}.`
                 : "This subscription ended."
-              : "What you pay for, and your next payment."
+              : sub.status === "non_renewing"
+                ? "Does not renew."
+                : sub.status === "active" && (sub.next_payment?.at ?? sub.current_period_end)
+                  ? `Renews on ${fmtDate((sub.next_payment?.at ?? sub.current_period_end)!, tz)}.`
+                  : undefined
           }
           bodyClassName="p-0"
           action={<StatusChip status={sub.status} />}
         >
           <RowList>
             {sub.items.map((item, i) => (
-              <Row key={`${item.name}-${i}`} className="flex-row items-center gap-3">
-                <div className="flex min-w-0 flex-1 items-center gap-3">
-                  <Glyph>
-                    <Package />
-                  </Glyph>
+              <Row
+                key={`${item.name}-${i}`}
+                className="flex-row flex-wrap items-center gap-x-3 gap-y-1"
+              >
+                <div className="flex min-w-0 flex-[1_1_12rem] items-center gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
+                    {/* Wraps, so the quantity after a long name stays on screen. */}
+                    <div className="text-sm font-medium wrap-break-word">
                       {item.name}
                       {item.quantity > 1 ? (
-                        <span className="text-muted-foreground"> × {item.quantity}</span>
+                        <span className="whitespace-nowrap text-muted-foreground">
+                          {" "}
+                          × {item.quantity}
+                        </span>
                       ) : null}
                     </div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
@@ -417,7 +432,7 @@ export function PlanCard({
                     says so rather than rendering a misleading zero. */}
                 {/* An ended plan bills nothing more, so its old rates are not shown. */}
                 {sub.status === "cancelled" ? null : (
-                  <div className="shrink-0 text-right text-sm tabular-nums">
+                  <div className="ml-auto text-right text-sm tabular-nums">
                     {item.metered ? (
                       item.unit_amount_minor != null ? (
                         `${money(item.unit_amount_minor, sub.currency)} per unit`
@@ -461,9 +476,7 @@ export function PlanCard({
                 /* A change runs before this payment but the figure is not priced after it (an
                  older engine): its amount would be the old plan's, so state no amount. */
                 <>
-                  <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-                    Next payment
-                  </div>
+                  <div className="mb-2 text-xs text-muted-foreground">Next payment</div>
                   <div className="text-sm text-muted-foreground">
                     {sub.next_payment.at ? fmtDate(sub.next_payment.at, tz) : "On renewal"}. Your
                     plan changes first, so this payment is for your new plan.
@@ -471,9 +484,7 @@ export function PlanCard({
                 </>
               ) : sub.next_payment ? (
                 <>
-                  <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-                    Next payment
-                  </div>
+                  <div className="mb-2 text-xs text-muted-foreground">Next payment</div>
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-sm text-muted-foreground">
                       {sub.next_payment.at ? fmtDate(sub.next_payment.at, tz) : "On renewal"}
@@ -521,15 +532,15 @@ export function PlanCard({
                             key={`${d.label}-${i}`}
                             className="flex items-center justify-between gap-3 text-xs text-muted-foreground"
                           >
-                            <span className="flex flex-wrap items-center gap-2">
-                              <span>
+                            <span className="flex min-w-0 flex-wrap items-center gap-2">
+                              <span className="min-w-0 wrap-anywhere">
                                 {withUsage(sub) ? "Plan charge includes" : "includes"} {d.label}
                               </span>
                               {removable ? (
                                 <PortalCouponRemove subscription={sub.id} coupon={match!.coupon!} />
                               ) : null}
                             </span>
-                            <span className="tabular-nums">
+                            <span className="shrink-0 whitespace-nowrap tabular-nums">
                               −{money(d.amount_minor, sub.next_payment!.currency)}
                             </span>
                           </div>
@@ -547,10 +558,10 @@ export function PlanCard({
                           key={`${t.label}-${i}`}
                           className="flex items-center justify-between gap-3 text-xs text-muted-foreground"
                         >
-                          <span>
+                          <span className="min-w-0">
                             {withUsage(sub) ? "Plan charge includes" : "includes"} {t.label}
                           </span>
-                          <span className="tabular-nums">
+                          <span className="shrink-0 whitespace-nowrap tabular-nums">
                             {money(t.amount_minor, sub.next_payment!.currency)}
                           </span>
                         </div>
@@ -573,9 +584,7 @@ export function PlanCard({
                 </>
               ) : sub.next_payment_unpriced?.type === "change" ? (
                 <>
-                  <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-                    Next payment
-                  </div>
+                  <div className="mb-2 text-xs text-muted-foreground">Next payment</div>
                   <div className="text-sm text-muted-foreground">
                     {fmtDate(sub.next_payment_unpriced.at, tz)}. Your plan changes first, so this
                     payment is for your new plan.
@@ -597,14 +606,24 @@ export function PlanCard({
                     : "Paused. No payments while it is paused."}
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">
-                  This plan will not renew
-                  {sub.cancels_at
-                    ? `. It ends on ${fmtDate(sub.cancels_at, tz)}.`
-                    : sub.current_period_end
-                      ? `. It ends on ${fmtDate(sub.current_period_end, tz)}.`
-                      : "."}
-                </div>
+                (() => {
+                  const ends = sub.cancels_at ?? sub.current_period_end;
+                  const endsLabel = ends ? fmtDate(ends, tz) : null;
+                  const sentence = endsLabel
+                    ? `This plan will not renew. It ends on ${endsLabel}.`
+                    : "This plan will not renew.";
+                  return sub.actions?.reactivate ? (
+                    <PortalKeepSubscription
+                      subscription={sub.id}
+                      sentence={sentence}
+                      periodEndLabel={endsLabel}
+                      payment={sub.actions.keep_payment ?? null}
+                      canCharge={canCharge}
+                    />
+                  ) : (
+                    <div className="text-sm text-muted-foreground">{sentence}</div>
+                  );
+                })()
               )}
             </div>
           )}
@@ -674,7 +693,7 @@ export function PlanCard({
             />
           ) : null}
 
-          {/* Cancel, pause, resume, keep: only the ones the business offers in this state. */}
+          {/* Cancel, pause, resume: only the ones the business offers in this state. */}
           {sub.actions ? (
             <PortalLifecycle
               subscription={sub.id}
@@ -769,6 +788,10 @@ export function lastFailure(invoices: PortalInvoice[], methods: PortalPaymentMet
     invoice: failed,
     at: err.at,
     code: err.code,
+    /** Why, in our payer words (the sentence the failure email sends); null = no reason. */
+    reason: err.message ?? null,
+    /** Retrying the same method cannot succeed. */
+    newMethodNeeded: err.new_method_needed === true,
     method: methods.find((m) => m.id === err.payment_method) ?? null,
   };
 }
@@ -796,6 +819,10 @@ export function BalanceCard({
   const due = summarizeDue(invoices);
   const inFlight = summarizeInFlight(invoices);
   const inFlightCount = inFlight.reduce((n, d) => n + d.count, 0);
+  // Every collection under way is a scheduled debit (pre-debit notice), none moving yet.
+  const scheduledOnly =
+    invoices.some((i) => i.collection_scheduled_at && i.amount_due_minor > 0) &&
+    !invoices.some((i) => i.payment_in_flight && i.amount_due_minor > 0);
   const inFlightText = `${inFlightCount} payment${inFlightCount === 1 ? "" : "s"} in progress`;
   const { primary: defaultMethod, problem } = primaryState(methods, tz);
   const openCount = due.reduce((n, d) => n + d.count, 0);
@@ -834,65 +861,53 @@ export function BalanceCard({
             ? "You have no saved payment method, so we cannot collect this automatically."
             : null;
   const fixLabel = methods.length === 0 ? "Add a payment method" : "Update payment method";
+  // A dead or expired method cannot pay again, so adding another one is the main action.
+  const fixFirst = !payNow || failure?.newMethodNeeded === true;
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
       <div className="px-5 py-5 sm:px-6">
         {due.length === 0 && inFlightCount > 0 ? (
-          // Not "Everything is paid": it is not paid until the bank confirms it.
-          <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              <Clock className="size-5" />
-            </span>
+          // Not "No balance due": it is not paid until the bank confirms it.
+          <div>
             <div className="min-w-0">
-              <div className="text-base font-semibold tracking-tight">Payment in progress</div>
+              <div className="text-base font-semibold tracking-tight">
+                {scheduledOnly ? "Payment scheduled" : "Payment in progress"}
+              </div>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                Your bank is still confirming{" "}
+                {scheduledOnly
+                  ? "We sent your bank a notice. We will take "
+                  : "We are waiting for confirmation of "}
                 <span className="font-medium tabular-nums">
                   {inFlight.map((d) => money(d.minor, d.currency)).join(" and ")}
                 </span>
-                . You do not have to do anything.
+                {scheduledOnly ? " in about 1 day" : ""}. You do not have to do anything.
               </p>
             </div>
           </div>
         ) : due.length === 0 ? (
-          <div className="flex items-start gap-3">
-            {/* Never billed is neutral; the success tone is for a buyer who settled something. */}
-            <span
-              className={
-                neverBilled
-                  ? "flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
-                  : "flex size-9 shrink-0 items-center justify-center rounded-full bg-success-soft text-success"
-              }
-            >
-              <CheckCircle2 className="size-5" />
-            </span>
+          <div>
+            {/* A plain statement with its figure, no badge: the page is a statement, not a
+                celebration (decided 2026-11-17). */}
             <div className="min-w-0">
-              <div className="text-base font-semibold tracking-tight">
-                {neverBilled ? "Nothing due" : "Everything is paid"}
-              </div>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {neverBilled ? (
-                  "You have no balance due."
-                ) : (
-                  <>
-                    No balance due.
-                    {lastPaid
-                      ? ` Last payment ${money(lastPaid.amount_paid_minor, lastPaid.currency)} on ${fmtDate(lastPaid.paid_at, tz)}.`
-                      : ""}
-                  </>
-                )}
-              </p>
+              <div className="text-base font-semibold tracking-tight">No balance due</div>
+              {neverBilled || lastPaid ? (
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {neverBilled
+                    ? "You have no invoices yet."
+                    : `Last payment ${money(lastPaid!.amount_paid_minor, lastPaid!.currency)} on ${fmtDate(lastPaid!.paid_at, tz)}.`}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : (
           <div>
-            <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-              Amount due
-            </div>
+            <div className="text-xs text-muted-foreground">Amount due</div>
             {due.length === 1 ? (
-              <div className="mt-1.5 text-3xl font-semibold tracking-tight tabular-nums">
-                {money(due[0].minor, due[0].currency)}
+              <div className="@container mt-1.5 text-3xl font-semibold tracking-tight whitespace-nowrap tabular-nums">
+                <span style={fitFigure(money(due[0].minor, due[0].currency))}>
+                  <RollingNumber value={money(due[0].minor, due[0].currency)} />
+                </span>
               </div>
             ) : (
               <div className="mt-1.5 flex flex-col gap-1">
@@ -938,18 +953,22 @@ export function BalanceCard({
                 <span>{methodLine}</span>
               </p>
             ) : null}
+            {failure?.reason ? (
+              <p className="mt-1 pl-5.5 text-sm text-muted-foreground">{failure.reason}</p>
+            ) : null}
             {payNow || methodLine ? (
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                {payNow}
+                {fixFirst ? null : payNow}
                 {methodLine ? (
                   <PortalSectionButton
                     section="methods"
                     addMethod
-                    variant={payNow ? "outline" : "default"}
+                    variant={fixFirst ? "default" : "outline"}
                   >
                     {fixLabel}
                   </PortalSectionButton>
                 ) : null}
+                {fixFirst ? payNow : null}
               </div>
             ) : openCount > 1 ? (
               <p className="mt-2 text-sm text-muted-foreground">
@@ -1009,10 +1028,14 @@ export function BalanceCard({
               the invoice identity, so it resolves the way the document does. */}
           {showBilledTo ? (
             <MetaField label="Billed to">
-              <div className="truncate font-medium">{billedTo ?? me.customer.email ?? "—"}</div>
+              <div className="font-medium wrap-break-word">
+                {billedTo ?? me.customer.email ?? "—"}
+              </div>
               {/* `invoiceContactName` falls back to the email: print it once. */}
               {billedTo && me.customer.email && billedTo !== me.customer.email ? (
-                <div className="truncate text-xs text-muted-foreground">{me.customer.email}</div>
+                <div className="text-xs wrap-break-word text-muted-foreground">
+                  {me.customer.email}
+                </div>
               ) : null}
               {address.length === 0 ? (
                 <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1026,7 +1049,7 @@ export function BalanceCard({
               <div className="flex items-center gap-2.5">
                 <MethodGlyph pm={defaultMethod} />
                 <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="truncate font-medium">{methodLabel(defaultMethod)}</span>
+                  <span className="font-medium wrap-break-word">{methodLabel(defaultMethod)}</span>
                   {defaultMethod.exp_month && defaultMethod.exp_year ? (
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                       {String(defaultMethod.exp_month).padStart(2, "0")}/{defaultMethod.exp_year}
@@ -1044,51 +1067,6 @@ export function BalanceCard({
         </div>
       ) : null}
     </Card>
-  );
-}
-
-/** One step of the setup sequence — number, what it is, and (on the live one) the control. */
-function SetupStep({
-  n,
-  active,
-  label,
-  children,
-}: {
-  n: number;
-  active: boolean;
-  label: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    /* STACKED below `sm`, and `flex-wrap` was not enough on its own: it kept the label
-       and the control on one line and let the LABEL wrap instead. Measured at 360px the
-       label had ~87px beside a 151px button and ran to three lines, turning a 36px row
-       into 68–84px. The number stays inline with the label it numbers; the control drops
-       to its own line. */
-    <li className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span
-          aria-hidden
-          className={
-            active
-              ? "flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-medium text-background"
-              : "flex size-6 shrink-0 items-center justify-center rounded-full border bg-muted text-xs font-medium text-muted-foreground"
-          }
-        >
-          {n}
-        </span>
-        <span className={active ? "text-sm font-medium" : "text-sm text-muted-foreground"}>
-          {label}
-        </span>
-      </div>
-      {/* INDENTED TO THE LABEL'S AXIS when stacked (`pl-9` = the 24px number + its 12px
-          gap), and left to size itself. As a bare flex-column item the control stretched
-          to the card's full width — which made step 1's button read as the CARD's footer
-          action rather than as that step's control — and step 2's caption sat at the
-          card's left edge under the NUMBER, reading as a stray line rather than as part
-          of the step. Both are the same missing indent. */}
-      {children ? <div className="pl-9 sm:pl-0">{children}</div> : null}
-    </li>
   );
 }
 
@@ -1149,25 +1127,16 @@ export function SetupCard({
           <h2 className="text-base font-semibold tracking-tight">{title}</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">{consequence}</p>
 
-          {needsDetails && needsMethod ? (
-            <ol className="mt-4 flex flex-col gap-3">
-              <SetupStep n={1} active label="Your name and billing address">
-                <PortalSectionButton section="details">Add billing details</PortalSectionButton>
-              </SetupStep>
-              {/* No control: a payment method needs billing details first. */}
-              <SetupStep n={2} active={false} label="A payment method" />
-            </ol>
-          ) : (
-            <div className="mt-4">
-              {needsDetails ? (
-                <PortalSectionButton section="details">Add billing details</PortalSectionButton>
-              ) : (
-                <PortalSectionButton section="methods" addMethod>
-                  {methods.length === 0 ? "Add a payment method" : "Update payment method"}
-                </PortalSectionButton>
-              )}
-            </div>
-          )}
+          {/* Missing details are asked inside "Add a payment method", so one button covers both. */}
+          <div className="mt-4">
+            {needsDetails && !needsMethod ? (
+              <PortalSectionButton section="details">Add billing details</PortalSectionButton>
+            ) : (
+              <PortalSectionButton section="methods" addMethod>
+                {methods.length === 0 ? "Add a payment method" : "Update payment method"}
+              </PortalSectionButton>
+            )}
+          </div>
         </div>
       </div>
     </Card>
@@ -1195,8 +1164,11 @@ export function setupNeeds({
   const needsDetails = !me.customer.billing_details_complete;
   const owed = summarizeDue(invoices)[0] ?? null;
   const { primary, problem } = primaryState(methods, tz);
-  // Only when a saved method would collect something: a subscription that has not ended.
-  const live = subs.some((s) => s.status !== "cancelled");
+  // Only when a saved method would collect something: a subscription that has not ended,
+  // and not one that is set to end with nothing left to bill (no usage to settle at the end).
+  const live = subs.some(
+    (s) => s.status !== "cancelled" && !(s.status === "non_renewing" && !s.has_metered_items),
+  );
   const needsMethod = !owed && live && (methods.length === 0 || problem != null);
   if (!needsDetails && !needsMethod) return null;
 

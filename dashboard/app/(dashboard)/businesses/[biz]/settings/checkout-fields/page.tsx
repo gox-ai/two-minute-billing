@@ -156,7 +156,7 @@ export default async function CheckoutFieldsSettings({
             portal={portal}
             locks={locks}
             collectsPoNumber={collectsPoNumber}
-            hostedPagesHref={`${base}/hosted-pages`}
+            hostedPagesHref={`${base}/checkout`}
           />
         </SettingsColumns>
       </ActionForm>

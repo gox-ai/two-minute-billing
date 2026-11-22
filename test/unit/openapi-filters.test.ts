@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { openapiDocument } from "@/api/openapi";
-import { INVOICE_FILTER_OPS, INVOICE_SORT_FIELDS } from "@/modules/invoicing/service";
+import {
+  INVOICE_FILTER_OPS,
+  INVOICE_SORT_FIELDS,
+  ORDER_FILTER_OPS,
+} from "@/modules/invoicing/service";
 import { SUBSCRIPTION_FILTER_OPS, SUBSCRIPTION_SORT_FIELDS } from "@/modules/subscriptions/service";
 import { TRANSACTION_FILTER_OPS, TRANSACTION_SORT_FIELDS } from "@/modules/transactions/service";
 import { CREDIT_NOTE_FILTER_OPS, CREDIT_NOTE_SORT_FIELDS } from "@/modules/credit-notes/service";
@@ -82,6 +86,12 @@ const LISTS: Array<{
     path: "/v1/businesses/{biz}/invoices",
     filterOps: INVOICE_FILTER_OPS,
     sortFields: INVOICE_SORT_FIELDS,
+  },
+  {
+    path: "/v1/businesses/{biz}/orders",
+    filterOps: ORDER_FILTER_OPS,
+    sortFields: INVOICE_SORT_FIELDS,
+    shorthand: [],
   },
   {
     path: "/v1/businesses/{biz}/subscriptions",

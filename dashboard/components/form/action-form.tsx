@@ -31,8 +31,12 @@ const viewRequest = (state: ActionResult, go: (href: string) => void) =>
 function notify(state: ActionResult, form: HTMLFormElement | null, go: (href: string) => void) {
   if (state.ok) {
     if (state.message) (state.warning ? toast.warning : toast.success)(state.message);
+  } else if (state.code === "possible_duplicate") {
+    // The dialog shows this one inline, with a "Refund again" button.
   } else if (state.code === "conflict") {
-    toast.error(state.message ?? "This record changed since you loaded it", {
+    // Our words, never the engine's ("resource_version mismatch: expected 1, found 2").
+    toast.error("We could not save the changes. Someone changed this page after you opened it.", {
+      description: "Reload to see the current values, then make your changes again.",
       action: { label: "Reload", onClick: () => window.location.reload() },
       duration: 8000,
     });
@@ -53,6 +57,46 @@ function notify(state: ActionResult, form: HTMLFormElement | null, go: (href: st
         },
       );
     else if (state.message) toast.error(state.message, viewRequest(state, go));
+  }
+}
+
+/**
+ * `data-save-outcome` on the form: "refused" while React resets it after a failed save.
+ * React resets after EVERY action that returns, so without this a refused save threw the
+ * person's edits away and the form looked as if nothing had changed.
+ */
+export const SAVE_OUTCOME = "saveOutcome";
+
+const TYPED = new Set([
+  "text",
+  "email",
+  "url",
+  "tel",
+  "search",
+  "number",
+  "date",
+  "datetime-local",
+  "time",
+  "month",
+]);
+
+/** Puts typed text back after a refused save's reset. Never a password. */
+function restoreTyped(form: HTMLFormElement, data: FormData) {
+  const seen = new Map<string, number>();
+  for (const el of Array.from(form.elements)) {
+    const typed =
+      el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type));
+    if (!typed || !el.name || el.disabled) continue;
+    const i = seen.get(el.name) ?? 0;
+    seen.set(el.name, i + 1);
+    const value = data.getAll(el.name)[i];
+    if (typeof value !== "string" || el.value === value) continue;
+    const proto =
+      el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 }
 
@@ -82,6 +126,7 @@ export function ActionForm({
   className,
   resetOnSuccess = false,
   onSuccess,
+  onRefused,
   formRef: externalFormRef,
 }: {
   action: FormAction;
@@ -90,6 +135,8 @@ export function ActionForm({
   resetOnSuccess?: boolean;
   /** Receives the result, so a create can land on `result.redirectTo`. */
   onSuccess?: (result: ActionResult) => void;
+  /** Receives a refused result (`ok: false`), once per submission. */
+  onRefused?: (result: ActionResult) => void;
   /**
    * Supply your own ref when a caller needs to `requestSubmit()` the form from
    * outside it (e.g. a confirm dialog's "Proceed" button) — ActionForm keeps
@@ -103,11 +150,29 @@ export function ActionForm({
   // Toast as soon as the action returns, not from an effect: the action's own refresh
   // can unmount this form (a cancel removes the control that opened its dialog), and an
   // effect on an unmounted form never runs, so the result vanished silently.
+  const refused = React.useRef<FormData | null>(null);
   const withToast = async (prev: ActionResult | null, formData: FormData) => {
     const result = await action(prev, formData);
+    // Read by the reset that React runs after this action (see `SAVE_OUTCOME`).
+    const form = formRef.current;
+    if (form) form.dataset[SAVE_OUTCOME] = result.ok ? "saved" : "refused";
+    refused.current = result.ok ? null : formData;
     notify(result, formRef.current, router.push);
     return result;
   };
+  React.useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const onReset = () => {
+      const data = form.dataset[SAVE_OUTCOME] === "refused" ? refused.current : null;
+      if (data) queueMicrotask(() => restoreTyped(form, data));
+      // After every control's microtask: a later reset (resetOnSuccess, a Reset button)
+      // is not a refusal.
+      setTimeout(() => delete form.dataset[SAVE_OUTCOME], 0);
+    };
+    form.addEventListener("reset", onReset);
+    return () => form.removeEventListener("reset", onReset);
+  }, [formRef]);
   const [state, formAction] = useActionState<ActionResult | null, FormData>(withToast, null);
   // Run the success follow-ups once per submission, even with an identical result object.
   const seen = React.useRef<ActionResult | null>(null);
@@ -119,8 +184,10 @@ export function ActionForm({
       if (resetOnSuccess) formRef.current?.reset();
       router.refresh();
       onSuccess?.(state);
+    } else {
+      onRefused?.(state);
     }
-  }, [state, resetOnSuccess, router, onSuccess]);
+  }, [state, resetOnSuccess, router, onSuccess, onRefused]);
 
   return (
     <FormErrorsContext.Provider value={state?.ok === false ? (state.errors ?? {}) : {}}>

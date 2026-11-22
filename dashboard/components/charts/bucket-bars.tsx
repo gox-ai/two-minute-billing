@@ -197,9 +197,9 @@ export function BucketBars({
   ]);
   if (blank) {
     return (
-      <p className="py-6 text-center text-sm text-muted-foreground">
+      <div className="py-6 text-center text-sm text-muted-foreground">
         {empty ?? blankSeriesNote(seriesLabel)}
-      </p>
+      </div>
     );
   }
   return <EChart option={option} height={height} />;

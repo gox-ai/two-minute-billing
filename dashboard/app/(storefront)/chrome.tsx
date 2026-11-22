@@ -2,7 +2,6 @@ import * as React from "react";
 import { Check, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
-import { Alert } from "@/components/ui/alert";
 import { BrandMark } from "@/components/brand/brand-mark";
 import { brandCss } from "@/lib/brand";
 import { instrumentLabel } from "@/lib/instrument-label";
@@ -33,6 +32,8 @@ export interface Brand {
   icon_url?: string | null;
   favicon_url?: string | null;
   brand_color?: string | null;
+  /** Label on brand-color buttons; null = automatic (`buttonLabel`). */
+  button_text_color?: string | null;
   /** `test` on a business's test mode: the header then says no real money moves. */
   livemode?: string;
 }
@@ -47,7 +48,7 @@ export interface Brand {
  * when there is no brand, and re-validates the hex before interpolating it.
  */
 export function BrandTheme({ brand, children }: { brand: Brand; children: React.ReactNode }) {
-  const css = brandCss(brand.brand_color);
+  const css = brandCss(brand.brand_color, brand.button_text_color);
   return (
     <>
       {css ? <style dangerouslySetInnerHTML={{ __html: css }} /> : null}
@@ -87,17 +88,26 @@ export function StorefrontHeader({
   const line = subtitle ?? eyebrow;
   return (
     <>
+      {/* A thin strip, as in the dashboard: it must be seen, but it is not the page's
+          content (decided 2026-11-17; it was a full warning card). */}
       {brand.livemode === "test" ? (
-        <Alert tone="warning" title="Test mode">
-          This page does not charge real money. Use a test card or a test payment method.
-        </Alert>
+        <div
+          role="note"
+          className="flex flex-wrap items-center justify-center gap-x-1.5 rounded-md bg-warning-soft px-3 py-1.5 text-center text-xs font-medium text-warning"
+        >
+          <strong className="font-semibold">Test mode</strong>
+          <span>
+            This page does not charge real money. Use a test card or a test payment method.
+          </span>
+        </div>
       ) : null}
-      <header className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      {/* Wraps: when a long name and the aside cannot share a line, the aside drops below. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 items-center gap-3">
           <BrandMark name={business} logoUrl={brand.logo_url} iconUrl={brand.icon_url} />
           <div className="min-w-0">
             {hasWordmark ? null : (
-              <div className="truncate text-lg font-semibold tracking-tight">{business}</div>
+              <div className="text-lg font-semibold tracking-tight wrap-break-word">{business}</div>
             )}
             {line ? <div className="text-sm text-muted-foreground">{line}</div> : null}
           </div>
@@ -107,7 +117,7 @@ export function StorefrontHeader({
           way to SIGN OUT of a hosted billing page on a shared device. The caller now
           decides what survives the narrow screen (the portal keeps Sign out and drops
           the identity); this just stops the header hiding all of it. */}
-        {aside ? <div className="min-w-0 text-right">{aside}</div> : null}
+        {aside ? <div className="ml-auto max-w-full min-w-0 text-right">{aside}</div> : null}
       </header>
     </>
   );
@@ -126,8 +136,11 @@ export function StorefrontSection({
   children,
   bodyClassName,
   hideTitle = false,
+  titleClassName,
 }: {
   title: React.ReactNode;
+  /** Extra classes for the heading, e.g. screen-reader only below a breakpoint. */
+  titleClassName?: string;
   description?: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
@@ -145,7 +158,12 @@ export function StorefrontSection({
     <Card className="gap-0 overflow-hidden py-0">
       <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
         <div className="min-w-0">
-          <h2 className={hideTitle ? "sr-only" : "text-sm font-semibold tracking-tight"}>
+          <h2
+            className={cn(
+              hideTitle ? "sr-only" : "text-sm font-semibold tracking-tight",
+              titleClassName,
+            )}
+          >
             {title}
           </h2>
           {description ? (
@@ -199,19 +217,11 @@ export function Glyph({ children, className }: { children: React.ReactNode; clas
 }
 
 /**
- * A line's product picture in the `Glyph` box, or `fallback` when it has none. Decorative:
- * the line's name beside it says what it is.
+ * A line's product picture, or nothing when the merchant has none. Decorative: the line's
+ * name beside it says what it is, and a stock icon in its place said nothing (2026-11-17).
  */
-export function ProductGlyph({
-  src,
-  fallback,
-  className,
-}: {
-  src?: string | null;
-  fallback: React.ReactNode;
-  className?: string;
-}) {
-  if (!src) return <Glyph className={className}>{fallback}</Glyph>;
+export function ProductGlyph({ src, className }: { src?: string | null; className?: string }) {
+  if (!src) return null;
   return (
     <span
       aria-hidden
@@ -223,13 +233,11 @@ export function ProductGlyph({
   );
 }
 
-/** Tracked micro-label over a value — the recessed strips under a statement. */
+/** A small sentence-case label over a value — the recessed strips under a statement. */
 export function MetaField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-        {label}
-      </div>
+      <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 min-w-0 text-sm">{children}</div>
     </div>
   );

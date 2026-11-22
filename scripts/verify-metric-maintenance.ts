@@ -23,7 +23,7 @@ import {
   TRAILING_DAYS,
 } from "@/modules/metrics/daily/maintenance";
 import { recordTransaction } from "@/modules/transactions/service";
-import { businessesWithSubscriptions } from "@/modules/metrics/daily/cron";
+import { businessesWithBillingActivity } from "@/modules/metrics/daily/cron";
 import { events, metricDaily, mrrMovements } from "@db/schema";
 
 let pass = 0;
@@ -330,7 +330,7 @@ await bulkFillMetricDays({
   write: true,
   now,
 });
-const cronBiz = (await businessesWithSubscriptions()).find((b) => b.id === biz.id)!;
+const cronBiz = (await businessesWithBillingActivity()).find((b) => b.id === biz.id)!;
 ok("a stored old day with no later row is not late", (await lateDays(cronBiz, now)).length === 0);
 await recordTransaction({
   organizationId: orgId,

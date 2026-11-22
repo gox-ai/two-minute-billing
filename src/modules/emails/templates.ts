@@ -4,6 +4,7 @@ import { escapeHtml, emailHtmlToText } from "./sanitize";
 import { renderBody, renderText } from "./template-lang";
 import { accountBrand, type AccountBrand } from "./account-brand";
 import { ASSISTANT_NAME } from "@/modules/assistant/name";
+import { emailButtonLabel } from "./button-label";
 
 /**
  * Built-in billing email templates. One subject + HTML + text per type, rendered
@@ -44,6 +45,8 @@ export interface RenderVars {
   logoUrl?: string;
   iconUrl?: string;
   brandColor?: string;
+  /** `#RRGGBB` label on the brand-coloured button, used as set; absent = automatic. */
+  buttonTextColor?: string;
   amount?: string; // pre-formatted "1,234.00 USD"
   invoiceNumber?: string;
   currency?: string;
@@ -71,6 +74,8 @@ export interface RenderVars {
    * is not cancelled (e.g. a refused restart), so the email does not ask them to keep it active.
    */
   subscriptionEnded?: string;
+  /** payment_method_invalid: set when a backup method paid in the same collection. */
+  backupPaid?: string;
   cancelDate?: string;
   dueDate?: string;
   /** Pre-debit notice: the day the mandate will be debited. */
@@ -380,7 +385,7 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
   payment_method_invalid: {
     subject: "We can no longer charge your {{paymentMethodType}}",
     heading: "Your payment method needs attention",
-    body: "Hi {{customerName}},\n\nWe can no longer charge your {{paymentMethodType}}. This can occur for different reasons. You can usually correct it.\n\n{{#if subscriptionEnded}}Your subscription is not active. If you want to restart it, add a new payment method with the button below.{{else}}To keep your subscription active, add a new payment method with the button below.{{/if}}",
+    body: "Hi {{customerName}},\n\nWe can no longer charge your {{paymentMethodType}}. This can occur for different reasons. You can usually correct it.\n\n{{#if backupPaid}}We charged your backup payment method for this payment, and the payment is complete. Until you update this payment method, we will charge the backup payment method.\n\n{{/if}}{{#if subscriptionEnded}}Your subscription is not active. If you want to reactivate it, add a new payment method with the button below.{{else}}To keep your subscription active, add a new payment method with the button below.{{/if}}",
   },
   // Rail-neutral, and deliberately so: fires for card, UPI Autopay and e-mandate alike
   // (`emails/outbox.ts` routes here whenever `expiry_reason === 'mandate'`). Names
@@ -391,7 +396,7 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
   mandate_expired: {
     subject: "Renew your automatic payment authorization with {{businessName}}",
     heading: "Your automatic payment authorization ended",
-    body: "Hi {{customerName}},\n\nThe authorization that lets us collect your subscription payments automatically is no longer active. Your payment method is not the problem. Only the permission to charge it automatically needs renewal.\n\n{{#if subscriptionEnded}}Your subscription is not active, so we do not collect payments now. If you restart it, use the button below to give a new authorization.{{else}}Use the button below to give a new authorization, so that we can collect your next payment.{{/if}}",
+    body: "Hi {{customerName}},\n\nThe authorization that lets us collect your subscription payments automatically is no longer active. Your payment method is not the problem. Only the permission to charge it automatically needs renewal.\n\n{{#if subscriptionEnded}}Your subscription is not active, so we do not collect payments now. If you reactivate it, use the button below to give a new authorization.{{else}}Use the button below to give a new authorization, so that we can collect your next payment.{{/if}}",
   },
 
   // ── trial lifecycle ─────────────────────────────────────────────────────────
@@ -509,10 +514,10 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
     body: "Hi {{customerName}},\n\n{{note}}\n\nWe ask you to change the payment method on your account. This keeps your subscription active without interruption.\n\nThe button below opens the correct page.",
   },
   subscription_restart: {
-    subject: "Restart your {{planName}} subscription with {{businessName}}",
-    heading: "Restart your subscription",
-    body: "Hi {{customerName}},\n\n{{note}}\n\nYour {{planName}} subscription ended. You can restart it with the button below.\n\nOn the next page, you pay for a new term. Your subscription starts again when the payment succeeds. The link works for a limited time. If you do not want to restart, you do not have to do anything.",
-    ctaLabel: "Restart subscription",
+    subject: "Reactivate your {{planName}} subscription with {{businessName}}",
+    heading: "Reactivate your subscription",
+    body: "Hi {{customerName}},\n\n{{note}}\n\nYour {{planName}} subscription ended. You can reactivate it with the button below.\n\nOn the next page, you pay for a new term. Your subscription starts again when the payment succeeds. The link works for a limited time. If you do not want to reactivate it, you do not have to do anything.",
+    ctaLabel: "Reactivate subscription",
   },
   credit_note_sent: {
     subject: "Credit note {{creditNoteNumber}} from {{businessName}}",
@@ -725,6 +730,7 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     { key: "cardBrand", always: false },
     { key: "cardLast4", always: false },
     { key: "subscriptionEnded", always: false },
+    { key: "backupPaid", always: false },
   ],
   // No `cardBrand`/`cardLast4` here at all, unlike `payment_method_invalid` above: this
   // fires for the SAME rails that carry no printed instrument identity as often as not
@@ -1014,7 +1020,7 @@ export const VAR_LABELS: Partial<Record<keyof RenderVars, string>> = {
  * stylesheets, and this has to survive Gmail, Outlook and a phone.
  */
 function brandedShell(opts: {
-  vars: Pick<RenderVars, "businessName" | "logoUrl" | "iconUrl" | "brandColor">;
+  vars: Pick<RenderVars, "businessName" | "logoUrl" | "iconUrl" | "brandColor" | "buttonTextColor">;
   heading: string;
   bodyHtml: string;
   /** The template's footer text, already rendered. */
@@ -1060,12 +1066,13 @@ function brandedShell(opts: {
       ? `<div style="font-size:14px;line-height:1.6;margin:24px 0 0">${opts.footerHtml}</div>`
       : "",
     action: cta
-      ? `<p style="margin:24px 0"><a href="${escapeHtml(cta.href)}" style="background:${brand};color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block">${escapeHtml(cta.label)}</a></p>`
+      ? `<p style="margin:24px 0"><a href="${escapeHtml(cta.href)}" style="background:${brand};color:${emailButtonLabel(brand, vars.buttonTextColor)};padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block">${escapeHtml(cta.label)}</a></p>`
       : "",
     facts: card,
   };
   return [
-    '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#222">',
+    // break-word: an unbroken email or id splits only when it cannot fit a line of its own.
+    '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;overflow-wrap:break-word;word-break:break-word">',
     header,
     `<h2 style="font-size:18px;margin:0 0 16px">${escapeHtml(heading)}</h2>`,
     // Button before card by default: the action is the point of the email, the numbers
@@ -1380,7 +1387,9 @@ export function blocksFor(
     add("Plan", v.planName);
     return {
       ...(rows.length ? { facts: rows } : {}),
-      ...(v.checkoutUrl ? { action: { label: "Restart subscription", url: v.checkoutUrl } } : {}),
+      ...(v.checkoutUrl
+        ? { action: { label: "Reactivate subscription", url: v.checkoutUrl } }
+        : {}),
     };
   }
 

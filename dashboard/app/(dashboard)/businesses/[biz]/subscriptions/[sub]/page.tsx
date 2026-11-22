@@ -1,3 +1,4 @@
+import { createdThroughLabel } from "@/lib/created-through";
 import { isApiNotFound, businessLabel } from "@/lib/api";
 import { notFound } from "next/navigation";
 import { billingRules, resetRules } from "@/lib/billing-rules";
@@ -580,8 +581,7 @@ export default async function SubscriptionDetail({
     next_billing_amount_minor: nextBillingIsEstimate ? nextBillingAmount : null,
     pending_scheduled_count: pendingScheduled.length,
     revenue_to_date_minor: sub.revenue_to_date_minor ?? 0,
-    revenue_paid_invoices_count: sub.revenue_paid_invoices_count ?? 0,
-    revenue_since: sub.revenue_since ?? null,
+    revenue_billed_minor: sub.revenue_billed_minor ?? 0,
   };
 
   // Unpaid invoices, oldest first. The oldest drives the retry line; the track draws
@@ -672,11 +672,13 @@ export default async function SubscriptionDetail({
             <TableBody>
               {entitlements.data.map((e) => (
                 <TableRow key={e.feature_key}>
-                  <TableCell>{e.feature_name}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
+                  {/* Names, keys and values wrap: the folded section is narrow beside its
+                      title column. */}
+                  <TableCell className="whitespace-normal">{e.feature_name}</TableCell>
+                  <TableCell className="font-mono text-xs wrap-anywhere whitespace-normal text-muted-foreground">
                     {e.feature_key}
                   </TableCell>
-                  <TableCell className="tabular-nums">
+                  <TableCell className="whitespace-normal tabular-nums">
                     {e.unit &&
                     typeof e.value !== "boolean" &&
                     !/^(true|false)$/.test(String(e.value))
@@ -709,6 +711,7 @@ export default async function SubscriptionDetail({
         <Facts
           rows={[
             sub.created_at ? { label: "Created on", value: fmtDateTime(sub.created_at, tz) } : null,
+            { label: "Created through", value: createdThroughLabel(sub.created_through) },
             sub.start_date
               ? { label: "Scheduled start", value: fmtDateTime(sub.start_date, tz) }
               : null,
@@ -1455,7 +1458,7 @@ export default async function SubscriptionDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table phone="stack">
+                  <Table phone="stack" fit>
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Description</TableHead>
@@ -1525,7 +1528,7 @@ export default async function SubscriptionDetail({
                     </TableRow>
                   ))}
                 >
-                  <Table phone="stack">
+                  <Table phone="stack" fit>
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Date</TableHead>
@@ -1557,6 +1560,7 @@ export default async function SubscriptionDetail({
                 creditNotes={subCreditNotes}
                 events={subEvents}
                 emails={subEmails}
+                viewAll={historyViewAll(biz, subId, sub.customer)}
               />
             </RecordCard>
           </Row>
@@ -1654,4 +1658,21 @@ function itemModelPriceActions(biz: string, sub: string, rows: ListPriceItem[]) 
       />,
     ]),
   );
+}
+
+/**
+ * Each History tab's full list, narrowed to this subscription. The Email logs tab is the
+ * customer's, so its list is narrowed to the customer.
+ */
+function historyViewAll(biz: string, subId: string, customer: string | null | undefined) {
+  const base = `/businesses/${biz}`;
+  const is = (field: string, value: string) =>
+    `filter=${encodeURIComponent(`${field}:is:${value}`)}`;
+  return {
+    invoices: `${base}/invoices?${is("subscription", subId)}`,
+    transactions: `${base}/transactions?${is("subscription", subId)}`,
+    "credit-notes": `${base}/credit_notes?${is("subscription", subId)}`,
+    ...(customer ? { emails: `${base}/emails?${is("customer", customer)}` } : {}),
+    events: `${base}/events?${is("resource_id", subId)}`,
+  };
 }

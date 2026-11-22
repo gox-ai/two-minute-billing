@@ -48,6 +48,7 @@ import {
   gatewayObjectUrl,
   type GatewayCatalogEntry,
 } from "@/components/gateways/gateway-meta";
+import { paymentSourceText } from "@/lib/payment-trigger";
 import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import { gatewayLogsHref } from "@/lib/gateway-logs-href";
 
@@ -347,6 +348,7 @@ export default async function PaymentIntentDetailPage({
                     }
                   : null,
                 { label: "Created at", value: fmtDateTime(intent.created_at, tz) },
+                { label: "Source", value: paymentSourceText(intent.initiated_by) },
                 // The mandate ceiling (0174) explains a $0.00 setup intent; null elsewhere.
                 intent.purpose === "setup" && intent.max_amount_minor != null && intent.currency
                   ? {
@@ -479,18 +481,20 @@ export default async function PaymentIntentDetailPage({
                     />
                   ))}
               >
-                <Table phone="stack" className="table-fixed max-lg:min-w-3xl">
+                <Table phone="stack" className="min-w-3xl table-fixed max-lg:min-w-3xl">
                   <colgroup>
                     {/* Status: 13% fits the "Requires action" chip (~113px) in the 1068px
                         card at 1440. The id column fits its head on one line; Error takes
-                        the rest (~21%). */}
-                    <col className="w-[13%]" />
+                        the rest (~17%). Attempt and Gateway calls hold an id's tail and its
+                        copy button at 768px. Seven columns need 768px: a narrower card (1024,
+                        or beside the assistant) scrolls the table inside it. */}
+                    <col className="w-[15%]" />
                     <col className="w-[13%]" />
                     <col className="w-[13%]" />
                     <col className="w-[16%]" />
                     <col />
                     <col className="w-[12%]" />
-                    <col className="w-[12%]" />
+                    <col className="w-[14%]" />
                   </colgroup>
                   <TableHeader>
                     <TableRow>
@@ -629,7 +633,7 @@ function AttemptRow({
         {/* What the gateway told US. A refusal confirmed in the buyer's browser exists only here. */}
         {attempt.id_at_gateway ? (
           <Link
-            href={`/businesses/${biz}/gateway_webhooks?intent%5Bis%5D=${encodeURIComponent(attempt.id_at_gateway)}`}
+            href={`/businesses/${biz}/gateway_webhooks?payment_attempt=${encodeURIComponent(attempt.id)}`}
             className="mt-1.5 block text-primary hover:underline"
           >
             Webhook events

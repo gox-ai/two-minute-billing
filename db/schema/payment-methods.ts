@@ -99,6 +99,9 @@ export const paymentMethods = pgTable(
     /** When the event that set `mandate_status` happened; an older event is not applied (0395). */
     mandateStatusAt: timestamp("mandate_status_at", { withTimezone: true }),
     mandateExpiresAt: timestamp("mandate_expires_at", { withTimezone: true }),
+    /** Why the mandate died, from the gateway's event (0538): our code and operator text. */
+    mandateFailureCode: text("mandate_failure_code"),
+    mandateFailureText: text("mandate_failure_text"),
     mandateReference: text("mandate_reference"),
     // Free-form annotations; imported rows carry { source, source_id, gateway_account_id }.
     metadata: jsonb("metadata"),

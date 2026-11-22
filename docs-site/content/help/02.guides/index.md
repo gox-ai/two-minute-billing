@@ -56,6 +56,10 @@ with [Getting started](/help/getting-started).
 - [Test with Time Travel](/help/guides/test-with-time-travel): move the clock of a test business
   forward to watch renewals, trial ends and retries in seconds.
 - [Read your numbers](/help/guides/read-your-numbers): how MRR, ARR, churn and subscriber mix are
-  calculated, per currency and per business.
+  calculated, per currency and per business, and how reports follow the way you bill.
+- [Read your sales report](/help/guides/read-your-sales): orders, order revenue, buyers, refunds and
+  repeat purchases for your one-time products.
 - [Your team, roles and logs](/help/guides/your-team): a fixed or custom role for each person,
   API keys with only the access they need, and a record of who changed what and when.
+- [Notifications and the app](/help/guides/notifications): failed payments, disputes and more on
+  your phone, in the app, by email or in Google Chat, a daily summary, and the installable app.

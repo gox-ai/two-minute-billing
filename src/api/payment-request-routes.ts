@@ -25,6 +25,8 @@ import {
 } from "@/modules/payment-requests/service";
 import { CollectionInFlightError } from "@/modules/invoicing/service";
 import { AdhocEmailError } from "@/modules/emails/adhoc-service";
+import { createdThrough } from "@/modules/events/provenance";
+import { attributePayingTransaction } from "@/modules/invoicing/dunning-journey";
 import { createLogger } from "@/platform/logger";
 
 const log = createLogger("payment-requests");
@@ -160,7 +162,18 @@ export async function registerPaymentRequestRoutes(app: FastifyInstance) {
       const { preq } = req.params as { preq: string };
       const view = await getPaymentRequest(req.organization!.id, business.id, preq);
       if (!view) return notFound(reply, `No such payment request: ${preq}`);
-      return serializePaymentRequest(view);
+      const orgId = req.organization!.id;
+      const [sent, paid] = await Promise.all([
+        createdThrough(orgId, "payment_request", preq),
+        view.request.status === "paid"
+          ? attributePayingTransaction(orgId, { paymentRequestId: view.request.id })
+          : null,
+      ]);
+      return {
+        ...serializePaymentRequest(view),
+        created_through: sent,
+        initiated_by: paid?.trigger ? paid : null,
+      };
     },
   );
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { paymentSourceText } from "@/lib/payment-trigger";
 import * as React from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
@@ -7,6 +8,7 @@ import {
   type ListFilterField,
   type ListSegment,
   type ListPageHeader,
+  type ListServerFilter,
 } from "@/components/patterns/list-page";
 import { InstrumentMark } from "@/components/brand/instrument-mark";
 import { makeListSource } from "@/lib/list-source";
@@ -40,6 +42,37 @@ function customerName(r: PaymentIntentRow): string | null {
 }
 
 /**
+ * Why the newest attempt failed: our reading, then the gateway's message, then its
+ * code. Wraps rather than cuts. Shared with the customer page's Payment intents tab.
+ */
+export function IntentLastError({ error }: { error: PaymentIntentRow["last_error"] }) {
+  if (!error?.message && !error?.code) return <TextCell />;
+  const reading = declineReading(error.code, error.message);
+  return (
+    <span className="flex flex-col gap-0.5">
+      {/* Our reading first; the gateway's own words always stay under it. */}
+      {reading ? (
+        <span className="block max-w-80 text-sm/6 font-medium whitespace-normal">{reading}</span>
+      ) : null}
+      {error.message ? (
+        <span className="block min-h-6 max-w-80 text-sm/6 wrap-break-word whitespace-normal">
+          {error.message}
+        </span>
+      ) : null}
+      {error.code ? (
+        <span className="flex min-h-5 items-center font-mono text-xs wrap-anywhere whitespace-normal text-muted-foreground">
+          {error.code}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function IntentPurposeChip({ purpose }: { purpose: PaymentIntentRow["purpose"] }) {
+  return <Chip>{purpose === "setup" ? "Setup" : "Payment"}</Chip>;
+}
+
+/**
  * Payment intents list.
  *
  * Amount/currency are nullable on the row: an intent can exist before either is
@@ -57,6 +90,7 @@ export function PaymentIntentsTable({
   hasMore,
   nextCursor,
   gatewayCatalog,
+  initialFilters,
 }: {
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
@@ -67,12 +101,20 @@ export function PaymentIntentsTable({
   total: number;
   hasMore: boolean;
   nextCursor: string | null;
+  /** Deep-link filters from the URL (`?filter=customer:is:cus_…`) — see ListPage. */
+  initialFilters?: ListServerFilter[];
 }) {
   const tz = useBusinessTz();
   const fetchPage = makeListSource<PaymentIntentRow>("payment_intents", biz);
 
   const columns = React.useMemo<ColumnDef<PaymentIntentRow>[]>(
     () => [
+      {
+        accessorKey: "created_at",
+        id: "created_at",
+        header: "Created",
+        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
+      },
       {
         id: "intent",
         header: "Payment intent",
@@ -134,31 +176,7 @@ export function PaymentIntentsTable({
         meta: { grow: true },
         // Why the newest attempt failed: the message, then the gateway's code under it,
         // as the transactions list shows it. Wraps rather than cuts.
-        cell: ({ row }) => {
-          const err = row.original.last_error;
-          if (!err?.message && !err?.code) return <TextCell />;
-          const reading = declineReading(err.code, err.message);
-          return (
-            <span className="flex flex-col gap-0.5">
-              {/* Our reading first; the gateway's own words always stay under it. */}
-              {reading ? (
-                <span className="block max-w-80 text-sm/6 font-medium whitespace-normal">
-                  {reading}
-                </span>
-              ) : null}
-              {err.message ? (
-                <span className="block min-h-6 max-w-80 text-sm/6 wrap-break-word whitespace-normal">
-                  {err.message}
-                </span>
-              ) : null}
-              {err.code ? (
-                <span className="flex min-h-5 items-center font-mono text-xs wrap-anywhere whitespace-normal text-muted-foreground">
-                  {err.code}
-                </span>
-              ) : null}
-            </span>
-          );
-        },
+        cell: ({ row }) => <IntentLastError error={row.original.last_error} />,
       },
       {
         id: "purpose",
@@ -166,7 +184,7 @@ export function PaymentIntentsTable({
         accessorFn: (r) => r.purpose,
         // Most real rows are $0.00 `setup` intents, so without this column the
         // Amount column reads as broken.
-        cell: ({ row }) => <Chip>{row.original.purpose === "setup" ? "Setup" : "Payment"}</Chip>,
+        cell: ({ row }) => <IntentPurposeChip purpose={row.original.purpose} />,
       },
       {
         id: "amount",
@@ -240,6 +258,14 @@ export function PaymentIntentsTable({
         },
       },
       {
+        id: "source",
+        header: "Source",
+        accessorFn: (r) => paymentSourceText(r.initiated_by),
+        cell: ({ row }) => (
+          <span className="text-sm">{paymentSourceText(row.original.initiated_by)}</span>
+        ),
+      },
+      {
         id: "expires_at",
         header: "Expires",
         accessorFn: (r) => r.expires_at ?? "",
@@ -248,12 +274,6 @@ export function PaymentIntentsTable({
             {row.original.expires_at ? fmtDateTime(row.original.expires_at, tz) : null}
           </TextCell>
         ),
-      },
-      {
-        accessorKey: "created_at",
-        id: "created_at",
-        header: "Created",
-        cell: ({ row }) => <TextCell>{fmtDateTime(row.original.created_at, tz)}</TextCell>,
       },
     ],
     [biz, tz, gatewayCatalog],
@@ -311,13 +331,13 @@ export function PaymentIntentsTable({
   );
 
   /**
-   * Exactly the two facets the endpoint implements, with exactly one operator each.
+   * Exactly the facets the endpoint implements, with exactly one operator each.
    *
    * `/api/lists/payment_intents` translates the builder's rows into the engine's
-   * `?status=` / `?purpose=` params, and it reads them as
+   * `?status=` / `?purpose=` / `?customer=` params, and it reads them as
    * `filters.find(f => f.field === … && f.op === 'is')` — so any other field is DROPPED
    * on the way through (the list comes back unnarrowed under a filter pill), and any
-   * other operator on these two fields is dropped the same way. Offering `is one of`
+   * other operator on these fields is dropped the same way. Offering `is one of`
    * here would therefore be a control that does nothing, which is why `serverOps` is a
    * single operator rather than the enum table every other server-backed list uses.
    *
@@ -352,6 +372,8 @@ export function PaymentIntentsTable({
         ],
         serverOps: ["is"],
       },
+      // The customer page's History tab links here with this one.
+      { id: "customer", label: "Customer ID", group: "Customer", serverOps: ["is"] },
     ],
     [],
   );
@@ -365,6 +387,7 @@ export function PaymentIntentsTable({
       server={{ total, hasMore, nextCursor, fetchPage }}
       segments={segments}
       filterFields={filterFields}
+      initialFilters={initialFilters}
       savedViews={{ entity: "payment_intents", biz }}
       // The intents proxy fetcher forwards only `status` and `purpose`, never `q`, so a
       // search box would be a control that does nothing.
@@ -396,7 +419,14 @@ export function PaymentIntentsTable({
        * still 31px over at 1440 and cut Gateway and Created at 1280 (910px card).
        * "Last error" is now the grow column, so it absorbs what is left.
        */
-      initialHidden={["expires_at", "payment_method", "purpose", "attempt_count", "gateway"]}
+      initialHidden={[
+        "expires_at",
+        "payment_method",
+        "purpose",
+        "attempt_count",
+        "gateway",
+        "source",
+      ]}
       emptyState={
         <EmptyState
           icon={<Wallet />}

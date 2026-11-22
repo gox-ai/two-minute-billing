@@ -20,7 +20,7 @@
  *
  * ── Why this matters HERE, beyond the port ──────────────────────────────────
  * `businesses.logo_url` / `icon_url` / `favicon_url` accept a `data:` URL today, and
- * `loadLogo` (`modules/invoicing/invoice-pdf.ts`) decodes it — including rasterising
+ * `loadLogo` (`modules/invoicing/pdf-branding.ts`) decodes it — including rasterising
  * `image/svg+xml`. That is precisely what rule 2 rules out. This module is the
  * replacement path: an upload proves what it is, gets stored, and the column holds an
  * `https://` URL instead. Once every logo is a URL, those fields can be scheme-restricted

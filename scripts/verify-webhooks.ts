@@ -487,7 +487,8 @@ await app.close();
   const outcome = await handleProviderEvent("razorpay", {
     providerEventId: evId,
     type: "charge.succeeded",
-    occurredAt: new Date(),
+    // Past the wait for our own row (`UNBOOKED_OWN_CHARGE_WAIT_MS`): a younger one is retried.
+    occurredAt: new Date(Date.now() - 20 * 60_000),
     providerChargeId: chargeId,
     providerIntentId: `order_g2b31_${crypto.randomUUID().slice(0, 8)}`,
     ownership: "ours",

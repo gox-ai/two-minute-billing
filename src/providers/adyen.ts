@@ -22,7 +22,13 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { currencyExponent, minorToDecimalString } from "@/platform/currency";
 import { createLogger } from "@/platform/logger";
-import { adyenAdviceCode, normalizeAdyenDecline, type DeclineSignal } from "./decline-codes";
+import {
+  adyenAdviceCode,
+  adyenRawNetworkCode,
+  GENERIC_CLIENT_REFUSAL,
+  normalizeAdyenDecline,
+  type DeclineSignal,
+} from "./decline-codes";
 import { classifyGatewayHttp } from "./gateway-http-class";
 import { boundedProviderKey, providerFetch, type ProviderFetchResult } from "./http";
 import {
@@ -300,6 +306,9 @@ const REASON_CODE: Record<string, string> = {
   "acquirer fraud": "14",
   cancelled: "15",
   "shopper cancelled": "16",
+  "invalid pin": "17",
+  "pin tries exceeded": "18",
+  "pin validation not possible": "19",
   fraud: "20",
   "not submitted": "21",
   "fraud-cancelled": "22",
@@ -312,7 +321,15 @@ const REASON_CODE: Record<string, string> = {
   "withdrawal count exceeded": "29",
   "issuer suspected fraud": "31",
   "avs declined": "32",
+  "card requires online pin": "33",
+  "no checking account available on card": "34",
+  "no savings account available on card": "35",
+  "mobile pin required": "36",
+  "contactless fallback": "37",
   "authentication required": "38",
+  "rreq not received from ds": "39",
+  "current aid is in penalty box": "40",
+  "cvm required restart payment": "41",
   "3ds authentication error": "42",
   "transaction blocked by adyen to prevent excessive retry fees": "46",
   "token revoked": "50",
@@ -335,6 +352,8 @@ export function adyenDeclineSignal(p: {
       null,
     message: reason,
     category: p.resultCode ?? null,
+    // The scheme's raw code, so the Visa/Mastercard never-resubmit codes apply.
+    networkMessage: adyenRawNetworkCode(p.additionalData?.refusalReasonRaw),
     recommendationCode: adyenAdviceCode(p.additionalData?.merchantAdviceCode),
     cardBrand: adyenBrand(p.brand ?? p.additionalData?.paymentMethod) ?? null,
   };
@@ -613,7 +632,8 @@ export function normalizeAdyenItem(
   };
   const psp = item.pspReference;
   const original = item.originalReference || undefined;
-  const decline = () => {
+  /** `operator`: the text goes to an attempt, not a payer, so the acquirer's raw reason may join it. */
+  const decline = (operator = false) => {
     const sig = adyenDeclineSignal({
       refusalReason: item.reason ?? null,
       resultCode: "Refused",
@@ -621,13 +641,25 @@ export function normalizeAdyenItem(
       brand: item.paymentMethod ?? null,
     });
     const f = normalizeAdyenDecline(sig);
+    const text = f.message ?? item.reason;
+    const rawReason = operator ? ad.refusalReasonRaw?.trim() : undefined;
+    const message =
+      rawReason && rawReason !== item.reason ? `${text ?? "Refused"} (${rawReason})` : text;
     return {
       failureCode: f.code,
       failureRetriable: f.retriable,
       ...(sig.code ? { providerFailureCode: sig.code } : {}),
-      ...((f.message ?? item.reason) ? { failureMessage: f.message ?? item.reason } : {}),
+      ...(message ? { failureMessage: message } : {}),
     };
   };
+  // Adyen's reason reaches the operator; a refund failure is never shown to a payer.
+  const refundFailed = (): NormalizedProviderEvent => ({
+    ...base,
+    type: "refund.failed",
+    providerChargeId: original,
+    providerRefundId: psp,
+    ...(item.reason?.trim() ? { failureMessage: item.reason.trim() } : {}),
+  });
   const disputeAmount = minorOf(item.amount);
   const dispute = () => ({
     // After CHARGEBACK_REVERSED the money is back and the case is booked won; what follows
@@ -674,12 +706,36 @@ export function normalizeAdyenItem(
     case "AUTHORISATION": {
       const created = dateOf(item.eventDate);
       const obj = { ...base, ...(created ? { providerObjectCreatedAt: created } : {}) };
+      /**
+       * A buyer-present refusal: the reason goes on the OPEN attempt (`charge.failed`), matched
+       * on the stored session id, then on our reference. Adyen sends one AUTHORISATION per try.
+       */
+      const sessionId = ad.checkoutSessionId;
+      const sessionRefusal = (): NormalizedProviderEvent => ({
+        ...obj,
+        type: "charge.failed",
+        ...(sessionId ? { providerIntentId: SESSION_PREFIX + sessionId } : {}),
+        ...(psp ? { providerChargeId: psp } : {}),
+        ...decline(true),
+      });
       // A payment made on a payment link names the link, which is the intent we stored.
       // https://docs.adyen.com/unified-commerce/pay-by-link/create-payment-links/api
       const linkId = ad.paymentLinkId;
       if (linkId) {
-        // Refused: the link stays open for another try until it expires, so nothing closes.
-        if (!ok || !psp) return [obj];
+        // Refused: the link stays open for another try, so the reason goes on the open attempt.
+        if (!ok)
+          return psp
+            ? [
+                {
+                  ...obj,
+                  type: "charge.failed",
+                  providerIntentId: ADYEN_LINK_PREFIX + linkId,
+                  providerChargeId: psp,
+                  ...decline(true),
+                },
+              ]
+            : [obj];
+        if (!psp) return [obj];
         return [
           {
             ...obj,
@@ -703,8 +759,10 @@ export function normalizeAdyenItem(
               providerIntentId: encodeStoredMethod(shopper, token, psp),
             },
           ];
-        return [obj];
+        return ok ? [obj] : [sessionRefusal()];
       }
+      // A refusal inside a Drop-in session: the buyer may try again on the same session.
+      if (!ok && sessionId && ref.startsWith(ADYEN_REF.intent)) return [sessionRefusal()];
       if (ref.startsWith(ADYEN_REF.intent))
         return [
           ok
@@ -763,14 +821,10 @@ export function normalizeAdyenItem(
         ? refunded()
         : [{ ...base, type: "intent.voided", providerIntentId: original }];
     case "REFUND":
-      return ok
-        ? refunded()
-        : [{ ...base, type: "refund.failed", providerChargeId: original, providerRefundId: psp }];
+      return ok ? refunded() : [refundFailed()];
     case "REFUND_FAILED":
     case "REFUNDED_REVERSED":
-      return [
-        { ...base, type: "refund.failed", providerChargeId: original, providerRefundId: psp },
-      ];
+      return [refundFailed()];
     case "NOTIFICATION_OF_CHARGEBACK":
     case "REQUEST_FOR_INFORMATION":
     case "PREARBITRATION_OPEN":
@@ -1736,17 +1790,16 @@ export class AdyenProvider implements PaymentProvider {
           intentId,
           status: "failed",
           ...(paid?.pspReference ? { providerChargeId: paid.pspReference } : {}),
-          failure: {
-            code: "card_declined",
-            message: "The card was refused. Use a different card, or contact your bank.",
-          },
+          // No reason in a session result: the AUTHORISATION webhook replaces it.
+          failure: { ...GENERIC_CLIENT_REFUSAL },
           raw: s,
         };
       case "canceled":
         return {
           intentId,
           status: "failed",
-          failure: { code: "authorization_failed", message: "The payment was cancelled." },
+          // The buyer left the form: not a decline.
+          failure: { code: "payment_abandoned", message: "The payment was cancelled." },
           raw: s,
         };
       case "expired":
@@ -1924,6 +1977,13 @@ export class AdyenProvider implements PaymentProvider {
         throw new Error(
           `Adyen webhook HMAC signature verification failed (${item.eventCode ?? "?"} ${item.pspReference ?? "?"})`,
         );
-    return items.flatMap((item) => normalizeAdyenItem(item, adyenItemEventId(item)));
+    return items.flatMap((item) =>
+      normalizeAdyenItem(item, adyenItemEventId(item)).map((ev) =>
+        // Not acted on; the payment's id lets the attempt find it.
+        ev.type === "unknown" && !ev.providerChargeId && !ev.providerIntentId
+          ? { ...ev, providerChargeId: item.originalReference || item.pspReference }
+          : ev,
+      ),
+    );
   }
 }

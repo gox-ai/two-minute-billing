@@ -1,3 +1,4 @@
+import type { CreatedThrough } from "@/lib/created-through";
 // Server-only API client for the tmbilling REST API. Authenticates as the SIGNED-IN
 // OPERATOR by forwarding their session cookie (0198) — there is no API key here any
 // more, and no shared secret in dashboard env. Never imported into client components:
@@ -164,23 +165,6 @@ export interface CurrencyRate {
   last_error: string | null;
 }
 
-/** Staff mail settings (0489). Mirrors `serializeTeamAlertsConfig` in team-alerts/config.ts. */
-export interface TeamAlertsConfig {
-  recipients: string[];
-  overdue: { enabled: boolean; thresholds: Record<string, number> };
-  webhook_failures: { enabled: boolean };
-  daily_digest: { enabled: boolean };
-  /** At the time of a free credit grant above `credit_config.grant_limits` (0495). */
-  large_grants?: { enabled: boolean };
-}
-
-/** A team alert address and whether it gets alerts (0495). */
-export interface TeamAlertRecipient {
-  email: string;
-  state: "member" | "confirmed" | "pending";
-  last_sent_at: string | null;
-}
-
 export interface Business {
   id: string;
   name: string;
@@ -210,6 +194,8 @@ export interface Business {
   icon_url?: string | null;
   favicon_url?: string | null;
   brand_color?: string | null;
+  /** 0542 — label on a brand-color button; null = automatic. */
+  button_text_color?: string | null;
   /** 0238 — may a BUYER type a coupon code on the hosted checkout / portal? */
   allow_customer_coupons?: boolean;
   /** 0495: coupon codes a buyer can enter on one checkout or subscription (1–10). */
@@ -414,6 +400,12 @@ export interface Business {
     portal_link_error_html?: string | null;
     /** One-time purchases: keep the buyer's payment method. Default `ask`. */
     one_time_save_payment_method?: "never" | "always" | "ask";
+    portal_save_new_method?: "offer" | "always" | "never";
+    /** Per currency: the order of method rows in the portal, and the account a NEW method of
+     * each kind goes to. Absent = automatic. */
+    payment_routing?: Record<string, { order: string[]; gateways: Record<string, string> }>;
+    /** Portal asks why when a buyer deletes their last payment method. Default FALSE. */
+    portal_ask_delete_reason?: boolean;
     /** Portal usage view on metered subscriptions. Default TRUE. */
     portal_show_usage?: boolean;
     /** Portal projected usage. Default FALSE. */
@@ -500,11 +492,11 @@ export interface Business {
     attachReceiptPdf?: boolean;
     /** Where email links go. Absent = the hosted portal. */
     linkTarget?: "portal" | "merchant_url";
+    /** Record opens and clicks. Unset = off. */
+    trackEngagement?: boolean;
     /** The merchant's page for email links (http/https). */
     merchantUrl?: string | null;
   } | null;
-  /** Team alerts (0489), resolved: every key present, all off when unset. */
-  team_alerts_config?: TeamAlertsConfig;
   /**
    * What the printed invoice / credit note SHOWS (0239). Governs the DOCUMENT only —
    * hiding the customer id here does NOT remove `customer_id` from this resource.
@@ -647,6 +639,8 @@ export interface CustomerDiscount {
 }
 
 export interface Customer {
+  /** Detail only: what created it. */
+  created_through?: CreatedThrough | null;
   id: string;
   email: string | null;
   name: string | null;
@@ -667,6 +661,8 @@ export interface Customer {
     paid_invoices_count: number;
     first_paid_at: string | null;
   }>;
+  /** Net billed revenue less credit notes, before tax, per currency (detail GET only). */
+  revenue_billed?: Array<{ currency: string; amount_minor: number }>;
   locale?: string | null;
   auto_collection?: "on" | "off";
   net_term_days?: number;
@@ -708,6 +704,8 @@ export interface Customer {
   balances?: CustomerBalance[];
   primary_payment_source_id?: string | null;
   backup_payment_source_id?: string | null;
+  /** `gwa_…`: where this customer's next NEW payment method goes; null = the business routing. */
+  new_method_gateway_account?: string | null;
 }
 /** One entry in a customer's shipping address book. */
 export interface ShippingAddress extends CustomerAddress {
@@ -923,6 +921,8 @@ export interface Discount {
   remaining_periods: number | null;
 }
 export interface Subscription {
+  /** Detail only: what created it. */
+  created_through?: CreatedThrough | null;
   id: string;
   status: string;
   currency: string;
@@ -1119,6 +1119,8 @@ export interface InvoiceDiscount {
   amount_minor: number;
 }
 export interface Invoice {
+  /** Detail only: what created it. */
+  created_through?: CreatedThrough | null;
   id: string;
   status: string;
   /** Detail read: all tax on the invoice, added and included (Σ `taxes`). */
@@ -1408,6 +1410,7 @@ export interface WebhookEndpoint {
   url: string;
   business: string | null;
   enabled: boolean;
+  livemode: "live" | "test";
   /**
    * The endpoint's NAME. `serializeEndpoint` has always returned it on the LIST route too, but
    * this type omitted it, so the list could not show what identifies an endpoint to a human — and
@@ -1645,6 +1648,8 @@ export async function apiWrite(
   status: number;
   error?: string;
   param?: string;
+  /** The engine's machine code for the refusal, when it sends one (`possible_duplicate`). */
+  code?: string;
   data?: unknown;
   /** The engine's `Request-Id`, on a failure the signed-in person can open in the request log. */
   requestId?: string;
@@ -1677,6 +1682,7 @@ export async function apiWrite(
           error?: {
             message?: string;
             param?: string;
+            code?: string;
             details?: Record<string, string[] | undefined>;
           };
         }
@@ -1690,6 +1696,7 @@ export async function apiWrite(
     status: res.status,
     error,
     param: payload?.param,
+    code: payload?.code,
     requestId: await loggedRequestId(path, res),
   };
 }
@@ -1793,7 +1800,10 @@ export interface ExcessPayment {
   invoice: string | null;
   currency: string;
   payment_amount_minor: number;
+  /** What the payment put on the excess balance, less its own refunds. */
   held_minor: number;
+  /** What is still on the balance from it after invoices used credit (oldest payment first). */
+  remaining_minor: number;
   refundable_minor: number;
   gateway: string | null;
   created_at: string;
@@ -1878,6 +1888,9 @@ export interface DunningJourneyAttempt {
     | "new_payment_method"
     | "offline"
     | "api"
+    | "checkout"
+    | "webhook"
+    | "mcp"
     | null;
   actor: string | null;
   transaction: string | null;
@@ -1893,6 +1906,8 @@ export interface DunningJourneyEvent {
 export type DunningJourneyStep =
   | { kind: "retry" | "deadline_attempt"; at: string }
   | { kind: "hold"; at: string; until: string; reason: "parked" | "network_limit" }
+  // The gateway refused our request: held for our team, no deadline, no final action.
+  | { kind: "hold"; at: string; until: null; reason: "parked_for_ops" }
   | {
       kind: "final_action";
       at: string;
@@ -2084,6 +2099,8 @@ export interface ReportSummary {
   description: string;
   category: string;
   category_label: string;
+  /** The shelf the report sits on (`lib/billing-models`). Absent on an engine that predates it. */
+  model?: string;
   kind: "money" | "count" | "rate" | "ratio";
   shape: "flow" | "stock" | "forward";
   dimensions: string[];
@@ -2129,7 +2146,14 @@ export interface ReportResult {
   matrix?: {
     columns: string[];
     base_kind: "money" | "count";
+    /** What the cells hold: basis points (absent, or `rate`) or minor units (`money`). */
+    value_kind?: "rate" | "money";
     rows: Array<{ group: string; base: number; values: Array<number | null> }>;
+  };
+  /** A ranked table with several columns per row. Each column states what its cells hold. */
+  grid?: {
+    columns: Array<{ key: string; label: string; kind: "money" | "count" | "rate" | "text" }>;
+    rows: Array<{ group: string; group_id: string | null; values: Array<number | string | null> }>;
   };
   /** The period a single-figure report describes, e.g. "Aug 2026". */
   window_label?: string;
@@ -2210,6 +2234,16 @@ function reachableFromOutside(url: string): boolean {
 }
 
 export const publicApiReachable = reachableFromOutside(PUBLIC_API_URL);
+
+/**
+ * Base of the Notification URLs new gateway registrations use: the engine's own
+ * `GATEWAY_WEBHOOK_BASE_URL`, read from the same root `.env`. Unset or empty: `PUBLIC_API_URL`.
+ * Only a fallback: the webhook card shows the URL the account is registered under.
+ */
+export const GATEWAY_WEBHOOK_BASE_URL = (
+  process.env.GATEWAY_WEBHOOK_BASE_URL || PUBLIC_API_URL
+).replace(/\/+$/, "");
+export const gatewayWebhookBaseReachable = reachableFromOutside(GATEWAY_WEBHOOK_BASE_URL);
 
 /**
  * The API base URL we tell developers to call (Developer page, API reference links): the

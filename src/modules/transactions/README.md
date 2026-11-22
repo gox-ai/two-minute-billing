@@ -49,6 +49,7 @@ occurred_at/settled_at).
 - Serializer lacks a linked `payment` id today (shows invoice + gateway charge id) — a known gap.
 
 ## Changelog
+- **2026-11-22** — List rows return `initiated_by` (one batched audit query per page).
 
 - **2026-11-03** — `span_id` (0496): the collection inside `trace_id` that wrote the row, stamped in
   `recordTransaction` from `getSpanId()`. The dashboard's gateway-log link filters on both, so a
@@ -169,3 +170,8 @@ occurred_at/settled_at).
 - **2026-10-21** — Transactions list total counts up to 10,000 and stops (`cappedTotal`, `total_capped`; `total=exact` opts in): an exact count over a large book cost seconds per page.
 - **2026-10-30** — `subscription_id` (0402): set only on a charge refused before its invoice existed (reactivation or signup pre-charge), which no invoice could reach. Every join and the `subscription` filter read `coalesce(transactions.subscription_id, invoices.subscription_id)` (`subscriptionOfTransaction`). `verify:create-gating` case 9.
 - **2026-11-10** — `invoice_number` and `credit_note_number` (and the already-served `customer_name`, now in the OpenAPI schema) on the transaction response, so screens name the invoice instead of its id. Additive, nullable.
+- **2026-11-17** — `dispute_recording.reported_daily`: the gateway reports its disputes in a
+  daily report (CyberSource), so the record dialog asks for the case number.
+- **2026-11-18** — `gateway_code` on the single read of a failed transaction: the gateway's own
+  refusal code (`invalid_account`), read from the newest logged call in the row's span
+  (`gatewayCodeInResponse`). The dashboard's Error line shows it as "Stripe code: …" beside ours.

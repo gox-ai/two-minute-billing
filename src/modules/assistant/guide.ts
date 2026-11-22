@@ -31,9 +31,18 @@ export interface Guide {
   steps: GuideStep[];
 }
 
+/** What the member's question asks to change: one record, or a rule for the whole business. */
+export type GuideScope = "one_record" | "whole_business";
+export const GUIDE_SCOPES = ["one_record", "whole_business"] as const;
+
 export interface GuideInput {
   /** The screen's path as find_screen returned it; {placeholders} are filled from params. */
   screen: string;
+  /**
+   * Set by the model. A question about one record is answered on that record's screen: a
+   * business-wide screen changes every customer, so it is refused as that question's guide.
+   */
+  scope?: GuideScope;
   params?: Record<string, string>;
   steps: Array<{ control: string; within?: string; say: string; do?: StepAction }>;
 }
@@ -48,6 +57,11 @@ const norm = (s: string) =>
     .replace(/[…*:]+$/u, "")
     .trim()
     .toLowerCase();
+
+/** A screen of one record (a customer, an invoice): its route names a record id. */
+export function isRecordScreen(screen: Pick<MapScreen, "route">): boolean {
+  return screen.route.split("/").some((p) => /^\{\w+\}$/.test(p) && p !== "{business}");
+}
 
 /** Every short id-like string in the turn's tool results: what a path may name. */
 export function idsIn(results: unknown[]): Set<string> {
@@ -82,6 +96,11 @@ export function resolveGuide(a: {
     return {
       error:
         "Unknown screen. Pass the screen's path exactly as the reference or research gave it, for example /businesses/{business}/settings/dunning.",
+    };
+  if (a.input.scope === "one_record" && !isRecordScreen(screen))
+    return {
+      error:
+        "This screen sets a rule for the whole business, and the question is about one record. Give that record's screen and the control that acts on it, or do not offer Show me.",
     };
   const given = template.split("/");
   let path = "";

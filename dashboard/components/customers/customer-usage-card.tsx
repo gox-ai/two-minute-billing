@@ -35,8 +35,9 @@ export async function CustomerUsageCard({
     >
       <div className="flex flex-col gap-3 text-sm">
         <div className="overflow-x-auto">
-          <div className="min-w-[36rem]">
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem_8rem] gap-x-4 border-b py-2 text-xs font-medium text-muted-foreground">
+          {/* One grid, rows as subgrids: the totals size to the widest amount in any row. */}
+          <div className="grid min-w-min grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_auto_auto] gap-x-4">
+            <div className="col-span-full grid grid-cols-subgrid border-b py-2 text-xs font-medium text-muted-foreground">
               <span>Subscription</span>
               <span>Period</span>
               <span className="text-right">Total so far</span>
@@ -45,7 +46,7 @@ export async function CustomerUsageCard({
             {usage.data.map((u) => (
               <div
                 key={u.subscription}
-                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem_8rem] gap-x-4 border-b border-border/40 py-3 tabular-nums"
+                className="col-span-full grid grid-cols-subgrid border-b border-border/40 py-3 tabular-nums"
               >
                 <Link
                   href={`/businesses/${biz}/subscriptions/${u.subscription}?from=customer#usage`}

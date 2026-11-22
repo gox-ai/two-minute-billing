@@ -495,7 +495,7 @@ export async function listDashboards(
         ),
       )
       .orderBy(asc(reportDashboards.name));
-    // The built-in five lead, in their declared order, then the operator's own by name. A
+    // The built-in boards lead, in their declared order, then the operator's own by name. A
     // preset is not a row, so it cannot be ordered by the query that fetched the rows.
     const models = businessId == null ? null : await billingModelsPresent(tx, businessId);
     const presets = listPresets(organizationId, businessId, models);
@@ -575,7 +575,7 @@ function presetAsRows(
   return { dashboard, tiles };
 }
 
-/** The five built-in dashboards, for this scope. */
+/** The built-in dashboards, for this scope. */
 export function listPresets(
   organizationId: string,
   businessId: string | null,
@@ -583,10 +583,11 @@ export function listPresets(
   models: ReadonlySet<BillingModel> | null = null,
 ): Array<{ dashboard: ReportDashboardRow; tiles: ReportDashboardTileRow[] }> {
   const listed = PRESET_DASHBOARDS.filter((p) => !p.requires || !models || models.has(p.requires));
-  // No subscriptions: the page opens on the first preset, so lead with this business's models.
-  const modelFirst = models != null && !models.has("subscriptions");
-  const ordered = modelFirst
-    ? [...listed.filter((p) => p.requires), ...listed.filter((p) => !p.requires)]
+  // No subscriptions: the page opens on the first preset, so lead with the model-neutral
+  // board (Revenue), then this business's own models.
+  const neutralFirst = models != null && !models.has("subscriptions");
+  const ordered = neutralFirst
+    ? [...listed.filter((p) => !p.requires), ...listed.filter((p) => p.requires)]
     : listed;
   return ordered.map((p) => presetAsRows(p, organizationId, businessId));
 }

@@ -93,12 +93,16 @@ import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { withTenantTx, type Tx } from "@/platform/db";
 import {
   appliedTaxes,
+  creditGrantMovements,
+  creditGrants,
   invoiceLineDiscounts,
   invoiceLineItems,
   invoices,
+  meters,
   payments,
   prices,
   refunds,
+  type CreditApplicability,
 } from "@db/schema";
 
 /**
@@ -250,12 +254,50 @@ export interface PaymentAttribution {
 /** Ids bound per statement; Postgres refuses more than 65,534 parameters. */
 const ID_CHUNK = 5000;
 
-/** The line weights of one invoice, in document order. */
-async function lineWeightsFor(tx: Tx, invoiceIds: string[]): Promise<Map<string, LineWeight[]>> {
-  const out = new Map<string, LineWeight[]>();
+/** One invoice line as the weights and the revenue parts read it. */
+interface LineRow {
+  id: string;
+  invoiceId: string;
+  kind: string;
+  amountMinor: bigint;
+  seq: bigint | null;
+  priceId: string | null;
+  pricePublicId: string | null;
+  adjustment: string | null;
+  meterId: string | null;
+}
+
+/** A credit grant draw on an invoice, positive amounts, with the grant it came from. */
+export interface InvoiceDraw {
+  category: string;
+  source: string;
+  taxTreatment: string | null;
+  applicability: CreditApplicability | null;
+  faceMinor: bigint;
+  costMinor: bigint;
+}
+
+/** Everything one chunk of invoices needs for its weights and its revenue parts. */
+export interface InvoiceFacts {
+  /** Gross weights: line − item discounts − inclusive tax. `invoice_total_consistent`'s terms. */
+  weights: LineWeight[];
+  /** Per weight (same index): item discount, exclusive tax, and what the grant rules match on. */
+  extra: Array<{
+    itemDiscountMinor: bigint;
+    exclusiveTaxMinor: bigint;
+    pricePublicId: string | null;
+    adjustment: string | null;
+    meterKey: string | null;
+  }>;
+  promotionalCreditsMinor: bigint;
+  draws: InvoiceDraw[];
+}
+
+async function invoiceFactsFor(tx: Tx, invoiceIds: string[]): Promise<Map<string, InvoiceFacts>> {
+  const out = new Map<string, InvoiceFacts>();
   if (invoiceIds.length === 0) return out;
 
-  const lines = await tx
+  const lines: LineRow[] = await tx
     .select({
       id: invoiceLineItems.id,
       invoiceId: invoiceLineItems.invoiceId,
@@ -263,8 +305,12 @@ async function lineWeightsFor(tx: Tx, invoiceIds: string[]): Promise<Map<string,
       amountMinor: invoiceLineItems.amountMinor,
       seq: invoiceLineItems.seq,
       priceId: invoiceLineItems.priceId,
+      pricePublicId: prices.publicId,
+      adjustment: invoiceLineItems.adjustment,
+      meterId: sql<string | null>`${invoiceLineItems.rating} ->> 'meter'`,
     })
     .from(invoiceLineItems)
+    .leftJoin(prices, eq(prices.id, invoiceLineItems.priceId))
     .where(inArray(invoiceLineItems.invoiceId, invoiceIds))
     .orderBy(invoiceLineItems.seq);
 
@@ -289,23 +335,114 @@ async function lineWeightsFor(tx: Tx, invoiceIds: string[]): Promise<Map<string,
     discountByLine.set(d.lineItemId, (discountByLine.get(d.lineItemId) ?? 0n) + d.amountMinor);
   }
 
-  const inclusiveTax = await inclusiveTaxByLine(tx, invoiceIds, lines);
+  const { inclusive: inclusiveTax, appliedByLine } = await inclusiveTaxByLine(
+    tx,
+    invoiceIds,
+    lines,
+  );
+
+  const docs = await tx
+    .select({ id: invoices.id, promo: invoices.promotionalCreditsAppliedMinor })
+    .from(invoices)
+    .where(inArray(invoices.id, invoiceIds));
+  const promoOf = new Map(docs.map((d) => [d.id, d.promo ?? 0n]));
+
+  // Draw movements are stored out of the grant (≤ 0); turned positive here.
+  const drawRows = await tx
+    .select({
+      invoiceId: creditGrantMovements.invoiceId,
+      faceMinor: creditGrantMovements.faceMinor,
+      costMinor: creditGrantMovements.costMinor,
+      category: creditGrants.category,
+      source: creditGrants.source,
+      taxTreatment: creditGrants.taxTreatment,
+      applicability: creditGrants.applicability,
+    })
+    .from(creditGrantMovements)
+    .innerJoin(creditGrants, eq(creditGrants.id, creditGrantMovements.grantId))
+    .where(
+      and(
+        inArray(creditGrantMovements.invoiceId, invoiceIds),
+        eq(creditGrantMovements.kind, "draw"),
+      ),
+    )
+    .orderBy(creditGrantMovements.createdAt, creditGrantMovements.id);
+  const drawsOf = new Map<string, InvoiceDraw[]>();
+  for (const r of drawRows) {
+    if (!r.invoiceId) continue;
+    const list = drawsOf.get(r.invoiceId) ?? [];
+    list.push({
+      category: r.category,
+      source: r.source,
+      taxTreatment: r.taxTreatment,
+      applicability: r.applicability,
+      faceMinor: -r.faceMinor,
+      costMinor: -r.costMinor,
+    });
+    drawsOf.set(r.invoiceId, list);
+  }
+
+  // Meter keys, only when a grant is scoped to meters by key.
+  const meterKeyOf = new Map<string, string>();
+  if (drawRows.some((d) => d.applicability?.kind === "meters")) {
+    const ids = [...new Set(lines.map((l) => l.meterId).filter((v): v is string => !!v))];
+    for (let i = 0; i < ids.length; i += ID_CHUNK) {
+      const rows = await tx
+        .select({ id: meters.id, key: meters.key })
+        .from(meters)
+        .where(inArray(meters.id, ids.slice(i, i + ID_CHUNK)));
+      for (const r of rows) meterKeyOf.set(r.id, r.key);
+    }
+  }
 
   for (const l of lines) {
-    const list = out.get(l.invoiceId) ?? [];
-    const weightMinor = l.amountMinor - (discountByLine.get(l.id) ?? 0n);
+    const facts = out.get(l.invoiceId) ?? {
+      weights: [],
+      extra: [],
+      promotionalCreditsMinor: promoOf.get(l.invoiceId) ?? 0n,
+      draws: drawsOf.get(l.invoiceId) ?? [],
+    };
+    const itemDiscountMinor = discountByLine.get(l.id) ?? 0n;
+    const weightMinor = l.amountMinor - itemDiscountMinor;
     const base = { lineItemId: l.id, kind: l.kind, bucket: bucketOfLineKind(l.kind) };
     const t = inclusiveTax.get(l.id) ?? 0n;
     // Only split when the tax genuinely sits inside this weight: same sign, and no bigger.
-    const splits =
-      t !== 0n && t > 0n === weightMinor > 0n && (t > 0n ? t <= weightMinor : t >= weightMinor)
-        ? [
-            { ...base, weightMinor: weightMinor - t },
-            { ...base, bucket: "tax" as const, weightMinor: t },
-          ]
-        : [{ ...base, weightMinor }];
-    list.push(...splits);
-    out.set(l.invoiceId, list);
+    const split =
+      t !== 0n && t > 0n === weightMinor > 0n && (t > 0n ? t <= weightMinor : t >= weightMinor);
+    const lineExtra = {
+      pricePublicId: l.pricePublicId,
+      adjustment: l.adjustment,
+      meterKey: l.meterId ? (meterKeyOf.get(l.meterId) ?? null) : null,
+    };
+    const exclusiveTaxMinor = (appliedByLine.get(l.id) ?? 0n) - (split ? t : 0n);
+    if (split) {
+      facts.weights.push(
+        { ...base, weightMinor: weightMinor - t },
+        { ...base, bucket: "tax" as const, weightMinor: t },
+      );
+      facts.extra.push(
+        { ...lineExtra, itemDiscountMinor, exclusiveTaxMinor },
+        { ...lineExtra, itemDiscountMinor: 0n, exclusiveTaxMinor: 0n },
+      );
+    } else {
+      facts.weights.push({ ...base, weightMinor });
+      facts.extra.push({ ...lineExtra, itemDiscountMinor, exclusiveTaxMinor });
+    }
+    out.set(l.invoiceId, facts);
+  }
+  return out;
+}
+
+/**
+ * The weights cash is placed by: the gross weights less every credit that paid part of a
+ * revenue line (promotional, plan, prepaid), and less the tax a post-tax grant draw paid. So
+ * Σ weights is what money could still pay, and a promo invoice's cash is not read as revenue
+ * that the credit paid for.
+ */
+async function lineWeightsFor(tx: Tx, invoiceIds: string[]): Promise<Map<string, LineWeight[]>> {
+  const out = new Map<string, LineWeight[]>();
+  for (const [invoiceId, facts] of await invoiceFactsFor(tx, invoiceIds)) {
+    out.set(invoiceId, revenuePartsOf(facts).cashWeights);
   }
   return out;
 }
@@ -331,8 +468,9 @@ async function inclusiveTaxByLine(
     amountMinor: bigint;
     priceId: string | null;
   }>,
-): Promise<Map<string, bigint>> {
+): Promise<{ inclusive: Map<string, bigint>; appliedByLine: Map<string, bigint> }> {
   const out = new Map<string, bigint>();
+  const appliedByLine = new Map<string, bigint>();
 
   const applied = await tx
     .select({
@@ -342,9 +480,8 @@ async function inclusiveTaxByLine(
     })
     .from(appliedTaxes)
     .where(inArray(appliedTaxes.invoiceId, invoiceIds));
-  if (applied.length === 0) return out;
+  if (applied.length === 0) return { inclusive: out, appliedByLine };
 
-  const appliedByLine = new Map<string, bigint>();
   const appliedByInvoice = new Map<string, bigint>();
   for (const a of applied) {
     appliedByLine.set(a.lineItemId, (appliedByLine.get(a.lineItemId) ?? 0n) + a.amountMinor);
@@ -389,7 +526,7 @@ async function inclusiveTaxByLine(
     );
     targets.forEach((l, i) => out.set(l.id, shares[i]!));
   }
-  return out;
+  return { inclusive: out, appliedByLine };
 }
 
 /**
@@ -817,33 +954,285 @@ export function foldRevenue(
   };
 }
 
+// ── Gross to net ─────────────────────────────────────────────────────────────────────────
+
 /**
- * Billed revenue per invoice: each line's share of the total (item discounts and inclusive
- * tax already out, `lineWeightsFor`), folded by `foldRevenue`.
+ * What takes billed revenue from gross to net. A closed set, stored as the `revenue_deduction`
+ * metric key. Every one of them was not paid for with money on that invoice:
+ *  - `coupon` — item and document discounts.
+ *  - `promotional_credit` — the promotional balance, promotional grants, and the bonus part of
+ *    a paid pack (face above what the customer paid for it).
+ *  - `plan_credit` — grants a plan gives each cycle. The plan fee is already revenue.
+ *  - `prepaid_credit` — usage a paid credit pack paid, at the pack's cost. The pack was revenue
+ *    when it was sold, so the usage is counted once.
+ *  - `credit_note` — dated by the note, not by the invoice (`invoice-measures.ts`).
+ * Overpayments, paid top-ups and refundable credit are money, so they are not here.
+ */
+export const REVENUE_DEDUCTIONS = [
+  "coupon",
+  "promotional_credit",
+  "plan_credit",
+  "prepaid_credit",
+  "credit_note",
+] as const;
+export type RevenueDeduction = (typeof REVENUE_DEDUCTIONS)[number];
+/** The deductions one invoice line carries. Credit notes are dated apart, never per line. */
+export type LineDeductions = Record<Exclude<RevenueDeduction, "credit_note">, bigint>;
+
+export interface BilledLine {
+  lineItemId: string;
+  type: RevenueType;
+  productId: string | null;
+  meterId: string | null;
+  /** Line amount less the tax inside it. Before every discount and credit. */
+  grossMinor: bigint;
+  deductions: LineDeductions;
+  /** Net: `grossMinor − Σ deductions`. */
+  amountMinor: bigint;
+}
+
+export interface BilledRevenue {
+  lines: BilledLine[];
+  /** Document discount with no revenue to sit on (the revenue lines net to zero). */
+  unallocatedMinor: bigint;
+}
+
+const halfUpDiv = (a: bigint, b: bigint): bigint => (b === 0n ? 0n : (2n * a + b) / (2n * b));
+
+/**
+ * Split `amount` over the lines in `idx` in proportion to their room, never past a line's
+ * room. Returns the shares (by line index) and what found no room.
+ */
+function placeCapped(
+  amount: bigint,
+  idx: readonly number[],
+  room: readonly bigint[],
+): { shares: Map<number, bigint>; leftover: bigint } {
+  const shares = new Map<number, bigint>();
+  if (amount <= 0n) return { shares, leftover: amount < 0n ? amount : 0n };
+  const rooms = idx.map((i) => (room[i]! > 0n ? room[i]! : 0n));
+  const total = rooms.reduce((a, r) => a + r, 0n);
+  if (total === 0n) return { shares, leftover: amount };
+  const take = amount < total ? amount : total;
+  // take ≤ total, so no share passes its room (largest remainder adds at most the unit
+  // that a floored share fell short by).
+  const parts = allocateProRata(take, rooms);
+  idx.forEach((i, k) => shares.set(i, parts[k]!));
+  return { shares, leftover: amount - take };
+}
+
+function grantCovers(
+  a: CreditApplicability | null,
+  line: {
+    kind: string;
+    adjustment: string | null;
+    pricePublicId: string | null;
+    meterKey: string | null;
+  },
+): boolean {
+  if (line.kind !== "usage" || line.adjustment) return false;
+  if (!a || a.kind === "metered") return true;
+  if (a.kind === "prices")
+    return line.pricePublicId !== null && a.prices.includes(line.pricePublicId);
+  return line.meterKey !== null && a.meters.includes(line.meterKey);
+}
+
+export interface RevenueParts {
+  /** By index into the facts' weights; only revenue entries are present. */
+  byEntry: Map<number, { grossMinor: bigint; deductions: LineDeductions; netMinor: bigint }>;
+  unallocatedMinor: bigint;
+  /** The weights cash is placed by (see `lineWeightsFor`). */
+  cashWeights: LineWeight[];
+}
+
+/**
+ * ONE invoice, gross to net, per revenue line. Pure, so the rule is testable without a book.
+ *
+ * Order, as the engine applied them (`invoicing/service.ts` `resolvePeriodInvoiceMoney`):
+ *  1. gross = line − inclusive tax; coupon = item discount + the document discount shared pro
+ *     rata (the `foldRevenue` rule).
+ *  2. pre-tax grant draws on the usage lines the grant covers (stored applicability), pro rata
+ *     to what is left after coupons. Plan grants → `plan_credit`; other promotional →
+ *     `promotional_credit`; paid → `prepaid_credit` at cost, the bonus to `promotional_credit`.
+ *  3. the promotional balance, pro rata over every revenue line with value left (a reversal
+ *     line never takes credit), as the tax engine spread it.
+ *  4. post-tax (taxed at use) draws: only their revenue share, draw × left ÷ (left + tax).
+ * Draws are stored per invoice, not per line, so the placement in 2 and 4 is derived. Every
+ * split is largest remainder, so the parts of an invoice add up exactly; no line goes below 0.
+ */
+export function revenuePartsOf(facts: {
+  weights: readonly LineWeight[];
+  extra: InvoiceFacts["extra"];
+  promotionalCreditsMinor: bigint;
+  draws: readonly InvoiceDraw[];
+}): RevenueParts {
+  const { weights, extra } = facts;
+  const rev = weights.map((w, i) => (REVENUE_BUCKETS.has(w.bucket) ? i : -1)).filter((i) => i >= 0);
+  const discount = weights
+    .filter((w) => w.bucket === "discount")
+    .reduce((s, w) => s + w.weightMinor, 0n);
+  const revWeights = rev.map((i) => weights[i]!.weightMinor);
+  const revTotal = revWeights.reduce((s, w) => s + w, 0n);
+  const docShares =
+    discount !== 0n && revTotal !== 0n ? allocateProRata(discount, revWeights) : rev.map(() => 0n);
+
+  const zero = (): LineDeductions => ({
+    coupon: 0n,
+    promotional_credit: 0n,
+    plan_credit: 0n,
+    prepaid_credit: 0n,
+  });
+  const ded = new Map<number, LineDeductions>();
+  const room: bigint[] = weights.map(() => 0n);
+  rev.forEach((i, k) => {
+    const d = zero();
+    d.coupon = extra[i]!.itemDiscountMinor - docShares[k]!;
+    ded.set(i, d);
+    room[i] = weights[i]!.weightMinor + docShares[k]!;
+  });
+
+  const positive = rev.filter((i) => room[i]! > 0n);
+  const usage = positive.filter((i) => weights[i]!.kind === "usage");
+  /** Lines a draw may land on: the grant's own, else any usage line, else any revenue line. */
+  const targets = (d: InvoiceDraw): number[][] => {
+    const own = positive.filter((i) =>
+      grantCovers(d.applicability, { kind: weights[i]!.kind, ...extra[i]! }),
+    );
+    return [own, usage, positive];
+  };
+  const place = (amount: bigint, sets: number[][]): Map<number, bigint> => {
+    const placed = new Map<number, bigint>();
+    let left = amount;
+    for (const set of sets) {
+      if (left <= 0n) break;
+      const { shares, leftover } = placeCapped(left, set, room);
+      for (const [i, v] of shares) {
+        placed.set(i, (placed.get(i) ?? 0n) + v);
+        room[i] = room[i]! - v;
+      }
+      left = leftover;
+    }
+    return placed;
+  };
+  const book = (placed: Map<number, bigint>, d: InvoiceDraw, costTotal: bigint) => {
+    const idx = [...placed.keys()];
+    const vals = idx.map((i) => placed.get(i)!);
+    if (d.category === "paid") {
+      const costs = allocateProRata(costTotal, vals);
+      idx.forEach((i, k) => {
+        const cost = costs[k]! < vals[k]! ? costs[k]! : vals[k]!;
+        ded.get(i)!.prepaid_credit += cost;
+        ded.get(i)!.promotional_credit += vals[k]! - cost;
+      });
+      return;
+    }
+    const key = d.source === "plan_cycle" ? "plan_credit" : "promotional_credit";
+    idx.forEach((i, k) => (ded.get(i)![key] += vals[k]!));
+  };
+  const placedTotal = (m: Map<number, bigint>) => [...m.values()].reduce((a, v) => a + v, 0n);
+  const capCost = (d: InvoiceDraw) => (d.costMinor < d.faceMinor ? d.costMinor : d.faceMinor);
+  const isPostTax = (d: InvoiceDraw) => d.category === "paid" && d.taxTreatment === "taxed_at_use";
+
+  // 2. Pre-tax draws.
+  for (const d of facts.draws) {
+    if (isPostTax(d) || d.faceMinor <= 0n) continue;
+    const placed = place(d.faceMinor, targets(d));
+    const got = placedTotal(placed);
+    const cost = capCost(d);
+    book(placed, d, got === d.faceMinor ? cost : halfUpDiv(cost * got, d.faceMinor));
+  }
+
+  // 3. The promotional balance.
+  const promo = place(facts.promotionalCreditsMinor, [rev.filter((i) => room[i]! > 0n)]);
+  for (const [i, v] of promo) ded.get(i)!.promotional_credit += v;
+
+  // 4. Post-tax draws: the share that paid revenue, the rest paid tax.
+  let taxPaidByDraws = 0n;
+  for (const d of facts.draws) {
+    if (!isPostTax(d) || d.faceMinor <= 0n) continue;
+    const sets = targets(d).map((set) => set.filter((i) => room[i]! > 0n));
+    const first = sets.find((set) => set.length > 0) ?? [];
+    const left = first.reduce((a, i) => a + room[i]!, 0n);
+    const tax = first.reduce(
+      (a, i) => a + (extra[i]!.exclusiveTaxMinor > 0n ? extra[i]!.exclusiveTaxMinor : 0n),
+      0n,
+    );
+    let revShare = left + tax > 0n ? halfUpDiv(d.faceMinor * left, left + tax) : 0n;
+    if (revShare > left) revShare = left;
+    const placed = place(revShare, sets);
+    const got = placedTotal(placed);
+    book(placed, d, halfUpDiv(capCost(d) * got, d.faceMinor));
+    taxPaidByDraws += d.faceMinor - got;
+  }
+
+  const byEntry: RevenueParts["byEntry"] = new Map();
+  for (const i of rev) {
+    const d = ded.get(i)!;
+    const grossMinor = weights[i]!.weightMinor + extra[i]!.itemDiscountMinor;
+    const netMinor =
+      grossMinor - d.coupon - d.promotional_credit - d.plan_credit - d.prepaid_credit;
+    byEntry.set(i, { grossMinor, deductions: d, netMinor });
+  }
+
+  // Cash weights: revenue lines less credits; tax less what post-tax draws paid of it.
+  const cashWeights = weights.map((w, i) => {
+    const d = ded.get(i);
+    return d
+      ? {
+          ...w,
+          weightMinor: w.weightMinor - d.promotional_credit - d.plan_credit - d.prepaid_credit,
+        }
+      : { ...w };
+  });
+  if (taxPaidByDraws > 0n) {
+    const taxIdx = cashWeights
+      .map((w, i) => (w.bucket === "tax" && w.weightMinor > 0n ? i : -1))
+      .filter((i) => i >= 0);
+    const { shares } = placeCapped(
+      taxPaidByDraws,
+      taxIdx,
+      cashWeights.map((w) => w.weightMinor),
+    );
+    for (const [i, v] of shares)
+      cashWeights[i] = { ...cashWeights[i]!, weightMinor: cashWeights[i]!.weightMinor - v };
+  }
+
+  return { byEntry, unallocatedMinor: revTotal === 0n ? discount : 0n, cashWeights };
+}
+
+/**
+ * Billed revenue per invoice, per line: gross, each deduction, and net (`amountMinor`). The
+ * one rule every billed-revenue figure reads (`revenue_billed`, orders, lifetime, retention,
+ * segments, usage margin). Tax is never revenue.
  */
 export async function billedRevenueByInvoice(
   tx: Tx,
   invoiceIds: readonly string[],
-): Promise<Map<string, FoldedRevenue>> {
-  const out = new Map<string, FoldedRevenue>();
+): Promise<Map<string, BilledRevenue>> {
+  const out = new Map<string, BilledRevenue>();
   for (let i = 0; i < invoiceIds.length; i += ID_CHUNK) {
-    const weights = await lineWeightsFor(tx, invoiceIds.slice(i, i + ID_CHUNK));
+    const facts = await invoiceFactsFor(tx, invoiceIds.slice(i, i + ID_CHUNK));
     const info = await revenueLineInfo(
       tx,
-      [...weights.values()].flat().map((w) => w.lineItemId),
+      [...facts.values()].flatMap((f) => f.weights.map((w) => w.lineItemId)),
     );
-    for (const [invoiceId, list] of weights) {
-      out.set(
-        invoiceId,
-        foldRevenue(
-          list.map((w) => ({
-            lineItemId: w.lineItemId,
-            bucket: w.bucket,
-            amountMinor: w.weightMinor,
-          })),
-          info,
-        ),
-      );
+    for (const [invoiceId, f] of facts) {
+      const parts = revenuePartsOf(f);
+      const lines: BilledLine[] = [];
+      for (const [k, p] of parts.byEntry) {
+        const w = f.weights[k]!;
+        const meta = info.get(w.lineItemId);
+        lines.push({
+          lineItemId: w.lineItemId,
+          type: meta?.type ?? typeOfBucket(w.bucket),
+          productId: meta?.productId ?? null,
+          meterId: meta?.meterId ?? null,
+          grossMinor: p.grossMinor,
+          deductions: p.deductions,
+          amountMinor: p.netMinor,
+        });
+      }
+      out.set(invoiceId, { lines, unallocatedMinor: parts.unallocatedMinor });
     }
   }
   return out;

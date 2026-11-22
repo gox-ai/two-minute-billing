@@ -111,6 +111,12 @@ export async function processOnce(e: BillingEvent): Promise<void> {
       switch (e.event_type) {
         case "subscription_created":
         case "subscription_changed":
+        case "subscription_activated":
+        case "subscription_cancel_scheduled":
+        case "subscription_scheduled_cancellation_removed":
+        case "subscription_reactivated":
+        case "subscription_paused":
+        case "subscription_resumed":
         case "subscription_canceled": {
           const sub = await tmb.subscriptions.get(BIZ, e.content.subscription.id);
           // The response carries customer and metadata; the SDK type does not declare them yet.

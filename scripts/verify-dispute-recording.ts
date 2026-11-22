@@ -11,11 +11,15 @@
  *  - § D the transaction read offers the action only where it applies; audit rows
  *  - § O `outcome_settable_by_operator`: true on an open hand-recorded dispute and on an open
  *    dispute of a gateway with no final state (Mollie), false on Stripe and once closed
+ *  - § E the same `dispute_*` events as the gateway path; the evidence due date is kept
+ *  - § R a second record of one case reference is refused (409), in any form
+ *  - § C a polled gateway case that a person recorded first moves that dispute and books
+ *    nothing twice (by reference, or by payment and amount when no reference was given)
  *
  *   pnpm verify:dispute-recording
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { buildApp } from "@/index";
 import { withTenant, systemDb, closeDb } from "@/platform/db";
 import { createOrganization, createBusiness, createApiKey } from "@/modules/tenancy/service";
@@ -28,7 +32,15 @@ import { refundPayment } from "@/modules/refunds/service";
 import { handleProviderEvent } from "@/modules/webhooks/inbound";
 import { inviteUser, acceptInvite } from "@/modules/auth/service";
 import { accountBalance } from "@/modules/ledger/service";
-import { auditLogs, authTokens, disputes, ledgerEntries, payments, transactions } from "@db/schema";
+import {
+  auditLogs,
+  authTokens,
+  disputes,
+  events,
+  ledgerEntries,
+  payments,
+  transactions,
+} from "@db/schema";
 import type { NormalizedProviderEvent } from "@/providers/types";
 import { pinMfaMandateOff } from "./lib/mfa-policy";
 
@@ -576,6 +588,225 @@ const bal = (account: string) => accountBalance(orgId, biz.id, account, "USD");
   );
   const so = await post(W, outcomeUrl(stripe.publicId), { outcome: "lost" });
   ok(`stripe: the outcome route refuses 400 (got ${so.statusCode})`, so.statusCode === 400);
+}
+
+// ── § E: events and the evidence date ───────────────────────────────────────
+/** The `dispute_*` event types that name this dispute, oldest first. */
+async function disputeEvents(disputePublicId: string): Promise<string[]> {
+  const rows = await withTenant(orgId, (tx) =>
+    tx
+      .select({ type: events.type })
+      .from(events)
+      .where(
+        and(
+          eq(events.organizationId, orgId),
+          sql`${events.type} like 'dispute_%'`,
+          sql`${events.data}::text like ${`%${disputePublicId}%`}`,
+        ),
+      )
+      .orderBy(events.createdAt, events.id),
+  );
+  return rows.map((r) => r.type);
+}
+{
+  const gwPay = await makePaidPayment(`ev-gw-${RUN}@example.com`);
+  const gw = await gatewayDispute(gwPay.providerChargeId!, `dp_ev_${RUN}`, [
+    "dispute.created",
+    "dispute.funds_withdrawn",
+  ]);
+  const pay = await makePaidPayment(`ev-op-${RUN}@example.com`);
+  const opened = Math.floor(Date.now() / 1000) - 3600;
+  const due = opened + 20 * 86400;
+  const r = await post(W, recordUrl(pay.publicId), {
+    amount_minor: 10000,
+    reason: "fraudulent",
+    opened_at: opened,
+    evidence_due_by: due,
+  });
+  const d = r.json() as Record<string, unknown>;
+  ok(`evidence date: 201 (got ${r.statusCode})`, r.statusCode === 201);
+  ok(
+    "evidence date: kept on the dispute",
+    typeof d.evidence_due_by === "string" && Date.parse(d.evidence_due_by as string) === due * 1000,
+  );
+  const opEvents = await disputeEvents(d.id as string);
+  const gwEvents = await disputeEvents(gw.publicId);
+  ok(
+    `events: the same dispute_* events as the gateway path (${opEvents.join(",")} vs ${gwEvents.join(",")})`,
+    opEvents.length === 2 && JSON.stringify(opEvents) === JSON.stringify(gwEvents),
+  );
+  const pay2 = await makePaidPayment(`ev-bad-${RUN}@example.com`);
+  const early = await post(W, recordUrl(pay2.publicId), {
+    amount_minor: 100,
+    reason: "general",
+    opened_at: opened,
+    evidence_due_by: opened - 86400,
+  });
+  ok(
+    `evidence date before the dispute date: 400 (got ${early.statusCode})`,
+    early.statusCode === 400,
+  );
+}
+
+// ── § R: one case reference, one dispute ────────────────────────────────────
+{
+  const ref = `CASE-R-${RUN}`;
+  const pay = await makePaidPayment(`ref-a-${RUN}@example.com`);
+  const first = await post(W, recordUrl(pay.publicId), {
+    amount_minor: 4000,
+    reason: "fraudulent",
+    processor_reference: ref,
+  });
+  ok(`reference: first record 201 (got ${first.statusCode})`, first.statusCode === 201);
+  const pay2 = await makePaidPayment(`ref-b-${RUN}@example.com`);
+  const cash = await bal("cash");
+  const same = await post(W, recordUrl(pay.publicId), {
+    amount_minor: 1000,
+    reason: "fraudulent",
+    processor_reference: ` ${ref} `,
+  });
+  ok(
+    `reference: the same case on the same payment, new key: 409 (got ${same.statusCode})`,
+    same.statusCode === 409,
+  );
+  const other = await post(W, recordUrl(pay2.publicId), {
+    amount_minor: 1000,
+    reason: "general",
+    processor_reference: ref,
+  });
+  ok(
+    `reference: the same case on another payment: 409 (got ${other.statusCode})`,
+    other.statusCode === 409,
+  );
+  ok("reference: a refused record moves no cash", (await bal("cash")) === cash);
+  // A gateway dispute keyed by the case id also counts.
+  const pay3 = await makePaidPayment(`ref-c-${RUN}@example.com`);
+  const gwRef = `dp_ref_${RUN}`;
+  await gatewayDispute(pay3.providerChargeId!, gwRef, ["dispute.created"]);
+  const g = await post(W, recordUrl(pay2.publicId), {
+    amount_minor: 1000,
+    reason: "general",
+    processor_reference: gwRef,
+  });
+  ok(
+    `reference: a gateway dispute with that case id: 409 (got ${g.statusCode})`,
+    g.statusCode === 409,
+  );
+  const rows = await withTenant(orgId, (tx) =>
+    tx.select().from(disputes).where(eq(disputes.processorReference, ref)),
+  );
+  ok(`reference: one dispute carries it (${rows.length})`, rows.length === 1);
+}
+
+// ── § C: the report shows a case a person recorded first ────────────────────
+{
+  /** A dispute event as the settlement poll hands it over. */
+  const polled = (chargeId: string, caseId: string, type: NormalizedProviderEvent["type"]) =>
+    handleProviderEvent(
+      "tmtest",
+      disputeEv({
+        providerEventId: `poll_${caseId}_${type}`,
+        type,
+        providerDisputeId: caseId,
+        providerChargeId: chargeId,
+      }),
+      { businessId: biz.id, polled: true },
+    );
+  const count = async (paymentId: string) =>
+    (
+      await withTenant(orgId, (tx) =>
+        tx.select().from(disputes).where(eq(disputes.paymentId, paymentId)),
+      )
+    ).length;
+
+  // By reference: the operator named the case.
+  const caseId = `CASE-C-${RUN}`;
+  const pay = await makePaidPayment(`poll-ref-${RUN}@example.com`);
+  const r = await post(W, recordUrl(pay.publicId), {
+    amount_minor: 10000,
+    reason: "fraudulent",
+    processor_reference: caseId,
+  });
+  const d = r.json() as Record<string, unknown>;
+  const cash = await bal("cash");
+  const held = await bal("disputed_funds");
+  const lines = await postings(d.id as string);
+  await polled(pay.providerChargeId!, caseId, "dispute.created");
+  await polled(pay.providerChargeId!, caseId, "dispute.funds_withdrawn");
+  ok(`poll by reference: still one dispute on the payment`, (await count(pay.id)) === 1);
+  ok(
+    "poll by reference: no second clawback",
+    (await bal("cash")) === cash && (await bal("disputed_funds")) === held,
+  );
+  ok(
+    "poll by reference: the dispute's ledger lines are unchanged",
+    JSON.stringify(await postings(d.id as string)) === JSON.stringify(lines),
+  );
+  // A reversal in the report moves the hand-recorded dispute to won.
+  await polled(pay.providerChargeId!, caseId, "dispute.funds_reinstated");
+  await polled(pay.providerChargeId!, caseId, "dispute.won");
+  const [after] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(disputes)
+      .where(eq(disputes.publicId, d.id as string)),
+  );
+  ok(
+    `poll by reference: a reversal wins the hand-recorded dispute (${after?.status})`,
+    after?.status === "won" && after.fundsWithdrawn === "false" && after.source === "operator",
+  );
+  ok("poll by reference: the cash is back", (await bal("cash")) === cash + 10000n);
+
+  // No reference: the payment and the amount match, and the case id is kept.
+  const pay2 = await makePaidPayment(`poll-noref-${RUN}@example.com`);
+  const r2 = await post(W, recordUrl(pay2.publicId), { amount_minor: 10000, reason: "general" });
+  const d2 = r2.json() as Record<string, unknown>;
+  const cash2 = await bal("cash");
+  const case2 = `CASE-N-${RUN}`;
+  await polled(pay2.providerChargeId!, case2, "dispute.created");
+  await polled(pay2.providerChargeId!, case2, "dispute.funds_withdrawn");
+  const [named] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(disputes)
+      .where(eq(disputes.publicId, d2.id as string)),
+  );
+  ok(
+    `poll without reference: still one dispute (${await count(pay2.id)})`,
+    (await count(pay2.id)) === 1,
+  );
+  ok("poll without reference: no second clawback", (await bal("cash")) === cash2);
+  ok(
+    "poll without reference: the case id becomes its reference",
+    named?.processorReference === case2,
+  );
+  const dup = await post(W, recordUrl(pay2.publicId), {
+    amount_minor: 1,
+    reason: "general",
+    processor_reference: case2,
+  });
+  ok(
+    `poll without reference: recording that case again is refused 409 (got ${dup.statusCode})`,
+    dup.statusCode === 409,
+  );
+
+  // A case the person never recorded is booked as a gateway dispute.
+  const pay3 = await makePaidPayment(`poll-new-${RUN}@example.com`);
+  const cash3 = await bal("cash");
+  await polled(pay3.providerChargeId!, `CASE-X-${RUN}`, "dispute.created");
+  await polled(pay3.providerChargeId!, `CASE-X-${RUN}`, "dispute.funds_withdrawn");
+  const [fresh] = await withTenant(orgId, (tx) =>
+    tx.select().from(disputes).where(eq(disputes.paymentId, pay3.id)),
+  );
+  ok(
+    "poll, no hand record: a gateway dispute that takes the money",
+    fresh?.source === "gateway" && (await bal("cash")) === cash3 - 10000n,
+  );
+  const late = await post(W, recordUrl(pay3.publicId), { amount_minor: 100, reason: "general" });
+  ok(
+    `poll, no hand record: a later hand record on that payment is refused 409 (got ${late.statusCode})`,
+    late.statusCode === 409,
+  );
 }
 
 // ── Every posted ledger transaction balances ─────────────────────────────────

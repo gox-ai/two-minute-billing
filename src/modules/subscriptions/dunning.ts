@@ -28,6 +28,7 @@ import {
 import { recomputeSubscriptionMrr } from "./service";
 import { HOLD_FOR_NEW_CARD } from "./decline-policy";
 import { storedPayerDeclineMessage } from "./decline-overrides";
+import { notParkedOnOurRequestSql } from "@/modules/invoicing/request-fault-park";
 import {
   invoices,
   subscriptions,
@@ -736,6 +737,9 @@ export async function sweepExpiredParkedDunning(now: Date): Promise<{
         eq(invoices.dunningStatus, "parked"),
         isNull(invoices.nextAttemptAt),
         dunningNotHeldSql(),
+        // Parked on OUR refused request: ops end it, never this deadline's final action.
+        // Excluded in the scan, so held rows never crowd the scan limit.
+        notParkedOnOurRequestSql(),
         scanBusinessFilter(invoices.businessId),
       ),
     )
@@ -866,6 +870,8 @@ export async function sweepExpiredParkedDunning(now: Date): Promise<{
                       customerId: live.inv.customerId,
                       subscription: live.sub ?? undefined,
                       currency: live.inv.currency,
+                      // A hard-declined method is not charged on the deadline either.
+                      skipUnusable: true,
                     }),
                   ),
                   now,
@@ -1048,6 +1054,9 @@ export async function sweepParkedReminders(
         isNotNull(invoices.dunningNextReminderAt),
         lte(invoices.dunningNextReminderAt, now),
         dunningNotHeldSql(),
+        // No payer reminder while parked on OUR refused request. The rung is kept, so the
+        // ladder resumes if the invoice parks again for a reason the payer can clear.
+        notParkedOnOurRequestSql(),
         scanBusinessFilter(invoices.businessId),
       ),
     )
@@ -1250,44 +1259,8 @@ async function retryInvoice(
   if (credit.settled) return "recovered";
   ctx.inv = credit.invoice;
 
-  // Per-card caps (`representment.ts`): a card at its limit is not presented; the retry
-  // waits until the window reopens instead.
-  const { capped } = await firstPresentable({
-    organizationId,
-    candidates: chargeOrder(
-      await resolveChargeCandidates({
-        organizationId,
-        customerId: ctx.inv.customerId,
-        subscription: ctx.sub ?? undefined,
-        currency: ctx.inv.currency,
-      }),
-    ),
-    now,
-    applyCaps: true,
-    invoiceId,
-  });
-  if (capped) {
-    await withTenant(organizationId, (tx) =>
-      tx
-        .update(invoices)
-        .set({ nextAttemptAt: capped.until })
-        .where(
-          and(
-            eq(invoices.id, invoiceId),
-            eq(invoices.status, "payment_due"),
-            isNull(invoices.nextAttemptAt),
-          ),
-        ),
-    );
-    log.info("dunning retry deferred: card at its attempt limit", {
-      event: "dunning_card_cap",
-      invoice: ctx.inv.publicId,
-      until: capped.until.toISOString(),
-      declines_24h: capped.declines24h,
-      declines_30d: capped.declines30d,
-    });
-    return "still_failing";
-  }
+  // Attempt caps (per card, per invoice) and a held dead method are decided inside
+  // `collectInvoice`: a capped or held rung is booked without a charge and the schedule goes on.
 
   // Several due invoices, one charge (2.51): null = not combined, charge this one alone.
   const { tryCombinedRetry } = await import("./dunning-combined");

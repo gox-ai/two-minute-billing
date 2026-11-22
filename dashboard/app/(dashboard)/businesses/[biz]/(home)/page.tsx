@@ -1,5 +1,6 @@
 import { listBusinesses, listCustomers, getReport, type ReportResult } from "@/lib/api";
 import { listDisputes } from "@/lib/api/disputes";
+import { listCreditUnits } from "@/lib/api/credits";
 import { fetchQueueCounts, queueItems } from "@/lib/attention-queues";
 import {
   queryAnalytics,
@@ -15,7 +16,8 @@ import { PaletteWelcome } from "@/components/palette-hints";
 import { ErrorState } from "@/components/states";
 import { Alert } from "@/components/ui/alert";
 import { SetupChecklist } from "@/components/home/setup-checklist";
-import { resolveSetupSteps } from "@/lib/setup-readiness";
+import { resolveSetupSteps, setupHiddenCookie } from "@/lib/setup-readiness";
+import { cookies } from "next/headers";
 import { HomeTabs, type HomeTab } from "@/components/analytics/home/tabs";
 import { CurrencyPicker } from "@/components/analytics/home/currency-picker";
 import { BoardRangePicker } from "@/components/reports/board-range-picker";
@@ -31,6 +33,7 @@ import {
   pick,
   rangeLabel,
   slice,
+  slices,
   type Basis,
   type LinkWindow,
 } from "@/components/analytics/home/parts";
@@ -44,6 +47,7 @@ import {
   CollectionsPerformanceSkeleton,
 } from "@/components/analytics/home/skeletons";
 import { NavPendingProvider, PendingContent } from "@/components/navigation/nav-pending";
+import { InstallCard } from "@/components/app-install/install-app";
 
 export const dynamic = "force-dynamic";
 
@@ -411,6 +415,9 @@ export default async function BizHome({
       // Revenue mix: shown only when the period has revenue other than subscriptions.
       { key: "rev_mix", measure: "revenue_billed", split: "revenue_type", ...PERIOD },
       { key: "rev_mix_cash", measure: "revenue_collected", split: "revenue_type", ...PERIOD },
+      // Gross to net under the mix: gross, then each deduction.
+      { key: "rev_mix_gross", measure: "revenue_billed_gross", ...PERIOD },
+      { key: "rev_mix_ded", measure: "revenue_deductions", split: "revenue_deduction", ...PERIOD },
       ...GATEWAY,
     ],
     recurring: [
@@ -516,6 +523,21 @@ export default async function BizHome({
       { key: "c_breakage", measure: "credit_breakage", ...PERIOD },
       { key: "c_packs", measure: "credit_packs_sold", ...PERIOD },
       { key: "c_pack_revenue", measure: "revenue_billed", split: "revenue_type", ...PERIOD },
+      // Credit in a unit with no money value: in its own units, per unit. The total and the
+      // other splits come only while the business has one such unit.
+      { key: "cu_balance", measure: "credit_units_outstanding", split: "credit_unit", ...READING },
+      { key: "cu_expiring", measure: "credit_units_expiring", split: "horizon", ...READING },
+      {
+        key: "cu_expiring_by_unit",
+        measure: "credit_units_expiring",
+        split: "credit_unit",
+        ...READING,
+      },
+      { key: "cu_granted", measure: "credit_units_granted", split: "credit_unit", ...PERIOD },
+      { key: "cu_granted_by", measure: "credit_units_granted", split: "credit_source", ...PERIOD },
+      { key: "cu_used", measure: "credit_units_used", split: "credit_unit", ...PERIOD },
+      { key: "cu_used_series", measure: "credit_units_used", ...CHART },
+      { key: "cu_expired", measure: "credit_units_expired", split: "credit_unit", ...PERIOD },
     ],
     usage: [
       // Current: the last 30 days, whatever the Performance period says.
@@ -589,11 +611,20 @@ export default async function BizHome({
     },
     { key: "pr_credit", measure: "credits_outstanding", ...READING },
     { key: "pr_granted", measure: "credits_granted", range: "90d", grain: "month" },
+    // A unit with no money value: its money figures stay 0, so its units count.
+    { key: "pr_units", measure: "credit_units_outstanding", split: "credit_unit", ...READING },
+    {
+      key: "pr_units_granted",
+      measure: "credit_units_granted",
+      split: "credit_unit",
+      range: "90d",
+      grain: "month",
+    },
     { key: "pr_usage", measure: "usage_events", range: "90d", grain: "month" },
     { key: "pr_orders", measure: "orders", range: "90d", grain: "month" },
     { key: "pr_subs", measure: "active_subscriptions", range: "90d", grain: "month" },
   ];
-  /** Overview's headline for a business with no subscriptions: revenue of every kind. */
+  /** Overview's model cards: the headline without subscriptions, a second row with them. */
   const MODEL_HEADLINE: AnalyticsQuery[] =
     tab === "overview"
       ? [
@@ -725,8 +756,9 @@ export default async function BizHome({
    * itself when every step is done.
    */
   const activeSubs = pick(batch, "subs_active")?.total ?? null;
+  const setupHidden = (await cookies()).get(setupHiddenCookie(biz))?.value === "1";
   const setupSteps =
-    activeSubs === 0 || activeSubs === null
+    !setupHidden && (activeSubs === 0 || activeSubs === null)
       ? await resolveSetupSteps(biz, baseCurrency, {
           livemode: business?.livemode ?? "live",
           signupGateway: user.organization_signup_gateway,
@@ -768,7 +800,12 @@ export default async function BizHome({
   const mixPresent = pick(batch, "pr_mix");
   const present = new Set<HomeTab>(["overview", "recurring", "collections"]);
   const hasSubscriptions = (pick(batch, "pr_subs")?.series ?? []).some((p) => (p.value ?? 0) > 0);
-  if ((pick(batch, "pr_credit")?.total ?? 0) > 0 || (pick(batch, "pr_granted")?.total ?? 0) > 0)
+  if (
+    (pick(batch, "pr_credit")?.total ?? 0) > 0 ||
+    (pick(batch, "pr_granted")?.total ?? 0) > 0 ||
+    slices(pick(batch, "pr_units")).length > 0 ||
+    slices(pick(batch, "pr_units_granted")).length > 0
+  )
     present.add("credits");
   if ((slice(mixPresent, "usage") ?? 0) !== 0 || (pick(batch, "pr_usage")?.total ?? 0) > 0)
     present.add("usage");
@@ -779,6 +816,14 @@ export default async function BizHome({
   const otherModels = (["credits", "usage", "sales"] as const).filter((m) => present.has(m));
   const modelLed = !hasSubscriptions && otherModels.length > 0;
   if (modelLed) present.delete("recurring");
+
+  const creditUnits =
+    tab === "credits"
+      ? await listCreditUnits(biz).then(
+          (l) => l.data,
+          () => [],
+        )
+      : [];
 
   const lowCredit =
     tab === "credits"
@@ -814,7 +859,7 @@ export default async function BizHome({
     tab === "sales"
       ? salesZones({ biz, basis, batch, lapsed })
       : tab === "credits"
-        ? creditsZones({ biz, basis, batch, lowCredit })
+        ? creditsZones({ biz, basis, batch, lowCredit, units: creditUnits })
         : tab === "usage"
           ? usageZones({ biz, basis, batch, stopped })
           : tab === "overview"
@@ -827,6 +872,7 @@ export default async function BizHome({
                 linkWindow,
                 windowLabel: periodLabel,
                 modelLed: modelLed ? otherModels : null,
+                alsoModels: !modelLed && otherModels.length > 0 ? otherModels : null,
               })
             : tab === "recurring"
               ? recurringZones({ biz, basis, batch, topCustomers, linkWindow })
@@ -863,7 +909,11 @@ export default async function BizHome({
 
       {/* A business still in setup has better first steps than a search shortcut. */}
       {setupSteps ? (
-        <SetupChecklist steps={setupSteps} sampleDataHref={`/businesses/${biz}/transfer`} />
+        <SetupChecklist
+          biz={biz}
+          steps={setupSteps}
+          sampleDataHref={`/businesses/${biz}/transfer`}
+        />
       ) : (
         <PaletteWelcome />
       )}
@@ -873,6 +923,7 @@ export default async function BizHome({
         </Alert>
       ) : null}
       {error ? <ErrorState className="mb-6" description={error} /> : null}
+      <InstallCard className="mb-6" />
 
       <div className="flex flex-col gap-6">
         {/* A tab or currency change reloads this zone; a period change cannot move it. */}
@@ -926,7 +977,7 @@ export default async function BizHome({
 
         <PageNote warning={missingRatesWarning(basis)}>
           {[
-            mrr?.coverage?.missing_periods?.length
+            !modelLed && mrr?.coverage?.missing_periods?.length
               ? `The MRR trend has no data for ${mrr.coverage.missing_periods.length} of its periods`
               : null,
             currencyBasis(basis),

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { authenticate } from "@/platform/auth";
 import { MEASURES } from "@/modules/metrics/daily/measures";
+import { measureModelGroup } from "@/modules/metrics/measure-models";
 import { MeasureRefused } from "@/modules/metrics/daily/query";
 import {
   businessesByPublicIds,
@@ -121,7 +122,10 @@ export async function registerAnalyticsRoutes(app: FastifyInstance) {
     "/v1/analytics/measures",
     { preHandler: [authenticate, requirePerm("reports:view")] },
     async () => {
-      return { object: "list", data: MEASURES.map(serialiseMeasure) };
+      return {
+        object: "list",
+        data: MEASURES.map((m) => ({ ...serialiseMeasure(m), model: measureModelGroup(m.source) })),
+      };
     },
   );
 

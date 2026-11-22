@@ -123,6 +123,7 @@ const MEASURES_UP_GOOD = new Set([
   "quick_ratio",
   "recovery_paid_late",
   "revenue_billed",
+  "revenue_billed_gross",
   "revenue_collected",
   "revenue_per_new_subscription",
   "revenue_per_paying_customer",

@@ -7,6 +7,7 @@ import type { RazorpayCheckoutDescriptor } from "./razorpay-checkout";
 import type { AchAuthorizationText } from "./checkout-api";
 import type { FormPostDescriptor, GatewaySdkDescriptor } from "./gateway-sdk";
 import { forwardedFor } from "./forwarded-for";
+import { storefrontErrorText } from "./storefront-error";
 import type { CurrentUsage } from "./api/current-usage";
 
 const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
@@ -51,10 +52,12 @@ export interface PortalMe {
     };
     /**
      * False until the customer has SOME billing name (address contact, account holder
-     * or legacy `name` — `hasBillingName` on the engine side) plus line1 + country.
-     * Collect billing details before card setup (India-exports).
+     * or legacy `name` — `hasBillingName` on the engine side) plus every address field this
+     * portal requires. Collect billing details before card setup (India-exports).
      */
     billing_details_complete: boolean;
+    /** The address fields still empty, by name (`first_name`, `postal_code`…). Absent on older engines. */
+    billing_details_missing?: string[];
   };
   /** Brand Styles (0185) — what this business shows ITS customers. All nullable. */
   business: {
@@ -67,6 +70,7 @@ export interface PortalMe {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    button_text_color?: string | null;
     /** Where the buyer asks for help. Null or absent: show nothing. */
     support_email?: string | null;
     website?: string | null;
@@ -77,6 +81,8 @@ export interface PortalMe {
      * renders only when true; `POST /portal/v1/subscriptions/:sub/coupon` 403s otherwise.
      */
     allow_customer_coupons: boolean;
+    /** Ask why when the buyer deletes their last payment method. Absent on an older API. */
+    ask_delete_reason?: boolean;
     /**
      * IANA zone for rendering dates. The storefront sits outside the `(dashboard)`
      * tree so there is no `BusinessTzProvider` to read — pass this to `fmtDate`
@@ -174,6 +180,17 @@ export type PortalInvoiceCollection =
   | (PortalInvoice & {
       payment?: { id: string; status: string } | null;
       payment_error?: { code: string; message: string };
+      /** A mandate that needs a pre-debit notice: the notice went out, the debit follows. */
+      collection_scheduled?: { at: string; message: string };
+      /** Pay and save: the method the payment also kept. */
+      saved_payment_method?: {
+        id: string;
+        type: string;
+        brand: string | null;
+        last4: string | null;
+      };
+      /** Pay and save: the money was taken but the method could not be kept. */
+      save_failed?: boolean;
     })
   | {
       object: "invoice_collection";
@@ -233,7 +250,15 @@ export interface PortalInvoice {
    * The latest charge on this invoice, when it failed: the saved method that was refused
    * (null when it is gone) and the gateway's code.
    */
-  last_payment_error?: { payment_method: string | null; code: string | null; at: string } | null;
+  last_payment_error?: {
+    payment_method: string | null;
+    code: string | null;
+    at: string;
+    /** Our payer sentence for the code; null when there is no reason to give. */
+    message?: string | null;
+    /** The same method cannot succeed: lead with adding another one. */
+    new_method_needed?: boolean;
+  } | null;
   /**
    * That in-flight debit is paused for the payer's OWN bank approval (RBI/NPCI, over
    * ₹15,000), not for a settlement network. Only meaningful alongside
@@ -251,6 +276,8 @@ export interface PortalInvoice {
   in_flight_gateway?: string | null;
   /** A held renewal invoice (usage grace window, `pending`): when it finalizes. */
   usage_closes_at?: string | null;
+  /** A debit announced to the payer's bank (pre-debit notice), not made yet: when. */
+  collection_scheduled_at?: string | null;
 }
 
 async function portalFetch<T>(
@@ -288,14 +315,8 @@ async function portalFetch<T>(
   if (res.ok) return { ok: true, status: res.status, data: json as T };
   // The field reasons without their keys, as `api.ts` does: each reason names its field
   // ("… is not a valid phone number"), and a buyer has no use for `address.phone`.
-  const payload = (
-    json as
-      | { error?: { message?: string; details?: Record<string, string[] | undefined> } }
-      | undefined
-  )?.error;
-  const reasons = Object.values(payload?.details ?? {}).flatMap((m) => m ?? []);
-  const error = reasons.length ? reasons.join("; ") : (payload?.message ?? res.statusText);
-  return { ok: false, status: res.status, error };
+  const error = storefrontErrorText(res.status, json, false);
+  return { ok: false, status: res.status, ...(error ? { error } : {}) };
 }
 
 export const portalMe = (token: string) => portalFetch<PortalMe>(token, "/portal/v1/me");
@@ -408,6 +429,7 @@ export interface PortalLinkNotice {
     icon_url: string | null;
     favicon_url: string | null;
     brand_color: string | null;
+    button_text_color?: string | null;
     support_email?: string | null;
     website?: string | null;
   };
@@ -437,7 +459,7 @@ async function publicPortalPost<T>(
     if (res.ok && json) return { ok: true, data: json };
     return {
       ok: false,
-      error: json?.error?.message ?? "We could not do this now. Try again.",
+      error: storefrontErrorText(res.status, json, false) ?? "We could not do this now. Try again.",
       ...(json?.error?.code ? { code: json.error.code } : {}),
     };
   } catch {
@@ -634,6 +656,8 @@ export interface PortalSubscription {
       starts: "now" | "end_of_term";
       resume_charge: "now" | "next_invoice";
     } | null;
+    /** With `reactivate`: the renewal that Keep restores, priced. Null when it cannot be priced. */
+    keep_payment?: { amount_due_minor: number; currency: string } | null;
   };
   /**
    * Null when the business does not offer skipping. `upcoming` is empty when this
@@ -920,6 +944,8 @@ export const portalListGateways = (
      * portal decides how to word it.
      */
     expected_debit_minor?: number;
+    /** One row per rail for Add a payment method, each on the account that takes it. */
+    method_routes?: { method: string; gateway_account: string }[];
     unattended_debit_limit_minor?: number | null;
   }>(
     token,
@@ -946,6 +972,24 @@ export const portalBeginSetup = (
     },
   });
 
+/** One open invoice the new method was charged for, and how that charge ended. */
+export interface PortalCollectedInvoice {
+  invoice: string;
+  /** `succeeded` | `pending` | `requires_action` | `failed` | `paid_with_credit` | `scheduled`. */
+  status: string;
+  amount_minor: number;
+  currency: string;
+  /** `scheduled` only: when the debit is due. */
+  scheduled_at?: string;
+}
+
+/** The saved method, plus what adding it did to the open invoices. */
+export type PortalVaultedMethod = PortalPaymentMethod & {
+  collected?: PortalCollectedInvoice[];
+  /** False: the business does not charge open invoices when a method is added. */
+  collection_enabled?: boolean;
+};
+
 export const portalCompleteVault = (
   token: string,
   completion: {
@@ -958,7 +1002,7 @@ export const portalCompleteVault = (
   },
   gatewayAccount?: string,
 ) =>
-  portalFetch<PortalPaymentMethod>(token, "/portal/v1/payment_methods", {
+  portalFetch<PortalVaultedMethod>(token, "/portal/v1/payment_methods", {
     method: "POST",
     body: {
       // The intent when we have one, the raw provider token only when we don't. The
@@ -1000,12 +1044,62 @@ export const portalCollectInvoice = (
     gateway_account?: string;
     /** Pay with this wallet on the gateway's own page. */
     wallet?: "apple_pay";
+    /** pm_… — pay with a method the buyer already holds. */
+    payment_method?: string;
+    /** Pay and save: keep the new method, with the consent text version the buyer saw. */
+    save_method?: boolean;
+    save_text_version?: string;
+    /** The rail of the selected new-method row (`new_methods[].method`). */
+    method_type?: string;
   } = {},
 ) =>
   portalFetch<PortalInvoiceCollection>(token, `/portal/v1/invoices/${invoice}/collect`, {
     method: "POST",
     body,
   });
+
+/** A saved method in Pay now's step 1 (`savedPayOption` on the engine). */
+export interface PortalSavedPayOption {
+  payment_method: string;
+  type: string;
+  brand: string | null;
+  last4: string | null;
+  mandate_rail: string | null;
+  primary: boolean;
+  /** `now`: charged with the buyer present. `debit`: through its mandate, settles later. */
+  kind: "now" | "debit";
+  available: boolean;
+  reason: string | null;
+  hint: string | null;
+}
+
+/** Pay now's step 1 for one invoice: saved methods, and new ones with the gateway picked. */
+export interface PortalPayOptions {
+  object: "pay_options";
+  invoice: string;
+  amount_due_minor: number;
+  saved: PortalSavedPayOption[];
+  new_methods: Array<{
+    gateway_account: string;
+    method: string;
+    method_types: string[] | null;
+    /** Pay and save: `offer` = a box, `always` = saved with the text shown. Null = not saved. */
+    save: {
+      mode: "offer" | "always";
+      checked: boolean;
+      text: string;
+      text_version: string;
+    } | null;
+  }>;
+}
+
+export const portalPayOptions = (token: string, invoice: string, avoidGateway?: string) =>
+  portalFetch<PortalPayOptions>(
+    token,
+    `/portal/v1/invoices/${encodeURIComponent(invoice)}/pay_options${
+      avoidGateway ? `?avoid=${encodeURIComponent(avoidGateway)}` : ""
+    }`,
+  );
 
 /** One invoice, with `payment_in_flight` — what the payment return leg polls. */
 export const portalGetInvoice = (token: string, invoice: string) =>
@@ -1063,9 +1157,15 @@ export const portalSetRole = (token: string, pm: string, role: "primary" | "back
     body: { role },
   });
 
-export const portalRemove = (token: string, pm: string) =>
+export const portalRemove = (
+  token: string,
+  pm: string,
+  /** Why the buyer deleted their last method, when the business asks. */
+  why?: { reason: string; reason_text?: string },
+) =>
   portalFetch<{ deleted: boolean }>(token, `/portal/v1/payment_methods/${pm}`, {
     method: "DELETE",
+    ...(why ? { body: why } : {}),
   });
 
 /** Mirrors `serializeReceipt` (src/modules/receipts/service.ts). The portal lists numbered ones only. */

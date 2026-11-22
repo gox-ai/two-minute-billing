@@ -134,6 +134,69 @@ function providerCustomerDetails(customer: typeof customers.$inferSelect): Ensur
   };
 }
 
+/** `provider_customers.updated_at` is when we last pushed the customer's details there. */
+const markProviderCustomerSynced = (organizationId: string, mappingId: string) =>
+  withTenant(organizationId, (tx) =>
+    tx
+      .update(providerCustomers)
+      .set({ updatedAt: new Date() })
+      .where(eq(providerCustomers.id, mappingId)),
+  );
+
+/**
+ * Push the customer's name, email, phone and address to the gateway before a CHARGE, when
+ * they changed after we last sent them. A charge addresses the stored provider customer
+ * directly, so without this a detail saved after the card stayed off the gateway until
+ * the next vault: an Indian Stripe account refused a buyer abroad four times
+ * (`cross_border_classification_missing_name_and_address`) after they had added the
+ * address in checkout (2026-11-16).
+ *
+ * Only when stale, so a renewal makes no extra call. Best-effort, as in
+ * `ensureProviderCustomer`: a failed push never fails the charge.
+ */
+export async function syncProviderCustomerBeforeCharge(input: {
+  organizationId: string;
+  customerId: string;
+  providerCustomerId: string | null;
+  provider: PaymentProvider;
+}): Promise<void> {
+  const providerCustomerId = input.providerCustomerId;
+  if (!input.provider.updateCustomer || !providerCustomerId) return;
+  const [row] = await withTenant(input.organizationId, (tx) =>
+    tx
+      .select({
+        customer: customers,
+        mappingId: providerCustomers.id,
+        syncedAt: providerCustomers.updatedAt,
+      })
+      .from(providerCustomers)
+      .innerJoin(customers, eq(customers.id, providerCustomers.customerId))
+      .where(
+        and(
+          eq(providerCustomers.customerId, input.customerId),
+          eq(providerCustomers.providerKey, input.provider.key),
+          eq(providerCustomers.providerCustomerId, providerCustomerId),
+        ),
+      )
+      .limit(1),
+  );
+  if (!row || row.customer.updatedAt <= row.syncedAt) return;
+  try {
+    await input.provider.updateCustomer(
+      { providerKey: input.provider.key, providerCustomerId },
+      providerCustomerDetails(row.customer),
+    );
+    await markProviderCustomerSynced(input.organizationId, row.mappingId);
+  } catch (e) {
+    log.warn("provider customer sync before a charge failed — charging with the stored details", {
+      provider: input.provider.key,
+      provider_customer_id: providerCustomerId,
+      customer: row.customer.publicId,
+      error: String(e),
+    });
+  }
+}
+
 /**
  * Resolve the provider-side customer for (customer × provider × gateway
  * account), creating it ONCE and reusing it afterwards (provider_customers
@@ -170,8 +233,8 @@ export async function ensureProviderCustomer(input: {
     };
     // ⚠️ The identity sync is BEST-EFFORT and may never fail the caller.
     //
-    // This function sits on the hot path of every vault AND every charge — the
-    // resolved provider customer is what both are addressed to. `updateCustomer` is a
+    // This function sits on the hot path of every vault (a charge syncs through
+    // `syncProviderCustomerBeforeCharge`, under the same rule). `updateCustomer` is a
     // second network call to the gateway purely to push name/email/phone, and
     // `providerFetch` THROWS on a transport failure (timeout, DNS, TLS, reset). So
     // without this catch, a gateway that is merely slow on an endpoint nobody is
@@ -189,7 +252,10 @@ export async function ensureProviderCustomer(input: {
     // provider customer. That is the right place for that error: it knows the field is
     // load-bearing, and this function does not.
     try {
-      await input.provider.updateCustomer?.(ref, details);
+      if (input.provider.updateCustomer) {
+        await input.provider.updateCustomer(ref, details);
+        await markProviderCustomerSynced(input.organizationId, existing.id);
+      }
     } catch (e) {
       log.warn("provider customer identity sync failed — continuing with the existing mapping", {
         provider: input.provider.key,
@@ -797,6 +863,8 @@ export async function persistVaultedPaymentMethod(input: {
   providerCustomerId?: string | null;
   /** The payer's ACH authorization, on a gateway where it is ours to capture. */
   achAuthorization?: AchAuthorizationEvidence;
+  /** The payer's consent to keep this method for later charges (`on-file-consent.ts`). */
+  onFileConsent?: AchAuthorizationEvidence;
   /**
    * The caller's `collect_open_invoices`, kept so a mandate confirmed later collects as
    * asked. Omitted = leave the stored value (null on a new row = the business rule).
@@ -812,6 +880,17 @@ export async function persistVaultedPaymentMethod(input: {
       "We could not save this bank account. Accept the bank debit authorization. Then try again.",
     );
   const recordAch = async (tx: Tx, pm: typeof paymentMethods.$inferSelect) => {
+    if (input.onFileConsent)
+      await insertAchAuthorization(tx, {
+        organizationId: input.organizationId,
+        businessId: input.businessId,
+        customerId: input.customer.id,
+        paymentMethodId: pm.id,
+        paymentMethodPublicId: pm.publicId,
+        gatewayKey: vaulted.providerKey,
+        methodType: vaulted.display.type,
+        evidence: input.onFileConsent,
+      });
     if (!needsAch || !input.achAuthorization) return;
     const pma = await insertAchAuthorization(tx, {
       organizationId: input.organizationId,
@@ -1244,7 +1323,7 @@ export class PaymentMethodVaultError extends Error {
   readonly detail: string;
   constructor(providerKey: string, cause: unknown) {
     super(
-      `We could not confirm that payment method with ${providerKey}. The approval may have expired, or it was not completed. Try to add it again.`,
+      `We could not confirm that payment method with ${gatewayDefinition(providerKey)?.displayName ?? "the payment provider"}. The approval may have expired, or it was not completed. Try to add it again.`,
     );
     this.name = "PaymentMethodVaultError";
     this.detail = cause instanceof Error ? cause.message : String(cause);
@@ -2161,6 +2240,10 @@ export async function detachPaymentMethod(
   organizationId: string,
   customerId: string,
   pmPublicId: string,
+  opts: {
+    /** The buyer's answer to "Why are you deleting it?" (portal, last method, when asked). */
+    reason?: { code: string; text: string | null };
+  } = {},
 ): Promise<boolean> {
   // Read first: the provider ids are needed to delete upstream, and they are gone
   // once the row is deleted.
@@ -2193,7 +2276,12 @@ export async function detachPaymentMethod(
         organizationId,
         businessId: deleted[0]!.businessId,
         type: "payment_source_deleted",
-        data: buildEventData("payment_source_deleted", { id: deleted[0]!.publicId }),
+        data: buildEventData(
+          "payment_source_deleted",
+          { id: deleted[0]!.publicId },
+          null,
+          opts.reason ? { deletion_reason: opts.reason } : undefined,
+        ),
       });
       const owner = await auditOwner(tx, customerId);
       if (owner) {

@@ -4,14 +4,17 @@ import { money } from "@/lib/format";
 import { fmtDate, fmtDateTime, fmtRange } from "@/lib/format-date";
 import { formatDecimalQuantity } from "@/lib/meters";
 import { PRICE_SOURCE_LABEL } from "@/lib/model-prices";
+import { INCLUDED_TAX_LABEL, splitTax } from "@/lib/tax-rows";
 
 /**
- * Name column flexes; the five numeric columns stay aligned. Below 640px a row is a block,
- * as `<Table phone="stack">` draws one: the name with the amount opposite, then each other
- * value under it with its column head as a 12px label.
+ * ONE grid, each row a subgrid: the five numeric columns size to the widest value in any
+ * row, so they stay aligned and a long amount widens its column instead of spilling. Below
+ * 640px a row is a block, as `<Table phone="stack">` draws one: the name with the amount
+ * opposite, then each other value under it with its column head as a 12px label.
  */
+const GRID = "grid grid-cols-[minmax(10rem,1fr)_repeat(5,auto)] gap-x-4 max-sm:block";
 const COLS =
-  "grid grid-cols-[minmax(0,1fr)_5rem_5rem_7rem_6rem_8rem] items-start gap-x-4 tabular-nums max-sm:grid-cols-[fit-content(40%)_minmax(0,1fr)_auto] max-sm:items-baseline max-sm:gap-x-3 max-sm:gap-y-1";
+  "col-span-full grid grid-cols-subgrid items-start tabular-nums max-sm:grid-cols-[fit-content(40%)_minmax(0,1fr)_auto] max-sm:items-baseline max-sm:gap-x-3 max-sm:gap-y-1";
 /** The name and its sub-line: the first line of a stacked row. */
 const TITLE = "min-w-0 max-sm:col-[1/3] max-sm:row-start-1";
 /** The column heads, which label the values of a stacked row. */
@@ -52,7 +55,7 @@ export function CurrentUsageCard({ usage, tz }: { usage: CurrentUsage; tz?: stri
 
       {usage.items.length > 0 || usage.settled_charges.length > 0 || credit.length > 0 ? (
         <div className="sm:overflow-x-auto">
-          <div className="sm:min-w-[40rem]">
+          <div className={`${GRID} sm:min-w-min`}>
             <div
               className={`${COLS} border-b py-2 text-xs font-medium text-muted-foreground max-sm:hidden`}
             >
@@ -88,8 +91,11 @@ export function CurrentUsageCard({ usage, tz }: { usage: CurrentUsage; tz?: stri
             {usage.items
               .filter((i) => i.combinations?.length)
               .map((i) => (
-                <div key={`combos-${i.item ?? i.name}`} className="border-b border-border/40 pb-2">
-                  <div className="pt-2 pb-1 text-xs text-muted-foreground">
+                <div
+                  key={`combos-${i.item ?? i.name}`}
+                  className="col-span-full grid grid-cols-subgrid border-b border-border/40 pb-2 max-sm:block"
+                >
+                  <div className="col-span-full pt-2 pb-1 text-xs text-muted-foreground">
                     {i.name}, by group value
                   </div>
                   {i.combinations!.map((cb, k) => (
@@ -217,6 +223,12 @@ export function CurrentUsageCard({ usage, tz }: { usage: CurrentUsage; tz?: stri
           {usage.tax_lines.map((t) => (
             <Pair key={t.label} label={t.label} value={money(t.amount_minor, c)} />
           ))}
+          {splitTax(usage.tax_minor, usage.tax_lines).includedMinor > 0 ? (
+            <Pair
+              label={INCLUDED_TAX_LABEL}
+              value={money(splitTax(usage.tax_minor, usage.tax_lines).includedMinor, c)}
+            />
+          ) : null}
           <dt className="font-medium">Total so far</dt>
           <dd className="text-right font-medium">{money(usage.total_minor, c)}</dd>
           {/* Only metered items project; credit rows count at their amount so far. */}

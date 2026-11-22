@@ -1,3 +1,4 @@
+import type { CreatedThrough } from "@/lib/created-through";
 // Typed data-access for the Credit Notes surface. Uses the generic apiGet /
 // apiWrite from '@/lib/api'; never imports a provider SDK or touches lib/api.ts.
 //
@@ -141,6 +142,7 @@ export interface CreditNoteTax {
 
 /** Detail shape: list fields + the Refunds & Allocations timeline. */
 export interface CreditNoteDetail extends CreditNote {
+  created_through?: CreatedThrough | null;
   /**
    * DETAIL-ONLY (its own table read; the invoice read draws the same line). Together
    * with `subtotal_minor` it makes the note's arithmetic checkable without the PDF.
@@ -226,7 +228,7 @@ export function createCreditNote(biz: string, body: CreateCreditNoteInput) {
 export function refundCreditNote(
   biz: string,
   cn: string,
-  body: { amount_minor?: number; reason?: string },
+  body: { amount_minor?: number; reason?: string; confirm_repeat?: boolean },
 ) {
   return apiWrite(`/v1/businesses/${biz}/credit_notes/${cn}/refund`, body, "POST");
 }

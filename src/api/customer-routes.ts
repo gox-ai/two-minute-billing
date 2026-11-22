@@ -1,3 +1,5 @@
+import { listGatewayAccounts } from "@/modules/gateway/service";
+import { createdThrough } from "@/modules/events/provenance";
 import { listExcessPayments } from "@/modules/refunds/excess";
 import { resolveBillingRulesConfig } from "@/modules/subscriptions/billing-rules-config";
 import {
@@ -92,6 +94,7 @@ import { withTenant } from "@/platform/db";
 import { dunningPolicyPublicIds } from "@/modules/dunning-policies/effective";
 import { DunningPolicyError, resolveDunningPolicyRef } from "@/modules/dunning-policies/service";
 import { collectedRevenue } from "@/modules/payments/revenue";
+import { billedRevenueForRecord } from "@/modules/metrics/record-revenue";
 import { listCustomerDiscounts } from "@/modules/coupons/service";
 
 // Digits, spaces and + ( ) - . — enough for any international format, no more.
@@ -250,6 +253,9 @@ const updateCustomerBody = z
     currency: customerFieldsBody.currency.nullable().optional(),
     locale: customerFieldsBody.locale.nullable().optional(),
     auto_collection: customerFieldsBody.auto_collection.optional(),
+    // gwa_… for this customer's new payment methods (portal Pay now and Add a payment
+    // method); null = the business setting. Must be an active account of this business.
+    new_method_gateway_account: z.string().max(LIMITS.id).nullable().optional(),
     net_term_days: customerFieldsBody.net_term_days.optional(),
     invoice_notes: customerFieldsBody.invoice_notes.nullable().optional(),
     address: validatedAddressBody.nullable().optional(),
@@ -588,26 +594,32 @@ export async function registerCustomerRoutes(app: FastifyInstance) {
       const cusId = (req.params as { cus: string }).cus;
       const c = await getCustomerByPublicId(req.organization!.id, business.id, cusId);
       if (!c) return notFound(reply, `No such customer: ${cusId}`);
-      const [financials, balances, roles, lifetimeRevenue, discounts] = await Promise.all([
-        getCustomerFinancials(req.organization!.id, c.id),
-        getCustomerBalances(req.organization!.id, c.id),
-        getPaymentRoleIds(req.organization!.id, c.id),
-        collectedRevenue(req.organization!.id, { customerId: c.id }),
-        withTenant(req.organization!.id, (tx) => listCustomerDiscounts(tx, c.id)),
-      ]);
-      return serializeCustomer(c, {
-        ...(await dunningPolicyExtra(req.organization!.id, c)),
-        discounts,
-        balances,
-        mrr: financials.mrr,
-        roles,
-        lifetimeRevenue,
-        effectiveCurrency: deriveEffectiveCurrency(c.currency, financials.currencyWeight),
-      });
+      const [financials, balances, roles, lifetimeRevenue, revenueBilled, discounts] =
+        await Promise.all([
+          getCustomerFinancials(req.organization!.id, c.id),
+          getCustomerBalances(req.organization!.id, c.id),
+          getPaymentRoleIds(req.organization!.id, c.id),
+          collectedRevenue(req.organization!.id, { customerId: c.id }),
+          billedRevenueForRecord(req.organization!.id, business.id, { customerId: c.id }),
+          withTenant(req.organization!.id, (tx) => listCustomerDiscounts(tx, c.id)),
+        ]);
+      return {
+        ...serializeCustomer(c, {
+          ...(await dunningPolicyExtra(req.organization!.id, c)),
+          discounts,
+          balances,
+          mrr: financials.mrr,
+          roles,
+          lifetimeRevenue,
+          revenueBilled,
+          effectiveCurrency: deriveEffectiveCurrency(c.currency, financials.currencyWeight),
+        }),
+        created_through: await createdThrough(req.organization!.id, "customer", c.publicId),
+      };
     },
   );
 
-  /** Payments still holding part of this customer's excess credit — what can be refunded. */
+  /** Payments still holding part of this customer's excess credit (draws come off the oldest). */
   app.get(
     "/v1/businesses/:biz/customers/:cus/excess_payments",
     { preHandler: [authenticate, requirePerm("credits:view")] },
@@ -617,7 +629,10 @@ export async function registerCustomerRoutes(app: FastifyInstance) {
       const cusId = (req.params as { cus: string }).cus;
       const c = await getCustomerByPublicId(req.organization!.id, business.id, cusId);
       if (!c) return notFound(reply, `No such customer: ${cusId}`);
-      const rows = await listExcessPayments(req.organization!.id, business.id, c.id);
+      const includeUsed = (req.query as { include_used?: string }).include_used === "true";
+      const rows = await listExcessPayments(req.organization!.id, business.id, c.id, {
+        includeUsed,
+      });
       return {
         object: "list",
         data: rows.map((r) => ({
@@ -627,6 +642,7 @@ export async function registerCustomerRoutes(app: FastifyInstance) {
           currency: r.currency,
           payment_amount_minor: Number(r.paymentAmountMinor),
           held_minor: Number(r.heldMinor),
+          remaining_minor: Number(r.remainingMinor),
           refundable_minor: Number(r.refundableMinor),
           gateway: r.gateway,
           created_at: r.createdAt.toISOString(),
@@ -659,12 +675,22 @@ export async function registerCustomerRoutes(app: FastifyInstance) {
           business.id,
           parsed.data.dunning_policy,
         );
+        // A gateway for this customer's new payment methods: an active account of THIS business.
+        const nmg = parsed.data.new_method_gateway_account;
+        if (nmg) {
+          const acc = (await listGatewayAccounts(orgId, business.id)).find(
+            (a) => a.publicId === nmg,
+          );
+          if (!acc || acc.status !== "active")
+            return badRequest(reply, `No active gateway account ${nmg} in this business.`);
+        }
         let c = await updateCustomer({
           organizationId: orgId,
           businessId: business.id,
           customerPublicId: cusId,
           expectedVersion: parsed.data.expected_version,
           ...toFields(parsed.data),
+          ...(nmg !== undefined ? { newMethodGatewayAccount: nmg } : {}),
           dunningPolicyId,
           customFields: collectCustomFields(req.body, parsed.data.custom_fields),
         });

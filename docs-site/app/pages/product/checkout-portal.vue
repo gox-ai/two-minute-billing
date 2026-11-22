@@ -89,7 +89,7 @@ const portal = [
   {
     icon: "i-lucide-sliders-horizontal",
     title: "Your switches",
-    body: "Turn each action on or off under Settings → Hosted pages.",
+    body: "Turn each action on or off under Settings → Customer portal.",
   },
 ];
 
@@ -250,7 +250,7 @@ useMarketingSeo({
       kicker="Customer portal"
       title="A customer portal for cards, invoices, billing details and plan changes"
       accent="customer portal"
-      description="Each switch you turn on under Settings → Hosted pages is a support request your team stops receiving. Whether customers may cancel on their own is your call."
+      description="Each switch you turn on under Settings → Customer portal is a support request your team stops receiving. Whether customers may cancel on their own is your call."
       :points="portal"
       :links="[{ label: 'One-time and repeat orders for stores', to: '/solutions/ecommerce' }]"
     >

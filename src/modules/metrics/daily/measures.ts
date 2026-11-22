@@ -69,6 +69,11 @@ export type DimensionId =
   | "revenue_type"
   /** The product of the line's price, as a product row id; `none` for a line with no price. */
   | "product"
+  /**
+   * What took billed revenue from gross to net: coupon · promotional_credit · plan_credit ·
+   * prepaid_credit · credit_note (closed set, `REVENUE_DEDUCTIONS`).
+   */
+  | "revenue_deduction"
   /** A credit grant's category: paid · promotional. */
   | "credit_category"
   /** Where a credit grant came from: purchase · plan_cycle · manual · restore · auto_top_up. */
@@ -76,7 +81,16 @@ export type DimensionId =
   /** A credit grant's unit key; `money` for a grant held in money. */
   | "credit_unit"
   /** A usage meter, as its row id. */
-  | "meter";
+  | "meter"
+  /**
+   * The coupon on an order, as its coupon row id. `manual` is a discount with no coupon,
+   * `multiple` is an order with more than one, `none` is an order with no discount.
+   */
+  | "coupon"
+  /** Whether the customer had ordered before this order: first · returning. */
+  | "buyer_type"
+  /** Days of credit left at the last 7 days' use: 0_7 · 8_30 · 31_90 · 90_plus · no_recent_use. */
+  | "runway_band";
 
 /**
  * How a period's value is derived from the stored rows. The audit's most load-bearing
@@ -150,7 +164,9 @@ export type MeasureSource =
   /** Folded usage events (`usage_rollups`) and the usage lines that billed them. */
   | "usage"
   /** One-time orders: billed invoices with no subscription and a one-time line. */
-  | "orders";
+  | "orders"
+  /** Billed revenue of every type, per customer: subscriptions, usage, one-time sales, credit packs. */
+  | "revenue";
 
 /**
  * HOW A RATIO'S TWO HALVES FOLD FROM THE STORED DAY ROWS.
@@ -226,6 +242,11 @@ export interface MeasureDef {
   supportsCompare: boolean;
   /** Required when `aggregate` is `ratio`, and forbidden otherwise. */
   ratio?: RatioFold;
+  /**
+   * `sum` — a distinct count of customers. A customer belongs to one business, so the
+   * organization's figure over a window is Σ each business's own figure. Never across periods.
+   */
+  acrossBusinesses?: "sum";
 }
 
 const ALL_GRAINS: readonly Grain[] = ["day", "week", "month", "quarter", "year"];
@@ -256,12 +277,15 @@ const ALL_GRAINS: readonly Grain[] = ["day", "week", "month", "quarter", "year"]
  * Only a cohort RATIO stored as two halves can: each business's halves are its own cohort,
  * the cohorts never overlap (a customer belongs to one business), so the organization's
  * figure is Σ numerators ÷ Σ denominators — divided once, never a mean of percentages.
- * A bare distinct count has no denominator to weight it and stays refused. Day and month
+ * A distinct count of customers (`acrossBusinesses: "sum"`) can too: its cohorts never overlap
+ * either, so the organization's figure is the sum. Any other bare distinct count stays refused. Day and month
  * only: those period ends are the same on every business's calendar, while a week, quarter
  * or year is cut where each business's own calendar puts it.
  */
 export function combinesAcrossBusinesses(m: MeasureDef, grain: Grain): boolean {
-  return m.halves != null && (grain === "day" || grain === "month");
+  return (
+    (m.halves != null || m.acrossBusinesses === "sum") && (grain === "day" || grain === "month")
+  );
 }
 
 /**
@@ -606,7 +630,7 @@ export const MEASURES: readonly MeasureDef[] = [
     id: "billing_gross",
     name: "Total billing",
     description:
-      "Everything invoiced in the period at the document total, tax included. Dated by the invoice's issue date, and counts only invoices that were actually raised. A draft that still collects lines is not billing.",
+      "Everything invoiced in the period at the total the invoice shows, tax included and promotional credit taken off. Dated by the invoice's issue date, and counts only invoices that were actually raised. A draft that still collects lines is not billing.",
     kind: "flow",
     unit: "money",
     aggregate: "sum",
@@ -666,11 +690,41 @@ export const MEASURES: readonly MeasureDef[] = [
     id: "revenue_billed",
     name: "Revenue billed",
     description:
-      "What was invoiced in the period before tax, by what it was for: subscriptions, usage, one-time sales and credit packs. Net of discounts; a discount on the whole invoice is shared across its lines by value. Rounding is left out. The meter split covers usage lines only.",
+      "What was invoiced in the period before tax, net: less discounts, promotional credit, plan credits and credit notes. A credit pack counts when it is sold, and the usage it pays for later is not counted again. By what it was for: subscriptions, usage, one-time sales and credit packs. A discount or credit on the whole invoice is shared across its lines by value. A credit note counts in the period it is raised, so a period can be negative. Rounding is left out. The meter split covers usage lines only. Since 2026-11-20 this figure is net of credits; history was restated.",
     kind: "flow",
     unit: "money",
     aggregate: "sum",
     dimensions: ["currency", "business", "revenue_type", "product", "meter"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "invoices",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "revenue_billed_gross",
+    name: "Gross revenue",
+    description:
+      "What was invoiced in the period before tax, before discounts and credits. Gross revenue less revenue deductions is revenue billed, per currency, revenue type and product.",
+    kind: "flow",
+    unit: "money",
+    aggregate: "sum",
+    dimensions: ["currency", "business", "revenue_type", "product", "meter"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "invoices",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "revenue_deductions",
+    name: "Revenue deductions",
+    description:
+      "What took gross revenue down to revenue billed, as positive amounts: discounts, promotional credit, plan credits, usage paid with prepaid credit (at what the customer paid for the pack) and credit notes. Credit that the customer paid for with money, such as an overpayment, is not a deduction. A credit note counts in the period it is raised.",
+    kind: "flow",
+    unit: "money",
+    aggregate: "sum",
+    dimensions: ["currency", "business", "revenue_deduction", "revenue_type", "product"],
     grains: ALL_GRAINS,
     currency: "per_currency",
     source: "invoices",
@@ -696,7 +750,7 @@ export const MEASURES: readonly MeasureDef[] = [
     id: "taxable_base",
     name: "Taxable base",
     description:
-      "The amount that tax was charged ON: the invoiced document totals less the tax itself. We take it from the document and do not add up the lines. A line can be partly exempt, and the document total is the figure that the invoice shows.",
+      "The amount that tax was charged ON: the invoiced document totals less the tax itself. We take it from the document and do not add up the lines. A line can be partly exempt, and the document total is the figure that the invoice shows. Promotional credit applied before tax is not in the base.",
     kind: "flow",
     unit: "money",
     aggregate: "sum",
@@ -1145,6 +1199,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -1172,7 +1227,7 @@ export const MEASURES: readonly MeasureDef[] = [
     id: "revenue_collected",
     name: "Revenue collected",
     description:
-      "Money applied to invoices in the period, by what it paid for: subscriptions, usage, one-time sales and credit packs. Before tax and net of discounts, so the part of a payment that paid tax or rounding is left out. Refunds are not deducted.",
+      "Money applied to invoices in the period, by what it paid for: subscriptions, usage, one-time sales and credit packs. Before tax and net of discounts and credits, so the part of a payment that paid tax or rounding is left out. Refunds are not deducted.",
     kind: "flow",
     unit: "money",
     aggregate: "sum",
@@ -1357,7 +1412,7 @@ export const MEASURES: readonly MeasureDef[] = [
         "Customers with credit",
         "count",
         [],
-        "Customers who hold any credit at the end of the period.",
+        "Customers who hold any credit at the end of the period, credit in a unit with no money value included.",
       ],
       [
         "prepaid_balance",
@@ -1405,6 +1460,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["business"],
     grains: ALL_GRAINS,
     currency: "none",
@@ -1432,7 +1488,7 @@ export const MEASURES: readonly MeasureDef[] = [
     halves: "money",
     name: "Usage revenue retention",
     description:
-      "Usage revenue invoiced in the period to customers who had usage revenue in the period before it, as a share of what they had then. Above 100% means existing customers use more. Each period is compared with the period of the same length just before it. In basis points, where 10,000 is 100%. Not additive.",
+      "Usage revenue invoiced in the period to customers who had usage revenue in the period before it, as a share of what they had then. Usage that credits paid for is not usage revenue. Above 100% means existing customers use more. Each period is compared with the period of the same length just before it. In basis points, where 10,000 is 100%. Not additive.",
     kind: "flow",
     unit: "bps",
     aggregate: "none",
@@ -1443,6 +1499,51 @@ export const MEASURES: readonly MeasureDef[] = [
     asOf: "period_end",
     supportsCompare: true,
   },
+  {
+    id: "usage_quantity",
+    name: "Usage quantity",
+    description:
+      "Billable units received in the period, by meter. Only meters that add up their events are included: a sum or a count that does not carry over. Units are rounded to whole units each day. There is no total across meters, because meters count different things.",
+    kind: "flow",
+    unit: "count",
+    aggregate: "sum",
+    dimensions: ["business", "meter"],
+    grains: ALL_GRAINS,
+    currency: "none",
+    source: "usage",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "commitment_shortfall",
+    name: "Commitment shortfall billed",
+    description:
+      "The minimum commitment adjustments on invoices raised in the period: what customers paid because their fees were below their commitment. Before discounts and tax.",
+    kind: "flow",
+    unit: "money",
+    aggregate: "sum",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "usage",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "usage_customers_stopped",
+    name: "Customers who stopped usage",
+    description:
+      "Customers who sent usage before but sent none in the last 30 days, counted as they are now. ⚠️ No history: only the period in progress carries a figure.",
+    kind: "stock",
+    unit: "count",
+    aggregate: "last",
+    dimensions: ["business"],
+    grains: ALL_GRAINS,
+    currency: "none",
+    source: "usage",
+    asOf: "computed_at",
+    supportsCompare: false,
+  },
   // ── One-time sales ───────────────────────────────────────────────────────────────────
   ...(
     [
@@ -1450,22 +1551,36 @@ export const MEASURES: readonly MeasureDef[] = [
         "orders",
         "Orders",
         "count",
-        [],
-        "One-time orders raised in the period. An order is an invoice with no subscription and at least one one-time line that is not a credit pack.",
+        ["country", "gateway", "coupon", "buyer_type"],
+        "One-time orders raised in the period. An order is an invoice with no subscription and at least one one-time line that is not a credit pack. The gateway is the one that took the first payment for the order. `none` means that the order is not paid.",
       ],
       [
         "order_revenue",
         "Order revenue",
         "money",
-        ["product"],
-        "What the orders raised in the period are worth, before tax and after discounts, by product.",
+        ["product", "country", "gateway", "coupon", "buyer_type"],
+        "What the orders raised in the period are worth, before tax, net of discounts and promotional credit. A returning buyer is a customer who placed an order before this one.",
       ],
       [
         "order_refunds",
         "Order refunds",
         "money",
+        ["product"],
+        "Money given back in the period on payments for orders, whenever the order was raised. A refund is divided across the products of its order in proportion to their revenue.",
+      ],
+      [
+        "units_sold",
+        "Units sold",
+        "count",
+        ["product"],
+        "The quantity on the one-time lines of the orders raised in the period, by product. Credit packs are not included.",
+      ],
+      [
+        "order_discount",
+        "Order discount",
+        "money",
         [],
-        "Money given back in the period on payments for orders, whenever the order was raised.",
+        "What discounts and coupons took off the orders raised in the period. An order that a discount took to zero is not included.",
       ],
     ] as const
   ).map(([id, name, unit, dims, description]): MeasureDef => ({
@@ -1499,6 +1614,38 @@ export const MEASURES: readonly MeasureDef[] = [
     ratio: { numerator: "sum", denominator: "sum", denominatorUnit: "count" },
   },
   {
+    id: "order_refund_rate",
+    name: "Order refund rate",
+    description:
+      "Order refunds in the period as a share of order revenue in the period, by product. The refunds are counted before tax, like the revenue. In basis points, where 10,000 is 100%.",
+    kind: "flow",
+    unit: "bps",
+    aggregate: "ratio",
+    dimensions: ["currency", "business", "product"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "orders",
+    asOf: "period_end",
+    supportsCompare: true,
+    ratio: { numerator: "sum", denominator: "sum", denominatorUnit: "money" },
+  },
+  {
+    id: "buyer_lifetime_revenue",
+    name: "Revenue per buyer",
+    description:
+      "The order revenue of every order up to the end of the period, divided by every customer who ever placed an order by then. This is what a buyer is worth since the first order.",
+    kind: "stock",
+    unit: "money",
+    aggregate: "ratio",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "orders",
+    asOf: "period_end",
+    supportsCompare: true,
+    ratio: { numerator: "last", denominator: "last", denominatorUnit: "count" },
+  },
+  {
     id: "buyers",
     name: "Buyers",
     description:
@@ -1506,6 +1653,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -1520,6 +1668,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -1557,6 +1706,163 @@ export const MEASURES: readonly MeasureDef[] = [
     source: "credits",
     asOf: "computed_at",
     supportsCompare: false,
+  },
+  {
+    id: "credit_burn_rate",
+    name: "Credit burn rate",
+    description:
+      "Face value of credit used per day over the 30 days up to the end of the period, less what was given back. Read at the period's end.",
+    kind: "stock",
+    unit: "money",
+    aggregate: "ratio",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "credits",
+    asOf: "period_end",
+    supportsCompare: true,
+    ratio: { numerator: "last", denominator: "last", denominatorUnit: "count" },
+  },
+  {
+    id: "credit_runway_customers",
+    name: "Customers by credit runway",
+    description:
+      "Customers who hold credit or used credit in the last 7 days, by how many days their credit lasts at the average use of those 7 days. Credit with a money value counts per currency; each unit with no money value counts in its own units; a customer's runway is the one that runs out first. This is the rule of the customer field Credit runway. `no_recent_use` is a customer with credit who used none in the 7 days. ⚠️ No history: only the period in progress carries a figure.",
+    kind: "stock",
+    unit: "count",
+    aggregate: "last",
+    dimensions: ["business", "runway_band"],
+    grains: ALL_GRAINS,
+    currency: "none",
+    source: "credits",
+    asOf: "computed_at",
+    supportsCompare: false,
+  },
+  // Credit in a unit with no money rate: in the unit's smallest step, never money.
+  ...(
+    [
+      [
+        "credit_units_granted",
+        "Credit units granted",
+        "flow",
+        ["credit_source"],
+        "Credit in a unit with no money value that became spendable in the period, in the unit's smallest step: packs bought, plan credits, grants made by hand and top-ups.",
+      ],
+      [
+        "credit_units_used",
+        "Credit units used",
+        "flow",
+        [],
+        "Credit in a unit with no money value that customers used in the period, in the unit's smallest step, less what was given back.",
+      ],
+      [
+        "credit_units_expired",
+        "Credit units expired",
+        "flow",
+        [],
+        "Credit in a unit with no money value that expired unused in the period, in the unit's smallest step.",
+      ],
+      [
+        "credit_units_outstanding",
+        "Credit unit balance",
+        "stock",
+        [],
+        "Credit in a unit with no money value that customers still hold at the end of the period, in the unit's smallest step.",
+      ],
+    ] as const
+  ).map(([id, name, kind, dims, description]): MeasureDef => ({
+    id,
+    name,
+    description: `${description} Split by credit_unit: the total and the other splits are given only while the business has one such unit.`,
+    kind,
+    unit: "count",
+    aggregate: kind === "flow" ? "sum" : "last",
+    dimensions: ["business", "credit_unit", ...dims],
+    grains: ALL_GRAINS,
+    currency: "none",
+    source: "credits",
+    asOf: "period_end",
+    supportsCompare: true,
+  })),
+  {
+    id: "credit_units_expiring",
+    name: "Credit units expiring",
+    description:
+      "Credit in a unit with no money value that customers hold now, in the unit's smallest step, banded by how soon it expires. `undated` is credit that does not expire. Split by credit_unit: the total and the horizon split are given only while the business has one such unit. ⚠️ No history: only the period in progress carries a figure.",
+    kind: "stock",
+    unit: "count",
+    aggregate: "last",
+    dimensions: ["business", "credit_unit", "horizon"],
+    grains: ALL_GRAINS,
+    currency: "none",
+    source: "credits",
+    asOf: "computed_at",
+    supportsCompare: false,
+  },
+  // ── Every revenue type ───────────────────────────────────────────────────────────────
+  {
+    id: "customer_revenue_lifetime",
+    name: "Lifetime revenue per customer",
+    description:
+      "The revenue billed up to the end of the period, of every type, divided by every customer billed by then. Subscriptions, usage, one-time sales and credit packs all count. A credit pack counts when it is sold. Revenue is net of discounts and credits. Credit notes are not deducted.",
+    kind: "stock",
+    unit: "money",
+    aggregate: "ratio",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "revenue",
+    asOf: "period_end",
+    supportsCompare: true,
+    ratio: { numerator: "last", denominator: "last", denominatorUnit: "count" },
+  },
+  {
+    id: "revenue_retention_all",
+    halves: "money",
+    name: "Net revenue retention, all revenue",
+    description:
+      "Revenue of every type billed in the period to customers who were billed in the period before it, as a share of what they were billed then. Revenue is net of discounts and credits. Credit notes are not deducted. Each period is compared with the period of the same length just before it. Annual billing makes a short period uneven, so read it at the length of your longest billing cycle. In basis points, where 10,000 is 100%. Not additive.",
+    kind: "flow",
+    unit: "bps",
+    aggregate: "none",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "revenue",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "revenue_top10_share",
+    halves: "money",
+    name: "Top 10 customers' share of revenue",
+    description:
+      "The revenue billed in the period to the ten customers billed the most, as a share of all revenue billed in the period. Every revenue type counts, net of discounts and credits. Credit notes are not deducted. In basis points, where 10,000 is 100%. Per currency. Not additive.",
+    kind: "flow",
+    unit: "bps",
+    aggregate: "none",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "revenue",
+    asOf: "period_end",
+    supportsCompare: true,
+  },
+  {
+    id: "paying_customers_all",
+    name: "Customers who paid",
+    description:
+      "Customers with at least one successful payment in the period, for any kind of revenue. One count per customer. Not additive: two periods cannot be added.",
+    kind: "flow",
+    unit: "count",
+    aggregate: "none",
+    acrossBusinesses: "sum",
+    dimensions: ["currency", "business"],
+    grains: ALL_GRAINS,
+    currency: "per_currency",
+    source: "revenue",
+    asOf: "period_end",
+    supportsCompare: true,
   },
   {
     id: "cards_expired",
@@ -1785,7 +2091,7 @@ export const MEASURES: readonly MeasureDef[] = [
   },
   {
     id: "customer_lifetime_value",
-    name: "Lifetime value of a customer",
+    name: "Subscription lifetime value",
     description:
       "What an account is worth over its life. It is the revenue per paying customer at the period's end, times the average life of an account that had fully ended by then. The life runs from the start of the first subscription to the cancellation of the last one. Null until an account has fully ended.",
     kind: "stock",
@@ -1827,6 +2133,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -1842,6 +2149,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -1857,6 +2165,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",
@@ -2204,6 +2513,7 @@ export const MEASURES: readonly MeasureDef[] = [
     kind: "flow",
     unit: "count",
     aggregate: "none",
+    acrossBusinesses: "sum",
     dimensions: ["currency", "business"],
     grains: ALL_GRAINS,
     currency: "per_currency",

@@ -1,15 +1,7 @@
 import { cache } from "react";
+import { mandateRailLabel, mandateRevokeWhere } from "@/lib/mandate-rail";
 import Link from "next/link";
-import {
-  CreditCard,
-  Download,
-  FileText,
-  Info,
-  Package,
-  LogOut,
-  ReceiptText,
-  ShoppingBag,
-} from "lucide-react";
+import { CreditCard, FileText, Info, Package, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
@@ -33,12 +25,7 @@ import {
   portalListSpendLimits,
 } from "@/lib/portal-api";
 import { readStorefrontToken } from "@/lib/storefront-session";
-import {
-  portalRemoveBackupAction,
-  portalSetBackupAction,
-  portalSetDefaultAction,
-  portalLogoutAction,
-} from "./actions";
+import { portalSetBackupAction, portalSetDefaultAction, portalLogoutAction } from "./actions";
 import { ExpiredCard, PortalContact, SignedOutCard } from "./portal-dead-ends";
 import {
   buyerInvoiceState,
@@ -50,17 +37,18 @@ import {
 } from "./portal-state";
 import { RemovePaymentMethod } from "./remove-method";
 import { AddCard } from "./add-card";
-import { AddMethodDisclosure } from "./add-method-disclosure";
+import { AddMethodButton, AddMethodDisclosure } from "./add-method-disclosure";
 import { PortalSectionLink } from "./section-link";
+import { TruncatedText } from "../../truncated-text";
 import { BillingDetails } from "./billing-details";
 import { ShippingAddresses } from "./shipping-addresses";
 import { PayInvoiceButton } from "./pay-invoice";
+import { ArriveRow, ExitRowList, PopOnChange } from "../../storefront-motion";
 import { PayRequestForm } from "./pay-request";
 import { PayNowInsteadButton, StopBankRequestButton } from "./pay-now-instead";
 import { canCancelAtGateway } from "./gateway-cancel";
 import {
   BrandTheme,
-  Glyph,
   ProductGlyph,
   Row,
   RowList,
@@ -304,7 +292,7 @@ export default async function PortalPage({
    */
   // Invoices the buyer can act on: a payment already in progress is not one of them.
   const dueCount = invoices.filter(
-    (i) => PAYABLE_STATUSES.has(i.status) && !i.payment_in_flight,
+    (i) => PAYABLE_STATUSES.has(i.status) && !i.payment_in_flight && !i.collection_scheduled_at,
   ).length;
 
   /** Invoices "Pay" can open a checkout for: owed, open, not moving, under the card limit. */
@@ -318,8 +306,8 @@ export default async function PortalPage({
     methods.some((m) => m.is_default && methodProblem(m, tz) != null);
 
   /**
-   * Which section a narrow screen opens on. Only matters below 1000px — above it every
-   * section is on screen at once and this is ignored.
+   * Which section the page opens on. Below 1000px it is the one section on screen; above
+   * it, the pane under the plan (the plan itself is always shown there).
    *
    * A gateway redirect wins over everything: a buyer coming back from approving a card
    * at PayPal (`?setup=return`) must land on Payment methods, or the card they just
@@ -344,7 +332,7 @@ export default async function PortalPage({
   return (
     <BrandTheme brand={brand}>
       {/* Finishes a redirect-mode add (PayPal approval) when the buyer lands back here. */}
-      <SetupReturn scope={scope} />
+      <SetupReturn scope={scope} me={meData} />
 
       {meData.return_url ? (
         <a
@@ -372,18 +360,20 @@ export default async function PortalPage({
                   button stays and the name goes. */}
               {/* The name stays on a phone too (truncated): it is the only place that says
                   who is signed in. The email is the part a phone gives up. */}
-              <div className="max-w-40 text-right sm:max-w-none">
-                <div className="truncate text-sm font-medium">
-                  {holder ?? meData.customer.email}
-                </div>
+              <div className="max-w-full min-w-0 text-right">
+                <TruncatedText
+                  value={holder ?? meData.customer.email ?? ""}
+                  className="text-sm font-medium"
+                />
                 {/* `accountHolderName` FALLS BACK TO THE EMAIL, so a customer with no
                     name resolves `holder` TO their email and this guard passed on the
                     same string — printing it twice, stacked, in the page's top-right.
                     The second line is only worth its space when it differs. */}
                 {holder && meData.customer.email && holder !== meData.customer.email ? (
-                  <div className="hidden truncate text-xs text-muted-foreground sm:block">
-                    {meData.customer.email}
-                  </div>
+                  <TruncatedText
+                    value={meData.customer.email}
+                    className="hidden text-xs text-muted-foreground sm:block"
+                  />
                 ) : null}
               </div>
               {/* Beside the identity it ends (F-22) — the obvious home for it, and the
@@ -394,7 +384,7 @@ export default async function PortalPage({
               <form action={portalLogoutAction}>
                 <button
                   type="submit"
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                  className="flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground hover:underline"
                 >
                   <LogOut className="size-3" aria-hidden />
                   Sign out
@@ -438,6 +428,8 @@ export default async function PortalPage({
                   me={meData}
                   scope={scope}
                   size="default"
+                  // The balance card leads with adding a method when this one is dead.
+                  variant={lastFailure(invoices, methods)?.newMethodNeeded ? "outline" : "default"}
                 />
               ) : null
             }
@@ -464,11 +456,8 @@ export default async function PortalPage({
                     {open.map((l) => (
                       <Row key={l.invoice}>
                         <div className="flex min-w-0 flex-1 items-center gap-3">
-                          <Glyph>
-                            <FileText />
-                          </Glyph>
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium">
+                            <div className="text-sm font-medium wrap-break-word">
                               {l.invoice_number ?? "Invoice"}
                             </div>
                             {l.due_date ? (
@@ -523,6 +512,7 @@ export default async function PortalPage({
             })}
             <StorefrontSection
               title="Invoices"
+              hideTitle
               description="Pay an open invoice or download a PDF for your records."
               bodyClassName="p-0"
             >
@@ -557,15 +547,14 @@ export default async function PortalPage({
                     return (
                       <Row key={inv.id} className="flex-row flex-wrap items-center gap-x-4 gap-y-2">
                         <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
-                          <Glyph>
-                            <FileText />
-                          </Glyph>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
-                              <span className="truncate text-sm font-medium">
+                              <span className="text-sm font-medium wrap-break-word">
                                 {inv.number ?? "Invoice"}
                               </span>
-                              <Chip tone={CHIP_TONE[state.tone]}>{state.label}</Chip>
+                              <PopOnChange value={state.label}>
+                                <Chip tone={CHIP_TONE[state.tone]}>{state.label}</Chip>
+                              </PopOnChange>
                             </div>
                             <div className="mt-0.5 text-xs text-muted-foreground">
                               {issued}
@@ -575,8 +564,8 @@ export default async function PortalPage({
                         </div>
                         {/* Amount on the right edge, so the money reads as one column whatever
                             actions a row has. */}
-                        <div className="ml-auto flex items-center gap-3">
-                          <div className="flex items-center justify-end gap-2">
+                        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
                             {inv.payment_in_flight && inv.amount_due_minor <= 0 ? (
                               /* A settled invoice with a stray in-flight debit: nothing is required
                                  of the buyer. The abandon control stays where an AFA request exists,
@@ -622,6 +611,15 @@ export default async function PortalPage({
                               <span className="text-xs text-muted-foreground">
                                 Payment processing…
                               </span>
+                            ) : inv.collection_scheduled_at && inv.amount_due_minor > 0 ? (
+                              /* The bank has the notice: a second payment would only race it. */
+                              <span className="max-w-56 text-right text-xs leading-tight text-muted-foreground">
+                                Payment scheduled
+                                <span className="block">
+                                  We take it on {fmtDateTime(inv.collection_scheduled_at, tz)}. Do
+                                  not pay again.
+                                </span>
+                              </span>
                             ) : inv.amount_due_minor > 0 &&
                               PAYABLE_STATUSES.has(inv.status) &&
                               inv.over_card_limit ? (
@@ -642,11 +640,14 @@ export default async function PortalPage({
                                 refusalSlot={`pay-refusal-${inv.id}`}
                               />
                             ) : null}
-                            <Button asChild variant="outline" size="sm">
-                              <Link href={`/portal/invoices/${inv.id}/pdf`} prefetch={false}>
-                                <Download className="size-4" /> PDF
-                              </Link>
-                            </Button>
+                            {/* A quiet text link: one filled action per screen (decided 2026-11-17). */}
+                            <Link
+                              href={`/portal/invoices/${inv.id}/pdf`}
+                              prefetch={false}
+                              className="text-sm font-medium text-primary hover:underline"
+                            >
+                              PDF
+                            </Link>
                           </div>
                           <div className="min-w-20 text-right">
                             <div className="text-sm font-medium tabular-nums">
@@ -712,10 +713,10 @@ export default async function PortalPage({
                         className="flex-row flex-wrap items-center gap-x-4 gap-y-2"
                       >
                         <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
-                          <ProductGlyph src={first?.image_url} fallback={<ShoppingBag />} />
+                          <ProductGlyph src={first?.image_url} />
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
-                              <span className="truncate text-sm font-medium">
+                              <span className="text-sm font-medium wrap-break-word">
                                 {first
                                   ? `${first.description}${first.quantity > 1 ? ` × ${first.quantity}` : ""}`
                                   : (p.number ?? p.invoice)}
@@ -729,12 +730,14 @@ export default async function PortalPage({
                             </div>
                           </div>
                         </div>
-                        <div className="ml-auto flex items-center gap-3">
-                          <Button asChild variant="outline" size="sm">
-                            <Link href={`/portal/invoices/${p.invoice}/pdf`} prefetch={false}>
-                              <Download className="size-4" /> Receipt
-                            </Link>
-                          </Button>
+                        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                          <Link
+                            href={`/portal/invoices/${p.invoice}/pdf`}
+                            prefetch={false}
+                            className="text-sm font-medium text-primary hover:underline"
+                          >
+                            Receipt
+                          </Link>
                           <div className="min-w-20 text-right text-sm font-medium tabular-nums">
                             {money(p.total_minor, p.currency)}
                           </div>
@@ -755,22 +758,22 @@ export default async function PortalPage({
                   {receipts.map((rc) => (
                     <Row key={rc.id} className="flex-row flex-wrap items-center gap-x-4 gap-y-2">
                       <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
-                        <Glyph>
-                          <ReceiptText />
-                        </Glyph>
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{rc.number}</div>
+                          <div className="text-sm font-medium wrap-break-word">{rc.number}</div>
                           <div className="mt-0.5 text-xs text-muted-foreground">
                             {fmtDate(rc.paid_at, tz)} · {normalizeMethodWords(rc.method)}
                           </div>
                         </div>
                       </div>
-                      <div className="ml-auto flex items-center gap-3">
-                        <Button asChild variant="outline" size="sm">
-                          <Link href={`/portal/receipts/${rc.id}/pdf`} prefetch={false}>
-                            <Download className="size-4" /> PDF
-                          </Link>
-                        </Button>
+                      <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                        {/* A quiet text link: one filled action per screen (decided 2026-11-17). */}
+                        <Link
+                          href={`/portal/receipts/${rc.id}/pdf`}
+                          prefetch={false}
+                          className="text-sm font-medium text-primary hover:underline"
+                        >
+                          PDF
+                        </Link>
                         <div className="min-w-20 text-right text-sm font-medium tabular-nums">
                           {money(rc.amount_minor, rc.currency)}
                         </div>
@@ -802,6 +805,7 @@ export default async function PortalPage({
                 allowCoupons={meData.business.allow_customer_coupons}
                 offeredRails={offeredRails}
                 shippingAddresses={shippingOn ? shippingAddresses : undefined}
+                canCharge={payMethods.length > 0}
               />
             ) : (
               /* No subscription: say so, and give a way forward. */
@@ -859,6 +863,7 @@ export default async function PortalPage({
               title="Payment methods"
               hideTitle
               description="Cards and mandates this business may charge for your subscription."
+              action={<AddMethodButton />}
               bodyClassName="p-0"
             >
               {methods.length === 0 ? (
@@ -866,14 +871,7 @@ export default async function PortalPage({
                   compact
                   icon={<CreditCard />}
                   title="No payment method saved"
-                  /* "Add one below" is only true once the billing address is on file —
-                     otherwise what is below is the gate, not the form, and the empty
-                     state was pointing at a refusal. */
-                  description={
-                    meData.customer.billing_details_complete
-                      ? "Add one below so that we can collect invoice payments automatically."
-                      : "We cannot collect invoice payments automatically until you save a payment method."
-                  }
+                  description="Add one so that we can collect invoice payments automatically."
                 />
               ) : (
                 /* Scrolled, not paginated, and only once there are enough to need it.
@@ -884,7 +882,7 @@ export default async function PortalPage({
                    1024px and the card towered over everything beside it. Four rows fit,
                    the rest scroll, and no instrument becomes unreachable. */
                 <div>
-                  <RowList>
+                  <ExitRowList>
                     {methods.map((pm) => {
                       /* What the mandate behind this instrument is doing — see `mandateState`. The
                  chip, the limit line and the well below all read it, so they cannot end up
@@ -892,13 +890,13 @@ export default async function PortalPage({
                       const mandate = mandateState(pm);
                       const problem = methodProblem(pm, tz);
                       return (
-                        <li key={pm.id} className="px-5 py-3.5">
+                        <ArriveRow key={pm.id} rowId={pm.id} className="px-5 py-3.5">
                           <div className="flex flex-col gap-2.5">
                             <div className="flex min-w-0 items-center gap-3">
                               <MethodGlyph pm={pm} />
                               <div className="min-w-0">
                                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                  <span className="truncate text-sm font-medium">
+                                  <span className="text-sm font-medium wrap-break-word">
                                     {methodLabel(pm)}
                                   </span>
                                   {/* One word for this role across both surfaces (2026-09-14):
@@ -907,7 +905,9 @@ export default async function PortalPage({
                                       matches the engine's `role` and `/assign_role`. Read off
                                       `role`, not `is_default`: that field is literally
                                       `role === "primary"`, kept on the API for integrators. */}
-                                  {pm.role === "primary" ? <Chip>Primary</Chip> : null}
+                                  <PopOnChange value={pm.role ?? ""}>
+                                    {pm.role === "primary" ? <Chip>Primary</Chip> : null}
+                                  </PopOnChange>
                                   {/* Every card the engine will fall back to, so a removed one
                               is visibly different. */}
                                   {pm.role === "backup" ? <Chip>Backup</Chip> : null}
@@ -1015,16 +1015,10 @@ export default async function PortalPage({
                                   </Button>
                                 </ActionForm>
                               ) : null}
-                              {/* Backups are tried in turn when the primary declines. Never
-                          offered on the primary: it cannot be demoted, only replaced. */}
-                              {pm.role === "backup" ? (
-                                <ActionForm action={portalRemoveBackupAction}>
-                                  <input type="hidden" name="pm" value={pm.id} />
-                                  <Button type="submit" variant="outline" size="sm">
-                                    Remove backup
-                                  </Button>
-                                </ActionForm>
-                              ) : !pm.is_default && !problem ? (
+                              {/* Every method that is not primary is a backup, tried in turn
+                          when the primary declines: no "Remove backup". "Make backup" is
+                          only for an older method saved with no role. */}
+                              {pm.role !== "backup" && !pm.is_default && !problem ? (
                                 <ActionForm action={portalSetBackupAction}>
                                   <input type="hidden" name="pm" value={pm.id} />
                                   <Button type="submit" variant="outline" size="sm">
@@ -1039,6 +1033,9 @@ export default async function PortalPage({
                                 label={methodLabel(pm)}
                                 isPrimary={pm.role === "primary"}
                                 mandateRail={pm.mandate?.rail}
+                                askReason={
+                                  methods.length === 1 && meData.business.ask_delete_reason === true
+                                }
                               />
                             </div>
                           </div>
@@ -1059,59 +1056,54 @@ export default async function PortalPage({
                         the two moments a buyer is most likely to be reading this row. */}
                               {mandate.kind === "pending" ? (
                                 <span>
-                                  Auto-debit is not active yet ({pm.mandate.rail}). Your bank is
-                                  still confirming this authorization. This can take until the next
-                                  working day. We do not automatically collect invoices due before
-                                  then. Pay them from{" "}
+                                  Auto-debit is not active yet ({mandateRailLabel(pm.mandate.rail)}
+                                  ). Your bank is still confirming this authorization. This can take
+                                  until the next working day. We do not automatically collect
+                                  invoices due before then. Pay them from{" "}
                                   <PortalSectionLink section="invoices">Invoices</PortalSectionLink>
                                   .
                                 </span>
                               ) : mandate.kind === "dead" ? (
                                 <span>
                                   This auto-debit authorization is no longer active (
-                                  {pm.mandate.rail} · {mandate.status}). We cannot collect from this
-                                  account. Add a payment method to give a new authorization.
+                                  {mandateRailLabel(pm.mandate.rail)} · {mandate.status}). We cannot
+                                  collect from this account. Add a payment method to give a new
+                                  authorization.
                                 </span>
                               ) : (
                                 <span>
-                                  Auto-debit authorized ({pm.mandate.rail}). If you delete it here,
-                                  we stop charges from this account. To cancel the mandate, revoke
-                                  it in your UPI app or bank portal.
+                                  Auto-debit authorized ({mandateRailLabel(pm.mandate.rail)}). If
+                                  you delete it here, we stop charges from this account. To cancel
+                                  the mandate, revoke it {mandateRevokeWhere(pm.mandate.rail)}.
                                 </span>
                               )}
                             </div>
                           ) : null}
-                        </li>
+                        </ArriveRow>
                       );
                     })}
-                  </RowList>
+                  </ExitRowList>
                 </div>
               )}
-              {/* A titled block, not a tracked micro-label: this is the one thing on the page
-                  the buyer comes here to DO, and an eyebrow the size of a column head made it
-                  read as a footnote under the list.
+              {/* A popup (option C), opened by "Add a payment method" at the top right of this card or
+                  by any link that asks for it. See `add-method-disclosure.tsx`. */}
 
-                  Now a DISCLOSURE. Open it is ~740px — about half the Payment methods card —
-                  and it was rendered open to everyone, including a buyer with five saved
-                  instruments who is not adding a sixth. It opens by itself for the two people
-                  who need it: someone with nothing saved, and someone landing back from a
-                  provider redirect. See `add-method-disclosure.tsx`. */}
-              <div className="border-t px-5 py-4">
-                <AddMethodDisclosure
-                  defaultOpen={
-                    methods.length === 0 || setup === "return" || addCard === "1" || methodTrouble
-                  }
-                >
-                  <AddCard
-                    currency={subscriptions[0]?.currency ?? invoices[0]?.currency ?? null}
-                    scope={scope}
-                    me={meData}
-                    gateways={gateways}
-                    expectedDebitMinor={gws.data?.expected_debit_minor ?? 0}
-                    unattendedLimitMinor={gws.data?.unattended_debit_limit_minor ?? null}
-                  />
-                </AddMethodDisclosure>
-              </div>
+              <AddMethodDisclosure
+                // A popup now: it opens by itself only when the buyer came to add a method
+                // (an email's link, a setup coming back), never on every visit.
+                defaultOpen={setup === "return" || addCard === "1"}
+              >
+                <AddCard
+                  currency={subscriptions[0]?.currency ?? invoices[0]?.currency ?? null}
+                  scope={scope}
+                  me={meData}
+                  countries={countries}
+                  gateways={gateways}
+                  routes={gws.data?.method_routes ?? null}
+                  expectedDebitMinor={gws.data?.expected_debit_minor ?? 0}
+                  unattendedLimitMinor={gws.data?.unattended_debit_limit_minor ?? null}
+                />
+              </AddMethodDisclosure>
             </StorefrontSection>
           </>
         }

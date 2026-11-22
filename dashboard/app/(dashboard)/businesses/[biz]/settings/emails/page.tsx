@@ -242,7 +242,7 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
             />
           }
           save={{
-            note: "Saves sending, the per-email switches, the links and the receipt attachment. Sender and delivery save on their own pages.",
+            note: "Saves sending, the per-email switches, the links, open and click tracking and the receipt attachment. Sender and delivery save on their own pages.",
           }}
         >
           <SettingsCard title="Sending" meta={enabled ? "On" : "Off"}>
@@ -355,6 +355,30 @@ export default async function EmailSettings({ params }: { params: Promise<{ biz:
                 cfg?.linkTarget === "merchant_url" && cfg.merchantUrl ? "merchant_url" : "portal"
               }
               url={cfg?.merchantUrl ?? null}
+            />
+          </SettingsCard>
+
+          <SettingsCard title="Opens and clicks" meta="Saved with the switches above">
+            <SettingRow
+              label="Track opens and clicks"
+              help="We add a small image to the HTML part of each email, and we send each link through our server. We record the time, the type of device, the browser and the link. We do not record the IP address or the recipient address. Some mail apps open emails automatically, so we count those opens apart and leave them out of the open rate."
+              placement="end"
+              control={
+                <>
+                  {/* Tells the action the switch rendered, so unchecked = off. */}
+                  <input type="hidden" name="track_engagement_present" value="1" />
+                  <ToggleAnswer
+                    name="track_engagement"
+                    label="Track opens and clicks"
+                    defaultChecked={cfg?.trackEngagement === true}
+                  />
+                </>
+              }
+              consequence={
+                cfg?.trackEngagement === true
+                  ? "On: new emails carry the image and the link redirects. The Email report shows open and click rates."
+                  : "Off: emails go out as we render them. The Email report shows no open or click figures."
+              }
             />
           </SettingsCard>
 

@@ -34,12 +34,17 @@ import { Alert } from "@/components/ui/alert";
 import { CurrencySelect } from "@/components/form/currency-select";
 import { WelcomeFirstBusiness } from "@/components/home/welcome-first-business";
 import { currencyForCountry } from "@/lib/country-currency";
-import { OrgTotals, totalsQueries, windowQueries } from "@/components/overview/totals";
+import {
+  OrgRevenueRow,
+  OrgTotals,
+  totalsQueries,
+  windowQueries,
+} from "@/components/overview/totals";
 import { ZoneHeading } from "@/components/analytics/home/zone";
 import { orgTz } from "@/lib/org-tz-server";
 import { loadAttention } from "@/components/overview/attention";
 import { AttentionList } from "@/components/overview/attention-list";
-import type { RosterRow } from "@/components/analytics/org/business-roster";
+import { byRevenue, type RosterRow } from "@/components/analytics/org/business-roster";
 import { BusinessCards, BusinessPanel } from "@/components/analytics/org/business-cards";
 import { SectionHeading } from "@/components/overview/section-heading";
 import { OverviewSkeleton } from "@/components/overview/overview-skeleton";
@@ -168,7 +173,6 @@ export default async function Home({
           grain: "day",
           queries: windowQueries({
             businessCount: businesses.data.length,
-            soleBusiness: sole?.id ?? null,
             currency: currencyParam,
           }),
         }),
@@ -191,8 +195,11 @@ export default async function Home({
   /** The 30-day MRR: the Performance section's basis. */
   const windowMrr = ok(windowAnswers.get("mrr"));
   const payingTotal = [...payingBiz.values()].reduce((s, r) => s + (r.total ?? 0), 0);
+  const revResult = ok(windowAnswers.get("rev"));
+  const revRefusal = refusalOf(windowAnswers.get("rev"));
   /** Live businesses exist, but none has billed anything yet. */
-  const dormant = visible.length > 0 && !mrr?.total && payingTotal === 0;
+  const dormant =
+    visible.length > 0 && !mrr?.total && payingTotal === 0 && !(revResult?.total ?? 0);
   /** Businesses the conversion left out: named, never counted as zero. */
   const dropped = new Set(excludedBusinesses(visible, mrr?.missing_rates ?? []).map((b) => b.id));
 
@@ -207,8 +214,20 @@ export default async function Home({
    * whose currency has no rate converts to nothing and is named, not shown as zero.
    */
   const rosterCurrency = mrrMoveResult?.currency ?? windowMrr?.currency ?? null;
+  const read = (key: string) => splitByKey(ok(windowAnswers.get(key)));
+  const revBiz = read("rev_biz");
+  const ordersBiz = read("orders_biz");
+  const aovBiz = read("aov_biz");
+  const usageBiz = read("usage_biz");
+  const creditsBiz = read("credits_biz");
+  const rev = ok(windowAnswers.get("rev_biz"));
   const rows: RosterRow[] = visible.map((b) => {
     const mrrRow = mrrMoveBiz.get(b.id);
+    const revenue = revBiz.get(b.id)?.total ?? null;
+    const orders = ordersBiz.get(b.id)?.total ?? null;
+    const usageEvents = usageBiz.get(b.id)?.total ?? null;
+    const creditsUsed = creditsBiz.get(b.id)?.total ?? null;
+    const paying = payingSubsBiz.get(b.id)?.total ?? null;
     return {
       id: b.id,
       name: b.name,
@@ -217,24 +236,69 @@ export default async function Home({
       mrrLabel:
         mrrRow?.total != null && rosterCurrency ? money(mrrRow.total, rosterCurrency) : null,
       mrrMinor: mrrRow?.total ?? null,
+      revenueMinor: revenue,
+      revenueLabel: revenue != null && rev?.currency ? money(revenue, rev.currency) : null,
+      // One rule for the models: a reading above zero over the 30 days.
+      models: {
+        subscriptions: (mrrRow?.total ?? 0) > 0 || (paying ?? 0) > 0,
+        oneTime: (orders ?? 0) > 0,
+        usage: (usageEvents ?? 0) > 0,
+        credits: (creditsUsed ?? 0) > 0,
+      },
+      orders,
+      averageOrderMinor: aovBiz.get(b.id)?.total ?? null,
+      usageEvents,
+      creditsUsedMinor: creditsUsed,
       changeBps: mrrRow ? windowChangeBps(mrrRow.points) : null,
-      payingSubscriptions: payingSubsBiz.get(b.id)?.total ?? null,
+      payingSubscriptions: paying,
       subscriptionsInDunning: dunningBiz.get(b.id)?.total ?? null,
       excludedFromRollup: dropped.has(b.id),
       iconUrl: b.icon_url ?? null,
       brandColor: b.brand_color ?? null,
     };
   });
+  const hasSubscriptions = rows.some((r) => r.models?.subscriptions);
+
+  // The non-subscription part of the biggest subscription businesses' revenue, for their cards.
+  // A business-scoped answer is stated in the business's own currency, so only its SHARE is
+  // taken, and applied to the converted figure above.
+  const topSubs = byRevenue(rows)
+    .filter((r) => r.models?.subscriptions && (r.revenueMinor ?? 0) > 0)
+    .slice(0, 4);
+  if (topSubs.length > 0) {
+    try {
+      const typed = await queryAnalytics({
+        range: "30d",
+        grain: "day",
+        queries: topSubs.map((r) => ({
+          key: r.id,
+          measure: "revenue_billed",
+          business: r.id,
+          split: "revenue_type",
+          split_limit: 4,
+          shape: "totals" as const,
+        })),
+      });
+      for (const r of topSubs) {
+        const res = ok(typed.find((e) => e.key === r.id));
+        const recurring = splitByKey(res).get("recurring")?.total ?? 0;
+        if (res?.total && res.total > 0 && r.revenueMinor != null) {
+          r.otherRevenueMinor = Math.round(r.revenueMinor * (1 - recurring / res.total));
+        }
+      }
+    } catch {
+      // No share, no line: the card keeps its MRR.
+    }
+  }
   /** One business: the organization's totals are its totals, so its panel holds them. */
   const only = rows.length === 1 ? rows[0]! : null;
-  const panel = only && windowMrr && !dormant ? only : null;
+  const panel = only && (windowMrr || revResult) && !dormant ? only : null;
 
   const totalsProps = {
     answers,
     window: windowAnswers,
-    businessCount: visible.length,
-    includedCount: visible.length - dropped.size,
     soleBusiness: sole?.id ?? null,
+    hasSubscriptions,
   };
 
   /** The currencies the book is billed in: the reporting currency control's options. */
@@ -305,7 +369,7 @@ export default async function Home({
 
       <PendingContent skeleton={<OverviewSkeleton />}>
         <Stack>
-          {/* The way into each business: the largest by MRR as cards. One business with
+          {/* The way into each business: the largest by 30-day revenue as cards. One business with
               revenue is the panel in the totals instead. */}
           {panel ? null : (
             <section aria-label="Businesses" className="flex flex-col gap-6">
@@ -313,8 +377,8 @@ export default async function Home({
               <BusinessCards rows={rows} currency={rosterCurrency} allHref="/metrics" />
               {dormant ? (
                 <p className="text-sm text-muted-foreground">
-                  Revenue, subscriptions and cash show here after the first live subscription. Open
-                  a business to set up its catalog, or turn on Test mode to try your setup first.
+                  Revenue, subscriptions and cash show here after the first live payment. Open a
+                  business to set up its catalog, or turn on Test mode to try your setup first.
                 </p>
               ) : null}
             </section>
@@ -340,14 +404,20 @@ export default async function Home({
               ) : null}
               {/* No base currency: the engine refuses a cross-currency total and names the
                   currencies it CAN answer. Its sentence, its options. */}
-              {mrrRefusal ? (
-                <CurrencyRefusal refusal={mrrRefusal} hrefFor={(c) => `/?currency=${c}`} />
+              {(mrrRefusal ?? revRefusal) ? (
+                <CurrencyRefusal
+                  refusal={(mrrRefusal ?? revRefusal)!}
+                  hrefFor={(c) => `/?currency=${c}`}
+                />
               ) : null}
               {panel ? (
                 /* One business with revenue: its panel heads its own figures, as before. */
-                <BusinessPanel row={panel}>
-                  <OrgTotals {...totalsProps} bare />
-                </BusinessPanel>
+                <>
+                  <BusinessPanel row={panel}>
+                    <OrgTotals {...totalsProps} bare revenueRow={false} />
+                  </BusinessPanel>
+                  {hasSubscriptions ? <OrgRevenueRow window={windowAnswers} /> : null}
+                </>
               ) : (
                 <OrgTotals {...totalsProps} />
               )}

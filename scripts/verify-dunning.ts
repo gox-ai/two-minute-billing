@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { systemDb, withTenant, closeDb } from "@/platform/db";
 import { buildApp } from "@/index";
 import { createOrganization, createBusiness } from "@/modules/tenancy/service";
+import { createGatewayAccount } from "@/modules/gateway/service";
 import { createCustomer, updateCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
@@ -22,10 +23,15 @@ import {
   retryDueInvoice,
   runDunningPass,
   sweepExpiredParkedDunning,
+  sweepParkedReminders,
 } from "@/modules/subscriptions/dunning";
 import { getDunningJourney } from "@/modules/invoicing/dunning-journey";
+import { handleProviderEvent } from "@/modules/webhooks/inbound";
 import { MAX_ATTEMPTS, PARKED_GRACE_DAYS } from "@/modules/subscriptions/dunning-schedule";
 import { runWithClockScope } from "@/platform/clock";
+import { publicId } from "@/platform/ids";
+import { resolveChargeCandidates } from "@/modules/invoicing/collection";
+import { MAX_PRESENTATIONS_PER_INVOICE } from "@/modules/invoicing/representment";
 import {
   auditLogs,
   subscriptions,
@@ -34,6 +40,7 @@ import {
   payments,
   businesses,
   events,
+  emailMessages,
 } from "@db/schema";
 
 async function setup(
@@ -1066,6 +1073,588 @@ const hold = (name: string, ok: boolean, detail: string) => {
 }
 const holdPass = holdChecks.every(([, ok]) => ok);
 
+/**
+ * ---- Case R: the gateway refuses OUR request -> retries -> PARKED for ops, never cancelled ----
+ *
+ * A customer is never cancelled over our own setup (2026-11-17). The request fault retries
+ * like any decline; where the schedule would end in the final action it parks instead, and
+ * the parked deadline sweep holds it for ops.
+ */
+{
+  const org = await createOrganization({ name: "Dunning RequestFault" });
+  const orgId = org.organization.id;
+  const biz = await createBusiness({
+    organizationId: orgId,
+    name: "Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  // Mail on, so "no payer mail while parked" is measured, not vacuous.
+  await systemDb
+    .update(businesses)
+    .set({ emailConfig: { enabled: true, types: {} } })
+    .where(eq(businesses.id, biz.id));
+  const acct = await createGatewayAccount({
+    organizationId: orgId,
+    businessId: biz.id,
+    gatewayKey: "tmtest",
+    label: "Refuses our request",
+    credentials: { charge_fault: "request_rejected" },
+  });
+  const customer = await createCustomer({
+    organizationId: orgId,
+    businessId: biz.id,
+    email: "fault@a.com",
+  });
+  const pm = await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: biz.id,
+    customer,
+    token: "tok_4242",
+  });
+  await withTenant(orgId, (tx) =>
+    tx
+      .update(paymentMethods)
+      .set({ gatewayAccountId: acct.id })
+      .where(eq(paymentMethods.id, pm.id)),
+  );
+  const product = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Pro" });
+  const price = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: product.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 5000,
+    interval: "month",
+  });
+  const created = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: customer.id,
+    now: new Date(),
+    items: [{ price, quantity: 1 }],
+    defaultPaymentMethodId: pm.id,
+  });
+  const { invoice } = await billSubscriptionPeriod({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscription: created.subscription,
+    periodStart: created.subscription.currentPeriodStart!,
+    periodEnd: created.subscription.currentPeriodEnd!,
+  });
+  const first = await getInv(orgId, invoice.id);
+  let passes = 0;
+  let subR = await getSub(orgId, created.subscription.id);
+  let invR = first;
+  for (let i = 0; i < MAX_ATTEMPTS + 2 && invR.dunningStatus !== "parked"; i++) {
+    await backdate(invoice.id);
+    await runDunningPass(new Date());
+    invR = await getInv(orgId, invoice.id);
+    subR = await getSub(orgId, created.subscription.id);
+    passes++;
+  }
+  // Far past any park deadline and every reminder rung: no final action, no payer mail.
+  const later = new Date(Date.now() + (PARKED_GRACE_DAYS + 30) * 86_400_000);
+  await runWithClockScope({ onlyBusinessId: biz.id, now: later }, () =>
+    sweepParkedReminders(later),
+  );
+  await runWithClockScope({ onlyBusinessId: biz.id }, () => sweepExpiredParkedDunning(later));
+  const mails = await withTenant(orgId, (tx) =>
+    tx.select().from(emailMessages).where(eq(emailMessages.invoiceId, invoice.id)),
+  );
+  const parkedAt = (await getInv(orgId, invoice.id)).dunningParkedAt!;
+  const failedMails = mails.filter((m) => m.type === "payment_failed");
+  const mailedWhileParked = mails.filter(
+    (m) =>
+      [
+        "payment_failed",
+        "dunning_action_required",
+        "payment_due_reminder",
+        "invoice_overdue",
+      ].includes(m.type) && m.createdAt.getTime() >= parkedAt.getTime(),
+  );
+  const journey = await getDunningJourney({
+    organizationId: orgId,
+    business: { id: biz.id },
+    invoicePublicId: invoice.publicId,
+  });
+  const invAfter = await getInv(orgId, invoice.id);
+  const subAfter = await getSub(orgId, created.subscription.id);
+  const pays = await withTenant(orgId, (tx) =>
+    tx.select().from(payments).where(eq(payments.invoiceId, invoice.id)),
+  );
+  const pmAfter = await withTenant(
+    orgId,
+    async (tx) => (await tx.select().from(paymentMethods).where(eq(paymentMethods.id, pm.id)))[0]!,
+  );
+  console.log(
+    `R: mails failed=${failedMails.length} while_parked=${mailedWhileParked.map((m) => m.type).join(",") || "none"} ` +
+      `journey=${JSON.stringify(journey?.projection ?? null)}`,
+  );
+  console.log(
+    `R: request fault first=${first.dunningStatus} after ${passes} passes invoice=${invAfter.status}/` +
+      `${invAfter.dunningStatus} attempts=${invAfter.attemptCount} sub=${subAfter.status} ` +
+      `codes=${[...new Set(pays.map((p) => p.failureCode))].join(",")} pm=${pmAfter.status}`,
+  );
+  var requestFaultParkPass =
+    // Retried first: the first failure armed the schedule, not a park.
+    first.dunningStatus === "in_progress" &&
+    first.nextAttemptAt !== null &&
+    invR.attemptCount > 1 &&
+    pays.length > 1 &&
+    pays.every((p) => p.failureCode === "gateway_request_rejected") &&
+    // Exhausted into a park, and the sweep held it.
+    invAfter.status === "payment_due" &&
+    invAfter.dunningStatus === "parked" &&
+    subR.status === "active" &&
+    subAfter.status === "active" &&
+    // Never the card's fault.
+    pmAfter.status === "valid" &&
+    // The payer heard about the retries, then nothing while parked on our fault.
+    failedMails.length > 0 &&
+    mailedWhileParked.length === 0 &&
+    // The preview shows the ops hold, with no deadline and no final action.
+    journey?.projection?.length === 1 &&
+    journey.projection[0]!.kind === "hold" &&
+    journey.projection[0]!.reason === "parked_for_ops";
+}
+
+/**
+ * ---- Case R2: the same refusal delivered by WEBHOOK on a pending debit ----
+ *
+ * The async path writes the park before it emits `payment_failed`, like the synchronous
+ * one, so the payer gets no mail for the failure that parks it.
+ */
+{
+  const org = await createOrganization({ name: "Dunning RequestFault Async" });
+  const orgId = org.organization.id;
+  const biz = await createBusiness({
+    organizationId: orgId,
+    name: "Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  await systemDb
+    .update(businesses)
+    .set({ emailConfig: { enabled: true, types: {} } })
+    .where(eq(businesses.id, biz.id));
+  const customer = await createCustomer({
+    organizationId: orgId,
+    businessId: biz.id,
+    email: "async-fault@a.com",
+  });
+  // Accepted, then pending at the bank: the verdict arrives only by webhook.
+  const pm = await vaultPaymentMethod({
+    organizationId: orgId,
+    businessId: biz.id,
+    customer,
+    token: "4000000000000101",
+  });
+  const product = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Pro" });
+  const price = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: product.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 5000,
+    interval: "month",
+  });
+  const created = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: customer.id,
+    now: new Date(),
+    items: [{ price, quantity: 1 }],
+    defaultPaymentMethodId: pm.id,
+  });
+  const { invoice } = await billSubscriptionPeriod({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscription: created.subscription,
+    periodStart: created.subscription.currentPeriodStart!,
+    periodEnd: created.subscription.currentPeriodEnd!,
+  });
+  const [pending] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.invoiceId, invoice.id), eq(payments.status, "pending"))),
+  );
+  // The schedule is spent, so this failure is the one that would end dunning.
+  await systemDb
+    .update(invoices)
+    .set({ attemptCount: MAX_ATTEMPTS + 1 })
+    .where(eq(invoices.id, invoice.id));
+  const outcome = pending
+    ? await handleProviderEvent(
+        "tmtest",
+        {
+          providerEventId: `ev_reqfault_${pending.publicId}`,
+          type: "charge.failed",
+          providerChargeId: pending.providerChargeId!,
+          failureCode: "gateway_request_rejected",
+          providerFailureCode: "invalid_request",
+          occurredAt: new Date(),
+          raw: {},
+        },
+        { businessId: biz.id },
+      )
+    : "no pending debit";
+  const invR2 = await getInv(orgId, invoice.id);
+  const subR2 = await getSub(orgId, created.subscription.id);
+  const mailsR2 = await withTenant(orgId, (tx) =>
+    tx.select().from(emailMessages).where(eq(emailMessages.invoiceId, invoice.id)),
+  );
+  const failedEvents = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(events)
+      .where(and(eq(events.businessId, biz.id), eq(events.type, "payment_failed"))),
+  );
+  console.log(
+    `R2: webhook=${outcome} invoice=${invR2.status}/${invR2.dunningStatus} sub=${subR2.status} ` +
+      `mails=${mailsR2.map((m) => m.type).join(",") || "none"} payment_failed_events=${failedEvents.length}`,
+  );
+  var requestFaultAsyncPass =
+    outcome === "processed" &&
+    invR2.status === "payment_due" &&
+    invR2.dunningStatus === "parked" &&
+    subR2.status === "active" &&
+    // The merchant's webhook still hears about it; the payer gets no mail.
+    failedEvents.length === 1 &&
+    !mailsR2.some((m) =>
+      ["payment_failed", "dunning_action_required", "invoice_overdue"].includes(m.type),
+    );
+}
+
+/**
+ * ---- Cases DA–DF: dead cards, backup, attempt caps, payer-skipped debit (2026-11-17) ----
+ */
+// One customer with these cards in order (the first is primary, the rest backups), mail on.
+async function setupCards(
+  label: string,
+  tokens: string[],
+  opts: { dunningConfig?: Record<string, unknown>; retryDays?: number[] } = {},
+) {
+  const org = await createOrganization({ name: `Dunning ${label}` });
+  const orgId = org.organization.id;
+  const biz = await createBusiness({
+    organizationId: orgId,
+    name: "Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  await systemDb
+    .update(businesses)
+    .set({
+      dunningConfig: { ...opts.dunningConfig },
+      emailConfig: { enabled: true, types: {} },
+      ...(opts.retryDays ? { dunningRetryDays: opts.retryDays } : {}),
+    })
+    .where(eq(businesses.id, biz.id));
+  const customer = await createCustomer({
+    organizationId: orgId,
+    businessId: biz.id,
+    email: `${label.toLowerCase()}@example.com`,
+  });
+  const pms = [];
+  for (const token of tokens)
+    pms.push(
+      await vaultPaymentMethod({ organizationId: orgId, businessId: biz.id, customer, token }),
+    );
+  const product = await createProduct({ organizationId: orgId, businessId: biz.id, name: "Pro" });
+  const price = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: product.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 5000,
+    interval: "month",
+  });
+  const created = await createSubscription({
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: customer.id,
+    now: new Date(),
+    items: [{ price, quantity: 1 }],
+    defaultPaymentMethodId: pms[0]!.id,
+  });
+  const { invoice } = await billSubscriptionPeriod({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscription: created.subscription,
+    periodStart: created.subscription.currentPeriodStart!,
+    periodEnd: created.subscription.currentPeriodEnd!,
+  });
+  return { orgId, bizId: biz.id, customer, sub: created.subscription, invoiceId: invoice.id, pms };
+}
+const invoicePays = (orgId: string, invoiceId: string) =>
+  withTenant(orgId, (tx) =>
+    tx.select().from(payments).where(eq(payments.invoiceId, invoiceId)).orderBy(payments.createdAt),
+  );
+const presentedOn = async (orgId: string, invoiceId: string) =>
+  (await invoicePays(orgId, invoiceId)).filter((p) => p.providerKey !== "none").length;
+const pmRow = (orgId: string, id: string) =>
+  withTenant(
+    orgId,
+    async (tx) =>
+      (await tx.select().from(paymentMethods).where(eq(paymentMethods.id, id)).limit(1))[0]!,
+  );
+const deadChecks: Array<[string, boolean, string]> = [];
+const dead = (name: string, ok: boolean, detail: string) => {
+  deadChecks.push([name, ok, detail]);
+  console.log(`${ok ? "✅" : "❌"} ${name} — ${detail}`);
+};
+{
+  // DA: an expired card, no backup. Retries on the schedule, but the card is not charged.
+  const d = await setupCards("HoldDead", ["4000000000000069"], {
+    dunningConfig: { skip_retries_for_hard_failures: false },
+  });
+  const card = await pmRow(d.orgId, d.pms[0]!.id);
+  const before = await presentedOn(d.orgId, d.invoiceId);
+  await backdate(d.invoiceId);
+  await scopedPass(d.bizId);
+  const after = await presentedOn(d.orgId, d.invoiceId);
+  const pays = await invoicePays(d.orgId, d.invoiceId);
+  const newest = pays.at(-1)!;
+  const inv = await getInv(d.orgId, d.invoiceId);
+  dead(
+    "DA hard decline marks the card invalid",
+    card.status === "invalid",
+    `status=${card.status}`,
+  );
+  dead(
+    "DA the next retry does not charge the dead card; it is booked without a charge",
+    after === before &&
+      newest.providerKey === "none" &&
+      newest.failureCode === "payment_method_unusable",
+    `presented ${before}→${after} newest=${newest.providerKey}/${newest.failureCode}`,
+  );
+  dead(
+    "DA the invoice stays in dunning on its schedule",
+    inv.status === "payment_due" && inv.dunningStatus === "in_progress" && !!inv.nextAttemptAt,
+    `invoice=${inv.status}/${inv.dunningStatus} next=${inv.nextAttemptAt?.toISOString() ?? "null"}`,
+  );
+  const mails = await withTenant(d.orgId, (tx) =>
+    tx.select().from(emailMessages).where(eq(emailMessages.invoiceId, d.invoiceId)),
+  );
+  dead(
+    "DA the reminder asks the customer to update the payment method",
+    mails.some((m) => m.type === "payment_failed" && /Update your payment method/.test(m.bodyText)),
+    `mails=${mails.map((m) => m.type).join(",")}`,
+  );
+  // The card updater revalidates it: collection runs at once on that card.
+  const res = await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `evt_hold_updated_${card.publicId}`,
+      type: "payment_method.updated",
+      providerPaymentMethodId: card.providerPaymentMethodId,
+      card: { brand: "visa", last4: "0069", expMonth: 12, expYear: 2034 },
+      occurredAt: new Date(),
+      raw: {},
+    },
+    { businessId: d.bizId },
+  );
+  const afterUpdate = await presentedOn(d.orgId, d.invoiceId);
+  dead(
+    "DA a card update charges the held invoice at once",
+    res === "processed" && afterUpdate === after + 1,
+    `webhook=${res} presented ${after}→${afterUpdate}`,
+  );
+  // A new card: collect-on-update pays it.
+  const good = await vaultPaymentMethod({
+    organizationId: d.orgId,
+    businessId: d.bizId,
+    customer: d.customer,
+    token: "tok_4242",
+  });
+  await collectOutstandingForNewPaymentMethod({
+    organizationId: d.orgId,
+    businessId: d.bizId,
+    customerId: d.customer.id,
+    paymentMethodPublicId: good.publicId,
+  });
+  const paid = await getInv(d.orgId, d.invoiceId);
+  dead("DA a new card pays the held invoice", paid.status === "paid", `invoice=${paid.status}`);
+}
+{
+  // DB: expired primary, good backup. The backup pays in the same pass; the customer is told.
+  const d = await setupCards("BackupNow", ["4000000000000069", "tok_4242"]);
+  const inv = await getInv(d.orgId, d.invoiceId);
+  const pays = await invoicePays(d.orgId, d.invoiceId);
+  const primary = await pmRow(d.orgId, d.pms[0]!.id);
+  dead(
+    "DB the backup pays in the same pass as the hard decline",
+    inv.status === "paid" &&
+      pays.length === 2 &&
+      pays[0]!.status === "failed" &&
+      pays[1]!.status === "succeeded" &&
+      pays[1]!.paymentMethodId === d.pms[1]!.id,
+    `invoice=${inv.status} pays=${pays.map((p) => `${p.status}/${p.failureCode ?? ""}`).join(",")}`,
+  );
+  const invalidated = await withTenant(d.orgId, (tx) =>
+    tx
+      .select()
+      .from(events)
+      .where(and(eq(events.businessId, d.bizId), eq(events.type, "payment_source_invalidated"))),
+  );
+  const mail = await withTenant(d.orgId, (tx) =>
+    tx
+      .select()
+      .from(emailMessages)
+      .where(
+        and(
+          eq(emailMessages.customerId, d.customer.id),
+          eq(emailMessages.type, "payment_method_invalid"),
+        ),
+      ),
+  );
+  dead(
+    "DB the customer is emailed at once that the backup paid",
+    primary.status === "invalid" &&
+      invalidated.length === 1 &&
+      (invalidated[0]!.data as Record<string, unknown>).backup_paid === true &&
+      mail.length === 1 &&
+      /backup payment method/.test(mail[0]!.bodyText),
+    `pm=${primary.status} events=${invalidated.length} mails=${mail.length}`,
+  );
+  const next = await resolveChargeCandidates({
+    organizationId: d.orgId,
+    customerId: d.customer.id,
+    subscription: d.sub,
+    currency: "USD",
+    skipUnusable: true,
+  });
+  dead(
+    "DB later collections charge the backup, never the dead card",
+    next.primary?.id === d.pms[1]!.id && next.held?.id === d.pms[0]!.id,
+    `primary=${next.primary?.publicId} held=${next.held?.publicId}`,
+  );
+}
+const failedRow = (
+  d: { orgId: string; bizId: string; customer: { id: string } },
+  pmId: string,
+  providerKey: string,
+  invoiceId: string | null,
+  at: Date,
+) =>
+  withTenant(d.orgId, (tx) =>
+    tx.insert(payments).values({
+      organizationId: d.orgId,
+      businessId: d.bizId,
+      customerId: d.customer.id,
+      invoiceId,
+      paymentMethodId: pmId,
+      publicId: publicId("pay"),
+      status: "failed",
+      amountMinor: 5000n,
+      currency: "USD",
+      providerKey,
+      failureCode: "insufficient_funds",
+      createdAt: at,
+    }),
+  );
+{
+  // DC1: per invoice. Eight presentations, then an automatic attempt is not sent.
+  const d = await setupCards("InvoiceCap", ["4000000000009995"], {
+    retryDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  });
+  const first = (await invoicePays(d.orgId, d.invoiceId))[0]!;
+  for (let i = 1; i < MAX_PRESENTATIONS_PER_INVOICE; i++)
+    await failedRow(
+      d,
+      d.pms[0]!.id,
+      first.providerKey,
+      d.invoiceId,
+      new Date(Date.now() - i * 60_000),
+    );
+  const before = await presentedOn(d.orgId, d.invoiceId);
+  await backdate(d.invoiceId);
+  await scopedPass(d.bizId);
+  const after = await presentedOn(d.orgId, d.invoiceId);
+  const newest = (await invoicePays(d.orgId, d.invoiceId)).at(-1)!;
+  const inv = await getInv(d.orgId, d.invoiceId);
+  dead(
+    `DC1 an invoice is presented at most ${MAX_PRESENTATIONS_PER_INVOICE} times automatically`,
+    before === MAX_PRESENTATIONS_PER_INVOICE &&
+      after === before &&
+      newest.failureCode === "invoice_attempt_limit" &&
+      inv.status === "payment_due" &&
+      !!inv.nextAttemptAt,
+    `presented ${before}→${after} newest=${newest.failureCode} invoice=${inv.status}`,
+  );
+
+  // DC2: per card, by brand. 15 declines in 30 days caps a Visa card, not a Mastercard.
+  for (const [brand, capped] of [
+    ["visa", true],
+    ["mastercard", false],
+  ] as const) {
+    const c = await setupCards(`CardCap${brand}`, ["4000000000009995"]);
+    const pm = c.pms[0]!;
+    await withTenant(c.orgId, (tx) =>
+      tx.update(paymentMethods).set({ brand }).where(eq(paymentMethods.id, pm.id)),
+    );
+    const key = (await invoicePays(c.orgId, c.invoiceId))[0]!.providerKey;
+    for (let i = 0; i < 15; i++)
+      await failedRow(c, pm.id, key, null, new Date(Date.now() - (i + 2) * 86_400_000));
+    const b = await presentedOn(c.orgId, c.invoiceId);
+    await backdate(c.invoiceId);
+    await scopedPass(c.bizId);
+    const a = await presentedOn(c.orgId, c.invoiceId);
+    const n = (await invoicePays(c.orgId, c.invoiceId)).at(-1)!;
+    dead(
+      `DC2 ${brand}: 15 declines in 30 days ${capped ? "caps" : "does not cap"} the card`,
+      capped ? a === b && n.failureCode === "card_attempt_limit" : a === b + 1,
+      `presented ${b}→${a} newest=${n.providerKey}/${n.failureCode}`,
+    );
+  }
+}
+{
+  // DF: the payer skipped one debit. Parked for the cycle, mandate kept, payer told at once.
+  const d = await setupCards("PayerSkip", ["4000000000000101"]);
+  const [pending] = (await invoicePays(d.orgId, d.invoiceId)).filter((p) => p.status === "pending");
+  const res = pending
+    ? await handleProviderEvent(
+        "tmtest",
+        {
+          providerEventId: `ev_skip_${pending.publicId}`,
+          type: "charge.failed",
+          providerChargeId: pending.providerChargeId!,
+          failureCode: "debit_cancelled_by_payer",
+          providerFailureCode: "payment_cancelled",
+          failureMessage: "You stopped this payment at your bank.",
+          failureRetriable: true,
+          occurredAt: new Date(),
+          raw: {},
+        },
+        { businessId: d.bizId },
+      )
+    : "no pending debit";
+  const inv = await getInv(d.orgId, d.invoiceId);
+  const sub = await getSub(d.orgId, d.sub.id);
+  const pm = await pmRow(d.orgId, d.pms[0]!.id);
+  const mails = await withTenant(d.orgId, (tx) =>
+    tx.select().from(emailMessages).where(eq(emailMessages.invoiceId, d.invoiceId)),
+  );
+  dead(
+    "DF a payer-skipped debit parks the invoice, keeps the method and emails the payer",
+    res === "processed" &&
+      inv.status === "payment_due" &&
+      inv.dunningStatus === "parked" &&
+      sub.status === "active" &&
+      pm.status === "valid" &&
+      mails.some((m) => m.type === "payment_failed"),
+    `webhook=${res} invoice=${inv.status}/${inv.dunningStatus} pm=${pm.status} mails=${mails.map((m) => m.type).join(",")}`,
+  );
+}
+const deadCardsPass = deadChecks.every(([, ok]) => ok);
 console.log("");
 const pass =
   holdPass &&
@@ -1078,7 +1667,10 @@ const pass =
   manualCollectPass &&
   periodDeadlinePass &&
   afaNoticePass &&
-  mandateReasonPass;
+  mandateReasonPass &&
+  requestFaultParkPass &&
+  requestFaultAsyncPass &&
+  deadCardsPass;
 console.log(pass ? "✅ DUNNING: PASS" : "❌ DUNNING: FAIL");
 await closeDb();
 process.exit(pass ? 0 : 1);

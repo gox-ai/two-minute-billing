@@ -13,7 +13,7 @@
   "headline": 29927,
   "key": "lifetime_value_of_a_customer",
   "kind": "money",
-  "name": "Lifetime Value of a Customer",
+  "name": "Subscription Lifetime Value",
   "object": "report",
   "points": [],
   "range": "12m",

@@ -46,8 +46,9 @@ export function Field({
     : children;
   if (row)
     return (
-      <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-        <div className="min-w-0 sm:max-w-md">
+      // Wraps, never squeezes (see SettingRow): the control drops under a label below 14rem.
+      <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3 px-5 py-4">
+        <div className="min-w-0 flex-[1_1_14rem] sm:max-w-md">
           <Label htmlFor={name} className="text-sm leading-relaxed font-medium">
             {label}
             {required ? <span className="text-destructive"> *</span> : null}
@@ -60,7 +61,7 @@ export function Field({
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{help}</p>
           ) : null}
         </div>
-        <div className={cn("w-full shrink-0 sm:w-72", className)}>{control}</div>
+        <div className={cn("w-full max-w-full sm:w-72", className)}>{control}</div>
       </div>
     );
   return (

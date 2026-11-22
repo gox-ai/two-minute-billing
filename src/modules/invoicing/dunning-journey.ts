@@ -8,7 +8,7 @@
  * collect changes it.
  */
 import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
 import {
   auditLogs,
@@ -25,6 +25,7 @@ import {
   dunningAppliesTo,
   dunningPeriodEndsAt,
   networkRetryCap,
+  retryRailOf,
   parkedDunningDeadline,
   planFailureRearm,
   type DunningConfig,
@@ -32,6 +33,8 @@ import {
 } from "@/modules/subscriptions/dunning-schedule";
 import { dunningHoldFor, isAutoCollectOn } from "./service";
 import { RAIL_LIMIT_CODE, RAIL_SPACING_CODE } from "./representment";
+import { isOurRequestFault } from "@/providers/decline-codes";
+import { creationEvents } from "@/modules/events/provenance";
 
 export type JourneyTrigger =
   | "billing_clock"
@@ -39,7 +42,152 @@ export type JourneyTrigger =
   | "portal"
   | "new_payment_method"
   | "offline"
-  | "api";
+  | "api"
+  /** The buyer paid on hosted checkout. */
+  | "checkout"
+  /** A gateway notification completed it; `actor` is the gateway key. */
+  | "webhook"
+  /** An AI agent over OAuth/MCP. */
+  | "mcp";
+
+/**
+ * Who started a collection attempt, from its trace and the audit rows of the same request.
+ * Says nothing (null) when nothing recorded it, rather than guessing "the API".
+ */
+export function attributeAttempt(
+  trace: string | null,
+  providerKey: string,
+  rows: { actor: string; source: string; action: string }[],
+): { trigger: JourneyTrigger | null; actor: string | null } {
+  if (trace?.startsWith("job-")) return { trigger: "billing_clock", actor: null };
+  if (rows.some((a) => a.action === "customer.add_payment_method"))
+    return { trigger: "new_payment_method", actor: null };
+  // A delivery (or its replay) runs in its own trace: the gateway's notice completed it.
+  if (trace?.startsWith("hook-") || trace?.startsWith("replay-"))
+    return { trigger: "webhook", actor: providerKey };
+  const row = rows[0];
+  if (!row) return { trigger: null, actor: null };
+  if (row.actor.startsWith("psess_") || row.source === "portal")
+    return { trigger: "portal", actor: null };
+  if (row.actor.startsWith("cosess_") || row.source === "checkout")
+    return { trigger: "checkout", actor: null };
+  if (row.source === "dashboard" || row.source === "assistant")
+    return { trigger: "dashboard", actor: row.actor };
+  if (row.source === "scheduled_job") return { trigger: "billing_clock", actor: null };
+  if (row.source === "webhook") return { trigger: "webhook", actor: row.actor || providerKey };
+  if (row.source === "mcp") return { trigger: "mcp", actor: null };
+  if (row.source === "api") return { trigger: "api", actor: null };
+  return { trigger: null, actor: null };
+}
+
+export type Attribution = { trigger: JourneyTrigger | null; actor: string | null };
+
+/** Traces that name their own trigger need no audit rows. */
+const SELF_ATTRIBUTED = /^(job|hook|replay)-/;
+
+/**
+ * Who started each transaction, for a whole page: ONE query on the audit rows of every trace.
+ * The result lines up with `txns`.
+ */
+export async function attributeTransactions(
+  organizationId: string,
+  txns: { traceId: string | null; gatewayKey: string | null }[],
+): Promise<Attribution[]> {
+  const traces = [
+    ...new Set(
+      txns.map((t) => t.traceId).filter((t): t is string => !!t && !SELF_ATTRIBUTED.test(t)),
+    ),
+  ];
+  const byTrace = new Map<string, { actor: string; source: string; action: string }[]>();
+  if (traces.length > 0) {
+    const rows = await withTenant(organizationId, (tx) =>
+      tx
+        .select({
+          traceId: auditLogs.traceId,
+          actor: auditLogs.actor,
+          source: auditLogs.source,
+          action: auditLogs.action,
+        })
+        .from(auditLogs)
+        .where(inArray(auditLogs.traceId, traces))
+        .orderBy(asc(auditLogs.createdAt), asc(auditLogs.id)),
+    );
+    for (const r of rows) {
+      const list = byTrace.get(r.traceId!) ?? [];
+      list.push(r);
+      byTrace.set(r.traceId!, list);
+    }
+  }
+  return txns.map((t) =>
+    attributeAttempt(t.traceId, t.gatewayKey ?? "", (t.traceId && byTrace.get(t.traceId)) || []),
+  );
+}
+
+/** Who started one transaction. Null trigger when nothing recorded it. */
+export async function attributeTransaction(
+  organizationId: string,
+  txn: { traceId: string | null; gatewayKey: string | null },
+): Promise<Attribution> {
+  return (await attributeTransactions(organizationId, [txn]))[0]!;
+}
+
+/**
+ * Who started the charge that paid: the first succeeded payment transaction found by its own
+ * id, its payment, or its payment request. Null trigger when there is none.
+ */
+export async function attributePayingTransaction(
+  organizationId: string,
+  by: {
+    transactionId?: string | null;
+    paymentId?: string | null;
+    paymentRequestId?: string | null;
+  },
+): Promise<Attribution> {
+  const match = [
+    by.transactionId ? eq(transactions.id, by.transactionId) : null,
+    by.paymentId ? eq(transactions.paymentId, by.paymentId) : null,
+    by.paymentRequestId ? eq(transactions.paymentRequestId, by.paymentRequestId) : null,
+  ].filter((c) => c !== null);
+  if (match.length === 0) return { trigger: null, actor: null };
+  const [txn] = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ traceId: transactions.traceId, gatewayKey: transactions.gatewayKey })
+      .from(transactions)
+      .where(
+        and(or(...match), eq(transactions.type, "payment"), eq(transactions.status, "succeeded")),
+      )
+      .orderBy(asc(transactions.createdAt), asc(transactions.id))
+      .limit(1),
+  );
+  return txn ? attributeTransaction(organizationId, txn) : { trigger: null, actor: null };
+}
+
+/**
+ * Who created each payment intent, from its creation event, for a whole page (ONE query).
+ * Keyed by the intent's public id; an intent with no event is absent.
+ */
+export async function attributeIntents(
+  organizationId: string,
+  intents: { publicId: string; gatewayKey: string | null }[],
+): Promise<Map<string, Attribution>> {
+  const created = await creationEvents(
+    organizationId,
+    "payment_intent",
+    intents.map((i) => i.publicId),
+  );
+  const out = new Map<string, Attribution>();
+  for (const i of intents) {
+    const e = created.get(i.publicId);
+    if (!e) continue;
+    out.set(
+      i.publicId,
+      attributeAttempt(e.traceId, i.gatewayKey ?? "", [
+        { actor: e.actor ?? "", source: e.source, action: e.type },
+      ]),
+    );
+  }
+  return out;
+}
 
 export interface JourneyAttempt {
   kind: "attempt";
@@ -81,6 +229,8 @@ export interface JourneyEvent {
 export type JourneyStep =
   | { kind: "retry"; at: Date }
   | { kind: "hold"; at: Date; until: Date; reason: "parked" | "network_limit" }
+  /** Parked because a gateway refused OUR request: no deadline and no final action. */
+  | { kind: "hold"; at: Date; until: null; reason: "parked_for_ops" }
   | { kind: "deadline_attempt"; at: Date }
   | {
       kind: "final_action";
@@ -234,7 +384,11 @@ export async function getDunningJourney(input: {
             a.action === "invoice.record_payment" &&
             Math.abs(a.at.getTime() - at.getTime()) < 5_000,
         );
-        return { trigger: "offline", actor: rec?.source === "dashboard" ? rec.actor : null };
+        return {
+          trigger: "offline",
+          actor:
+            rec && (rec.source === "dashboard" || rec.source === "assistant") ? rec.actor : null,
+        };
       }
       if (trace?.startsWith("job-")) return { trigger: "billing_clock", actor: null };
       const byTrace = trace ? audits.filter((a) => a.traceId === trace) : [];
@@ -243,14 +397,7 @@ export async function getDunningJourney(input: {
       const rows = byTrace.length
         ? byTrace
         : invoiceAudits.filter((a) => Math.abs(a.at.getTime() - at.getTime()) < 5_000);
-      if (rows.some((a) => a.action === "customer.add_payment_method"))
-        return { trigger: "new_payment_method", actor: null };
-      const row = rows[0];
-      if (!row) return { trigger: trace ? "api" : null, actor: null };
-      if (row.actor.startsWith("psess_")) return { trigger: "portal", actor: null };
-      if (row.source === "dashboard") return { trigger: "dashboard", actor: row.actor };
-      if (row.source === "scheduled_job") return { trigger: "billing_clock", actor: null };
-      return { trigger: "api", actor: null };
+      return attributeAttempt(trace, providerKey, rows);
     };
 
     const withCounted = (a: { trigger: JourneyTrigger | null; actor: string | null }) => ({
@@ -284,7 +431,7 @@ export async function getDunningJourney(input: {
           kind: "event",
           at: a.at,
           type: a.action,
-          actor: a.source === "dashboard" ? a.actor : null,
+          actor: a.source === "dashboard" || a.source === "assistant" ? a.actor : null,
         })),
     ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
@@ -332,6 +479,21 @@ export async function getDunningJourney(input: {
       subscription: inv.subscriptionId ? cfg.finalAction.subscription : null,
     });
 
+    // The newest refusal, read once: it decides a request-fault park and the forecast.
+    const failed = [...pays].reverse().find((p) => p.pay.status === "failed");
+    const requestFault = isOurRequestFault({
+      code: failed?.pay.failureCode,
+      message: failed?.pay.failureMessage,
+    });
+    const opsHold = (at: Date): JourneyStep => ({
+      kind: "hold",
+      at,
+      until: null,
+      reason: "parked_for_ops",
+    });
+
+    if (inv.dunningStatus === "parked" && requestFault)
+      return { ...base, projectionNote: null, projection: [opsHold(inv.dunningParkedAt ?? now)] };
     if (inv.dunningStatus === "parked") {
       const until = parkedDunningDeadline(cfg, inv.dunningParkedAt ?? inv.dueDate ?? inv.createdAt);
       return {
@@ -347,10 +509,9 @@ export async function getDunningJourney(input: {
     if (!inv.nextAttemptAt) return { ...base, projection: null, projectionNote: null };
 
     // Forecast from the latest attempt: its decline, its instrument and that rail's cap.
-    const failed = [...pays].reverse().find((p) => p.pay.status === "failed");
     const lastCode = failed?.pay.failureCode ?? undefined;
     const retriable = failed ? (traceOf.get(failed.pay.id)?.retriable ?? true) : true;
-    const rail = failed?.rail ?? null;
+    const rail = retryRailOf(failed ? { ...failed, mandateRail: failed.rail } : null);
     const issuerZones = failed?.issuerCountry
       ? ((
           await tx
@@ -360,7 +521,7 @@ export async function getDunningJourney(input: {
             .limit(1)
         )[0]?.z ?? null)
       : null;
-    const cap = networkRetryCap(rail);
+    const cap = networkRetryCap(rail, failed?.issuerCountry);
     let presentedOnRail = failed
       ? pays.filter(
           (p) =>
@@ -407,6 +568,7 @@ export async function getDunningJourney(input: {
         periodEndsAt,
         dueDate: dunningAnchor(inv),
         mandateRail: rail,
+        issuerCountry: failed?.issuerCountry ?? null,
         adaptiveTiming: cfg.adaptiveTiming,
         timezone: input.business.timezone ?? null,
         issuerZones,
@@ -414,13 +576,16 @@ export async function getDunningJourney(input: {
         retriesByMethod: cfg.retriesByMethod,
         adaptiveCadence: cfg.adaptiveCadence,
         priorMethods: [...priorMethods],
+        requestFault,
       });
       priorMethods.push({ type: failed?.type ?? null, rail });
       if (plan.action === "retry") {
         at = plan.nextAttempt;
         continue;
       }
-      if (plan.action === "parked") {
+      if (plan.action === "parked" && requestFault) {
+        steps.push(opsHold(at));
+      } else if (plan.action === "parked") {
         const until = parkedDunningDeadline(cfg, at);
         steps.push(
           { kind: "hold", at, until, reason: "parked" },
@@ -465,7 +630,7 @@ export function serializeDunningJourney(j: DunningJourney) {
     projection:
       j.projection?.map((s) =>
         s.kind === "hold"
-          ? { kind: s.kind, at: iso(s.at), until: iso(s.until), reason: s.reason }
+          ? { kind: s.kind, at: iso(s.at), until: s.until ? iso(s.until) : null, reason: s.reason }
           : s.kind === "final_action"
             ? { kind: s.kind, at: iso(s.at), invoice: s.invoice, subscription: s.subscription }
             : { kind: s.kind, at: iso(s.at) },

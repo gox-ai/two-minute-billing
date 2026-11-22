@@ -1,12 +1,15 @@
 import { sql, type SQL } from "drizzle-orm";
-import { withTenant } from "@/platform/db";
+import { withTenant, type Tx } from "@/platform/db";
+import { billedRevenueByInvoice } from "@/modules/payments/attribution";
 import { accountHolderNameSql } from "@/modules/customers/name-sql";
 import { planProductJoin } from "./plan-of";
 
 /**
  * Usage margin (design G1b § 3.7, Decision B7): over meter usage lines of finalized invoices
- * (not voided) dated in [from, to), revenue = line amount − its discount − its credit notes,
- * before tax; margin = revenue − cost. A line with no full cost (null, partial, none, no
+ * (not voided) dated in [from, to), revenue = line amount − its discount − its credit notes
+ * − the free credit that paid it (promotional, plan credits, a pack's bonus), before tax;
+ * margin = revenue − cost. Usage a paid pack paid keeps the pack's cost as revenue here: the
+ * pack's money earned it, though `revenue_billed` counted that money at the sale. A line with no full cost (null, partial, none, no
  * rate) is counted in `lines_without_cost` and left out of both sides. One SQL fold.
  *
  * `scope: "all"` adds usage no invoice line bills (cost only, from `usage_cost_daily`) and, by
@@ -80,8 +83,11 @@ interface Input {
   customerId?: string;
 }
 
-/** A line's revenue: amount − discount − its credit notes, before tax. */
-const lineRevenue = sql`li.amount_minor - coalesce(li.discount_minor, 0)
+/**
+ * A line's revenue: amount − discount − its credit notes − the free credit on it, before tax.
+ * `free` is a jsonb object of line id → minor units (`freeCreditByLine`).
+ */
+const lineRevenue = (free: SQL) => sql`li.amount_minor - coalesce(li.discount_minor, 0)
   - coalesce((
       select sum(ci.amount_minor) from credit_note_items ci
       join credit_notes cn on cn.id = ci.credit_note_id
@@ -90,7 +96,40 @@ const lineRevenue = sql`li.amount_minor - coalesce(li.discount_minor, 0)
   -- An inclusive price holds its tax inside the amount: take it out.
   - case when p.tax_behavior = 'inclusive' then coalesce((
       select sum(t.amount_minor) from applied_taxes t
-      where t.invoice_line_item_id = li.id), 0) else 0 end`;
+      where t.invoice_line_item_id = li.id), 0) else 0 end
+  - coalesce((${free}::jsonb ->> li.id::text)::bigint, 0)`;
+
+/**
+ * Promotional credit, plan credits and pack bonus per line, from the one billed-revenue rule
+ * (`billedRevenueByInvoice`), for the invoices the margin reads. Only non-zero lines are kept.
+ */
+async function freeCreditByLine(tx: Tx, input: Input, usageOnly: boolean): Promise<SQL> {
+  const docs = (await tx.execute(sql`
+    select i.id from invoices i join customers c on c.id = i.customer_id
+    where i.business_id = ${input.businessId} and not c.exclude_from_reporting
+      and i.status not in ('pending', 'voided')
+      and coalesce(i.finalized_at, i.created_at) >= ${input.from.toISOString()}::timestamptz
+      and coalesce(i.finalized_at, i.created_at) < ${input.to.toISOString()}::timestamptz
+      and (i.promotional_credits_applied_minor <> 0 or i.grant_credits_pre_tax_minor <> 0
+        or i.grant_credits_post_tax_minor <> 0)
+      ${input.currency ? sql`and i.currency = ${input.currency}` : sql``}
+      ${input.customerId ? sql`and i.customer_id = ${input.customerId}` : sql``}
+      ${usageOnly ? sql`and exists (select 1 from invoice_line_items u where u.invoice_id = i.id and u.kind = 'usage')` : sql``}`)) as unknown as Array<{
+    id: string;
+  }>;
+  const free: Record<string, string> = {};
+  const folded = await billedRevenueByInvoice(
+    tx,
+    docs.map((d) => d.id),
+  );
+  for (const f of folded.values()) {
+    for (const l of f.lines) {
+      const v = l.deductions.promotional_credit + l.deductions.plan_credit;
+      if (v !== 0n) free[l.lineItemId] = v.toString();
+    }
+  }
+  return sql`${JSON.stringify(free)}`;
+}
 
 /** The model value of a usage line: the group value under the meter's model key. */
 const lineModel = sql`coalesce(li.rating -> 'group' ->> (array_position(
@@ -129,13 +168,13 @@ async function usageMarginBilled(input: Input): Promise<MarginReport> {
         : input.groupBy === "meter"
           ? sql`m.name`
           : sql`null::text`;
-  const rows = (await withTenant(input.organizationId, (tx) =>
+  const rows = (await withTenant(input.organizationId, async (tx) =>
     tx.execute(sql`
       with l as (
         select ${key} as k,
           ${name} as name,
           i.currency::text as currency,
-          ${lineRevenue} as revenue,
+          ${lineRevenue(await freeCreditByLine(tx, input, true))} as revenue,
           li.cost_minor,
           (li.cost_minor is not null and li.cost_basis in ${FULL_COST}) as costed
         from invoice_line_items li
@@ -206,11 +245,12 @@ async function usageMarginAll(input: Input): Promise<MarginReport> {
   const plan = (col: SQL) => (g === "plan" ? planProductJoin(col, "pl") : sql``);
   const z = sql`0::bigint`;
 
-  const rows = (await withTenant(input.organizationId, (tx) =>
-    tx.execute(sql`
+  const rows = (await withTenant(input.organizationId, async (tx) => {
+    const free = await freeCreditByLine(tx, input, !byPayer);
+    return tx.execute(sql`
       with u as (
         select ${lineKey} as k, ${nameOf} as name, i.currency::text as currency,
-          ${lineRevenue} as revenue, li.cost_minor,
+          ${lineRevenue(free)} as revenue, li.cost_minor,
           (li.cost_minor is not null and li.cost_basis in ${FULL_COST}) as costed
         from invoice_line_items li
         join invoices i on i.id = li.invoice_id
@@ -222,7 +262,7 @@ async function usageMarginAll(input: Input): Promise<MarginReport> {
       ),
       r as (
         select ${byPayer ? lineKey : sql`''::text`} as k, ${byPayer ? nameOf : sql`null::text`} as name, i.currency::text as currency,
-          ${lineRevenue} as revenue,
+          ${lineRevenue(free)} as revenue,
           (li.kind in ('recurring', 'proration') and prd.kind = 'plan') as plan_fee
         from invoice_line_items li
         join invoices i on i.id = li.invoice_id
@@ -312,8 +352,8 @@ async function usageMarginAll(input: Input): Promise<MarginReport> {
         grouping(k)::int as total
       from x
       group by grouping sets ((k, currency), (currency))
-      ${rowOrder}`),
-  )) as unknown as RawRow[];
+      ${rowOrder}`);
+  })) as unknown as RawRow[];
   return assemble(rows, g, true);
 }
 

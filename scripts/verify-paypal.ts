@@ -282,8 +282,9 @@ for (const issue of [
   const r = await p.charge(CHARGE);
   const code = r.failure?.code ?? "";
   ok(
-    `#5 ${issue}: merchant-side — parks with the ops alert, method stays valid, payer not blamed`,
-    MERCHANT_SIDE_PARK.has(code) &&
+    `#5 ${issue}: merchant-side — parks (or, for our refused request, retries) with an ops alert, method stays valid, payer not blamed`,
+    (MERCHANT_SIDE_PARK.has(code) ||
+      (code === "gateway_request_rejected" && classifyDecline(code) === "retry")) &&
       !isHardDecline(r) &&
       payerDeclineMessage({ code, message: r.failure?.message }, "fallback") !== r.failure?.message,
     `code ${code}, retriable ${r.failure?.retriable}`,

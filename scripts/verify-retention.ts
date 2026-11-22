@@ -274,6 +274,24 @@ try {
     (await lastRun(a.org!))?.lastRun,
   );
 
+  // A platform organization's data is never deleted, even with its mode set to on.
+  const platform = await fixture("platform");
+  fixtures.push(platform);
+  await systemDb
+    .update(organizations)
+    .set({ isPlatform: true })
+    .where(eq(organizations.id, platform.org!));
+  await setOwn(platform.org!, { mode: "on" });
+  const rp = await runRetentionSweep(NOW, { onlyOrganizationId: platform.org!, batch: 2 });
+  ok(
+    "platform organization: nothing is deleted, whatever its mode",
+    rp.organizations.on === 0 &&
+      (await exists(events, platform.eventOld!)) &&
+      (await logged(platform.writeOld!)) &&
+      (await logged(platform.readOld!)),
+    rp,
+  );
+
   ok("events past 90 days are deleted", !(await exists(events, a.eventOld!)));
   ok("events inside 90 days stay", await exists(events, a.eventRecent!));
   ok("an event with a pending delivery stays", await exists(events, a.eventPending!));

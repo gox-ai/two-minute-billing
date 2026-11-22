@@ -19,7 +19,7 @@ export function PaletteWelcome() {
   if (used || dismissed || !keys) return null;
   return (
     <div className="anim-fade mb-6 flex flex-wrap items-center gap-x-3.5 gap-y-3 rounded-xl border border-brand-border bg-card bg-linear-to-r from-brand-soft to-card to-70% px-4 py-3.5">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-linear-to-b from-solid to-solid-bottom text-solid-foreground shadow-xs inset-shadow-[0_1px_0_rgb(255_255_255/0.35)]">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-solid text-solid-foreground">
         <Search className="size-4.5" aria-hidden />
       </span>
       <div className="flex min-w-0 flex-[1_1_20rem] flex-col gap-0.5">

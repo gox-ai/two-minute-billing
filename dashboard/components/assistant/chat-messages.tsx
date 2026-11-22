@@ -36,6 +36,8 @@ export type Figures = {
   unverified: string[];
   links: string[];
   unverified_links?: string[];
+  /** Ids in the answer with no prefix (imported records), by dashboard folder. */
+  record_links?: Record<string, string>;
 };
 export interface Msg {
   /** The stored message's id, once the API has saved it (for feedback). */
@@ -301,7 +303,12 @@ export function LiveMessages({
           <div key={i} className="group/reply anim-fade flex min-w-0 flex-col gap-2.5">
             <TurnSteps steps={m.steps} live={!!m.streaming} />
             {m.content ? (
-              <AnswerMarkdown text={m.content} biz={biz} unverified={m.figures?.unverified ?? []} />
+              <AnswerMarkdown
+                text={m.content}
+                biz={biz}
+                unverified={m.figures?.unverified ?? []}
+                records={m.figures?.record_links}
+              />
             ) : null}
             {m.streaming && !m.error ? (
               <ThinkingIndicator steps={m.steps} hasText={!!m.content} startedAt={m.startedAt} />
@@ -411,7 +418,12 @@ export function ReadOnlyMessages({
           <div key={i} className="group/reply flex min-w-0 flex-col gap-2.5">
             <TurnSteps steps={m.steps} live={false} />
             {m.content ? (
-              <AnswerMarkdown text={m.content} biz={biz} unverified={m.figures?.unverified ?? []} />
+              <AnswerMarkdown
+                text={m.content}
+                biz={biz}
+                unverified={m.figures?.unverified ?? []}
+                records={m.figures?.record_links}
+              />
             ) : null}
             {m.data.length ? <ToolData items={m.data} biz={biz} tz={tz} /> : null}
             {m.question && next?.role === "user" ? (

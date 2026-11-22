@@ -1,23 +1,23 @@
 {
   "format": 1,
   "variant": "small",
-  "capturedAt": "2026-10-04T21:17:34.392Z",
+  "capturedAt": "2026-11-17T13:12:53.295Z",
   "migration": {
-    "idx": 324,
+    "idx": 540,
     "version": "7",
-    "when": 1790758530000,
-    "tag": "0324_attached_item_product",
+    "when": 1796000000000,
+    "tag": "0540_provider_event_intent_link",
     "breakpoints": true
   },
   "org": {
-    "id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
-    "publicId": "org_SMrMeUHXgEv04xd4iDTWfE7I",
+    "id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+    "publicId": "org_0mwkpntezm9ihBOxQJQtwLi9",
     "row": {
-      "id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
-      "public_id": "org_SMrMeUHXgEv04xd4iDTWfE7I",
+      "id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+      "public_id": "org_0mwkpntezm9ihBOxQJQtwLi9",
       "name": "Demo Org",
       "status": "active",
-      "created_at": "2026-10-04T21:16:17.200597+00:00",
+      "created_at": "2026-11-17T13:11:09.995019+00:00",
       "rate_limit_per_minute": null,
       "is_platform": true,
       "timezone": null,
@@ -27,32 +27,45 @@
       "base_currency": null,
       "exchange_rates": null,
       "exchange_rate_sources": null,
-      "icon_url": null
+      "icon_url": null,
+      "require_mfa": false,
+      "mfa_required_since": null,
+      "mfa_required_by": null,
+      "mfa_grace_days": 7,
+      "live_access": "enabled",
+      "live_access_enabled_at": null,
+      "live_access_enabled_by": null,
+      "country": null,
+      "signup_answers": null,
+      "restricted_reason": null,
+      "over_limit_since": null,
+      "ingest_rate_limit_per_second": null,
+      "session_idle_minutes": null,
+      "session_absolute_ttl_hours": null,
+      "mfa_required_roles": null,
+      "assistant_allowance_usd_cents": null
     }
   },
   "users": [
-    {
-      "id": "061c5e77-65b7-4772-bd95-8adada3ef5b3",
-      "publicId": "usr_XeKLn22k4IET9OiqpYCfEuMz"
-    }
+    { "id": "01a1e9a1-fe93-79ca-8158-3b38395f56be", "publicId": "usr_0mwkpntfazP58vSsChdh5cLz" }
   ],
-  "apiKeys": ["31bc1cab-e70d-4ff0-b809-77197a670d16"],
+  "apiKeys": ["01a1e9a1-fdb6-7ba9-8e33-2820eec5180f"],
   "businesses": [
     {
-      "key": "acme",
-      "id": "4bda85b8-9ff5-47b6-8e84-ce20db6c4124",
-      "publicId": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+      "key": "halyard",
+      "id": "01a1e9a2-1883-7d57-93fe-e3686187d2ec",
+      "publicId": "biz_0mwkpnypk74zGTn0Bh47wtfm",
       "name": "Halyard Analytics",
       "currency": "USD",
       "timezone": "America/New_York",
       "row": {
-        "id": "4bda85b8-9ff5-47b6-8e84-ce20db6c4124",
-        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
-        "public_id": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+        "id": "01a1e9a2-1883-7d57-93fe-e3686187d2ec",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnypk74zGTn0Bh47wtfm",
         "name": "Halyard Analytics",
         "default_currency": "USD",
         "status": "active",
-        "created_at": "2026-05-31T21:13:19.473+00:00",
+        "created_at": "2026-06-30T13:08:16.84+00:00",
         "address": null,
         "contact_email": null,
         "support_email": null,
@@ -62,12 +75,12 @@
         "timezone": "America/New_York",
         "tax_registration_number": null,
         "invoice_prefix": "INV",
-        "invoice_next_number": 57,
+        "invoice_next_number": 67,
         "default_invoice_notes": null,
         "default_due_days": null,
         "dunning_retry_days": null,
-        "updated_at": "2026-10-04T20:11:19.473+00:00",
-        "resource_version": 69,
+        "updated_at": "2026-11-17T13:08:16.84+00:00",
+        "resource_version": 75,
         "livemode": "test",
         "currencies": null,
         "default_gateway_account_id": null,
@@ -81,7 +94,7 @@
         "default_credit_option_for_cancel": "none",
         "default_unbilled_on_cancel": "no_action",
         "credit_note_prefix": "CN",
-        "credit_note_next_number": 12,
+        "credit_note_next_number": 8,
         "exchange_rates": null,
         "billing_frequencies": null,
         "email_config": null,
@@ -115,62 +128,69 @@
         "checkout_field_config": null,
         "inherit_subscription_po_number": true,
         "week_start": "sunday",
-        "fiscal_year_start_month": 1
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": "01a1e9a2-1877-7f22-9f73-fac441cdc54a",
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
       },
       "gatewayAccounts": [
         {
-          "id": "16485522-9ad9-4b52-81c2-3368621db6c5",
-          "publicId": "gwa_4IctTcAUQW7wSfBg3Ctudg0h",
+          "id": "01a1e9a2-1896-70ec-ac21-faf4f5d21b42",
+          "publicId": "gwa_0mwkpnyqcq8HUVCHt8XaULG7",
           "gatewayKey": "tmtest"
         }
       ],
       "summary": {
         "name": "Halyard Analytics",
-        "publicId": "biz_uvVIHWda0VIPwXJzKrkrZxGr",
+        "publicId": "biz_0mwkpnypk74zGTn0Bh47wtfm",
         "summary": {
-          "customers": 30,
-          "subs": {
-            "active": 17,
-            "cancelled": 7,
-            "future": 1,
-            "in_trial": 1,
-            "non_renewing": 3
-          },
-          "invoices": {
-            "not_paid": 1,
-            "paid": 50,
-            "pending": 3,
-            "posted": 1,
-            "voided": 1
-          },
-          "payments": 50,
-          "mrr": "2,705.42 USD"
+          "customers": 34,
+          "subs": { "active": 22, "cancelled": 7, "future": 1, "non_renewing": 3 },
+          "invoices": { "paid": 61, "pending": 3, "posted": 1, "voided": 1 },
+          "payments": 59,
+          "mrr": "3,702.90 USD"
         },
         "showcase": [
-          "Maya Okafor (sub_fyt8uydQgoLodN85taexoErC) — WELCOME10 + wallet + added seats",
-          "Priya Raman (sub_NmAF68EPZBKLClSBFI7rJKZw) — multi-item + usage + unbilled charge + scheduled cancel",
-          "Enterprise Co (sub_Aus6kexnYXLqQDG2bgXNh4sA) — custom price override",
-          "Tomas Castell (sub_yca6031L9WJ9KReWzzrTSiAx) — cancelled today (reactivate)",
-          "Globex Corp — manual invoices: paid + credit note · Net-30 partial wire · voided · written off",
-          "Jonas Lindqvist (sub_J3vTlGjHE58wEevEApSpm2ZD) — renewal declined, dunning in progress"
+          "Maya Okafor (sub_0mwkpppp2hI2kFlnTtMcHhs4) \u2014 WELCOME10 + wallet + added seats",
+          "Priya Raman (sub_0mwkppq75RXypxKbROqswyR2) \u2014 multi-item + usage + unbilled charge + scheduled cancel",
+          "Enterprise Co (sub_0mwkppqodl7Zh4X2yOOmWXlU) \u2014 custom price override",
+          "Tomas Castell (sub_0mwkppr18BIwz2deXDhXvHL2) \u2014 cancelled today (reactivate)",
+          "Larkspur Freight \u2014 manual invoices: paid + credit note \u00b7 Net-30 partial wire \u00b7 voided \u00b7 written off",
+          "Jonas Lindqvist (sub_0mwkppa5p3TbhpYredUduTpv) \u2014 renewal declined, dunning in progress"
         ]
       }
     },
     {
       "key": "fjord",
-      "id": "6cb4c9f7-6375-4d0d-a41d-651aa5caf531",
-      "publicId": "biz_xy7358c36siuUxXnTAcQkezO",
+      "id": "01a1e9a2-1883-7efc-bd5c-02ee7c6a0b87",
+      "publicId": "biz_0mwkpnypmdlf6v8410P6p2hT",
       "name": "Fjord Tools",
       "currency": "EUR",
       "timezone": "Europe/Amsterdam",
       "row": {
-        "id": "6cb4c9f7-6375-4d0d-a41d-651aa5caf531",
-        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
-        "public_id": "biz_xy7358c36siuUxXnTAcQkezO",
+        "id": "01a1e9a2-1883-7efc-bd5c-02ee7c6a0b87",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnypmdlf6v8410P6p2hT",
         "name": "Fjord Tools",
         "default_currency": "EUR",
         "status": "active",
-        "created_at": "2026-06-30T21:13:19.473+00:00",
+        "created_at": "2026-07-31T13:08:16.84+00:00",
         "address": null,
         "contact_email": null,
         "support_email": null,
@@ -180,11 +200,11 @@
         "timezone": "Europe/Amsterdam",
         "tax_registration_number": null,
         "invoice_prefix": "INV",
-        "invoice_next_number": 10,
+        "invoice_next_number": 11,
         "default_invoice_notes": null,
         "default_due_days": null,
         "dunning_retry_days": null,
-        "updated_at": "2026-10-04T19:43:19.473+00:00",
+        "updated_at": "2026-11-13T14:27:01.179+00:00",
         "resource_version": 14,
         "livemode": "test",
         "currencies": null,
@@ -199,7 +219,7 @@
         "default_credit_option_for_cancel": "none",
         "default_unbilled_on_cancel": "no_action",
         "credit_note_prefix": "CN",
-        "credit_note_next_number": 4,
+        "credit_note_next_number": 3,
         "exchange_rates": null,
         "billing_frequencies": null,
         "email_config": null,
@@ -233,51 +253,62 @@
         "checkout_field_config": null,
         "inherit_subscription_po_number": true,
         "week_start": "sunday",
-        "fiscal_year_start_month": 1
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": "01a1e9a2-1878-7377-99e0-7fc8ff362421",
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
       },
       "gatewayAccounts": [
         {
-          "id": "57457e25-d99f-444b-9f93-32e147aa4276",
-          "publicId": "gwa_qSHBlcEmHmWBJdPe1pTZGZLi",
+          "id": "01a1e9a2-1890-7ac9-8cdf-0f1307659968",
+          "publicId": "gwa_0mwkpnyq6xkARAztETE4tuv7",
           "gatewayKey": "tmtest"
         }
       ],
       "summary": {
         "name": "Fjord Tools",
-        "publicId": "biz_xy7358c36siuUxXnTAcQkezO",
+        "publicId": "biz_0mwkpnypmdlf6v8410P6p2hT",
         "summary": {
-          "customers": 9,
-          "subs": {
-            "active": 3,
-            "cancelled": 3,
-            "future": 1,
-            "in_trial": 1,
-            "non_renewing": 1
-          },
-          "invoices": {
-            "paid": 9
-          },
+          "customers": 10,
+          "subs": { "active": 3, "cancelled": 4, "future": 1, "non_renewing": 2 },
+          "invoices": { "paid": 9, "voided": 1 },
           "payments": 9,
-          "mrr": "265.83 EUR"
+          "mrr": "1,542.33 EUR"
         },
         "showcase": []
       }
     },
     {
       "key": "nimbus",
-      "id": "fdfd11b9-4fb3-4f14-b6df-5d1646fe2da2",
-      "publicId": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+      "id": "01a1e9a2-1883-707d-b65d-9b18a98d9774",
+      "publicId": "biz_0mwkpnypoAOi3TZ8rb9My35q",
       "name": "Nimbus Cloud",
       "currency": "INR",
       "timezone": "Asia/Kolkata",
       "row": {
-        "id": "fdfd11b9-4fb3-4f14-b6df-5d1646fe2da2",
-        "organization_id": "2fb1675c-376a-4aba-bd57-f8018997dd29",
-        "public_id": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+        "id": "01a1e9a2-1883-707d-b65d-9b18a98d9774",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnypoAOi3TZ8rb9My35q",
         "name": "Nimbus Cloud",
         "default_currency": "INR",
         "status": "active",
-        "created_at": "2026-06-30T21:13:19.473+00:00",
+        "created_at": "2026-07-31T13:08:16.84+00:00",
         "address": null,
         "contact_email": null,
         "support_email": null,
@@ -287,12 +318,12 @@
         "timezone": "Asia/Kolkata",
         "tax_registration_number": null,
         "invoice_prefix": "INV",
-        "invoice_next_number": 14,
+        "invoice_next_number": 16,
         "default_invoice_notes": null,
         "default_due_days": null,
         "dunning_retry_days": null,
-        "updated_at": "2026-10-04T21:13:19.473+00:00",
-        "resource_version": 18,
+        "updated_at": "2026-11-17T12:38:16.84+00:00",
+        "resource_version": 19,
         "livemode": "test",
         "currencies": null,
         "default_gateway_account_id": null,
@@ -306,7 +337,7 @@
         "default_credit_option_for_cancel": "none",
         "default_unbilled_on_cancel": "no_action",
         "credit_note_prefix": "CN",
-        "credit_note_next_number": 4,
+        "credit_note_next_number": 3,
         "exchange_rates": null,
         "billing_frequencies": null,
         "email_config": null,
@@ -340,36 +371,391 @@
         "checkout_field_config": null,
         "inherit_subscription_po_number": true,
         "week_start": "sunday",
-        "fiscal_year_start_month": 1
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": "01a1e9a2-1879-71c0-865a-aa3946938265",
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
       },
       "gatewayAccounts": [
         {
-          "id": "01db6271-fbf5-43ee-96e5-031b2639ba16",
-          "publicId": "gwa_cwJooGtdKHSf8EskwCNxA095",
+          "id": "01a1e9a2-1896-7b4c-80d5-4a482b32650c",
+          "publicId": "gwa_0mwkpnyqbQE7SpU6IXktasUO",
           "gatewayKey": "tmtest"
         }
       ],
       "summary": {
         "name": "Nimbus Cloud",
-        "publicId": "biz_SpYR7LfndIh0kamOwe2BnCq3",
+        "publicId": "biz_0mwkpnypoAOi3TZ8rb9My35q",
         "summary": {
-          "customers": 12,
-          "subs": {
-            "active": 3,
-            "cancelled": 3,
-            "future": 1,
-            "in_trial": 1,
-            "non_renewing": 2
-          },
-          "invoices": {
-            "paid": 11,
-            "payment_due": 2
-          },
-          "payments": 10,
-          "mrr": "16,288.17 INR"
+          "customers": 13,
+          "subs": { "active": 4, "cancelled": 4, "future": 1, "non_renewing": 2 },
+          "invoices": { "paid": 13, "payment_due": 2 },
+          "payments": 13,
+          "mrr": "23,693.15 INR"
         },
         "showcase": [
-          "Chennai Textiles / Bengaluru Cloud — GST intra-state (CGST+SGST) vs inter-state (IGST)"
+          "Chennai Textiles / Bengaluru Cloud \u2014 GST intra-state (CGST+SGST) vs inter-state (IGST)"
+        ]
+      }
+    },
+    {
+      "key": "halyard",
+      "id": "01a1e9a2-1877-7f22-9f73-fac441cdc54a",
+      "publicId": "biz_0mwkpnypfYvGBmuG8S9OW0eg",
+      "name": "Halyard Analytics",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "row": {
+        "id": "01a1e9a2-1877-7f22-9f73-fac441cdc54a",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnypfYvGBmuG8S9OW0eg",
+        "name": "Halyard Analytics",
+        "default_currency": "USD",
+        "status": "active",
+        "created_at": "2026-11-17T13:11:16.840921+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "America/New_York",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 1,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-11-17T13:11:16.840921+00:00",
+        "resource_version": 1,
+        "livemode": "live",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 1,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": null,
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
+      },
+      "gatewayAccounts": [],
+      "summary": {
+        "name": "Halyard Analytics",
+        "publicId": "biz_0mwkpnypk74zGTn0Bh47wtfm",
+        "summary": {
+          "customers": 34,
+          "subs": { "active": 22, "cancelled": 7, "future": 1, "non_renewing": 3 },
+          "invoices": { "paid": 61, "pending": 3, "posted": 1, "voided": 1 },
+          "payments": 59,
+          "mrr": "3,702.90 USD"
+        },
+        "showcase": [
+          "Maya Okafor (sub_0mwkpppp2hI2kFlnTtMcHhs4) \u2014 WELCOME10 + wallet + added seats",
+          "Priya Raman (sub_0mwkppq75RXypxKbROqswyR2) \u2014 multi-item + usage + unbilled charge + scheduled cancel",
+          "Enterprise Co (sub_0mwkppqodl7Zh4X2yOOmWXlU) \u2014 custom price override",
+          "Tomas Castell (sub_0mwkppr18BIwz2deXDhXvHL2) \u2014 cancelled today (reactivate)",
+          "Larkspur Freight \u2014 manual invoices: paid + credit note \u00b7 Net-30 partial wire \u00b7 voided \u00b7 written off",
+          "Jonas Lindqvist (sub_0mwkppa5p3TbhpYredUduTpv) \u2014 renewal declined, dunning in progress"
+        ]
+      }
+    },
+    {
+      "key": "fjord",
+      "id": "01a1e9a2-1878-7377-99e0-7fc8ff362421",
+      "publicId": "biz_0mwkpnyp8vHcHtcOMjCY4Lme",
+      "name": "Fjord Tools",
+      "currency": "EUR",
+      "timezone": "Europe/Amsterdam",
+      "row": {
+        "id": "01a1e9a2-1878-7377-99e0-7fc8ff362421",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnyp8vHcHtcOMjCY4Lme",
+        "name": "Fjord Tools",
+        "default_currency": "EUR",
+        "status": "active",
+        "created_at": "2026-11-17T13:11:16.840969+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "Europe/Amsterdam",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 1,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-11-17T13:11:16.840969+00:00",
+        "resource_version": 1,
+        "livemode": "live",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 1,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": null,
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
+      },
+      "gatewayAccounts": [],
+      "summary": {
+        "name": "Fjord Tools",
+        "publicId": "biz_0mwkpnypmdlf6v8410P6p2hT",
+        "summary": {
+          "customers": 10,
+          "subs": { "active": 3, "cancelled": 4, "future": 1, "non_renewing": 2 },
+          "invoices": { "paid": 9, "voided": 1 },
+          "payments": 9,
+          "mrr": "1,542.33 EUR"
+        },
+        "showcase": []
+      }
+    },
+    {
+      "key": "nimbus",
+      "id": "01a1e9a2-1879-71c0-865a-aa3946938265",
+      "publicId": "biz_0mwkpnypheHxRhDdUWPlUnZX",
+      "name": "Nimbus Cloud",
+      "currency": "INR",
+      "timezone": "Asia/Kolkata",
+      "row": {
+        "id": "01a1e9a2-1879-71c0-865a-aa3946938265",
+        "organization_id": "01a1e9a1-fdb2-79cb-a28a-8fec229306cd",
+        "public_id": "biz_0mwkpnypheHxRhDdUWPlUnZX",
+        "name": "Nimbus Cloud",
+        "default_currency": "INR",
+        "status": "active",
+        "created_at": "2026-11-17T13:11:16.840987+00:00",
+        "address": null,
+        "contact_email": null,
+        "support_email": null,
+        "phone": null,
+        "website": null,
+        "logo_url": null,
+        "timezone": "Asia/Kolkata",
+        "tax_registration_number": null,
+        "invoice_prefix": "INV",
+        "invoice_next_number": 1,
+        "default_invoice_notes": null,
+        "default_due_days": null,
+        "dunning_retry_days": null,
+        "updated_at": "2026-11-17T13:11:16.840987+00:00",
+        "resource_version": 1,
+        "livemode": "live",
+        "currencies": null,
+        "default_gateway_account_id": null,
+        "create_pending_invoices": false,
+        "auto_close_pending_after_days": null,
+        "dunning_config": null,
+        "invoice_rounding": "none",
+        "default_prorate_on_change": false,
+        "default_invoice_immediately": false,
+        "default_cancel_option": "immediately",
+        "default_credit_option_for_cancel": "none",
+        "default_unbilled_on_cancel": "no_action",
+        "credit_note_prefix": "CN",
+        "credit_note_next_number": 1,
+        "exchange_rates": null,
+        "billing_frequencies": null,
+        "email_config": null,
+        "default_tax_behavior": "exclusive",
+        "anchor_granularity": "instant",
+        "proration_granularity": "exact",
+        "smtp_config": null,
+        "smtp_credentials_enc": null,
+        "default_tax_code": null,
+        "icon_url": null,
+        "favicon_url": null,
+        "brand_color": null,
+        "ses_config": null,
+        "ses_credentials_enc": null,
+        "credits_flexibility": null,
+        "mandate_config": null,
+        "exchange_rate_sources": null,
+        "invoice_issuer": "business",
+        "allow_customer_coupons": false,
+        "invoice_customization": null,
+        "default_ar_handling_on_cancel": "no_action",
+        "default_refundable_credits_on_cancel": "no_action",
+        "unbilled_charges_config": null,
+        "pause_config": null,
+        "backdating_config": null,
+        "default_credit_note_on_void": false,
+        "vies_validation_enabled": true,
+        "prorate_fixed_amount_coupons": false,
+        "storefront_config": null,
+        "chargeback_config": null,
+        "checkout_field_config": null,
+        "inherit_subscription_po_number": true,
+        "week_start": "sunday",
+        "fiscal_year_start_month": 1,
+        "metadata_rules_config": null,
+        "portal_field_config": null,
+        "live_business_id": null,
+        "live_business_mode": "live",
+        "reminder_config": null,
+        "receipt_prefix": "RCPT",
+        "receipt_next_number": 1,
+        "test_customer_limit": null,
+        "test_subscription_limit": null,
+        "usage_close_delay_minutes": 0,
+        "credit_config": null,
+        "usage_widget_origins": [],
+        "usage_controls_active": false,
+        "billing_rules_config": null,
+        "card_payment_limits": null,
+        "invoice_rules_config": null,
+        "tax_settings": null,
+        "team_alerts_config": null,
+        "max_customer_coupon_codes": 1
+      },
+      "gatewayAccounts": [],
+      "summary": {
+        "name": "Nimbus Cloud",
+        "publicId": "biz_0mwkpnypoAOi3TZ8rb9My35q",
+        "summary": {
+          "customers": 13,
+          "subs": { "active": 4, "cancelled": 4, "future": 1, "non_renewing": 2 },
+          "invoices": { "paid": 13, "payment_due": 2 },
+          "payments": 13,
+          "mrr": "23,693.15 INR"
+        },
+        "showcase": [
+          "Chennai Textiles / Bengaluru Cloud \u2014 GST intra-state (CGST+SGST) vs inter-state (IGST)"
         ]
       }
     }
@@ -378,19 +764,9 @@
     {
       "name": "coupons",
       "rows": 12,
-      "byScope": {
-        "acme": 4,
-        "fjord": 4,
-        "nimbus": 4
-      },
+      "byScope": { "halyard": 4, "fjord": 4, "nimbus": 4 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -544,25 +920,22 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "per_customer_limit_by",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
         }
       ]
     },
     {
       "name": "customers",
-      "rows": 51,
-      "byScope": {
-        "acme": 30,
-        "fjord": 9,
-        "nimbus": 12
-      },
+      "rows": 57,
+      "byScope": { "halyard": 34, "fjord": 10, "nimbus": 13 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -863,25 +1236,92 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "email_notifications",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "dunning_excluded",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "dunning_excluded_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_policy_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "credit_settings",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "marketing_opt_in",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "marketing_opt_in_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "exclude_from_reporting",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "billing_cc_emails",
+          "type": "text[]",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "billing_bcc_emails",
+          "type": "text[]",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "tax_behavior",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "payment_methods",
-      "rows": 51,
-      "byScope": {
-        "acme": 32,
-        "fjord": 9,
-        "nimbus": 10
-      },
+      "rows": 54,
+      "byScope": { "halyard": 36, "fjord": 7, "nimbus": 11 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -994,13 +1434,7 @@
           "hasDefault": true,
           "generated": false
         },
-        {
-          "name": "role",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "role", "type": "text", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "mandate_max_amount_minor",
           "type": "bigint",
@@ -1133,25 +1567,50 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "mandate_status_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "authorized_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "collect_open_invoices",
+          "type": "boolean",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_failure_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "mandate_failure_text",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "subscriptions",
-      "rows": 48,
-      "byScope": {
-        "acme": 29,
-        "fjord": 9,
-        "nimbus": 10
-      },
+      "rows": 54,
+      "byScope": { "halyard": 33, "fjord": 10, "nimbus": 11 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -1431,162 +1890,71 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
-        }
-      ]
-    },
-    {
-      "name": "applied_coupons",
-      "rows": 5,
-      "byScope": {
-        "acme": 3,
-        "fjord": 1,
-        "nimbus": 1
-      },
-      "columns": [
+        },
         {
-          "name": "id",
+          "name": "shipping_address_id",
           "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "bill_usage_monthly",
+          "type": "boolean",
           "notNull": true,
           "hasDefault": true,
           "generated": false
         },
         {
-          "name": "organization_id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "business_id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "coupon_id",
-          "type": "uuid",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "subscription_id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "public_id",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "status",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
-        {
-          "name": "remaining_periods",
-          "type": "integer",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
-        {
-          "name": "source",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
-        {
-          "name": "manual_kind",
-          "type": "text",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "manual_percent_off_bps",
-          "type": "integer",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "manual_amount_off_minor",
-          "type": "bigint",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "manual_currency",
-          "type": "character(3)",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "manual_note",
-          "type": "text",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "total_periods",
-          "type": "integer",
-          "notNull": false,
-          "hasDefault": false,
-          "generated": false
-        },
-        {
-          "name": "period_anchor",
+          "name": "current_sub_period_start",
           "type": "timestamp with time zone",
           "notNull": false,
           "hasDefault": false,
           "generated": false
         },
         {
-          "name": "period_used_minor",
+          "name": "current_sub_period_end",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "commitment_amount_minor",
           "type": "bigint",
-          "notNull": true,
-          "hasDefault": true,
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "commitment_segments",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "pause_source",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "reset_state",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
           "generated": false
         }
       ]
     },
     {
       "name": "invoices",
-      "rows": 78,
-      "byScope": {
-        "acme": 56,
-        "fjord": 9,
-        "nimbus": 13
-      },
+      "rows": 91,
+      "byScope": { "halyard": 66, "fjord": 10, "nimbus": 15 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -1901,25 +2269,318 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "customer_tax_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "seller_tax_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "seller_tax_country",
+          "type": "character(2)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "price_type",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "net_term_days",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "finalized_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "resource_version",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "seller_name",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "seller_address",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "awaiting_number",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "collect_due_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "opens_period",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "dunning_held_ms",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "grant_credits_pre_tax_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "grant_credits_post_tax_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dunning_exhausted_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "retry_hold_until",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "collect_trace_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "hold_until",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
+      ]
+    },
+    {
+      "name": "applied_coupons",
+      "rows": 7,
+      "byScope": { "halyard": 5, "nimbus": 2 },
+      "columns": [
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "coupon_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "remaining_periods",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "manual_kind",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_percent_off_bps",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_amount_off_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_currency",
+          "type": "character(3)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "manual_note",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "total_periods",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_anchor",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "period_used_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "entered_by_customer",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "invoice_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        { "name": "scope", "type": "text", "notNull": true, "hasDefault": true, "generated": false }
       ]
     },
     {
       "name": "product_groups",
       "rows": 6,
-      "byScope": {
-        "acme": 2,
-        "fjord": 2,
-        "nimbus": 2
-      },
+      "byScope": { "halyard": 2, "fjord": 2, "nimbus": 2 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -1988,19 +2649,9 @@
     {
       "name": "tax_profiles",
       "rows": 3,
-      "byScope": {
-        "acme": 1,
-        "fjord": 1,
-        "nimbus": 1
-      },
+      "byScope": { "halyard": 1, "fjord": 1, "nimbus": 1 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2069,19 +2720,9 @@
     {
       "name": "products",
       "rows": 21,
-      "byScope": {
-        "acme": 7,
-        "fjord": 7,
-        "nimbus": 7
-      },
+      "byScope": { "halyard": 7, "fjord": 7, "nimbus": 7 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2131,13 +2772,7 @@
           "hasDefault": true,
           "generated": false
         },
-        {
-          "name": "kind",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "kind", "type": "text", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "addon_applies_to_all",
           "type": "boolean",
@@ -2228,25 +2863,22 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "image_url",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "prices",
       "rows": 39,
-      "byScope": {
-        "acme": 13,
-        "fjord": 13,
-        "nimbus": 13
-      },
+      "byScope": { "halyard": 13, "fjord": 13, "nimbus": 13 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2275,13 +2907,7 @@
           "hasDefault": false,
           "generated": false
         },
-        {
-          "name": "type",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "type", "type": "text", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "model",
           "type": "text",
@@ -2505,25 +3131,113 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "minimum_amount_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "usage_recurring",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "usage_time_unit",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "bill_usage_monthly",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "commitment_amount_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "meter_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "unit_amount_decimal",
+          "type": "numeric(38,12)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity_divisor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "amount_source",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "markup_percent",
+          "type": "numeric(12,6)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "markup_base",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "grants_credit",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "portal_min_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "portal_max_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "invoice_line_items",
-      "rows": 180,
-      "byScope": {
-        "acme": 114,
-        "fjord": 26,
-        "nimbus": 40
-      },
+      "rows": 214,
+      "byScope": { "halyard": 140, "fjord": 22, "nimbus": 52 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2642,25 +3356,57 @@
           "notNull": true,
           "hasDefault": true,
           "generated": false
+        },
+        {
+          "name": "rating",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "adjustment",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity_decimal",
+          "type": "numeric(38,12)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "unit_amount_decimal",
+          "type": "numeric(38,12)",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cost_minor",
+          "type": "bigint",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "cost_basis",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "tax_regions",
       "rows": 7,
-      "byScope": {
-        "acme": 1,
-        "fjord": 5,
-        "nimbus": 1
-      },
+      "byScope": { "halyard": 1, "fjord": 5, "nimbus": 1 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2855,19 +3601,9 @@
     {
       "name": "tax_rate_components",
       "rows": 11,
-      "byScope": {
-        "acme": 3,
-        "fjord": 5,
-        "nimbus": 3
-      },
+      "byScope": { "halyard": 3, "fjord": 5, "nimbus": 3 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -2956,20 +3692,10 @@
     },
     {
       "name": "applied_taxes",
-      "rows": 113,
-      "byScope": {
-        "acme": 67,
-        "fjord": 16,
-        "nimbus": 30
-      },
+      "rows": 143,
+      "byScope": { "halyard": 89, "fjord": 12, "nimbus": 42 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3045,19 +3771,9 @@
     {
       "name": "attached_items",
       "rows": 18,
-      "byScope": {
-        "acme": 6,
-        "fjord": 6,
-        "nimbus": 6
-      },
+      "byScope": { "halyard": 6, "fjord": 6, "nimbus": 6 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3127,25 +3843,43 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "min_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "max_quantity",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "quantity_step",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "customer_can_change_quantity",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
         }
       ]
     },
     {
       "name": "audit_logs",
-      "rows": 328,
-      "byScope": {
-        "acme": 179,
-        "fjord": 71,
-        "nimbus": 78
-      },
+      "rows": 339,
+      "byScope": { "halyard": 196, "fjord": 66, "nimbus": 77 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3234,12 +3968,8 @@
     },
     {
       "name": "audit_log_snapshots",
-      "rows": 251,
-      "byScope": {
-        "acme": 129,
-        "fjord": 58,
-        "nimbus": 64
-      },
+      "rows": 262,
+      "byScope": { "halyard": 144, "fjord": 54, "nimbus": 64 },
       "columns": [
         {
           "name": "audit_id",
@@ -3280,20 +4010,10 @@
     },
     {
       "name": "credit_notes",
-      "rows": 17,
-      "byScope": {
-        "acme": 11,
-        "fjord": 3,
-        "nimbus": 3
-      },
+      "rows": 11,
+      "byScope": { "halyard": 7, "fjord": 2, "nimbus": 2 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3385,13 +4105,7 @@
           "hasDefault": false,
           "generated": false
         },
-        {
-          "name": "kind",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "kind", "type": "text", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "reason_code",
           "type": "text",
@@ -3475,24 +4189,50 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "refund_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payout_unconfirmed_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "payout_duplicated_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "payout_out_of_order_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "pack_refund",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "credit_note_allocations",
-      "rows": 5,
-      "byScope": {
-        "acme": 4,
-        "nimbus": 1
-      },
+      "rows": 6,
+      "byScope": { "halyard": 6 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3539,20 +4279,10 @@
     },
     {
       "name": "credit_note_items",
-      "rows": 24,
-      "byScope": {
-        "acme": 14,
-        "fjord": 5,
-        "nimbus": 5
-      },
+      "rows": 15,
+      "byScope": { "halyard": 8, "fjord": 4, "nimbus": 3 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3634,20 +4364,10 @@
     },
     {
       "name": "events",
-      "rows": 921,
-      "byScope": {
-        "acme": 574,
-        "fjord": 157,
-        "nimbus": 190
-      },
+      "rows": 1026,
+      "byScope": { "halyard": 665, "fjord": 165, "nimbus": 196 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3737,19 +4457,9 @@
     {
       "name": "features",
       "rows": 9,
-      "byScope": {
-        "acme": 3,
-        "fjord": 3,
-        "nimbus": 3
-      },
+      "byScope": { "halyard": 3, "fjord": 3, "nimbus": 3 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -3771,13 +4481,7 @@
           "hasDefault": false,
           "generated": false
         },
-        {
-          "name": "key",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
+        { "name": "key", "type": "text", "notNull": true, "hasDefault": false, "generated": false },
         {
           "name": "name",
           "type": "text",
@@ -3819,25 +4523,22 @@
           "notNull": true,
           "hasDefault": true,
           "generated": false
+        },
+        {
+          "name": "meter_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "gateway_request_logs",
-      "rows": 174,
-      "byScope": {
-        "acme": 114,
-        "fjord": 28,
-        "nimbus": 32
-      },
+      "rows": 187,
+      "byScope": { "halyard": 130, "fjord": 21, "nimbus": 36 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "business_id",
           "type": "uuid",
@@ -3866,13 +4567,7 @@
           "hasDefault": false,
           "generated": false
         },
-        {
-          "name": "url",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": false,
-          "generated": false
-        },
+        { "name": "url", "type": "text", "notNull": true, "hasDefault": false, "generated": false },
         {
           "name": "status",
           "type": "integer",
@@ -3956,25 +4651,22 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "span_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "invoice_line_discounts",
-      "rows": 6,
-      "byScope": {
-        "acme": 3,
-        "fjord": 1,
-        "nimbus": 2
-      },
+      "rows": 13,
+      "byScope": { "halyard": 11, "nimbus": 2 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4042,20 +4734,10 @@
     },
     {
       "name": "ledger_entries",
-      "rows": 430,
-      "byScope": {
-        "acme": 288,
-        "fjord": 63,
-        "nimbus": 79
-      },
+      "rows": 465,
+      "byScope": { "halyard": 320, "fjord": 67, "nimbus": 78 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4144,20 +4826,10 @@
     },
     {
       "name": "mrr_movements",
-      "rows": 85,
-      "byScope": {
-        "acme": 44,
-        "fjord": 21,
-        "nimbus": 20
-      },
+      "rows": 88,
+      "byScope": { "halyard": 51, "fjord": 14, "nimbus": 23 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4266,21 +4938,96 @@
       ]
     },
     {
-      "name": "payments",
-      "rows": 72,
-      "byScope": {
-        "acme": 52,
-        "fjord": 9,
-        "nimbus": 11
-      },
+      "name": "notification_queue",
+      "rows": 249,
+      "byScope": { "halyard": 171, "fjord": 35, "nimbus": 43 },
       "columns": [
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
-          "name": "id",
+          "name": "organization_id",
           "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "event_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "dedupe_key",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "kinds",
+          "type": "text[]",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
           "notNull": true,
           "hasDefault": true,
           "generated": false
         },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        },
+        {
+          "name": "last_error",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
+        }
+      ]
+    },
+    {
+      "name": "payments",
+      "rows": 84,
+      "byScope": { "halyard": 62, "fjord": 9, "nimbus": 13 },
+      "columns": [
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4392,25 +5139,36 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "payment_request_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "method_type",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "reversal_code",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "plan_entitlements",
       "rows": 21,
-      "byScope": {
-        "acme": 7,
-        "fjord": 7,
-        "nimbus": 7
-      },
+      "byScope": { "halyard": 7, "fjord": 7, "nimbus": 7 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4459,23 +5217,22 @@
           "notNull": true,
           "hasDefault": true,
           "generated": false
+        },
+        {
+          "name": "reset",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "promotional_credit_movements",
-      "rows": 1,
-      "byScope": {
-        "fjord": 1
-      },
+      "rows": 2,
+      "byScope": { "halyard": 1, "fjord": 1 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4529,20 +5286,10 @@
     },
     {
       "name": "provider_customers",
-      "rows": 49,
-      "byScope": {
-        "acme": 30,
-        "fjord": 9,
-        "nimbus": 10
-      },
+      "rows": 51,
+      "byScope": { "halyard": 33, "fjord": 7, "nimbus": 11 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4602,21 +5349,117 @@
       ]
     },
     {
-      "name": "refunds",
-      "rows": 3,
-      "byScope": {
-        "acme": 1,
-        "fjord": 1,
-        "nimbus": 1
-      },
+      "name": "receipts",
+      "rows": 81,
+      "byScope": { "halyard": 59, "fjord": 9, "nimbus": 13 },
       "columns": [
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
-          "name": "id",
+          "name": "organization_id",
           "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "business_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "number",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "payment_request_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "transaction_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "currency",
+          "type": "character(3)",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "paid_at",
+          "type": "timestamp with time zone",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "snapshot",
+          "type": "jsonb",
+          "notNull": true,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "numbered_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
           "notNull": true,
           "hasDefault": true,
           "generated": false
-        },
+        }
+      ]
+    },
+    {
+      "name": "refunds",
+      "rows": 1,
+      "byScope": { "nimbus": 1 },
+      "columns": [
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4707,25 +5550,29 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "not_found_state",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "on_decline",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "scheduled_changes",
-      "rows": 10,
-      "byScope": {
-        "acme": 5,
-        "fjord": 1,
-        "nimbus": 4
-      },
+      "rows": 13,
+      "byScope": { "halyard": 7, "fjord": 2, "nimbus": 4 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4828,20 +5675,10 @@
     },
     {
       "name": "subscription_items",
-      "rows": 66,
-      "byScope": {
-        "acme": 42,
-        "fjord": 13,
-        "nimbus": 11
-      },
+      "rows": 79,
+      "byScope": { "halyard": 50, "fjord": 13, "nimbus": 16 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -4925,23 +5762,29 @@
           "notNull": true,
           "hasDefault": true,
           "generated": false
+        },
+        {
+          "name": "usage_billed_through",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "next_credit_reset_at",
+          "type": "timestamp with time zone",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "tax_state_registrations",
       "rows": 2,
-      "byScope": {
-        "nimbus": 2
-      },
+      "byScope": { "nimbus": 2 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -5016,20 +5859,10 @@
     },
     {
       "name": "tmtest_charges",
-      "rows": 74,
-      "byScope": {
-        "acme": 52,
-        "fjord": 10,
-        "nimbus": 12
-      },
+      "rows": 82,
+      "byScope": { "halyard": 61, "fjord": 7, "nimbus": 14 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "charge_id",
           "type": "text",
@@ -5051,13 +5884,7 @@
           "hasDefault": false,
           "generated": false
         },
-        {
-          "name": "kind",
-          "type": "text",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "kind", "type": "text", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "parent_charge_id",
           "type": "text",
@@ -5125,18 +5952,10 @@
     },
     {
       "name": "tmtest_vault",
-      "rows": 51,
-      "byScope": {
-        "org": 51
-      },
+      "rows": 54,
+      "byScope": { "org": 54 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "vault_id",
           "type": "text",
@@ -5197,20 +6016,10 @@
     },
     {
       "name": "transactions",
-      "rows": 75,
-      "byScope": {
-        "acme": 53,
-        "fjord": 10,
-        "nimbus": 12
-      },
+      "rows": 85,
+      "byScope": { "halyard": 62, "fjord": 9, "nimbus": 14 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -5406,25 +6215,50 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "payment_request_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "ownership_ref",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "span_id",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
         }
       ]
     },
     {
       "name": "unbilled_charges",
-      "rows": 22,
-      "byScope": {
-        "acme": 6,
-        "fjord": 9,
-        "nimbus": 7
-      },
+      "rows": 24,
+      "byScope": { "halyard": 10, "fjord": 4, "nimbus": 10 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -5529,23 +6363,29 @@
           "notNull": true,
           "hasDefault": true,
           "generated": false
+        },
+        {
+          "name": "rating",
+          "type": "jsonb",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "discounted",
+          "type": "boolean",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
         }
       ]
     },
     {
       "name": "usage_records",
-      "rows": 37,
-      "byScope": {
-        "acme": 37
-      },
+      "rows": 25,
+      "byScope": { "halyard": 25 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -5563,7 +6403,7 @@
         {
           "name": "subscription_item_id",
           "type": "uuid",
-          "notNull": true,
+          "notNull": false,
           "hasDefault": false,
           "generated": false
         },
@@ -5615,24 +6455,36 @@
           "notNull": false,
           "hasDefault": false,
           "generated": false
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "price_id",
+          "type": "uuid",
+          "notNull": false,
+          "hasDefault": false,
+          "generated": false
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "generated": false
         }
       ]
     },
     {
       "name": "wallet_topups",
-      "rows": 4,
-      "byScope": {
-        "acme": 3,
-        "nimbus": 1
-      },
+      "rows": 7,
+      "byScope": { "halyard": 4, "fjord": 3 },
       "columns": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "notNull": true,
-          "hasDefault": true,
-          "generated": false
-        },
+        { "name": "id", "type": "uuid", "notNull": true, "hasDefault": true, "generated": false },
         {
           "name": "organization_id",
           "type": "uuid",
@@ -5706,5 +6558,5 @@
       ]
     }
   ],
-  "totalRows": 3380
+  "totalRows": 4018
 }

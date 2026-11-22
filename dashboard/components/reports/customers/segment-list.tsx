@@ -20,6 +20,7 @@ export function SegmentCustomerList({
   total,
   fallbackCurrency,
   tz,
+  showSubscriptions = true,
 }: {
   biz: string;
   filters: SegmentFilter[];
@@ -30,6 +31,8 @@ export function SegmentCustomerList({
   total: number | null;
   fallbackCurrency: string;
   tz: string | null;
+  /** False for a business with no subscriptions: the table drops the subscription columns. */
+  showSubscriptions?: boolean;
 }) {
   const [{ rows, cursor }, setList] = useDefaultState(
     { rows: initialRows, cursor: initialCursor },
@@ -61,6 +64,7 @@ export function SegmentCustomerList({
         customers={rows}
         fallbackCurrency={fallbackCurrency}
         tz={tz}
+        showSubscriptions={showSubscriptions}
       />
       {cursor || error ? (
         <div className="flex flex-wrap items-center gap-3 border-t px-5 py-2.5 text-xs text-muted-foreground">
@@ -69,7 +73,7 @@ export function SegmentCustomerList({
           ) : (
             <span>
               Showing {rows.length.toLocaleString("en")} of {(total ?? 0).toLocaleString("en")}. The
-              count and the MRR above are for all the customers in the segment.
+              count and the figures above are for all the customers in the segment.
             </span>
           )}
           {cursor ? (

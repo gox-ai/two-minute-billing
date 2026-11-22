@@ -1,4 +1,5 @@
 import { listReports } from "@/lib/api";
+import { getBillingModels } from "@/lib/api/billing-models";
 import { ReportsRail } from "./reports-rail";
 
 /**
@@ -22,7 +23,10 @@ export default async function ReportsAllLayout({
   params: Promise<{ biz: string }>;
 }) {
   const { biz } = await params;
-  const reports = await listReports(biz).catch(() => null);
+  const [reports, models] = await Promise.all([
+    listReports(biz).catch(() => null),
+    getBillingModels(biz),
+  ]);
 
   // No rail rather than an empty one implying an empty catalogue.
   if (!reports?.data?.length) return <div className="flex flex-col gap-5">{children}</div>;
@@ -33,7 +37,7 @@ export default async function ReportsAllLayout({
         {children}
       </div>
       <aside className="row-2 max-h-72 min-w-0 overflow-y-auto lg:sticky lg:top-[calc(var(--compact-h,0px)+1rem)] lg:col-1 lg:max-h-[calc(100vh-6rem)] lg:self-start">
-        <ReportsRail biz={biz} reports={reports.data} />
+        <ReportsRail biz={biz} reports={reports.data} models={models} />
       </aside>
     </div>
   );

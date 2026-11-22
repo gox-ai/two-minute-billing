@@ -1333,6 +1333,73 @@ const checks: Array<[string, boolean]> = [];
   await app.close();
 }
 
+// ── Repeat guard on a credit-note refund (`guardRepeat`, route `confirm_repeat`) ──
+{
+  const { refundCreditNote } = await import("@/modules/credit-notes/service");
+  const { refunds: refundsTable } = await import("@db/schema");
+  const { buildApp } = await import("@/index");
+  const { invoice } = await paidInvoice("cn-repeat-guard@a.com");
+  const issue = () =>
+    issueRefundableCreditNote({
+      organizationId: orgId,
+      businessId: biz.id,
+      invoicePublicId: invoice.publicId,
+      items: [{ description: "x", amountMinor: 2100 }],
+    });
+  const base = { organizationId: orgId, businessId: biz.id };
+  const cn1 = await issue();
+  await refundCreditNote({ ...base, creditNotePublicId: cn1.publicId, guardRepeat: true });
+  const cn2 = await issue();
+  const cashBefore = await cash();
+  const refundRows = () =>
+    withTenant(orgId, async (tx) => (await tx.select().from(refundsTable)).length);
+  const rowsBefore = await refundRows();
+  let dup: CreditNoteError | null = null;
+  try {
+    await refundCreditNote({ ...base, creditNotePublicId: cn2.publicId, guardRepeat: true });
+  } catch (e) {
+    if (e instanceof CreditNoteError) dup = e;
+  }
+  const afterDup = await withTenant(
+    orgId,
+    async (tx) =>
+      (await tx.select().from(creditNotesTable).where(eq(creditNotesTable.id, cn2.id)))[0]!,
+  );
+  checks.push(
+    [
+      "repeat guard: same amount on the same payment → CreditNoteError possible_duplicate",
+      dup?.code === "possible_duplicate" && dup.message.includes("$21.00"),
+    ],
+    [
+      "repeat guard: refused note is back to refundable, nothing booked",
+      afterDup.refundedMinor === 0n &&
+        (await cash()) === cashBefore &&
+        (await refundRows()) === rowsBefore,
+    ],
+  );
+  const app = await buildApp({ logger: false });
+  const post = (cn: string, payload: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: `/v1/businesses/${biz.publicId}/credit_notes/${cn}/refund`,
+      headers: { authorization: `Bearer ${org.secret}`, "idempotency-key": `rg-${Math.random()}` },
+      payload,
+    });
+  const r409 = await post(cn2.publicId, {});
+  const j = r409.json() as { error?: { type?: string; code?: string } };
+  const rOk = await post(cn2.publicId, { confirm_repeat: true });
+  checks.push(
+    [
+      "repeat guard route: 409 invalid_request_error possible_duplicate",
+      r409.statusCode === 409 &&
+        j.error?.code === "possible_duplicate" &&
+        j.error?.type === "invalid_request_error",
+    ],
+    ["repeat guard route: confirm_repeat → 200", rOk.statusCode === 200],
+  );
+  await app.close();
+}
+
 let pass = true;
 for (const [n, ok] of checks) {
   console.log(`  ${ok ? "✓" : "✗"} ${n}`);

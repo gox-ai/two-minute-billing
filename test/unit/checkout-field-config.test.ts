@@ -23,10 +23,10 @@ const EXPECTED_DEFAULTS: Record<CheckoutFieldKey, "show" | "hide" | "mandatory">
   "customer.phone": "show",
   "customer.company": "show",
   "customer.tax_registration_number": "show",
-  "billing.line1": "mandatory",
+  "billing.line1": "show",
   "billing.line2": "show",
   "billing.line3": "show",
-  "billing.city": "mandatory",
+  "billing.city": "show",
   "billing.state": "show",
   "billing.state_code": "mandatory",
   "billing.postal_code": "mandatory",
@@ -48,18 +48,12 @@ describe("DEFAULT_CHECKOUT_FIELD_CONFIG — matches today's zod contract field b
     });
   }
 
-  it("line1, city, state_code, postal_code and country are mandatory by default (0334)", () => {
+  it("state_code, postal_code and country are the only mandatory defaults", () => {
     const mandatory = Object.entries(DEFAULT_CHECKOUT_FIELD_CONFIG)
       .filter(([, v]) => v === "mandatory")
       .map(([k]) => k)
       .sort();
-    expect(mandatory).toEqual([
-      "billing.city",
-      "billing.country",
-      "billing.line1",
-      "billing.postal_code",
-      "billing.state_code",
-    ]);
+    expect(mandatory).toEqual(["billing.country", "billing.postal_code", "billing.state_code"]);
   });
 
   it("shipping.address defaults to hide — never collected before 0360", () => {
@@ -104,11 +98,11 @@ describe("resolveCheckoutFieldConfig — null/absent/malformed business", () => 
 });
 
 describe("malformed per-field values fall back to that field's OWN default — never a looser state", () => {
-  it("a mandatory field (billing.line1) with an unknown string stays mandatory, not show", () => {
+  it("a mandatory field (billing.postal_code) with an unknown string stays mandatory, not show", () => {
     const cfg = resolveCheckoutFieldConfig({
-      checkoutFieldConfig: { "billing.line1": "sometimes" },
+      checkoutFieldConfig: { "billing.postal_code": "sometimes" },
     });
-    expect(cfg["billing.line1"]).toBe("mandatory");
+    expect(cfg["billing.postal_code"]).toBe("mandatory");
   });
 
   it("a mandatory field (billing.country) with a non-string value stays mandatory", () => {
@@ -120,9 +114,9 @@ describe("malformed per-field values fall back to that field's OWN default — n
 
   it("a mandatory field with a number value stays mandatory", () => {
     const cfg = resolveCheckoutFieldConfig({
-      checkoutFieldConfig: { "billing.line1": 1 },
+      checkoutFieldConfig: { "billing.postal_code": 1 },
     });
-    expect(cfg["billing.line1"]).toBe("mandatory");
+    expect(cfg["billing.postal_code"]).toBe("mandatory");
   });
 
   it("a hide-default field (invoice.po_number) with an unknown string stays hidden, not mandatory", () => {
@@ -148,9 +142,9 @@ describe("malformed per-field values fall back to that field's OWN default — n
 
   it("one malformed key does not perturb resolution of the others", () => {
     const cfg = resolveCheckoutFieldConfig({
-      checkoutFieldConfig: { "billing.line1": 123, "customer.email": "mandatory" },
+      checkoutFieldConfig: { "billing.postal_code": 123, "customer.email": "mandatory" },
     });
-    expect(cfg["billing.line1"]).toBe("mandatory"); // its own default, unperturbed
+    expect(cfg["billing.postal_code"]).toBe("mandatory"); // its own default, unperturbed
     expect(cfg["customer.email"]).toBe("mandatory"); // the valid neighbour still applies
     expect(cfg["billing.country"]).toBe("mandatory"); // untouched keys keep their default
   });
@@ -172,7 +166,7 @@ describe("every valid state round-trips for every key", () => {
 describe("isRequired / isHidden", () => {
   it("isRequired is true only for mandatory", () => {
     const cfg = resolveCheckoutFieldConfig(null);
-    expect(isRequired(cfg, "billing.line1")).toBe(true);
+    expect(isRequired(cfg, "billing.postal_code")).toBe(true);
     expect(isRequired(cfg, "billing.country")).toBe(true);
     expect(isRequired(cfg, "customer.email")).toBe(false);
     expect(isRequired(cfg, "invoice.po_number")).toBe(false);

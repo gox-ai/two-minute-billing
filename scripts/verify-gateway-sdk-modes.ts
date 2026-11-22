@@ -37,13 +37,20 @@ import { GATEWAYS } from "@/providers/gateway-catalog";
 import { TmtestProvider } from "@/providers/tmtest";
 import { insertCharge } from "@/providers/tmtest/store";
 import { AUTO_SUBMIT_SCRIPT_SHA256, formPostFields } from "@/providers/tmtest/form-post";
-import type { BuyerAuthorization } from "@/providers/types";
+import type { BuyerAuthorization, NormalizedProviderEvent } from "@/providers/types";
+import { handleProviderEvent } from "@/modules/webhooks/inbound";
+import {
+  completeCheckoutForPaymentIntent,
+  resolveCheckoutSession,
+} from "@/modules/checkout/service";
 import {
   businesses,
+  checkoutSessions,
   gatewayAccounts,
   invoices,
   paymentMethods,
   payments,
+  refunds,
   tmtestCharges,
 } from "@db/schema";
 import { clearPublicRateLimits } from "./lib/rate-limit-reset";
@@ -677,6 +684,135 @@ const json = (r: { body: string }) => JSON.parse(r.body) as Record<string, any>;
     "h: checkout complete applies client_result to payment_intent and pays",
     paidInv?.status === "paid",
     l2.body.slice(0, 200),
+  );
+
+  // The page never posts leg 2 (the gateway's sheet lost its answer): the authorization
+  // webhook finishes the purchase.
+  const t3 = await openLink(`h3-${randomUUID().slice(0, 6)}@example.com`);
+  const w1 = await api("POST", "/checkout/v1/complete", t3, {
+    token: CHALLENGE,
+    po_number: "PO-H3",
+  });
+  const w1Intent = json(w1).payment_intent?.id as string | undefined;
+  const sessionOf = async (token: string) => {
+    const c = await resolveCheckoutSession(token);
+    return (
+      await withTenant(orgId, (tx) =>
+        tx.select().from(checkoutSessions).where(eq(checkoutSessions.id, c!.sessionId)).limit(1),
+      )
+    )[0]!;
+  };
+  const pending = await sessionOf(t3);
+  ok(
+    "h: leg 1 records the pending charge on the session",
+    w1.statusCode === 402 &&
+      !!w1Intent &&
+      pending.chargePaymentIntent === w1Intent &&
+      pending.chargeCompletion?.paymentMethodToken === CHALLENGE &&
+      pending.chargeCompletion?.poNumber === "PO-H3",
+    w1.body.slice(0, 200),
+  );
+  await applyClientResult(orgId, sdk.biz.id, w1Intent!, { nonce: "tmtest_ok" });
+  const atGateway = await getPaymentIntent(orgId, sdk.biz.id, w1Intent!);
+  const attempt = (await listAttemptsForIntent(orgId, sdk.biz.id, w1Intent!)).at(-1);
+  const handled = await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `evt_h3_${randomUUID()}`,
+      type: "intent.authorized",
+      providerIntentId: atGateway?.intentAtGateway ?? "",
+      ...(attempt?.idAtGateway ? { gatewayIntentId: attempt.idAtGateway } : {}),
+      occurredAt: new Date(),
+      raw: {},
+    } as NormalizedProviderEvent,
+    { businessId: sdk.biz.id },
+  );
+  const done = await sessionOf(t3);
+  const purchaseInvoices = await withTenant(orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.customerId, done.resultingCustomerId!)),
+  );
+  ok(
+    "h: the authorization webhook completes the purchase with no second leg",
+    handled === "processed" &&
+      done.status === "completed" &&
+      purchaseInvoices.length === 1 &&
+      purchaseInvoices[0]!.status === "paid" &&
+      purchaseInvoices[0]!.poNumber === "PO-H3",
+    `${handled} ${done.status} ${purchaseInvoices.map((i) => i.status).join(",")}`,
+  );
+  const again = await completeCheckoutForPaymentIntent({
+    organizationId: orgId,
+    businessId: sdk.biz.id,
+    intentPublicId: w1Intent!,
+  });
+  const invoicesAfter = await withTenant(orgId, (tx) =>
+    tx.select().from(invoices).where(eq(invoices.customerId, done.resultingCustomerId!)),
+  );
+  ok(
+    "h: a redelivered authorization changes nothing",
+    again === "skipped" && invoicesAfter.length === 1,
+    `${again} ${invoicesAfter.length}`,
+  );
+  ok(
+    "h: an intent no session recorded is a no-op",
+    (await completeCheckoutForPaymentIntent({
+      organizationId: orgId,
+      businessId: sdk.biz.id,
+      intentPublicId: `pi_not_a_checkout_${Date.now()}`,
+    })) === "no_session",
+  );
+
+  // A gateway that captures on its own page (PayU) can report the capture BEFORE the page
+  // returns. That is the buyer's one payment for this checkout, not a duplicate: it must not
+  // be refunded, and the purchase must complete exactly once.
+  const t4 = await openLink(`h4-${randomUUID().slice(0, 6)}@example.com`);
+  const c1 = await api("POST", "/checkout/v1/complete", t4, { token: CHALLENGE });
+  const c1Intent = json(c1).payment_intent?.id as string;
+  const c1AtGateway = (await getPaymentIntent(orgId, sdk.biz.id, c1Intent))?.intentAtGateway ?? "";
+  // The buyer pays on the gateway's page; its notification arrives before the page returns.
+  await applyClientResult(orgId, sdk.biz.id, c1Intent, { nonce: "tmtest_ok" });
+  const early = await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `evt_h4_${randomUUID()}`,
+      type: "charge.succeeded",
+      providerChargeId: c1AtGateway,
+      providerIntentId: c1AtGateway,
+      amountMinor: 2500n,
+      occurredAt: new Date(),
+      raw: {},
+    } as NormalizedProviderEvent,
+    { businessId: sdk.biz.id },
+  );
+  const c2 = await api("POST", "/checkout/v1/complete", t4, {
+    token: CHALLENGE,
+    payment_intent: c1Intent,
+    client_result: { nonce: "tmtest_ok" },
+  });
+  const raced = await sessionOf(t4);
+  const racedCustomer = raced.resultingCustomerId!;
+  const [racedInvoices, racedPayments, racedRefunds] = await withTenant(orgId, async (tx) => [
+    await tx.select().from(invoices).where(eq(invoices.customerId, racedCustomer)),
+    await tx.select().from(payments).where(eq(payments.customerId, racedCustomer)),
+    await tx
+      .select({ id: refunds.id, reason: refunds.reason })
+      .from(refunds)
+      .innerJoin(payments, eq(payments.id, refunds.paymentId))
+      .where(eq(payments.customerId, racedCustomer)),
+  ]);
+  ok(
+    "h: a capture reported before the page returns is not refunded as a duplicate",
+    racedRefunds.length === 0,
+    `webhook ${early}, refunds: ${racedRefunds.map((r) => r.reason).join(" | ") || "none"}`,
+  );
+  ok(
+    "h: …and the purchase completes exactly once",
+    raced.status === "completed" &&
+      racedInvoices.length === 1 &&
+      racedInvoices[0]!.status === "paid" &&
+      racedPayments.filter((p) => p.status === "succeeded").length === 1,
+    `leg2 ${c2.statusCode} ${c2.body.slice(0, 120)}, session ${raced.status}, invoices ${racedInvoices.map((i) => i.status).join(",")}, ` +
+      `payments ${racedPayments.map((p) => `${p.status}${p.invoiceId ? "@inv" : "@none"}`).join(",")}`,
   );
 
   // Setup leg: client_result completes the add-card when there is no payment_intent.

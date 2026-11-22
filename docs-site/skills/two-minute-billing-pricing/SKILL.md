@@ -10,7 +10,7 @@ metadata:
 # Pricing and the catalog
 
 The `two-minute-billing` skill's rules hold here: test key only, keys never in the chat, and
-`preflight.mjs` before the first write.
+`tmb doctor` (or `preflight.mjs`) before the first write.
 
 ## 1. Find the value metric
 
@@ -108,8 +108,9 @@ credit), write `"minor_per_unit": null`; leaving the field out is an error. A me
 a unit takes a `credit_cost`: `{ "unit": "token", "credits_per_unit": "2.5", "overrides": [{
 "product": "pro", "credits_per_unit": "2" }] }`. A meter in the file without `credit_cost` has
 its stored credit cost planned for removal. The script stays in
-this skill and needs no install step: plain Node, no dependencies, so it works in any project. It
-prints a **plan of changes** first, and changes nothing unless it gets `--apply`.
+this skill and needs no install step: plain Node, no dependencies, so it works in any project.
+`tmb push` runs the same script, so the CLI is optional. It prints a **plan of changes** first,
+and changes nothing unless it gets `--apply`.
 
 The same file holds the rest of the business's billing setup, so the user's business settings
 live in the repository too. Do not set these by hand with `PATCH` calls; put them in the file:
@@ -209,12 +210,19 @@ Rules the script follows, and you must keep:
 - Run it with a test key only. Show the plan output, wait for a yes, then run with `--apply`.
 
 ```bash
+tmb push billing.catalog.json --env-file <env file>           # plan
+tmb push billing.catalog.json --env-file <env file> --apply   # after a yes
+```
+
+Without the CLI (see the `two-minute-billing` skill), run the script itself:
+
+```bash
 node --env-file=<env file> <this skill>/scripts/catalog.mjs billing.catalog.json           # plan
 node --env-file=<env file> <this skill>/scripts/catalog.mjs billing.catalog.json --apply   # after a yes
 ```
 
-Exit 0: planned, applied or nothing to change · 1: bad input or a refused request · 2: a conflict
-(a field the API cannot change), nothing was written · 3: not a test key.
+Both exit the same way. Exit 0: planned, applied or nothing to change · 1: bad input or a refused
+request · 2: a conflict (a field the API cannot change), nothing was written · 3: not a test key.
 
 Each `+ price` line shows the terms to review with the user: amount and period, the trial, the
 meter and usage rate, and the credits it grants (amount, unit, kind, reset). A `+ coupon` line

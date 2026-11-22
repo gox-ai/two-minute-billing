@@ -130,6 +130,78 @@ carries the same argument from the browser side.
 
 ## Changelog
 
+- **2026-11-19 (inline Add)** — Add a payment method draws a card form we host (Stripe, TM Test,
+  Braintree, Adyen, Checkout.com, Square, CyberSource) inside the open row: no second dialog,
+  no Add card button for that row, Try again in the row. The popup closes after a save. The
+  gateways list drops rails the account has not activated (`activeMethodTypes`), as Pay now.
+  A gateway's 3DS challenge on `<body>` can now take clicks and focus under the dialog.
+- **2026-11-19 (option C)** — Pay now and Add a payment method list one row per rail across
+  every account (the payment-element pattern), each with its method logos; the selected row
+  opens in place and, where the gateway draws its form in our page (Stripe, Braintree, Adyen,
+  Checkout.com, Square, CyberSource, TM Test), mounts that form inline (`SdkFrame`,
+  `GatewaySdkContext.inline`). A rail goes to: the customer's `new_method_gateway_account`,
+  then `storefront_config.payment_routing[currency].gateways`, then the primary method's
+  account, the business default, the oldest. Rows follow `payment_routing[currency].order`.
+  `pay_options?avoid=gwa_…` (Try again after a gateway-side failure) routes around one
+  account. `collect.method_type` pins the form to the row's rail; a changed row/save box
+  voids the open intent. `/payment_methods/gateways` returns `method_routes`. Deleting the
+  last method can ask why (`portal_ask_delete_reason`); the answer rides on
+  `payment_source_deleted` as `deletion_reason`. Add a payment method is a popup opened from
+  the Payment methods card.
+- **2026-11-19 (Phase C, all methods)** — Pay and save beyond cards: each other method an
+  account can save gets its own `new_methods` row (`method_types` = that rail), only where the
+  adapter reports the account has it active (`activeMethodTypes`; an adapter that cannot say
+  is trusted). `collect` takes `method_type`; the box names the method ("Save this UPI
+  ID / bank account …").
+- **2026-11-19** — Portal (dashboard): no "Remove backup"; every method that is not primary is a
+  backup (Make primary + Delete). "Make backup" only for an older method with no role.
+- **2026-11-19** — Portal (dashboard): the Stripe dialog for a new method is "Pay <amount>" with
+  the privacy line; "Payment in progress" no longer names the bank; the return card follows the
+  refreshed invoice list, so it never shows "in progress" over a paid invoice.
+- **2026-11-19 (Phase C)** — `pay_options.new_methods[].save`; `collect` takes `save_method` +
+  `save_text_version` and answers `saved_payment_method` / `save_failed` (also after a webhook
+  consume). Pay now step 1 shows the save box and its consent text.
+- **2026-11-19** — `GET /portal/v1/invoices` adds `collection_scheduled_at` (a pre-debit notice
+  sent, debit not made): the portal shows "Scheduled", no Pay, and leaves it out of the amount
+  due. Mandate rails shown in plain words (`dashboard/lib/mandate-rail.ts`). The Add-card result's
+  Pay runs outside its dialog (`PayInvoiceButton headless`). A new PayPal row beside a saved one
+  reads "Another PayPal account".
+- **2026-11-18** — Pay now: saved PayPal methods are offered (`PAYS_NOW`, sandbox-proven).
+  A saved debit that waits for a pre-debit notice answers 200 + `collection_scheduled`; the Add
+  method result shows "Payment scheduled".
+- **2026-11-18** — Pay now: "New card" after a saved-card attempt closes that attempt (0543
+  `saved_method_chosen`) instead of resuming its bank check; a hold whose capture was refused is
+  released and a fresh payment starts (`releaseRefusedCapture`). An `open` intent on a gateway
+  without void is closed on our side only.
+- **2026-11-18** — Portal pay-and-save, Phase B. `GET /portal/v1/invoices/:inv/pay_options`
+  (`pay-options.ts`): the buyer's saved methods for one invoice (`kind` `now` = charged with the
+  buyer present, `debit` = through the mandate; `available` + `reason` + `hint`), primary first,
+  and `new_methods` with the gateway picked (holds the primary → business default → setup
+  order). `POST …/collect` takes `payment_method` and re-checks it with the same
+  `savedPayOption`; `now` mints the on-session intent on that instrument, `debit` runs
+  `collectInvoiceNow` with it. `/payment_methods/gateways` lists the business default first.
+  The portal's Pay now shows methods, never provider names; Add card shows one "Card" row.
+
+- **2026-11-18** — Portal pay-and-save, Phase A. `GET /portal/v1/invoices` adds
+  `last_payment_error.message` (the payer sentence the failure email sends, from
+  `payerDeclineMessage`; never the gateway's raw text; null when there is no reason) and
+  `last_payment_error.new_method_needed` (`payerNeedsNewMethod`). The balance card shows the reason
+  and leads with "Update payment method" when the same method cannot succeed.
+  `POST /portal/v1/payment_methods` adds `collection_enabled`, and `collected` entries carry
+  `amount_minor` + `currency`; the portal shows a "Payment method added" dialog with what was paid,
+  in progress, refused (with the reason) or still due (`addMethodOutcome`). Razorpay Pay now no
+  longer sends `customer_id` on a one-off payment: Checkout listed the buyer's auto-debit card under
+  "Saved Cards" and a mandate token cannot pay on-session ("Invalid Token", sandbox 2026-11-18).
+
+- **2026-11-17** — `POST /portal/v1/client_errors` (portal session): the portal reports each payment
+  error it shows the buyer (pay invoice, add a payment method, the return pages), through
+  `/portal/client-error` on the dashboard, into `buyer_client_errors` (ops module).
+- **2026-11-16** — Buyer text says "reactivate" for an ended subscription (`RESTART_MESSAGES`, the 409 on
+  `/reactivate`, "We could not open the reactivation page."); keys and routes keep `restart`. The portal's Keep is
+  a filled button in the plan card (`PortalKeepSubscription`), no longer a lifecycle link.
+  `actions.keep_payment` (`{amount_due_minor, currency}` or null) prices the renewal Keep restores, from
+  `estimateRenewal({ ignoreScheduledCancellation: true })`, so the dialog states the amount.
+
 - **2026-11-14** — The subscription list gives `has_credit_usage` (the customer's credit usage is
   on this subscription); the page shows the usage block for it as for `has_metered_items`. The
   usage block says what the next invoice bills past the credit balance and shows a negative
@@ -702,3 +774,11 @@ carries the same argument from the browser side.
   invoice holds the change (`PendingChangeError` → a payer refusal, 400). A retry of the same
   change, Pay on the invoice, or a new card that collects open invoices pays the same invoice and
   the change applies. `pendingSource: portal`.
+- **2026-11-17 (0542)** — `getPortalLinkNotice` and the portal business payload carry
+  `button_text_color` beside `brand_color` (the label on brand-color buttons).
+- **2026-11-20 (0549)** — `GET /portal/v1/me` carries `billing_details_missing` (field names
+  still empty, from `billingDetailsMissing`). "Add a payment method" asks for exactly those
+  inline (`inline-billing-details.tsx`, same `portalUpdateMeAction`), then continues into the
+  gateway form; the pointer to the Billing details section is gone. The portal defaults no
+  longer require line 1, city or phone. Postal data credit: GeoNames, CC BY 4.0.
+- **2026-11-21** — Every `/portal/v1` request now carries event source `portal` (set at `onRequest`, by path), so pay invoice, add or remove a card and update details no longer read "Through the API". The per-route `portalSource` hook is gone. Operator notifications are unchanged: `customer_portal_change` still lists only six subscription event types.

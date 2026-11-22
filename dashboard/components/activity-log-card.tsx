@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { listEventsForBusiness } from "@/lib/api/developer";
 import { SectionCard } from "@/components/patterns/section-card";
-import { EmptyState } from "@/components/states";
+import { EmptyState, ErrorState } from "@/components/states";
 import { Chip } from "@/components/patterns/chip";
 import { fmtDateTime } from "@/lib/api";
 import {
@@ -13,14 +13,31 @@ import {
   EVENT_TYPE_FOR_ACTION,
   actionHeadline,
   actorLabel,
+  changeSummary,
   sourceByPhrase,
+  type ChangeSummary,
 } from "@/components/audit/labels";
 import { cn } from "@/lib/utils";
+import { eventSentence } from "@/lib/labels";
 import { MiddleEllipsis } from "@/components/patterns/id-text";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Paged, PagedFooter, PagedItems } from "@/components/patterns/pager";
+import { ScrollList } from "@/components/patterns/scroll-list";
 
-/** Per stream; the card pages through the merged result. */
+/** Per stream, by default; the card pages through the merged result. */
 const ACTIVITY_LIMIT = 200;
+
+/** The full Activity log page for one record (`/businesses/<biz>/activity`). */
+export function activityLogHref(
+  biz: string,
+  resourceType: string,
+  resourceId: string,
+  scope: "resource" | "customer" = "resource",
+): string {
+  const q = new URLSearchParams({ resource_type: resourceType, resource_id: resourceId });
+  if (scope === "customer") q.set("scope", "customer");
+  return `/businesses/${biz}/activity?${q}`;
+}
 
 /**
  * "Activity Log" — the history of one record, merged from the two streams that
@@ -73,6 +90,8 @@ interface LogRow {
    * an id cannot say WHICH invoice.
    */
   ref?: string | null;
+  /** What the audit record changed; absent on an event-only row. */
+  changes?: ChangeSummary;
 }
 
 export async function ActivityLogCard({
@@ -83,6 +102,8 @@ export async function ActivityLogCard({
   scope = "resource",
   layout = "section",
   previewRows,
+  limit = ACTIVITY_LIMIT,
+  fullPage = false,
 }: {
   biz: string;
   resourceType: string;
@@ -99,19 +120,26 @@ export async function ActivityLogCard({
   layout?: "section" | "card";
   /** Rows per page (default 10). */
   previewRows?: number;
+  /** Rows read per stream (default 200; the engine's list maximum is 1000). */
+  limit?: number;
+  /**
+   * The card IS the Activity log page: no title and no "View all" link, and a failed
+   * read shows an error instead of hiding the card.
+   */
+  fullPage?: boolean;
 }) {
   const byCustomer = scope === "customer";
   let page;
   try {
     page = byCustomer
-      ? await listEventsForBusiness(biz, { customer: resourceId, limit: ACTIVITY_LIMIT })
+      ? await listEventsForBusiness(biz, { customer: resourceId, limit })
       : await listEventsForBusiness(biz, {
           resource_type: resourceType,
           resource_id: resourceId,
-          limit: ACTIVITY_LIMIT,
+          limit,
         });
-  } catch {
-    return null;
+  } catch (e) {
+    return fullPage ? <ErrorState error={e} thing="activity log" retry /> : null;
   }
 
   // The audit read is independent: a failure (or a key without audit access) must
@@ -120,8 +148,8 @@ export async function ActivityLogCard({
   let auditsMore = false;
   try {
     const a = byCustomer
-      ? await listAuditLogsForCustomer(biz, resourceId, { limit: ACTIVITY_LIMIT })
-      : await listAuditLogsForResource(biz, resourceType, resourceId, { limit: ACTIVITY_LIMIT });
+      ? await listAuditLogsForCustomer(biz, resourceId, { limit })
+      : await listAuditLogsForResource(biz, resourceType, resourceId, { limit });
     audits = a.data;
     auditsMore = a.has_more;
   } catch {
@@ -175,9 +203,7 @@ export async function ActivityLogCard({
       // In customer scope the row may be about an invoice or a subscription, so the
       // EVENT's own resource names it — the card's cannot stand in for it any more.
       const ownType = byCustomer ? (e.resource?.type ?? resourceType) : resourceType;
-      const h = a
-        ? actionHeadline(a.action, a.resource_type)
-        : { noun: eventNoun(e.type, ownType), verb: eventVerb(e.type) };
+      const h = a ? actionHeadline(a.action, a.resource_type) : eventSentence(e.type, ownType);
       return {
         key: `e_${e.id}`,
         at: e.occurred_at,
@@ -189,6 +215,7 @@ export async function ActivityLogCard({
         href: a ? auditHref(a) : `/businesses/${biz}/events/${e.id}`,
         ...(a ? { altHref: `/businesses/${biz}/events/${e.id}`, altLabel: "Event" } : {}),
         ref: refOf(a?.resource_id ?? e.resource?.id ?? null),
+        ...(a ? { changes: changeSummary(a.before, a.after, tz) } : {}),
       };
     }),
     ...unpaired.map((a) => {
@@ -203,6 +230,7 @@ export async function ActivityLogCard({
         ip: a.actor_ip,
         href: auditHref(a),
         ref: refOf(a.resource_id),
+        changes: changeSummary(a.before, a.after, tz),
       };
     }),
   ].sort((x, y) => Date.parse(y.at) - Date.parse(x.at));
@@ -216,30 +244,55 @@ export async function ActivityLogCard({
   const cutoff = cuts.length ? Math.max(...cuts) : null;
   const shown = cutoff == null ? rows : rows.filter((r) => Date.parse(r.at) >= cutoff);
 
+  const body =
+    rows.length === 0 ? (
+      <EmptyState title="No activity yet" />
+    ) : (
+      <>
+        <ActivityRows rows={shown} previewRows={previewRows} tz={tz} scroll={fullPage} />
+        {cutoff != null ? (
+          <p className="border-t pt-3 text-xs text-muted-foreground">
+            Showing activity since {fmtDateTime(new Date(cutoff).toISOString(), tz)}.{" "}
+            {byCustomer ? (
+              "Older entries are in the Events and Audit log lists."
+            ) : (
+              <Link
+                href={`/businesses/${biz}/events?resource_id=${encodeURIComponent(resourceId)}`}
+                className="text-primary hover:underline"
+              >
+                Older events
+              </Link>
+            )}
+          </p>
+        ) : null}
+      </>
+    );
+
+  // The page's own header names it, so the full page draws the card without one.
+  if (fullPage) {
+    return (
+      <SectionCard id="activity" layout={layout}>
+        {body}
+      </SectionCard>
+    );
+  }
   return (
-    <SectionCard id="activity" title="Activity log" layout={layout}>
-      {rows.length === 0 ? (
-        <EmptyState title="No activity yet" />
-      ) : (
-        <>
-          <ActivityRows rows={shown} previewRows={previewRows} tz={tz} />
-          {cutoff != null ? (
-            <p className="border-t pt-3 text-xs text-muted-foreground">
-              Showing activity since {fmtDateTime(new Date(cutoff).toISOString(), tz)}.{" "}
-              {byCustomer ? (
-                "Older entries are in the Events and Audit log lists."
-              ) : (
-                <Link
-                  href={`/businesses/${biz}/events?resource_id=${encodeURIComponent(resourceId)}`}
-                  className="text-primary hover:underline"
-                >
-                  Older events
-                </Link>
-              )}
-            </p>
-          ) : null}
-        </>
-      )}
+    <SectionCard
+      id="activity"
+      title="Activity log"
+      layout={layout}
+      actions={
+        rows.length > 0 ? (
+          <Link
+            href={activityLogHref(biz, resourceType, resourceId, scope)}
+            className="text-sm text-primary hover:underline"
+          >
+            View all
+          </Link>
+        ) : undefined
+      }
+    >
+      {body}
     </SectionCard>
   );
 }
@@ -248,12 +301,25 @@ function ActivityRows({
   rows,
   previewRows,
   tz,
+  scroll,
 }: {
   rows: LogRow[];
   /** Rows per page (default 10). */
   previewRows?: number;
   tz: string | null;
+  /** The full page loads more on scroll, like the list pages; the card pages. */
+  scroll?: boolean;
 }) {
+  if (scroll) {
+    return (
+      <ScrollList
+        className="divide-y"
+        items={rows.map((r) => (
+          <ActivityItem key={r.key} r={r} tz={tz} />
+        ))}
+      />
+    );
+  }
   return (
     <Paged
       size={previewRows ?? 10}
@@ -274,19 +340,20 @@ function ActivityItem({ r, tz }: { r: LogRow; tz: string | null }) {
     // A real basis on the text, so on a narrow card the time drops under it instead of
     // squeezing it to a word per line.
     <li className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-3 text-sm first:pt-0">
-      <span className="min-w-0 flex-[1_1_14rem]">
+      <div className="min-w-0 flex-[1_1_14rem]">
         {/* The source leads the row: it is the first thing that tells you
                     whether a human, an integration or the clock did this. */}
         {r.source ? (
           <Chip className="mr-2 align-middle">
-            <span className="first-letter:uppercase">{sourceByPhrase(r.source)}</span>
+            <span className="first-letter:uppercase">{sourceByPhrase(r.source, r.actor)}</span>
           </Chip>
         ) : null}
         <span className="font-medium">{r.noun}</span> <span>{r.verb}</span>
         {r.ref ? (
           <MiddleEllipsis value={r.ref} className="ml-2 text-xs text-muted-foreground" />
         ) : null}
-      </span>
+        {r.changes ? <ChangeLines changes={r.changes} href={r.href} /> : null}
+      </div>
       {/* Under the text on a phone, so it reads as one left-aligned line: time · actor · ip. */}
       <span className="max-w-full shrink-0 text-right max-sm:text-left max-sm:text-xs max-sm:text-muted-foreground max-sm:[&>span]:inline max-sm:[&>span+span]:before:content-['_·_']">
         <span className="block text-xs text-muted-foreground tabular-nums">
@@ -324,21 +391,57 @@ function ActivityItem({ r, tz }: { r: LogRow; tz: string | null }) {
   );
 }
 
-/**
- * An UNAUDITED event's sentence. `invoice_payment_due` → "Invoice" + "payment due."
- *
- * The event type already begins with its resource on almost every type we emit, so
- * the prefix is stripped when it matches rather than printed twice. When it doesn't
- * match, the card's own resource names it — the row is on that record's page, so it
- * cannot be about anything else.
- */
-function eventNoun(type: string, resourceType: string): string {
-  const noun = type.split("_")[0] ?? resourceType;
-  const base = type.startsWith(`${resourceType}_`) ? resourceType : noun;
-  return base.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+/** Up to two `field old → new` lines under an audited row; the rest is one link to Details. */
+function ChangeLines({ changes, href }: { changes: ChangeSummary; href: string }) {
+  const { lines, more } = changes;
+  if (lines.length === 0 && more === 0) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+      {lines.map((l, i) => (
+        <div key={i} className="min-w-0 tabular-nums">
+          <span className="text-foreground">{l.field}</span>{" "}
+          {l.changed ? (
+            "changed"
+          ) : l.from === undefined ? (
+            <>
+              set to <ChangeValue value={l.to ?? "—"} />
+            </>
+          ) : l.to === undefined ? (
+            "cleared"
+          ) : (
+            <>
+              <ChangeValue value={l.from ?? "—"} />
+              <span aria-hidden className="mx-1">
+                →
+              </span>
+              <span className="sr-only">to</span>
+              <ChangeValue value={l.to ?? "—"} />
+            </>
+          )}
+        </div>
+      ))}
+      {more > 0 ? (
+        <div>
+          <Link href={href} className="text-primary hover:underline">
+            {`${lines.length ? "+" : ""}${more} ${lines.length ? "more " : ""}${more === 1 ? "change" : "changes"}`}
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
-function eventVerb(type: string): string {
-  const parts = type.split("_");
-  return `${(parts.length > 1 ? parts.slice(1) : parts).join(" ")}.`;
+/** Values that can outgrow a phone line truncate; the full value is in a tooltip. */
+const LONG_VALUE = 24;
+
+function ChangeValue({ value }: { value: string }) {
+  if (value.length <= LONG_VALUE) return <span>{value}</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-block max-w-full truncate align-bottom">{value}</span>
+      </TooltipTrigger>
+      <TooltipContent className="break-all">{value}</TooltipContent>
+    </Tooltip>
+  );
 }

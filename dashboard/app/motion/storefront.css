@@ -1,0 +1,131 @@
+/* Motion: storefront (checkout and portal). Tokens from globals.css only.
+   Base styles are the END state and every animation fills backwards, so a skipped one
+   leaves nothing half-done; under reduced motion globals.css runs each in 1ms. Nothing
+   here moves inside a gateway's form, and nothing loops. */
+
+/* Checkout entrance: the order rail, then the step column, rise in turn. */
+.sf-enter > * {
+  animation: r2-rise var(--dur-slow) var(--ease-glide) backwards;
+}
+.sf-enter > :nth-child(2) {
+  animation-delay: 40ms;
+}
+
+/* A new checkout step (steps layout): the details summary, then the payment card. */
+.sf-step > * {
+  animation: r2-rise var(--dur-slow) var(--ease-glide) backwards;
+}
+.sf-step > :nth-child(2) {
+  animation-delay: 40ms;
+}
+
+/* A gateway frame is never carried by a moving container: it lands in place. */
+.sf-enter > :has(iframe),
+.sf-step > :has(iframe) {
+  animation: none;
+}
+
+/* A discount line that arrives with an accepted coupon. */
+.sf-slide {
+  animation: sf-slide-in var(--dur) var(--ease-glide) backwards;
+}
+@keyframes sf-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+/* The finished checkout's statement rises into the step's place. */
+.sf-rise {
+  animation: r2-rise var(--dur-slow) var(--ease-glide) backwards;
+}
+
+/* A payment refusal slides in under the commit. */
+.sf-refusal {
+  animation: sf-drop-in var(--dur) var(--ease-glide) backwards;
+}
+@keyframes sf-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+/* …and the commit button gives ONE 2px shake when it appears. */
+.checkout-main:has(.sf-refusal) #checkout-commit > button {
+  animation: sf-shake var(--dur) var(--ease-out);
+}
+@keyframes sf-shake {
+  25% {
+    transform: translateX(-2px);
+  }
+  50% {
+    transform: translateX(2px);
+  }
+  75% {
+    transform: translateX(-1px);
+  }
+}
+
+/* Portal entrance: the money cards rise in turn; each section fades in when shown, which
+   also cross-fades a tab change (a hidden pane restarts its animation when it shows). */
+.portal-pinned > * {
+  animation: r2-rise var(--dur-slow) var(--ease-glide) backwards;
+}
+.portal-pinned > :nth-child(2) {
+  animation-delay: 40ms;
+}
+.portal-panes > .portal-col > .portal-pane {
+  animation: r2-fade var(--dur-pop) var(--ease-out) backwards;
+}
+
+/* The portal's underlined tabs: one underline glides to the selected tab
+   (ui/segment-indicator.tsx); once it is placed, the tab drops its own. */
+.portal-tabs[data-segment-ready] > button[aria-pressed="true"],
+.portal-side-tabs[data-segment-ready] > button[aria-pressed="true"] {
+  border-color: transparent;
+}
+
+/* Pay now: the open row's extra content eases open under the moving ring. */
+.sf-expand {
+  animation: sf-drop-in var(--dur) var(--ease-glide) backwards;
+}
+.sf-expand:has(iframe) {
+  animation: none;
+}
+
+/* A payment method that was just added slides in from the top. */
+.sf-arrive {
+  animation: sf-arrive var(--dur-slow) var(--ease-glide) backwards;
+}
+@keyframes sf-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+/* A chip that changed (Primary moved, an invoice became Paid). */
+.sf-pop {
+  animation: m-mark var(--dur-pop) var(--ease-spring) backwards;
+}
+
+/* A deleted payment method collapses and the list closes the gap (`collapseRow`). */
+[data-sf-row] {
+  transition:
+    height var(--dur) var(--ease-glide),
+    padding var(--dur) var(--ease-glide),
+    opacity var(--dur-out) var(--ease-out);
+}
+[data-sf-row][data-sf-leaving] {
+  height: 0 !important;
+  padding-block: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The cancel flow's offers pop in. */
+.sf-offers {
+  animation: r2-pop var(--dur) var(--ease-spring) backwards;
+}

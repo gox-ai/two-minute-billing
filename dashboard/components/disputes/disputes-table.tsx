@@ -187,12 +187,16 @@ export function DisputesTable({
         header: "Status",
         accessorFn: (r) => r.status,
         cell: ({ row }) => (
-          <span className="flex items-center gap-2">
-            <Chip tone={disputeStatusTone(row.original.status)} className="uppercase">
+          // Two chips wrap rather than run past a narrow column.
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Chip
+              tone={disputeStatusTone(row.original.status)}
+              className="whitespace-nowrap uppercase"
+            >
               {row.original.status.replace(/_/g, " ")}
             </Chip>
             {row.original.funds_withdrawn ? (
-              <Chip tone="tan" className="text-xs">
+              <Chip tone="tan" className="text-xs whitespace-nowrap">
                 funds held
               </Chip>
             ) : null}

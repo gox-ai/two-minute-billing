@@ -10,6 +10,8 @@ import { usePortalSelect } from "./portal-panes";
 /** The add-method disclosure's id, and the event that opens it. */
 export const ADD_METHOD_ANCHOR = "portal-add-method";
 export const OPEN_ADD_METHOD_EVENT = "portal:open-add-method";
+/** Fired when a method is saved with nothing more to show: the Add popup closes. */
+export const CLOSE_ADD_METHOD_EVENT = "portal:close-add-method";
 import type { PortalTab } from "./portal-tabs";
 
 /**

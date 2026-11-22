@@ -60,6 +60,7 @@ Events: `payment_request_created|paid|payment_failed|canceled|expired`; child
 Gate: `verify:payment-requests`.
 
 ## Changelog
+- **2026-11-22** — Detail route returns `created_through` (who sent it) and, when paid, `initiated_by` (what started the paying charge).
 
 - **2026-11-03 (0488)** — `payment_requests.origin`: `manual` (operator/API, every row before), `dunning` (the clock's combined retry, 2.51) or `portal` (the customer's Pay all / selection, `payInvoicesFromPortal`). A `dunning` request counts one dunning attempt per invoice on its first booking, fails each child through `settlePaymentFailed` (each invoice re-arms its own retry; backups re-arm only on the last decline) and closes `canceled`/`payment_failed` with no link mail; a `portal` request also closes on its last decline. Both closes move the lines to `removed`, so the invoices can join a later request or retry. Children carry `metadata.payment_request_attempt`; a late failure passes `retriable` through. Creation sorts by `payment_application.invoice_order` (2.66). The portal list hides `dunning` requests. Gate: `verify:settings-payment-application`.
 - **2026-11-02** — No pre-debit-notice rail is charged from a request at ANY position:

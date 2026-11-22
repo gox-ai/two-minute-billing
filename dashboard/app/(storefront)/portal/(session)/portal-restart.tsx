@@ -49,13 +49,12 @@ export function PortalRestart({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="flex-[1_1_14rem] text-sm text-muted-foreground">
           {restart.term
-            ? `You can restart this subscription. The price of ${termName(restart.term.interval, restart.term.interval_count)} is ${money(restart.term.subtotal_minor, restart.term.currency)} before tax and discounts. On the next page, you see the full amount and pay it.`
-            : "You can restart this subscription. On the next page, you see the price of the new term and pay it."}{" "}
-          Your subscription starts again after you pay.
-          {closesLabel ? ` You can restart it until ${closesLabel}.` : ""}
+            ? `${termName(restart.term.interval, restart.term.interval_count).replace(/^a/, "A")} costs ${money(restart.term.subtotal_minor, restart.term.currency)} before tax and discounts. You pay on the next page.`
+            : "You see the price and pay on the next page."}
+          {closesLabel ? ` You can reactivate it until ${closesLabel}.` : ""}
         </p>
         <Button size="sm" onClick={go} disabled={busy}>
-          {busy ? "Opening…" : "Restart subscription"}
+          {busy ? "Opening…" : "Reactivate subscription"}
         </Button>
       </div>
       {error ? <Alert tone="error">{error}</Alert> : null}

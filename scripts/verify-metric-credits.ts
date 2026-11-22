@@ -8,6 +8,12 @@
  *   B promotional 3000, no expiry;              draw 1000;              left 2000
  *   C paid 2000 (cost 2000), expired at once → breakage 2000;           left 0
  *   Prepaid account credit 2500 (customer balance ledger).
+ *   Burn rate: 5000 used in the 30 days to today → 5000 ÷ 30 = 167 a day.
+ *   Runway: balance 8000 at 5000 used in 7 days → 8000 × 7 ÷ 5000 = 11.2 days → band 8_30.
+ *   Own unit (no money rate), customer D: 50000 by hand expiring in 20 days, draw 30000; 3000
+ *   more expired at once. Granted 53000, used 30000, expired 3000, held 20000 (1_30).
+ *   Runway in units: 20000 × 7 ÷ 30000 = 4.7 days → band 0_7. Its money figures stay 0.
+ *   A second business with two such units: only the credit_unit split is written.
  *
  *   pnpm verify:metric-credits
  */
@@ -24,8 +30,17 @@ import {
 } from "@/modules/credits/service";
 import { activatePaidCreditGrants } from "@/modules/credits/packs";
 import { assertRegistryImplemented, computeMetricPeriod } from "@/modules/metrics/daily/compute";
-import { MEASURES } from "@/modules/metrics/daily/measures";
-import { CREDIT_LEDGER_ACCOUNTS, invoices, ledgerEntries } from "@db/schema";
+import { MEASURES, measureById, ratioValue } from "@/modules/metrics/daily/measures";
+import { writeMetricDay } from "@/modules/metrics/daily/write";
+import { billingModelsPresent } from "@/modules/metrics/billing-models";
+import { recordGrantMovement } from "@/modules/credits/service";
+import {
+  CREDIT_LEDGER_ACCOUNTS,
+  creditGrants,
+  creditUnits,
+  invoices,
+  ledgerEntries,
+} from "@db/schema";
 
 const checks: Array<[string, boolean]> = [];
 const ok = (n: string, c: boolean) => checks.push([n, c]);
@@ -140,6 +155,64 @@ await addPromotionalCredits({
   currency: "USD",
 });
 
+// ── Own unit: a credit unit with no money rate ───────────────────────────────────────────
+type Unit = typeof creditUnits.$inferSelect;
+const ownUnit = (businessId: string, key: string) =>
+  withTenant(orgId, async (tx) => {
+    const [u] = await tx
+      .insert(creditUnits)
+      .values({
+        organizationId: orgId,
+        businessId,
+        key,
+        name: "token",
+        pluralName: "tokens",
+        currency: "USD",
+        minorPerUnitE12: null,
+      })
+      .returning();
+    return u!;
+  });
+const unitGrant = (
+  businessId: string,
+  customerId: string,
+  unit: Unit,
+  amount: bigint,
+  expiresAt?: Date,
+) =>
+  withTenant(orgId, (tx) =>
+    insertCreditGrant(tx, {
+      organizationId: orgId,
+      businessId,
+      customerId,
+      currency: "USD",
+      unit,
+      amount,
+      category: "promotional",
+      source: "manual",
+      ...(expiresAt ? { expiresAt } : {}),
+    }),
+  );
+const tokens = await ownUnit(bizId, `tokens-${stamp}`);
+const holderD = await createCustomer({
+  organizationId: orgId,
+  businessId: bizId,
+  email: `credit-oracle-d-${stamp}@example.test`,
+});
+const grantU1 = await unitGrant(bizId, holderD.id, tokens, 50000n, new Date(Date.now() + 20 * DAY));
+const grantU2 = await unitGrant(bizId, holderD.id, tokens, 3000n);
+await withTenant(orgId, async (tx) => {
+  await recordGrantMovement(tx, {
+    grant: grantU1!,
+    kind: "draw",
+    units: -30000n,
+    faceMinor: 0n,
+    invoiceId: inv!.id,
+  });
+  await recordGrantMovement(tx, { grant: grantU2!, kind: "expire", units: -3000n, faceMinor: 0n });
+  await tx.update(creditGrants).set({ status: "expired" }).where(eq(creditGrants.id, grantU2!.id));
+});
+
 const NOW = new Date();
 const today = NOW.toISOString().slice(0, 10);
 const monthEnd = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth() + 1, 0))
@@ -156,8 +229,8 @@ try {
 }
 ok("registry: every credit measure is declared and implemented with its slices", paired);
 ok(
-  "registry: ten credit measures plus the expiring reading",
-  MEASURES.filter((m) => m.source === "credits").length === 11,
+  "registry: fifteen credit measures plus the three expiring and runway readings",
+  MEASURES.filter((m) => m.source === "credits").length === 18,
 );
 
 async function figures(grain: "day" | "month", periodEnd: string) {
@@ -167,7 +240,11 @@ async function figures(grain: "day" | "month", periodEnd: string) {
     }),
   );
   const out = new Map<string, bigint>();
-  for (const r of rows) out.set(`${r.measure}|${r.dim}|${r.dimValue}|${r.currency}`, r.value ?? 0n);
+  for (const r of rows) {
+    out.set(`${r.measure}|${r.dim}|${r.dimValue}|${r.currency}`, r.value ?? 0n);
+    if (r.denominator != null)
+      out.set(`${r.measure}|${r.dim}|${r.dimValue}|${r.currency}|den`, r.denominator);
+  }
   return out;
 }
 const day = await figures("day", today);
@@ -204,12 +281,55 @@ ok(
 );
 ok("balance: all money", g("credits_outstanding", "credit_unit", "money") === 8000n);
 ok("liability: 8000 − 3200", g("credits_liability") === 4800n);
-ok("customers with credit: 1", g("credit_customers") === 1n);
+ok("customers with credit: A–C's holder and D, who holds only units", g("credit_customers") === 2n);
 ok("prepaid account balance: 2500", g("prepaid_balance") === 2500n);
 ok("packs sold: none", g("credit_packs_sold") === 0n);
 ok("expiring: 8000 held now", g("credits_expiring") === 8000n);
 ok("expiring: A's 6000 within 30 days", g("credits_expiring", "horizon", "1_30") === 6000n);
 ok("expiring: B's 2000 has no date", g("credits_expiring", "horizon", "undated") === 2000n);
+ok(
+  "burn rate: 5000 used over the trailing 30 days → 167 a day",
+  g("credit_burn_rate") === 5000n &&
+    day.get("credit_burn_rate|||USD|den") === 30n &&
+    ratioValue(measureById("credit_burn_rate")!, 5000n, 30n) === 167,
+);
+ok(
+  "runway: 8000 × 7 ÷ 5000 = 11.2 days → 8–30; D in units, 20000 × 7 ÷ 30000 = 4.7 → 0–7",
+  day.get(["credit_runway_customers", "", "", "XXX"].join("|")) === 2n &&
+    day.get(["credit_runway_customers", "runway_band", "8_30", "XXX"].join("|")) === 1n &&
+    day.get(["credit_runway_customers", "runway_band", "0_7", "XXX"].join("|")) === 1n,
+);
+
+// Own unit: counted in units, never as money.
+const u = (m: string, dim = "", v = "") => day.get(`${m}|${dim}|${v}|XXX`);
+ok(
+  "own unit: granted 50000 + 3000 by hand",
+  u("credit_units_granted") === 53000n &&
+    u("credit_units_granted", "credit_unit", tokens.key) === 53000n &&
+    u("credit_units_granted", "credit_source", "manual") === 53000n,
+);
+ok(
+  "own unit: used 30000, expired 3000",
+  u("credit_units_used") === 30000n &&
+    u("credit_units_used", "credit_unit", tokens.key) === 30000n &&
+    u("credit_units_expired") === 3000n,
+);
+ok(
+  "own unit: held 20000",
+  u("credit_units_outstanding") === 20000n &&
+    u("credit_units_outstanding", "credit_unit", tokens.key) === 20000n,
+);
+ok(
+  "own unit: 20000 expiring within 30 days",
+  u("credit_units_expiring") === 20000n &&
+    u("credit_units_expiring", "horizon", "1_30") === 20000n &&
+    u("credit_units_expiring", "credit_unit", tokens.key) === 20000n,
+);
+ok(
+  "own unit: no money figure — the money unit split has no row for it",
+  g("credits_outstanding", "credit_unit", tokens.key) === undefined &&
+    g("credits_granted") === 15000n,
+);
 
 // The stocks reconcile to the ledger accounts the credits service posts.
 const ledger = await withTenant(orgId, (tx) =>
@@ -244,6 +364,49 @@ ok(
   month.get("credits_used|||USD") === 5000n,
 );
 ok("month: the stock is the period's last value", month.get("credits_outstanding|||USD") === 8000n);
+
+// Two units with no rate: a total would add unlike things, so only the unit split is written.
+{
+  const biz2 = await createBusiness({
+    organizationId: orgId,
+    name: "Credit Measure Oracle Units Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+    timezone: "UTC",
+  });
+  const holder = await createCustomer({
+    organizationId: orgId,
+    businessId: biz2.id,
+    email: `credit-oracle-units-${stamp}@example.test`,
+  });
+  const [t1, t2] = [await ownUnit(biz2.id, `tok-${stamp}`), await ownUnit(biz2.id, `img-${stamp}`)];
+  await unitGrant(biz2.id, holder.id, t1, 700n);
+  await unitGrant(biz2.id, holder.id, t2, 40n);
+  const rows = await withTenant(orgId, (tx) =>
+    computeMetricPeriod(tx, biz2.id, "day", today, NOW, {
+      measures: new Set(MEASURES.filter((m) => m.source === "credits").map((m) => m.id)),
+    }),
+  );
+  const r = (dim: string, v: string) =>
+    rows.find((x) => x.measure === "credit_units_outstanding" && x.dim === dim && x.dimValue === v)
+      ?.value;
+  ok(
+    "two units: 700 and 40 by unit, and no total across them",
+    r("credit_unit", t1.key) === 700n &&
+      r("credit_unit", t2.key) === 40n &&
+      r("", "") === undefined,
+  );
+  // Reports and Home show the Credits model for a business whose credit has no money value.
+  await writeMetricDay({
+    organizationId: orgId,
+    businessId: biz2.id,
+    grain: "day",
+    periodEnd: today,
+    rows,
+  });
+  const models = await withTenant(orgId, (tx) => billingModelsPresent(tx, biz2.id));
+  ok("billing models: own-unit credit alone is the credits model", models.has("credits"));
+}
 
 let failed = 0;
 for (const [name, pass] of checks) {

@@ -8,6 +8,7 @@ import {
   integer,
   timestamp,
   jsonb,
+  boolean,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -65,6 +66,14 @@ export const paymentIntents = pgTable(
     currency: char("currency", { length: 3 }),
     gatewayAccountId: uuid("gateway_account_id"),
     paymentMethodId: uuid("payment_method_id"),
+    /** The buyer named this saved method (true) or the gateway's form collects one (false). Null: before 0543. */
+    savedMethodChosen: boolean("saved_method_chosen"),
+    /** The buyer asked to keep this payment's method for later charges (0544). Null: not asked. */
+    saveMethod: boolean("save_method"),
+    /** The consent the buyer accepted for that (text, version, when, IP, user agent) (0544). */
+    saveConsent: jsonb("save_consent"),
+    /** The rail the buyer selected for a new method (0545): the gateway's form was pinned to it. */
+    methodType: text("method_type"),
     intentAtGateway: text("intent_at_gateway"), // the gateway's intent id
     nextAction: jsonb("next_action"),
     // Denormalised count of `payment_attempts` rows, for the intent list.
@@ -128,6 +137,12 @@ export const paymentIntents = pgTable(
     // shape as transactions_invoice_idx.
     index("payment_intents_invoice_idx").on(t.invoiceId),
     index("payment_intents_subscription_idx").on(t.subscriptionId),
+    // The customer page's intents tab: newest first per customer (0541).
+    index("payment_intents_customer_created_idx").on(
+      t.customerId,
+      t.createdAt.desc(),
+      t.publicId.desc(),
+    ),
     // The inbound `intent.*` webhook correlation (0173). An authorized-but-unconsumed
     // intent has no `transactions` row, so this column — not `id_at_gateway` — is the
     // only handle a gateway callback about an intent gives us. Partial on NOT NULL in

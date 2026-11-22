@@ -5,12 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { adyenError, adyenNoResult, contactBusiness } from "@/lib/gateway-errors";
 import type { GatewaySdkContext, GatewaySdkResult } from "@/lib/gateway-sdk";
-import {
-  PaymentDialog,
-  PaymentDialogFooter,
-  PaymentPrivacyNote,
-  RefusalAlert,
-} from "./payment-dialog";
+import { SdkFrame, PaymentDialogFooter, PaymentPrivacyNote, RefusalAlert } from "./payment-dialog";
 import { sdkAmountLabel } from "./storefront-text";
 
 /**
@@ -71,6 +66,7 @@ function loadAdyenWeb(): Promise<void> {
 
 function AdyenDropinDialog({
   open,
+  inline,
   params,
   purpose,
   amountLabel,
@@ -78,6 +74,7 @@ function AdyenDropinDialog({
   onSettle,
 }: {
   open: boolean;
+  inline: boolean;
   businessName: string;
   params: {
     clientKey: string;
@@ -140,7 +137,10 @@ function AdyenDropinDialog({
           },
         });
         if (cancelled || !container.current) return;
-        dropin = new window.AdyenWeb.Dropin(checkout).mount(container.current);
+        // Our own list shows the saved methods; this form is only for a new one.
+        dropin = new window.AdyenWeb.Dropin(checkout, { showStoredPaymentMethods: false }).mount(
+          container.current,
+        );
       } catch (e) {
         if (!cancelled)
           setError(
@@ -155,7 +155,8 @@ function AdyenDropinDialog({
   }, [open, params, onSettle, setup, purpose]);
 
   return (
-    <PaymentDialog
+    <SdkFrame
+      inline={inline}
       open={open}
       onClose={() => onSettle({ status: "dismissed" })}
       title={setup ? setupTitle : "Pay"}
@@ -170,13 +171,15 @@ function AdyenDropinDialog({
         business={businessName}
         instrument={bank ? (card ? "other" : "bank") : setup ? "card" : "other"}
       />
-      <RefusalAlert message={error} />
+      <RefusalAlert message={error} gateway="adyen" />
       <PaymentDialogFooter>
-        <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
-          Cancel
-        </Button>
+        {inline ? null : (
+          <Button variant="outline" onClick={() => onSettle({ status: "dismissed" })}>
+            Cancel
+          </Button>
+        )}
       </PaymentDialogFooter>
-    </PaymentDialog>
+    </SdkFrame>
   );
 }
 
@@ -211,14 +214,16 @@ export function openAdyenDropin(
     });
   const amountLabel = sdkAmountLabel(params.amount, params.currency);
   return new Promise((resolve) => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const inline = Boolean(context.inline);
+    const host = context.inline ?? document.createElement("div");
+    if (!inline) document.body.appendChild(host);
     const root = createRoot(host);
     let settled = false;
     const render = (open: boolean) =>
       root.render(
         <AdyenDropinDialog
           open={open}
+          inline={inline}
           params={p}
           purpose={context.purpose}
           amountLabel={amountLabel}
@@ -233,7 +238,7 @@ export function openAdyenDropin(
       resolve(result);
       setTimeout(() => {
         root.unmount();
-        host.remove();
+        if (!inline) host.remove();
       }, 300);
     };
     render(true);

@@ -7,7 +7,6 @@ import {
   appliedTaxes,
   businesses,
   checkoutSessions,
-  retentionEvents,
   creditNotes,
   customers,
   invoiceLineDiscounts,
@@ -68,6 +67,12 @@ import {
   retentionRates,
 } from "../mrr-movements";
 import { loadRateTimeline } from "@/platform/fx/history";
+import {
+  cancellationSaves,
+  checkoutInvoiceJoin,
+  checkoutRecoveredSql,
+  checkoutSteps,
+} from "../hosted-page-figures";
 import { loadMovementCells, movementPath } from "./movement-matview";
 import {
   attributePaymentsForBusiness,
@@ -83,6 +88,7 @@ import {
   type ReportDef,
   type ReportDimension,
 } from "./registry";
+import { commitmentPacing, orderCohort, topUsageConsumers, type Grid } from "./model-grids";
 
 /**
  * The report resolvers: one per `source`, never one per report.
@@ -225,8 +231,19 @@ export interface ReportResult {
     columns: string[];
     /** What the `base` column holds, so the client formats it without guessing. */
     base_kind: "money" | "count";
+    /**
+     * What the cells hold. Absent or `rate`: basis points. `money`: minor units of the
+     * reporting currency (revenue per buyer).
+     */
+    value_kind?: "rate" | "money";
     rows: Array<{ group: string; base: number; values: Array<number | null> }>;
   };
+  /**
+   * A ranked table with several columns per row (top usage consumers, commitment pacing).
+   * Each column says what its cells hold: money in minor units of the reporting currency,
+   * a count, a rate in basis points, or text. `rows` still carries the first measure.
+   */
+  grid?: Grid;
   /**
    * The period a single-figure report describes, e.g. "Aug 2026". A rate with no stated
    * period is ambiguous — the reader cannot tell last month from the last twelve — and the
@@ -2150,14 +2167,15 @@ async function resolveCheckoutReport(
   base: Omit<ReportResult, "headline" | "points">,
 ): Promise<ReportResult> {
   const s = checkoutSessions;
+  const step = checkoutSteps(sql.raw('"checkout_sessions"'));
   const [r] = await withTenant(organizationId, (tx) =>
     tx
       .select({
         created: sql<number>`count(*)::int`,
-        opened: sql<number>`count(*) filter (where ${s.lastUsedAt} is not null or ${s.resultingCustomerId} is not null or ${s.paymentStartedAt} is not null or ${s.completedAt} is not null)::int`,
-        details: sql<number>`count(*) filter (where ${s.resultingCustomerId} is not null or ${s.paymentStartedAt} is not null or ${s.completedAt} is not null)::int`,
-        payment: sql<number>`count(*) filter (where ${s.paymentStartedAt} is not null or ${s.completedAt} is not null)::int`,
-        completed: sql<number>`count(*) filter (where ${s.completedAt} is not null)::int`,
+        opened: sql<number>`count(*) filter (where ${step.opened})::int`,
+        details: sql<number>`count(*) filter (where ${step.details})::int`,
+        payment: sql<number>`count(*) filter (where ${step.payment})::int`,
+        completed: sql<number>`count(*) filter (where ${step.completed})::int`,
       })
       .from(s)
       .where(
@@ -2185,9 +2203,6 @@ const OFFER_LABEL: Record<string, string> = {
   contact: "Contacted you",
 };
 
-/** A taken offer followed by a cancel of the same subscription within this many days is not a save. */
-const SAVE_HOLD_DAYS = 30;
-
 /**
  * The portal cancel flow (0483), over offers taken and cancellations made in the window. A save
  * is a taken offer whose subscription was NOT cancelled within SAVE_HOLD_DAYS after it; the base
@@ -2200,57 +2215,13 @@ async function resolveCancellationSaves(
   buckets: Bucket[],
   base: Omit<ReportResult, "headline" | "points">,
 ): Promise<ReportResult> {
-  const e = retentionEvents;
-  const start = buckets[0]!.start;
-  const end = buckets[buckets.length - 1]!.end;
-  const hold = SAVE_HOLD_DAYS * 86_400_000;
-  // Cancellations up to the hold past the window end, so a save near the end can be revoked.
-  const rows = await withTenant(organizationId, (tx) =>
-    tx
-      .select({
-        kind: e.kind,
-        offer: e.offer,
-        offersShown: e.offersShown,
-        subscriptionId: e.subscriptionId,
-        createdAt: e.createdAt,
-      })
-      .from(e)
-      .where(
-        and(
-          eq(e.businessId, businessId),
-          gte(e.createdAt, start),
-          lt(e.createdAt, new Date(end.getTime() + hold)),
-          reportableCustomer(e.customerId),
-        ),
-      ),
+  const { saves, lost: lostRows } = await cancellationSaves(
+    organizationId,
+    businessId,
+    buckets[0]!.start,
+    buckets[buckets.length - 1]!.end,
   );
-  const inWindow = (d: Date) => d >= start && d < end;
-  const cancels = rows.filter((r) => r.kind === "cancelled");
-  const saves = rows.filter(
-    (r) =>
-      r.kind === "offer_accepted" &&
-      inWindow(r.createdAt) &&
-      !cancels.some(
-        (c) =>
-          c.subscriptionId === r.subscriptionId &&
-          c.createdAt >= r.createdAt &&
-          c.createdAt.getTime() - r.createdAt.getTime() <= hold,
-      ),
-  );
-  // A cancel counts as lost when offers were shown, or when it revokes an earlier taken offer
-  // (with "offer once" on, that second flow shows no offers but is still a lost save).
-  const accepted = rows.filter((r) => r.kind === "offer_accepted");
-  const lost = cancels.filter(
-    (c) =>
-      inWindow(c.createdAt) &&
-      (c.offersShown ||
-        accepted.some(
-          (a) =>
-            a.subscriptionId === c.subscriptionId &&
-            a.createdAt <= c.createdAt &&
-            c.createdAt.getTime() - a.createdAt.getTime() <= hold,
-        )),
-  ).length;
+  const lost = lostRows.length;
   const denom = saves.length + lost;
   const byOffer = new Map<string, number>();
   for (const r of saves)
@@ -2272,7 +2243,7 @@ async function resolveCancellationSaves(
 
 const CHECKOUT_LAYOUT_LABEL: Record<string, string> = { steps: "Steps", one_page: "One page" };
 const CHECKOUT_DEVICE_LABEL: Record<string, string> = {
-  mobile: "Phone",
+  mobile: "Mobile",
   tablet: "Tablet",
   desktop: "Desktop",
 };
@@ -2352,29 +2323,26 @@ async function resolveCheckoutRecovery(
   buckets: Bucket[],
   base: Omit<ReportResult, "headline" | "points">,
 ): Promise<ReportResult> {
-  const s = checkoutSessions;
-  const rows = await withTenant(organizationId, (tx) =>
-    tx
-      .select({
-        mode: s.mode,
-        completedAt: s.completedAt,
-        lastRemindedAt: s.lastRemindedAt,
-        invoiceId: s.resultingInvoiceId,
-        subscriptionId: s.resultingSubscriptionId,
-      })
-      .from(s)
-      .where(
-        and(
-          eq(s.businessId, businessId),
-          gte(s.createdAt, buckets[0]!.start),
-          lt(s.createdAt, buckets[buckets.length - 1]!.end),
-          sql`${s.reminderCount} > 0`,
-        ),
-      ),
-  );
-  const recovered = rows.filter(
-    (r) => r.completedAt != null && r.lastRemindedAt != null && r.completedAt > r.lastRemindedAt,
-  );
+  const s = sql.raw("s");
+  const rows = (await withTenant(organizationId, (tx) =>
+    tx.execute(sql`
+      select ${checkoutRecoveredSql(s)} as recovered,
+             fi.status as inv_status, fi.total_minor::text as total_minor, fi.currency as currency,
+             coalesce(fi.paid_at, fi.created_at) as inv_at
+      from checkout_sessions s
+      ${checkoutInvoiceJoin(s, "fi")}
+      where s.business_id = ${businessId}::uuid
+        and s.created_at >= ${buckets[0]!.start.toISOString()}::timestamptz
+        and s.created_at < ${buckets[buckets.length - 1]!.end.toISOString()}::timestamptz
+        and s.reminder_count > 0`),
+  )) as unknown as Array<{
+    recovered: boolean;
+    inv_status: string | null;
+    total_minor: string | null;
+    currency: string | null;
+    inv_at: Date | string | null;
+  }>;
+  const recovered = rows.filter((r) => r.recovered);
   if (def.bucketing === "checkout_recovery") {
     const out: ReportRow[] = [
       { group: "Reminded", group_id: null, value: rows.length },
@@ -2384,23 +2352,11 @@ async function resolveCheckoutRecovery(
   }
   // Revenue: the purchase's invoice, or the subscription's first invoice.
   let total = 0;
-  await withTenant(organizationId, async (tx) => {
-    for (const r of recovered) {
-      const [inv] = r.invoiceId
-        ? await tx.select().from(invoices).where(eq(invoices.id, r.invoiceId)).limit(1)
-        : r.subscriptionId
-          ? await tx
-              .select()
-              .from(invoices)
-              .where(eq(invoices.subscriptionId, r.subscriptionId))
-              .orderBy(invoices.createdAt)
-              .limit(1)
-          : [];
-      if (!inv || inv.status !== "paid") continue;
-      const v = ctx.convert(Number(inv.totalMinor), inv.currency, inv.paidAt ?? inv.createdAt);
-      if (v != null) total += v;
-    }
-  });
+  for (const r of recovered) {
+    if (r.inv_status !== "paid" || r.currency == null || r.inv_at == null) continue;
+    const v = ctx.convert(Number(r.total_minor), r.currency, new Date(r.inv_at));
+    if (v != null) total += v;
+  }
   return {
     ...base,
     headline: total,
@@ -3642,6 +3598,29 @@ async function resolveFigure(
     customer_filter: filter?.raw,
     as_of: ctx.now.toISOString(),
   };
+
+  if (def.source === "order" || def.source === "usage") {
+    const gctx = { now: ctx.now, convert: ctx.convert };
+    if (def.cohort === "repeat_purchase" || def.cohort === "buyer_revenue") {
+      const r = await orderCohort(
+        organizationId,
+        businessId,
+        def.cohort === "repeat_purchase" ? "repeat" : "revenue",
+        gctx,
+      );
+      return { ...base, headline: r.headline, points: [], matrix: r.matrix };
+    }
+    if (def.bucketing === "top_usage_consumers") {
+      const window = { start: buckets[0]!.start, end: buckets[buckets.length - 1]!.end };
+      const r = await topUsageConsumers(organizationId, businessId, window, gctx);
+      return { ...base, headline: r.headline, points: [], rows: r.rows, grid: r.grid };
+    }
+    if (def.bucketing === "commitment_pacing") {
+      const r = await commitmentPacing(organizationId, businessId, gctx);
+      return { ...base, headline: r.headline, points: [], rows: r.rows, grid: r.grid };
+    }
+    throw new ReportError(`${def.name} has no resolver`);
+  }
 
   if (def.source === "movement") {
     // A flow is filtered and grouped by joining the movement to its customer — no stored

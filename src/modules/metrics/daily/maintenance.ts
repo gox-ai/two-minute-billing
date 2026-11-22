@@ -20,7 +20,7 @@ import { opsInvariantResults, metricDaily } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { computeMetricPeriod } from "./compute";
 import { bulkFillMetricDays, bulkFillCoarseGrains } from "./bulk-fill";
-import { businessesWithSubscriptions, dayFor, type CronBusiness } from "./cron";
+import { businessesWithBillingActivity, dayFor, type CronBusiness } from "./cron";
 import { foldUsageCostDays } from "@/modules/metering/cost-fold";
 
 const log = createLogger("metrics.daily.maintenance");
@@ -30,7 +30,7 @@ export const TRAILING_DAYS = 35;
 const MAX_CACHED_ROWS = 400_000;
 
 const scoped = async (ids?: readonly string[]) => {
-  const all = await businessesWithSubscriptions();
+  const all = await businessesWithBillingActivity();
   return ids ? all.filter((b) => ids.includes(b.id)) : all;
 };
 

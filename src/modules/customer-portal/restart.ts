@@ -31,13 +31,14 @@ export type RestartBlock =
 
 /** Buyer-facing text per block (ASD-STE100). */
 export const RESTART_MESSAGES: Record<RestartBlock, string> = {
-  not_offered: "You cannot restart this subscription here. Contact us to restart it.",
+  not_offered: "You cannot reactivate this subscription here. Contact us to reactivate it.",
   not_ended: "This subscription has not ended.",
-  window_closed: "You can no longer restart this subscription here. Contact us to restart it.",
-  open_invoices: "Pay the open invoices of this subscription. Then you can restart it.",
-  plan_unavailable: "This plan is no longer available. Contact us to restart your subscription.",
+  window_closed:
+    "You can no longer reactivate this subscription here. Contact us to reactivate it.",
+  open_invoices: "Pay the open invoices of this subscription. Then you can reactivate it.",
+  plan_unavailable: "This plan is no longer available. Contact us to reactivate your subscription.",
   manual_collection:
-    "We collect payment for this subscription by invoice. Contact us to restart it.",
+    "We collect payment for this subscription by invoice. Contact us to reactivate it.",
 };
 
 export interface RestartEligibility {
@@ -216,7 +217,8 @@ export async function mintRestartSession(input: {
     ...(input.returnUrl ? { redirectUrl: input.returnUrl } : {}),
     ...(input.cancelUrl ? { cancelUrl: input.cancelUrl } : {}),
   });
-  if (!ref.url) throw new RestartError("We could not open the restart page. Try again later.", 500);
+  if (!ref.url)
+    throw new RestartError("We could not open the reactivation page. Try again later.", 500);
   return { url: ref.url, expiresAt: ref.expiresAt };
 }
 
@@ -282,6 +284,7 @@ export async function restartTerm(input: {
       subscriptionId: input.subscriptionId,
       items,
       now: input.now,
+      termOnly: true,
     });
     const [plan] = await withTenant(input.organizationId, (tx) =>
       tx

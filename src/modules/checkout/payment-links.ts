@@ -371,6 +371,7 @@ export interface PricingPageView {
     iconUrl: string | null;
     faviconUrl: string | null;
     brandColor: string | null;
+    buttonTextColor: string | null;
     /** The buyer's contact for the page footer; null when unset. */
     supportEmail: string | null;
     website: string | null;
@@ -578,6 +579,7 @@ export async function getPricingPage(businessPublicId: string): Promise<PricingP
       iconUrl: biz.iconUrl,
       faviconUrl: biz.faviconUrl,
       brandColor: biz.brandColor,
+      buttonTextColor: biz.buttonTextColor,
       supportEmail: biz.supportEmail,
       website: biz.website,
     },

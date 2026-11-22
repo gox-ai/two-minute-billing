@@ -29,7 +29,12 @@ import { createVerify } from "node:crypto";
 import { providerFetch, boundedProviderKey } from "./http";
 import { minorToDecimalString, decimalToMinor, minorScale } from "@/platform/currency";
 import { classifyGatewayHttp } from "./gateway-http-class";
-import { normalizePaypalDecline, PAYPAL_CODE_TABLE } from "./decline-codes";
+import {
+  normalizePaypalDecline,
+  operatorFailureText,
+  PAYPAL_ALREADY_DONE_ISSUES,
+  PAYPAL_CODE_TABLE,
+} from "./decline-codes";
 import { createLogger } from "@/platform/logger";
 import { bodyId, webhookEventId } from "./webhook-event-id";
 
@@ -88,6 +93,10 @@ function paypalIssue(json: unknown): string | undefined {
   const issue = j?.details?.[0]?.issue ?? j?.name;
   return typeof issue === "string" && issue ? issue : undefined;
 }
+
+const ALREADY_DONE: ReadonlySet<string> = new Set(PAYPAL_ALREADY_DONE_ISSUES);
+/** PayPal says this step already happened (or is running): read the result back. */
+const alreadyDone = (json: unknown) => ALREADY_DONE.has(paypalIssue(json) ?? "");
 
 /** A PayPal decimal string to signed minor units; a balance can be negative. Absent = 0. */
 function paypalSignedMinor(value: string | undefined, currency: string): bigint {
@@ -185,11 +194,82 @@ const PAYPAL_METHOD_USED: Readonly<Record<string, string>> = {
   google_pay: "google_pay",
 };
 
+/** The issuer's answer on a card capture or authorization. AVS and CVV are informational. */
+interface PayPalProcessorResponse {
+  response_code?: string;
+  payment_advice_code?: string;
+  avs_code?: string;
+  cvv_code?: string;
+}
+
+/** A capture or authorization resource, as far as a refusal reads it. */
+export interface PayPalPaymentResource {
+  id?: string;
+  status?: string;
+  processor_response?: PayPalProcessorResponse;
+  status_details?: { reason?: string };
+}
+
+/** The card network of an order's `payment_source`, lower-cased (`visa`, `mastercard`). */
+export function paypalCardBrand(raw: unknown): string | null {
+  const card = (raw as { payment_source?: { card?: { brand?: unknown } } } | null)?.payment_source
+    ?.card;
+  return typeof card?.brand === "string" && card.brand ? card.brand.toLowerCase() : null;
+}
+
+/**
+ * A refused card capture or authorization → its failure. Classified on
+ * `processor_response` (the issuer's code and the network's advice); the status word
+ * (`DECLINED`, `DENIED`, `FAILED`) is only the fallback.
+ */
+export function paypalCardFailure(
+  status: string,
+  resource: PayPalPaymentResource | undefined,
+  brand?: string | null,
+): NonNullable<ChargeResult["failure"]> {
+  const pr = resource?.processor_response;
+  const responseCode = pr?.response_code || undefined;
+  const norm = normalizePaypalDecline({
+    code: status,
+    declineCode: responseCode ?? null,
+    recommendationCode: pr?.payment_advice_code || null,
+    cardBrand: brand ?? null,
+  });
+  const detail = [
+    responseCode ? `Processor code: ${responseCode}.` : null,
+    pr?.payment_advice_code ? `Advice code: ${pr.payment_advice_code}.` : null,
+    pr?.avs_code ? `AVS: ${pr.avs_code}.` : null,
+    pr?.cvv_code ? `CVV: ${pr.cvv_code}.` : null,
+  ].filter(Boolean);
+  return {
+    code: norm.code,
+    providerCode: responseCode ?? resource?.status_details?.reason ?? status,
+    message: norm.message ?? [`PayPal refused the card payment (${status}).`, ...detail].join(" "),
+    retriable: norm.retriable,
+    ...(norm.ruleId ? { ruleId: norm.ruleId } : {}),
+    ...(norm.retryAfterMs ? { retryAfterMs: norm.retryAfterMs } : {}),
+  };
+}
+
 export function paypalMethodUsed(raw: unknown): { methodUsed?: string } {
   const src = (raw as { payment_source?: Record<string, unknown> } | null)?.payment_source;
   const key = src && typeof src === "object" ? Object.keys(src).find((k) => src[k]) : undefined;
   const m = key ? PAYPAL_METHOD_USED[key] : undefined;
   return m ? { methodUsed: m } : {};
+}
+
+/**
+ * The PayPal account a pay-and-save order stored: `payment_source.paypal.attributes.vault`
+ * on the order (or its authorize answer), once its status is `VAULTED`. Undefined while
+ * PayPal has not vaulted it (it then sends VAULT.PAYMENT-TOKEN.CREATED later).
+ */
+function paypalVaulted(raw: unknown): ProviderPaymentMethodRef | undefined {
+  const paypal = (raw as { payment_source?: { paypal?: Record<string, unknown> } } | null)
+    ?.payment_source?.paypal;
+  const vault = (paypal?.attributes as { vault?: { id?: string; status?: string } } | undefined)
+    ?.vault;
+  if (!vault?.id || vault.status !== "VAULTED") return undefined;
+  return { providerKey: "paypal", providerPaymentMethodId: vault.id, display: { type: "paypal" } };
 }
 
 /** The `payment_source` PayPal echoes back on a vault token. */
@@ -630,6 +710,9 @@ export class PayPalProvider implements PaymentProvider {
     // unlike RazorPay, where it must stay false.
     intents: true,
     intentPurposes: ["payment", "setup"],
+    // Pay and save: the order stores the buyer's PayPal account when it succeeds
+    // (`store_in_vault: ON_SUCCESS`). Wallet only: cards are not vaulted here.
+    paymentSavesMethod: ["paypal"],
     intentVoid: true,
     /**
      * PayPal has NO mandate model on the flow we use, and this says so explicitly
@@ -832,11 +915,10 @@ export class PayPalProvider implements PaymentProvider {
     returnUrl: string,
     cancelUrl: string,
     ourCustomerId: string,
-  ): Promise<{
-    id: string;
-    approvalUrl: string;
-    raw: unknown;
-  }> {
+  ): Promise<
+    | { id: string; approvalUrl: string; raw: unknown }
+    | { failure: NonNullable<ChargeResult["failure"]>; raw: unknown }
+  > {
     // A PayPal wallet vault, off-session merchant-initiated usage. Buyer approves at
     // the returned link; the approved setup token is then exchanged for a permanent
     // vault token (vaultPaymentMethod / consumeIntent).
@@ -863,8 +945,8 @@ export class PayPalProvider implements PaymentProvider {
         },
       },
     });
-    if (status >= 300)
-      throw new Error(`PayPal setup-token failed: ${status} ${JSON.stringify(json)}`);
+    // A refusal is data: the classified issue, like a refused payment.
+    if (status >= 300) return { failure: this.chargeFailure(status, json).failure!, raw: json };
     const approvalUrl = approvalLink(json.links);
     if (!approvalUrl)
       throw new Error(
@@ -892,6 +974,7 @@ export class PayPalProvider implements PaymentProvider {
       input.cancelUrl,
       input.customer.providerCustomerId,
     );
+    if ("failure" in setup) throw new ProviderRefusalError(operatorFailureText(setup.failure));
     return { setupTokenId: setup.id, mode: "redirect", approvalUrl: setup.approvalUrl };
   }
 
@@ -969,7 +1052,7 @@ export class PayPalProvider implements PaymentProvider {
   private async exchangeSetupToken(
     setupTokenId: string,
     expectedCustomerId?: string,
-  ): Promise<ProviderPaymentMethodRef> {
+  ): Promise<ProviderPaymentMethodRef | { failure: NonNullable<ChargeResult["failure"]> }> {
     if (expectedCustomerId) {
       await this.assertSetupTokenBelongsTo(setupTokenId, expectedCustomerId);
     }
@@ -987,7 +1070,8 @@ export class PayPalProvider implements PaymentProvider {
       { payment_source: { token: { id: setupTokenId, type: "SETUP_TOKEN" } } },
       boundedProviderKey(`vault_${setupTokenId}`, PAYPAL_REQUEST_ID_MAX),
     );
-    if (status >= 300) throw new Error(`PayPal vault failed: ${status} ${JSON.stringify(json)}`);
+    // A refused exchange (not approved, vaulting not enabled) is data, not an exception.
+    if (status >= 300) return { failure: this.chargeFailure(status, json).failure! };
     return {
       providerKey: this.key,
       providerPaymentMethodId: json.id,
@@ -1003,7 +1087,9 @@ export class PayPalProvider implements PaymentProvider {
     // `providerCustomerId` is our own `cus_…` here (ensureCustomer returns the ref
     // unchanged), which is exactly what `createSetupToken` stamped on the token — so
     // the ownership proof needs no new field on the input.
-    return this.exchangeSetupToken(input.token, input.customer.providerCustomerId);
+    const out = await this.exchangeSetupToken(input.token, input.customer.providerCustomerId);
+    if ("failure" in out) throw new ProviderRefusalError(operatorFailureText(out.failure));
+    return out;
   }
 
   /**
@@ -1030,6 +1116,9 @@ export class PayPalProvider implements PaymentProvider {
             ? `PayPal did not accept the payment. PayPal code: ${rawCode}.`
             : `PayPal did not accept the payment (HTTP ${status}).`),
         retriable: status >= 500 ? true : norm.retriable,
+        ...(rawCode ? { providerCode: rawCode } : {}),
+        ...(norm.ruleId ? { ruleId: norm.ruleId } : {}),
+        ...(norm.retryAfterMs ? { retryAfterMs: norm.retryAfterMs } : {}),
       },
       raw: json,
     };
@@ -1048,23 +1137,19 @@ export class PayPalProvider implements PaymentProvider {
    * only a wallet payment that tripped review ever exposed it.
    */
   private captureResult(
-    capture: { id?: string; status?: string } | undefined,
+    capture: PayPalPaymentResource | undefined,
     fallbackId: string,
     raw: unknown,
+    brand: string | null = paypalCardBrand(raw),
   ): ChargeResult {
     const captureId = capture?.id ?? fallbackId;
     const captureStatus = capture?.status;
     const used = paypalMethodUsed(raw);
     if (captureStatus === "DECLINED" || captureStatus === "FAILED") {
-      const norm = normalizePaypalDecline(captureStatus);
       return {
         status: "failed",
         providerChargeId: captureId,
-        failure: {
-          code: norm.code,
-          message: `capture ${captureStatus}`,
-          retriable: norm.retriable,
-        },
+        failure: paypalCardFailure(captureStatus, capture, brand),
         ...used,
         raw,
       };
@@ -1154,6 +1239,8 @@ export class PayPalProvider implements PaymentProvider {
         input.cancelUrl,
         input.customer.providerCustomerId,
       );
+      if ("failure" in setup)
+        return { intentId: "", status: "inited", failure: setup.failure, raw: setup.raw };
       return {
         intentId: setup.id,
         // Always: a MERCHANT-usage setup token is worthless until the buyer approves
@@ -1182,7 +1269,21 @@ export class PayPalProvider implements PaymentProvider {
     // see vaultChargeSource); without one the buyer picks their wallet during the
     // approval redirect. `input.methodTypes` is not consulted: server-side PayPal
     // only offers the wallet here, and a card intent arrives as a vaulted card.
-    const source = input.paymentMethod ? vaultChargeSource(input.paymentMethod) : { paypal: {} };
+    const source = input.paymentMethod
+      ? vaultChargeSource(input.paymentMethod)
+      : input.saveForFuture
+        ? {
+            paypal: {
+              attributes: {
+                vault: {
+                  store_in_vault: "ON_SUCCESS",
+                  usage_type: "MERCHANT",
+                  customer_type: "CONSUMER",
+                },
+              },
+            },
+          }
+        : { paypal: {} };
     const sourceKey = Object.keys(source)[0]!;
     const payment_source = {
       [sourceKey]: { ...(source as Record<string, object>)[sourceKey], ...experienceContext },
@@ -1289,9 +1390,22 @@ export class PayPalProvider implements PaymentProvider {
       // The intent id IS the setup token; consuming it produces the instrument, no
       // money moves. `describeVaultSource` (inside) records what was ACTUALLY vaulted,
       // so a vaulted CARD is not mislabelled as a wallet and made unchargeable.
-      return { purpose: "setup", paymentMethod: await this.exchangeSetupToken(input.intentId) };
+      const out = await this.exchangeSetupToken(input.intentId);
+      return "failure" in out
+        ? { purpose: "setup", failure: out.failure }
+        : { purpose: "setup", paymentMethod: out };
     }
+    return this.consumePayment(input, true);
+  }
 
+  /**
+   * Authorize (if needed) and capture an approved order. `readBack`: on a step PayPal
+   * says is already done (a raced consume), read the order once more and answer from it.
+   */
+  private async consumePayment(
+    input: ConsumeIntentInput,
+    readBack: boolean,
+  ): Promise<ConsumeIntentResult> {
     // A failed READ is not a decline: a 5xx here once failed an approved, payable intent.
     const order = await this.callUntilAnswered<any>(
       "intent",
@@ -1308,19 +1422,25 @@ export class PayPalProvider implements PaymentProvider {
     // where money had in fact moved).
     const existingCapture = payments.captures?.[0];
     if (existingCapture) {
-      return {
-        purpose: "payment",
-        charge: this.captureResult(existingCapture, input.intentId, order.json),
-      };
+      const charge = this.captureResult(existingCapture, input.intentId, order.json);
+      const saved = charge.status !== "failed" ? paypalVaulted(order.json) : undefined;
+      return { purpose: "payment", charge, ...(saved ? { paymentMethod: saved } : {}) };
     }
+    // Where PayPal reports a pay-and-save vault: the authorize answer, else the order.
+    let vaultedIn: unknown = order.json;
 
     // The order may already carry an authorization — either because createIntent's
     // order was authorized by an earlier consume attempt, or because the buyer's
     // approval produced one. Capture that instead of authorizing again.
-    const authorizations: Array<{ id?: string; status?: string }> = payments.authorizations ?? [];
-    let authId =
-      authorizations.find((a) => a.status !== "VOIDED" && a.status !== "CAPTURED")?.id ??
-      authorizations[0]?.id;
+    const authorizations: PayPalPaymentResource[] = payments.authorizations ?? [];
+    const brand = paypalCardBrand(order.json);
+    const held =
+      authorizations.find((a) => a.status !== "VOIDED" && a.status !== "CAPTURED") ??
+      authorizations[0];
+    // The issuer refused the authorization: there is nothing to capture.
+    if (held?.status === "DENIED")
+      return { purpose: "payment", charge: this.deniedAuthorization(held, input.intentId, brand) };
+    let authId = held?.id;
     if (!authId) {
       const authorized = await this.callUntilAnswered<any>(
         "intent_authorize",
@@ -1330,12 +1450,21 @@ export class PayPalProvider implements PaymentProvider {
         boundedProviderKey(`${input.idempotencyKey}:authorize`, PAYPAL_REQUEST_ID_MAX),
       );
       if (authorized.status >= 300) {
+        if (readBack && alreadyDone(authorized.json)) return this.consumePayment(input, false);
         return {
           purpose: "payment",
           charge: this.chargeFailure(authorized.status, authorized.json),
         };
       }
-      authId = authorized.json?.purchase_units?.[0]?.payments?.authorizations?.[0]?.id;
+      const auth: PayPalPaymentResource | undefined =
+        authorized.json?.purchase_units?.[0]?.payments?.authorizations?.[0];
+      if (auth?.status === "DENIED")
+        return {
+          purpose: "payment",
+          charge: this.deniedAuthorization(auth, input.intentId, brand),
+        };
+      vaultedIn = authorized.json;
+      authId = auth?.id;
       if (!authId) {
         return {
           purpose: "payment",
@@ -1377,17 +1506,31 @@ export class PayPalProvider implements PaymentProvider {
       boundedProviderKey(input.idempotencyKey, PAYPAL_REQUEST_ID_MAX),
     );
     if (captured.status >= 300) {
+      if (readBack && alreadyDone(captured.json)) return this.consumePayment(input, false);
       return { purpose: "payment", charge: this.chargeFailure(captured.status, captured.json) };
     }
     // Same capture mapping as `charge()`, PENDING-parking included: a capture under
     // review returns `pending` and settles later via PAYMENT.CAPTURE.COMPLETED/DENIED.
     // A capture resource carries no `payment_source`; the order read above does.
+    const charge = {
+      ...paypalMethodUsed(order.json),
+      ...this.captureResult(captured.json, authId, captured.json, brand),
+    };
+    const saved = charge.status !== "failed" ? paypalVaulted(vaultedIn) : undefined;
+    return { purpose: "payment", charge, ...(saved ? { paymentMethod: saved } : {}) };
+  }
+
+  /** An authorization PayPal answered `DENIED`: a decline, booked without a capture. */
+  private deniedAuthorization(
+    auth: PayPalPaymentResource,
+    orderId: string,
+    brand: string | null,
+  ): ChargeResult {
     return {
-      purpose: "payment",
-      charge: {
-        ...paypalMethodUsed(order.json),
-        ...this.captureResult(captured.json, authId, captured.json),
-      },
+      status: "failed",
+      providerChargeId: auth.id ?? orderId,
+      failure: paypalCardFailure("DENIED", auth, brand),
+      raw: auth,
     };
   }
 
@@ -2200,7 +2343,10 @@ export class PayPalProvider implements PaymentProvider {
     return res.text;
   }
 
-  async provisionWebhookEndpoint(input: { url: string }): Promise<ProvisionedWebhook> {
+  async provisionWebhookEndpoint(input: {
+    url: string;
+    previousUrl?: string;
+  }): Promise<ProvisionedWebhook> {
     const list = await this.api<{ webhooks?: Array<{ id: string; url: string }> }>(
       "provision_webhook",
       "GET",
@@ -2208,6 +2354,28 @@ export class PayPalProvider implements PaymentProvider {
     );
     const found = list.json?.webhooks?.find((w) => w.url === input.url);
     if (found) return { webhookId: found.id, providerEndpointId: found.id };
+
+    // A move keeps the webhook id, which the verify API checks every delivery against.
+    const previous = input.previousUrl
+      ? list.json?.webhooks?.find((w) => w.url === input.previousUrl)
+      : undefined;
+    if (previous) {
+      const moved = await this.api<{ id?: string; name?: string; message?: string }>(
+        "provision_webhook",
+        "PATCH",
+        `/v1/notifications/webhooks/${encodeURIComponent(previous.id)}`,
+        [{ op: "replace", path: "/url", value: input.url }],
+      );
+      if (moved.status >= 300)
+        throw new Error(
+          `paypal webhook move failed: ${moved.json?.message ?? moved.json?.name ?? moved.status}`,
+        );
+      return {
+        webhookId: previous.id,
+        providerEndpointId: previous.id,
+        movedFromPreviousUrl: true,
+      };
+    }
 
     const created = await this.api<{ id?: string; name?: string; message?: string }>(
       "provision_webhook",
@@ -2219,6 +2387,12 @@ export class PayPalProvider implements PaymentProvider {
         event_types: [{ name: "*" }],
       },
     );
+    // PayPal allows 10 webhooks per app. We never delete one we did not make for this URL.
+    if (created.json?.name === "WEBHOOK_NUMBER_LIMIT_EXCEEDED")
+      throw new Error(
+        "We could not add a webhook to your PayPal app. The app already has 10 webhooks, the most PayPal allows. " +
+          "In the PayPal Developer Dashboard, open Apps & Credentials, select this app, and delete a webhook that you do not use. Then select Check connection again.",
+      );
     if (created.status >= 300 || !created.json?.id)
       throw new Error(
         `paypal webhook provisioning failed: ${created.json?.message ?? created.json?.name ?? created.status}`,
@@ -2657,6 +2831,15 @@ export class PayPalProvider implements PaymentProvider {
     // engine acts on the flag only for a succeeded transaction.
     const denied =
       event.event_type === "PAYMENT.CAPTURE.DENIED" || event.event_type === "PAYMENT.SALE.DENIED";
+    // The decline's reason, so an open on-session attempt keeps it (and a pending capture
+    // that is later denied books the issuer's code, not `async_failed`).
+    const failure =
+      type === "charge.failed"
+        ? paypalCardFailure(
+            typeof r.status === "string" && r.status ? r.status : "DECLINED",
+            r as PayPalPaymentResource,
+          )
+        : undefined;
     return [
       {
         providerEventId: eventId,
@@ -2665,6 +2848,14 @@ export class PayPalProvider implements PaymentProvider {
         ...(relatedOrderId ? { providerIntentId: relatedOrderId } : {}),
         ...(captured != null ? { capturedAmountMinor: captured } : {}),
         ...(denied ? { lateReversal: true } : {}),
+        ...(failure
+          ? {
+              failureCode: failure.code,
+              failureRetriable: failure.retriable,
+              failureMessage: failure.message,
+              ...(failure.providerCode ? { providerFailureCode: failure.providerCode } : {}),
+            }
+          : {}),
         ...provenance,
         occurredAt,
         raw: event,

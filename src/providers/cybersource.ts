@@ -299,6 +299,8 @@ export function cybersourceFailure(sig: DeclineSignal): NonNullable<ChargeResult
 
 export type PaymentKind = "sale" | "authorization" | "echeck";
 
+const NOT_CONFIGURED = "INVALID_OR_MISSING_CONFIG";
+
 /**
  * A `/pts/v2/payments` answer as a charge outcome; `duplicate` (look the original up),
  * or `lookup` (SERVER_ERROR: read the transaction before deciding).
@@ -311,7 +313,6 @@ export function readPaymentResponse(
   const id = r.id ?? "";
   const reason = r.errorInformation?.reason ?? r.reason;
   if (r.status === "INVALID_REQUEST" && reason === "DUPLICATE_REQUEST") return { duplicate: true };
-  if (httpStatus >= 500 || r.status === "SERVER_ERROR") return { lookup: id };
   const failed = (): { result: ChargeResult } => ({
     result: {
       status: "failed",
@@ -320,6 +321,9 @@ export function readPaymentResponse(
       raw: r,
     },
   });
+  // A 502 that names our merchant setup: CyberSource says not to resend, so it is no lookup.
+  if (reason === NOT_CONFIGURED) return failed();
+  if (httpStatus >= 500 || r.status === "SERVER_ERROR") return { lookup: id };
   switch (r.status) {
     case "AUTHORIZED":
       return { result: { status: "succeeded", providerChargeId: id, raw: r } };
@@ -820,7 +824,129 @@ export function normalizeCybersourceNotification(
       return [{ ...base, ...own, type: "refund.pending", providerRefundId: id }];
     }
   }
-  return [{ ...base, type: "unknown" }];
+  // Not acted on; the transaction id lets the attempt find it.
+  return [{ ...base, ...own, type: "unknown", ...(id ? { providerChargeId: id } : {}) }];
+}
+
+// ── Chargeback report ──────────────────────────────────────────────────────
+
+/**
+ * The report subscription the poll downloads: definition `ChargebackAndRetrievalDetailClass`,
+ * CSV, daily, UTC. The merchant creates it under this name in the Business Center.
+ * TODO(sandbox): the CSV column names are read from the field reference, not from a
+ * downloaded report. Prove them on a sandbox chargeback before the gateway leaves "soon".
+ */
+export const CYBERSOURCE_CHARGEBACK_REPORT = "tmbilling_chargebacks";
+/** Report dates read on each pass, ending yesterday (UTC): a day's report exists after it ends. */
+export const CYBERSOURCE_CHARGEBACK_REPORT_DAYS = 3;
+
+/** RFC 4180 rows: quoted fields, doubled quotes, CRLF or LF. */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else field += c;
+  }
+  if (field !== "" || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((f) => f.trim() !== ""));
+}
+
+/**
+ * The report's data rows, keyed by field name in lower case without its group
+ * (`Request.RequestID` and `RequestID` both give `requestid`). The header is the first line
+ * that names `CaseNumber`; lines above it are the report's title block.
+ */
+export function parseChargebackReport(text: string): Array<Record<string, string>> {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("<"))
+    throw new Error(
+      `The CyberSource report ${CYBERSOURCE_CHARGEBACK_REPORT} is XML. Change its subscription to CSV.`,
+    );
+  const rows = parseCsv(trimmed);
+  const key = (h: string) => h.trim().split(".").pop()!.toLowerCase();
+  const at = rows.findIndex((r) => r.some((h) => key(h) === "casenumber"));
+  if (at < 0) return [];
+  const header = rows[at]!.map(key);
+  return rows.slice(at + 1).map((r) => {
+    const o: Record<string, string> = {};
+    header.forEach((h, i) => {
+      if (h) o[h] = (r[i] ?? "").trim();
+    });
+    return o;
+  });
+}
+
+/**
+ * One report row as dispute events, keyed on the processor's case number. A debit opens the
+ * case and takes the money (`dispute.created`, `dispute.funds_withdrawn`); a credit gives it
+ * back (`dispute.funds_reinstated`, `dispute.won`). A row with no financial impact (a
+ * retrieval request), no request id, or another system's reference gives nothing.
+ */
+export function mapChargebackReportRow(
+  row: Record<string, string>,
+  reportDate: string,
+): NormalizedProviderEvent[] {
+  const caseNumber = row.casenumber || row.caseidentifier;
+  const requestId = row.requestid || row.transactionrequestid;
+  if (!caseNumber || !requestId) return [];
+  const reference = row.merchantreferencenumber;
+  if (reference && !OUR_REFERENCE.test(reference)) return [];
+  if ((row.financialimpact ?? "").toUpperCase() !== "Y") return [];
+  const impact = (row.financialimpacttype ?? "").toLowerCase();
+  if (impact !== "debit" && impact !== "credit") return [];
+  const currency = (row.chargebackcurrency || row.currency || "").toUpperCase();
+  const amountText = (row.chargebackamount || "").replace(/^-/, "");
+  if (!currency || !amountText) return [];
+  let amount: bigint | undefined;
+  try {
+    amount = toMinor(amountText, currency);
+  } catch {
+    return [];
+  }
+  if (amount == null) return [];
+  const when = row.chargebacktime || row.casetime || reportDate;
+  const occurredAt = dateOf(when) ?? dateOf(reportDate) ?? new Date();
+  const reason =
+    [row.chargebackreasoncode, row.chargebackreasoncodedescription].filter(Boolean).join(" ") ||
+    null;
+  const base = {
+    providerChargeId: requestId,
+    providerDisputeId: caseNumber,
+    disputeReason: reason,
+    disputeAmountMinor: amount,
+    disputeCurrency: currency,
+    evidenceDueBy: dateOf(row.respondbydate) ?? null,
+    occurredAt,
+    raw: row,
+  };
+  const id = (type: string) => `cybs_cb_${caseNumber}_${impact}_${when}_${type}`;
+  const types =
+    impact === "debit"
+      ? (["dispute.created", "dispute.funds_withdrawn"] as const)
+      : (["dispute.funds_reinstated", "dispute.won"] as const);
+  return types.map((type) => ({ ...base, type, providerEventId: id(type) }));
 }
 
 /** The subscription products: what we read, limited to what the account has unencrypted. */
@@ -902,8 +1028,10 @@ export class CybersourceProvider implements PaymentProvider {
       intentVoid: true,
       mandates: false,
       perDebitMandateReference: false,
-      // No dispute webhook or API: an operator records chargebacks.
+      // No dispute webhook: the daily chargeback report is polled, and a person may record a
+      // chargeback before the report shows it.
       disputeFeed: false,
+      settlementReport: { intervalMinutes: 24 * 60, maxWindowHours: 72 },
     };
   }
 
@@ -915,6 +1043,7 @@ export class CybersourceProvider implements PaymentProvider {
     method: string,
     path: string,
     body?: unknown,
+    accept = "application/hal+json;charset=utf-8, application/json",
   ): Promise<Res> {
     const text = body === undefined ? undefined : JSON.stringify(body);
     const headers = signCybersourceRequest(this.opts, {
@@ -933,7 +1062,7 @@ export class CybersourceProvider implements PaymentProvider {
         url: this.base + path,
         headers: {
           ...headers,
-          Accept: "application/hal+json;charset=utf-8, application/json",
+          Accept: accept,
           ...(text !== undefined ? { "Content-Type": "application/json;charset=utf-8" } : {}),
         },
         ...(text !== undefined ? { body: text } : {}),
@@ -1192,7 +1321,10 @@ export class CybersourceProvider implements PaymentProvider {
       if (tx) return { result: chargeResultFromTransaction(tx, opts), json: null };
       throw e;
     }
-    if (r.status === 429 || (r.status >= 500 && !(r.json as CsPaymentResponse | null)?.id))
+    const answered = r.json as CsPaymentResponse | null;
+    const notConfigured =
+      (answered?.errorInformation?.reason ?? answered?.reason) === NOT_CONFIGURED;
+    if (r.status === 429 || (r.status >= 500 && !answered?.id && !notConfigured))
       throw new ProviderIndeterminateError(
         `CyberSource answered ${operation} with HTTP ${r.status}. We could not confirm the outcome.`,
       );
@@ -1223,7 +1355,11 @@ export class CybersourceProvider implements PaymentProvider {
     result: ChargeResult,
     body: Record<string, unknown>,
   ): Promise<ChargeResult> {
-    if (result.status !== "failed" || result.failure?.code !== "gateway_request_rejected")
+    if (
+      result.status !== "failed" ||
+      result.failure?.code !== "gateway_request_rejected" ||
+      result.failure.providerCode === NOT_CONFIGURED
+    )
       return result;
     const pin = (body.paymentInformation ?? {}) as {
       customer?: { id?: string };
@@ -1338,6 +1474,10 @@ export class CybersourceProvider implements PaymentProvider {
         );
       return { status: 201, json: { id: tx.id }, original: tx };
     }
+    if (reason === NOT_CONFIGURED)
+      throw new ProviderRefusalError(
+        `CyberSource refused ${operation}: the merchant configuration is invalid or missing. Contact CyberSource support.`,
+      );
     if (r.status >= 500 || json.status === "SERVER_ERROR")
       throw new ProviderIndeterminateError(
         `CyberSource answered ${operation} with ${reason ?? `HTTP ${r.status}`}. We could not confirm the outcome. Retry later.`,
@@ -1393,6 +1533,53 @@ export class CybersourceProvider implements PaymentProvider {
     const tx = await this.readTransaction(input.providerRefundId);
     if (!tx) return { status: "pending", providerRefundId: input.providerRefundId };
     return refundResultFromTransaction(tx);
+  }
+
+  // ── chargeback report ──
+
+  /**
+   * One day's chargeback report as CSV text, or null when CyberSource has none for that date
+   * (404: no report, or no chargebacks). Endpoint: Reporting API `GET /reporting/v3/report-downloads`.
+   */
+  async downloadChargebackReport(reportDate: string): Promise<string | null> {
+    const q = new URLSearchParams({
+      organizationId: this.opts.organizationId,
+      reportDate,
+      reportName: CYBERSOURCE_CHARGEBACK_REPORT,
+    });
+    const r = await this.call(
+      "download_chargeback_report",
+      "GET",
+      `/reporting/v3/report-downloads?${q.toString()}`,
+      undefined,
+      "text/csv, application/xml;q=0.5",
+    );
+    if (r.status === 404) return null;
+    if (r.status !== 200)
+      throw new ProviderIndeterminateError(
+        `CyberSource could not give the chargeback report for ${reportDate} (HTTP ${r.status}). Retry later.`,
+      );
+    return typeof r.json === "string" ? r.json : "";
+  }
+
+  /**
+   * The settlement poll's read: the chargeback report for each date from the window start to
+   * yesterday, and never fewer than {@link CYBERSOURCE_CHARGEBACK_REPORT_DAYS} dates. Event ids
+   * come from the case and the row, so a date read again books nothing new.
+   */
+  async pollSettlements(input: { since: Date; until: Date }): Promise<NormalizedProviderEvent[]> {
+    const DAY = 86_400_000;
+    const day = (d: Date) => Math.floor(d.getTime() / DAY) * DAY;
+    const last = day(input.until) - DAY;
+    const first = Math.min(day(input.since), last - (CYBERSOURCE_CHARGEBACK_REPORT_DAYS - 1) * DAY);
+    const out: NormalizedProviderEvent[] = [];
+    for (let t = first; t <= last; t += DAY) {
+      const date = new Date(t).toISOString().slice(0, 10);
+      const text = await this.downloadChargebackReport(date);
+      if (!text) continue;
+      for (const row of parseChargebackReport(text)) out.push(...mapChargebackReportRow(row, date));
+    }
+    return out;
   }
 
   // ── intents ──
@@ -1762,9 +1949,13 @@ export class CybersourceProvider implements PaymentProvider {
         tx.orderInformation?.amountDetails?.totalAmount,
       cur,
     );
+    // A refusal read back keeps its reason, so a missed answer never ends as "expired".
+    const failure =
+      status === "failed" ? txFailure(tx, appOf(tx, ach ? "ics_ecp_debit" : "ics_auth")) : null;
     return {
       intentId: id,
       status,
+      ...(failure ? { failure } : {}),
       providerChargeId: tx.id,
       ...(amount != null ? { amountMinor: amount, currency: cur } : {}),
       raw: tx,

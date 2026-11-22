@@ -28,8 +28,8 @@ export interface SubscriptionVolatileState {
   pending_scheduled_count: number;
   /** Collected on this subscription's invoices, net of refunds. */
   revenue_to_date_minor: number;
-  revenue_paid_invoices_count: number;
-  revenue_since: string | null;
+  /** Net billed revenue less credit notes, before tax. */
+  revenue_billed_minor: number;
 }
 
 export async function refreshSubscriptionVolatileAction(
@@ -66,8 +66,7 @@ export async function refreshSubscriptionVolatileAction(
         next_billing_amount_minor: estimate?.total_minor ?? null,
         pending_scheduled_count: pendingScheduled.length,
         revenue_to_date_minor: sub.revenue_to_date_minor ?? 0,
-        revenue_paid_invoices_count: sub.revenue_paid_invoices_count ?? 0,
-        revenue_since: sub.revenue_since ?? null,
+        revenue_billed_minor: sub.revenue_billed_minor ?? 0,
       },
     };
   } catch (e) {

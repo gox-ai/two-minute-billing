@@ -7,18 +7,20 @@ import {
   type GatewayCatalogEntry,
 } from "@/lib/api/gateways";
 import { gatewayEntry } from "@/components/gateways/gateway-meta";
-import { requirePermission } from "@/lib/session";
+import { allows, requirePermission } from "@/lib/session";
+import { buildRoutingGroups, routingCurrencies } from "@/lib/payment-routing";
 import { ErrorState } from "@/components/states";
 import { buttonVariants } from "@/components/ui/button";
 import { SettingsPage, type AttentionItem } from "@/components/settings/settings-layout";
 import { GatewaysTable } from "@/components/gateways/gateways-table";
+import { PaymentRoutingCard } from "./payment-routing-card";
 
 export const dynamic = "force-dynamic";
 
 // In a route group so the list's skeleton does not preempt /new and /[gwa].
 export default async function GatewaysPage({ params }: { params: Promise<{ biz: string }> }) {
   const { biz } = await params;
-  await requirePermission("gateways:view", "admin");
+  const me = await requirePermission("gateways:view", "admin");
 
   const crumbs = [
     { label: "Settings", href: `/businesses/${biz}/settings` },
@@ -42,6 +44,13 @@ export default async function GatewaysPage({ params }: { params: Promise<{ biz: 
   }
   const b = businesses.data.find((x) => x.id === biz);
   const defaultId = accounts.data.find((r) => r.default)?.id ?? null;
+  const routing = buildRoutingGroups({
+    accounts: accounts.data,
+    catalog,
+    currencies: routingCurrencies(accounts.data, b?.currencies, b?.default_currency),
+    defaultId,
+    stored: b?.storefront_config?.payment_routing,
+  });
 
   // Gate removed 2026-09-02 on our user's instruction (was a step-up, audit M3.3) — see PROGRESS.
   return (
@@ -65,6 +74,14 @@ export default async function GatewaysPage({ params }: { params: Promise<{ biz: 
         defaultId={defaultId}
         createHref={`/businesses/${biz}/settings/gateways/new`}
       />
+      {routing.length > 0 ? (
+        <PaymentRoutingCard
+          biz={biz}
+          version={b?.resource_version}
+          groups={routing}
+          canManage={allows(me, "settings:manage", "admin")}
+        />
+      ) : null}
     </SettingsPage>
   );
 }

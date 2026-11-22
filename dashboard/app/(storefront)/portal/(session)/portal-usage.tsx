@@ -35,9 +35,7 @@ export async function PortalUsage({
   const meterNames = new Map(credit.map((m) => [m.meter, m.name]));
   return (
     <div className="border-t px-5 py-4">
-      <div className="mb-2 text-xs font-medium tracking-widest text-muted-foreground uppercase">
-        Usage this period
-      </div>
+      <div className="mb-2 text-xs text-muted-foreground">Usage this period</div>
       {u.window || credit.length > 0 ? (
         <>
           {u.window ? (
@@ -48,7 +46,7 @@ export async function PortalUsage({
           <ul className="flex flex-col gap-1.5 text-sm">
             {u.items.map((i, k) => (
               <li key={`${i.name}-${k}`} className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 truncate">
+                <span className="min-w-0 wrap-break-word">
                   {i.name}{" "}
                   <span className="text-muted-foreground tabular-nums">· {units(i.quantity)}</span>
                 </span>
@@ -63,7 +61,7 @@ export async function PortalUsage({
                     key={`${i.name}-combo-${k}`}
                     className="flex items-baseline justify-between gap-3 pl-3 text-muted-foreground"
                   >
-                    <span className="min-w-0 truncate">
+                    <span className="min-w-0 wrap-break-word">
                       <span className="font-mono">
                         {Object.values(cb.group).join(" · ") || i.name}
                       </span>{" "}
@@ -75,7 +73,7 @@ export async function PortalUsage({
               )}
             {u.settled_charges.map((s, k) => (
               <li key={`settled-${k}`} className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 truncate">
+                <span className="min-w-0 wrap-break-word">
                   {s.name}{" "}
                   <span className="text-muted-foreground tabular-nums">· {units(s.quantity)}</span>
                 </span>
@@ -90,7 +88,7 @@ export async function PortalUsage({
                       className="flex items-baseline justify-between gap-3"
                     >
                       <span className="min-w-0">
-                        <span className="block truncate">{m.name}</span>
+                        <span className="block wrap-break-word">{m.name}</span>
                         <span className="block text-xs text-muted-foreground">
                           <span className="tabular-nums">
                             {formatDecimalQuantity(m.paid_quantity)}
@@ -108,7 +106,7 @@ export async function PortalUsage({
                       className="flex items-baseline justify-between gap-3"
                     >
                       <span className="min-w-0">
-                        <span className="block truncate">{m.name}</span>
+                        <span className="block wrap-break-word">{m.name}</span>
                         <span className="block text-xs text-muted-foreground">
                           <span className="tabular-nums">
                             {formatDecimalQuantity(m.below_zero_quantity!)}
@@ -125,7 +123,7 @@ export async function PortalUsage({
                   className="flex items-baseline justify-between gap-3"
                 >
                   <span className="min-w-0">
-                    <span className="block truncate">{m.name}</span>
+                    <span className="block wrap-break-word">{m.name}</span>
                     <span className="block text-xs text-muted-foreground">
                       <span className="tabular-nums">{formatDecimalQuantity(b.quantity)}</span> used
                       past your credit balance. Your next invoice bills this.
@@ -213,7 +211,7 @@ export async function PortalUsage({
           <ul className="flex flex-col gap-1 text-sm">
             {u.trial.items.map((t, k) => (
               <li key={`${t.name}-${k}`} className="flex justify-between gap-3">
-                <span className="min-w-0 truncate">{t.name}</span>
+                <span className="min-w-0 wrap-break-word">{t.name}</span>
                 <span className="shrink-0 tabular-nums">{units(t.quantity)}</span>
               </li>
             ))}

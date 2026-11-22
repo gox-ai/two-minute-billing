@@ -78,3 +78,4 @@ built from a stale dashboard is refused instead.
   CRUD over `/v1/report_dashboards`, the whole-dashboard fetch, and
   `scripts/verify-report-dashboards.ts`.
 - **2026-11-04** — `createDashboard` refuses a person's 51st stored dashboard in an organization (`MAX_DASHBOARDS_PER_OWNER`, counted across businesses and org-level, under an advisory lock; presets are not rows and do not count). 400 from `POST /v1/report_dashboards`. Gate: `verify:report-dashboards` §12.
+- **2026-11-19** — New built-in "Revenue" board (`revenue`, no `requires`): revenue billed by type and product, cash by bucket, billed customers, revenue per customer, refunds, receivables. "Business overview", "What moved it" and "Lifecycle" now require subscriptions. A business without subscriptions lists Revenue first, then its model boards.

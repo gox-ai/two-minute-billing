@@ -165,8 +165,9 @@ For prepaid or credit-based products:
   none: a customer with no subscription and a paid pack is allowed, and the check blocks at 0
   (`on_exhausted.source: "no_subscription"`).
 - **Blocking** is off until `credit_config.blocking_enabled` is true. Set it in `settings` of
-  `billing.catalog.json` and run `catalog.mjs` (pricing skill): the business PATCH replaces the
-  whole `credit_config`, so the script sends the stored object with the file's keys on top.
+  `billing.catalog.json` and run `tmb push --apply` (pricing skill; script fallback
+  `catalog.mjs --apply`): the business PATCH replaces the whole `credit_config`, so it sends the
+  stored object with the file's keys on top.
   `credit_config.in_flight_share_bps` (default 5000 = 50%) caps open holds plus the new amount at
   that part of the balance.
   `credit_config.in_flight_applies` sets when: `other_holds_open` applies the cap only while the
@@ -212,9 +213,10 @@ fixed price. Recipe: https://twominutebilling.com/help/developers/recipes/credit
   "refused"`), never billed, and `credit_usage_refused` is sent with the `policy`. Under `bill`,
   an overage price (the rate price of the meter on a live subscription of the customer, or the
   unit's `overage_minor_per_unit`; the meter's comes first) accepts the event and the next period invoice bills the missing credits in
-  money; with no overage price `bill` refuses as `block` does. During a free trial the policy is
-  `trial`: always refused, no overage, no overdraft. A refused event counts in cost reports, not in
-  usage totals. A replay of
+  money; with no overage price `bill` refuses as `block` does. During a free trial (policy source
+  `trial`) the default `credit_config.trial_usage: "refuse"` refuses it: no overage, no overdraft
+  (`overdraft_only` allows the overdraft limit; `as_paid` applies the paid rules). A refused
+  event counts in cost reports, not in usage totals. A replay of
   the key answers 402 again, so send a new key after the customer buys credit. An event that
   captures a credit hold is never refused; the rest is in `credits_uncovered`. A grant pays only
   while its life contains the moment the event arrives.
@@ -236,6 +238,10 @@ fixed price. Recipe: https://twominutebilling.com/help/developers/recipes/credit
   invoice. It draws the credits from the grants and books the revenue. Read it with
   `GET …/customers/{cus}/credit_usage`; `credit_usage_settled` goes only to an endpoint that lists
   it by name. A usage event can be voided until it is settled (then 409).
+- **Local webhooks:** `tmb listen --forward http://localhost:<port>/<path>` (verify skill) sends
+  `credit_usage_refused` and the top-up events to the app with no tunnel. It sends
+  `credit_usage_settled` only while an enabled webhook endpoint of the organization lists that
+  type: without one, the engine does not write the event.
 - **The invoice:** the period invoice states "Illustrations: 120. Paid with 120 credits." under
   "Usage paid with credits", with no amount and no tax.
 - **Free credit limit:** `credit_config.unit_grant_limits.<unit>` (`max_units`,

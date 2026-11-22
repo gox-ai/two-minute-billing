@@ -55,7 +55,7 @@ export default async function EmailsPage({
           breadcrumbs: [{ label: name, href: `/businesses/${biz}` }, { label: "Emails" }],
           actions: (
             <Button asChild variant="outline" size="sm">
-              <Link href={`/businesses/${biz}/emails/report`}>Delivery report</Link>
+              <Link href={`/businesses/${biz}/reports/emails`}>Email report</Link>
             </Button>
           ),
         }}

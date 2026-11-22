@@ -4,6 +4,7 @@ import * as React from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { useDefaultState } from "@/lib/use-default-state";
 import { BrandImageField } from "./brand-image-field";
 import type { BrandImageSupport } from "@/lib/api/brand-images";
@@ -12,7 +13,7 @@ import type { ActionResult } from "@/lib/action-result";
 import { SettingRow, SettingsCard, SettingsColumns } from "@/components/settings/settings-layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BrandMark } from "./brand-mark";
-import { HEX_RE, contrastRatio, readableOn } from "@/lib/brand";
+import { HEX_RE, buttonLabel, contrastRatio, readableOn, onColor } from "@/lib/brand";
 import type { PreviewBrand } from "./brand-previews";
 
 /**
@@ -51,6 +52,16 @@ const SWATCHES = [
   "#374151",
 ];
 
+/** Text colours for the brand button. The hex field takes any other value. */
+const TEXT_SWATCHES = ["#ffffff", "#111111", "#000000"];
+
+/** How the preview names a label colour; any other hex is shown as itself. */
+const LABEL_NAME: Record<string, string> = {
+  "#ffffff": "white",
+  "#111111": "near-black",
+  "#000000": "black",
+};
+
 export function BrandEditor({
   biz,
   brand,
@@ -82,6 +93,7 @@ export function BrandEditor({
   // the next submit. Favicon was uncontrolled for that reason and is now state too,
   // because an upload has to be able to write into it.
   const [color, setColor] = useDefaultState(brand.brand_color ?? "");
+  const [textColor, setTextColor] = useDefaultState(brand.button_text_color ?? "");
   const [logo, setLogo] = useDefaultState(brand.logo_url ?? "");
   const [icon, setIcon] = useDefaultState(brand.icon_url ?? "");
   const [favicon, setFavicon] = useDefaultState(brand.favicon_url ?? "");
@@ -92,6 +104,10 @@ export function BrandEditor({
   // by looking at their portal.
   const corrected = valid ? readableOn(color, "#ffffff") : null;
   const willAdjust = corrected != null && corrected.toLowerCase() !== color.toLowerCase();
+  // The label the hosted pages will render (`buttonLabel`, as `brandCss` uses it).
+  const textValid = HEX_RE.test(textColor);
+  const label = valid ? buttonLabel(color, textValid ? textColor : null) : null;
+  const textKept = label != null && textValid && label === textColor.toLowerCase();
 
   const [tab, setTab] = React.useState("logo");
   // On a phone the strip scrolls sideways; keep the current tab in view.
@@ -293,6 +309,122 @@ export function BrandEditor({
                   )}
                 </p>
               </SettingRow>
+              <SettingRow
+                label="Button text color"
+                htmlFor="button_text_color"
+                placement="end"
+                errorFor="button_text_color"
+                help="The text on your brand-color buttons. Leave it empty and we select a readable color."
+                control={
+                  <>
+                    {/* A disabled input posts nothing; this keeps the saved value. */}
+                    {!valid ? (
+                      <input type="hidden" name="button_text_color" value={textColor} />
+                    ) : null}
+                    <Input
+                      id="button_text_color"
+                      name={valid ? "button_text_color" : undefined}
+                      value={textColor}
+                      onChange={(e) => setTextColor(e.target.value)}
+                      disabled={!valid}
+                      maxLength={7}
+                      placeholder="#ffffff"
+                      className="w-30 font-mono"
+                      aria-describedby="button-text-note"
+                    />
+                  </>
+                }
+              />
+              <SettingRow
+                label="Select a text color"
+                placement="end"
+                control={
+                  <div className="flex w-72 max-w-full flex-wrap items-center justify-end gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!valid}
+                      onClick={() => setTextColor("")}
+                      aria-pressed={textColor === ""}
+                      className={cn(
+                        textColor === "" && "ring-2 ring-ring ring-offset-2 ring-offset-background",
+                      )}
+                    >
+                      Automatic
+                    </Button>
+                    {TEXT_SWATCHES.map((hex) => {
+                      const on = textColor.toLowerCase() === hex;
+                      return (
+                        <button
+                          key={hex}
+                          type="button"
+                          disabled={!valid}
+                          onClick={() => setTextColor(hex)}
+                          aria-label={`Use ${LABEL_NAME[hex]} text (${hex})`}
+                          aria-pressed={on}
+                          style={{ background: hex, color: onColor(hex) }}
+                          className={cn(
+                            "flex size-7 items-center justify-center rounded-md border border-border transition-transform hover:scale-105 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50",
+                            on && "ring-2 ring-ring ring-offset-2 ring-offset-background",
+                          )}
+                        >
+                          {on ? <Check className="size-3.5" aria-hidden /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                }
+              >
+                <p id="button-text-note" className="m-0 text-xs text-muted-foreground">
+                  {!valid
+                    ? "Set a brand color first. Without one, buttons use our neutral palette."
+                    : textColor === ""
+                      ? "Automatic: white, near-black or black, whichever is readable on your brand color."
+                      : !textValid
+                        ? "Enter a 6-digit hex color. For example: #ffffff."
+                        : "The button preview below shows this color on your brand color."}
+                </p>
+              </SettingRow>
+              {/* What the hosted pages render: `buttonLabel`, the same rule `brandCss` uses, so
+                  the preview cannot disagree with them. A text color the merchant set is always
+                  used; below 4.5:1 this only warns. */}
+              {valid && label ? (
+                <SettingRow
+                  label="Button preview"
+                  placement="end"
+                  control={
+                    <span
+                      aria-hidden
+                      className="inline-flex h-9 items-center rounded-md px-4 text-sm font-medium"
+                      style={{ background: color, color: label }}
+                    >
+                      Pay now
+                    </span>
+                  }
+                >
+                  <p className="m-0 text-xs text-muted-foreground">
+                    {textKept && contrastRatio(label, color) < 4.5 ? (
+                      <span className="text-warning">
+                        This text color has low contrast on your brand color (
+                        {contrastRatio(label, color).toFixed(1)}:1). Some customers cannot read it.
+                        We recommend 4.5:1 or more, or select Automatic.
+                      </span>
+                    ) : textKept ? (
+                      <>
+                        The button text is <LabelName hex={label} /> on this color (
+                        {contrastRatio(label, color).toFixed(1)}:1).
+                      </>
+                    ) : (
+                      <>
+                        The button text is <LabelName hex={label} /> on this color (
+                        {contrastRatio(label, color).toFixed(1)}:1). We use white text only when it
+                        is readable, so all button text meets the 4.5:1 minimum.
+                      </>
+                    )}
+                  </p>
+                </SettingRow>
+              ) : null}
             </TabsContent>
             <TabsContent value="email" className="border-t p-5">
               {previews.email}
@@ -311,4 +443,10 @@ export function BrandEditor({
       </SettingsColumns>
     </ActionForm>
   );
+}
+
+/** "white" / "near-black" / "black", or the hex itself for any other color. */
+function LabelName({ hex }: { hex: string }) {
+  const name = LABEL_NAME[hex.toLowerCase()];
+  return name ? <>{name}</> : <span className="font-mono">{hex.toLowerCase()}</span>;
 }

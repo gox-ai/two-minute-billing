@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 // Relative, not `@/…`: these live in the dashboard app and the root `@/` alias points at src/.
 import {
+  addMethodOutcome,
+  outcomeIsEmpty,
   buyerInvoiceState,
   cardExpired,
   failureVerb,
@@ -76,5 +78,67 @@ describe("failure wording", () => {
   it("puts frozen receipt words in the portal's card format", () => {
     expect(normalizeMethodWords("Visa ···4242")).toBe("Visa •••• 4242");
     expect(normalizeMethodWords("Cash")).toBe("Cash");
+  });
+});
+
+describe("addMethodOutcome", () => {
+  const row = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    number: id.toUpperCase(),
+    status: "payment_due",
+    currency: "USD",
+    amount_due_minor: 4900,
+    ...over,
+  });
+
+  it("sorts each charge by how it ended", () => {
+    const o = addMethodOutcome(
+      [
+        { invoice: "a", status: "succeeded", amount_minor: 4900, currency: "USD" },
+        { invoice: "b", status: "pending", amount_minor: 1999, currency: "INR" },
+        { invoice: "c", status: "failed", amount_minor: 4900, currency: "USD" },
+      ],
+      [
+        row("a", { status: "paid", amount_due_minor: 0 }),
+        row("b", { payment_in_flight: true }),
+        row("c", { last_payment_error: { message: "The card expired." } }),
+      ],
+    );
+    expect(o.paid.map((i) => i.id)).toEqual(["a"]);
+    expect(o.inProgress.map((i) => i.id)).toEqual(["b"]);
+    expect(o.notCollected).toEqual([
+      expect.objectContaining({ id: "c", reason: "The card expired.", payable: true }),
+    ]);
+    expect(o.stillDue).toEqual([]);
+  });
+
+  it("reports an owed invoice that was never charged, even when its charge threw", () => {
+    const o = addMethodOutcome([], [row("d"), row("e", { status: "paid", amount_due_minor: 0 })]);
+    expect(o.stillDue.map((i) => i.id)).toEqual(["d"]);
+    expect(outcomeIsEmpty(o)).toBe(false);
+  });
+
+  it("asks for the bank check when the off-session charge needed one", () => {
+    const o = addMethodOutcome(
+      [{ invoice: "f", status: "requires_action", amount_minor: 4900, currency: "USD" }],
+      [row("f")],
+    );
+    expect(o.notCollected[0]?.reason).toMatch(/^Your bank must confirm this payment\./);
+  });
+
+  it("reports a debit waiting on its pre-debit notice as scheduled, never as still due", () => {
+    const o = addMethodOutcome(
+      [{ invoice: "h", status: "scheduled", amount_minor: 199900, currency: "INR" }],
+      [row("h", { currency: "INR", amount_due_minor: 199900 })],
+    );
+    expect(o.scheduled).toEqual([expect.objectContaining({ id: "h", payable: false })]);
+    expect(o.stillDue).toEqual([]);
+    expect(outcomeIsEmpty(o)).toBe(false);
+  });
+
+  it("is empty when nothing was owed", () => {
+    expect(
+      outcomeIsEmpty(addMethodOutcome([], [row("g", { status: "paid", amount_due_minor: 0 })])),
+    ).toBe(true);
   });
 });

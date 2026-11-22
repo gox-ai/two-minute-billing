@@ -15,6 +15,14 @@ export interface CollectedRevenue {
  * (payments against its invoices). Same net-cash rule as `overCollectedNetCash` in
  * ops/invariants. Credits applied to invoices are not cash and are excluded; so are
  * dispute clawbacks, which the label "net of refunds" does not claim to cover.
+ *
+ * CASH, tax included — not the `revenue_billed` rule (net, before tax). The screens call it
+ * "Cash collected" so the two never share a name. Against that rule it already holds: free
+ * credit (promotional, plan credits) is never a payment; a pack counts once, when its own
+ * invoice is paid, and its credit paying later usage adds nothing; an overpayment is cash
+ * once. A credit note lowers it only when refunded as money (a refund row); a note kept as
+ * balance is money still held, and lowers the cash of the invoice it later pays.
+ * Gate: `verify:metric-revenue-net` (cash section).
  */
 export async function collectedRevenue(
   organizationId: string,

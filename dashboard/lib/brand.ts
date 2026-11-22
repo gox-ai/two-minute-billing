@@ -59,8 +59,9 @@ function luminance(hex: string): number {
 }
 
 export function contrastRatio(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
 /** Mix toward black (t<0) or white (t>0), t in -1..1. */
@@ -87,9 +88,25 @@ export function readableOn(hex: string, surface: string): string {
   return towardWhite ? "#ffffff" : "#000000";
 }
 
-/** Black or white label on a filled button of `hex`, whichever contrasts more. */
+/**
+ * The label on a filled button of `hex`: always at least AA (4.5:1). White while it passes, else
+ * near-black, else pure black. "Whichever contrasts more" between white and #111 left a band of
+ * mid-tones (an orange, a violet) where the better of the two was only 4.35:1; against #000 the
+ * worst case is 4.58:1, so this never falls below AA.
+ */
 export function onColor(hex: string): string {
-  return contrastRatio("#ffffff", hex) >= contrastRatio("#111111", hex) ? "#ffffff" : "#111111";
+  if (contrastRatio("#ffffff", hex) >= AA) return "#ffffff";
+  return contrastRatio("#111111", hex) >= AA ? "#111111" : "#000000";
+}
+
+/**
+ * The label on a `brandColor` button. A text colour the merchant set ALWAYS wins, whatever its
+ * contrast (decided 2026-11-17: their choice; Brand Styles warns below 4.5:1). Only when it is
+ * unset or malformed does the label fall back to `onColor`, which always meets 4.5:1.
+ */
+export function buttonLabel(brandColor: string, textColor: string | null | undefined): string {
+  if (textColor && HEX_RE.test(textColor)) return textColor.toLowerCase();
+  return onColor(brandColor.toLowerCase());
 }
 
 /**
@@ -114,14 +131,17 @@ export function brandAccent(brandColor: string | null | undefined): string | nul
  * `--primary` (the accent: links, focus rings, marks) is contrast-corrected, because a
  * brand chosen to look good on a marketing site is often unreadable as 14px link text.
  * `--solid` (the primary button fill) keeps the RAW brand colour — a filled button is
- * the one place the merchant's exact hex belongs — and `--solid-foreground` flips
- * between black and white so the label stays legible on whatever they picked.
+ * the one place the merchant's exact hex belongs — and `--solid-foreground` is the
+ * merchant's button text colour when it is readable there, else `onColor` (`buttonLabel`).
  *
  * Returns '' for no brand, so the page falls through to our own tokens.
  */
-export function brandCss(brandColor: string | null | undefined): string {
+export function brandCss(
+  brandColor: string | null | undefined,
+  buttonTextColor?: string | null,
+): string {
   const accent = brandAccent(brandColor);
   if (!accent || !brandColor) return "";
   const raw = brandColor.toLowerCase();
-  return `[data-brand]{--primary:${accent};--ring:${accent};--solid:${raw};--solid-foreground:${onColor(raw)}}`;
+  return `[data-brand]{--primary:${accent};--ring:${accent};--solid:${raw};--solid-foreground:${buttonLabel(raw, buttonTextColor)}}`;
 }

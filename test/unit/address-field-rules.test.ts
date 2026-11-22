@@ -12,6 +12,7 @@ import {
   addressFieldLocksFor,
   addressRequirementIssues,
   billingDetailsComplete,
+  billingDetailsMissing,
   isPortalKeyLocked,
   mergePortalAddress,
   resolvePortalFieldConfig,
@@ -28,7 +29,7 @@ beforeAll(() => {
 const fields = (issues: Array<{ field: string }>) => issues.map((i) => i.field);
 
 describe("resolvePortalFieldConfig", () => {
-  it("defaults to the old portal form: first name, phone and the address core required", () => {
+  it("defaults: only the name, country, postal code and state are required", () => {
     const cfg = resolvePortalFieldConfig(null);
     expect(cfg).toEqual(DEFAULT_PORTAL_FIELD_CONFIG);
     const required = Object.entries(cfg)
@@ -36,13 +37,10 @@ describe("resolvePortalFieldConfig", () => {
       .map(([k]) => k)
       .sort();
     expect(required).toEqual([
-      "billing.city",
       "billing.country",
-      "billing.line1",
       "billing.postal_code",
       "billing.state_code",
       "customer.first_name",
-      "customer.phone",
     ]);
   });
 
@@ -55,8 +53,10 @@ describe("resolvePortalFieldConfig", () => {
   });
 
   it("a malformed value falls back to that key's default", () => {
-    const cfg = resolvePortalFieldConfig({ portalFieldConfig: { "billing.city": "sometimes" } });
-    expect(cfg["billing.city"]).toBe("mandatory");
+    const cfg = resolvePortalFieldConfig({
+      portalFieldConfig: { "billing.postal_code": "sometimes" },
+    });
+    expect(cfg["billing.postal_code"]).toBe("mandatory");
     expect(resolvePortalFieldConfig({ portalFieldConfig: [] })).toEqual(
       DEFAULT_PORTAL_FIELD_CONFIG,
     );
@@ -128,12 +128,12 @@ describe("addressRequirementIssues", () => {
     expect(addressRequirementIssues(checkoutDefaults, fullUs)).toEqual([]);
   });
 
-  it("defaults: city, region and postal code are required where the country has them", () => {
+  it("defaults: region and postal code are required where the country has them", () => {
     const issues = addressRequirementIssues(checkoutDefaults, {
       line1: "1 Main St",
       country: "US",
     });
-    expect(fields(issues)).toEqual(["city", "state_code", "postal_code"]);
+    expect(fields(issues)).toEqual(["state_code", "postal_code"]);
   });
 
   it("defaults: state OR state_code satisfies the region requirement", () => {
@@ -161,9 +161,8 @@ describe("addressRequirementIssues", () => {
     expect(fields(issues)).not.toContain("postal_code");
   });
 
-  it("defaults: line1 and country are required, blank counts as missing", () => {
-    expect(fields(addressRequirementIssues(checkoutDefaults, { line1: "  " }))).toEqual([
-      "line1",
+  it("defaults: only country is required without one, blank counts as missing", () => {
+    expect(fields(addressRequirementIssues(checkoutDefaults, { country: "  " }))).toEqual([
       "country",
     ]);
   });
@@ -183,7 +182,7 @@ describe("addressRequirementIssues", () => {
   });
 
   it("mandatory contact fields are required", () => {
-    const cfg = resolvePortalFieldConfig(null); // first name + phone mandatory
+    const cfg = resolvePortalFieldConfig({ portalFieldConfig: { "customer.phone": "mandatory" } });
     expect(fields(addressRequirementIssues(cfg, fullUs))).toEqual(["first_name", "phone"]);
     expect(
       addressRequirementIssues(cfg, { ...fullUs, first_name: "Pat", phone: "+15125550100" }),
@@ -264,24 +263,39 @@ describe("mergePortalAddress", () => {
   });
 });
 
-describe("billingDetailsComplete", () => {
+describe("billingDetailsComplete / billingDetailsMissing", () => {
   const defaults = resolvePortalFieldConfig(null);
-  it("defaults: needs a name, line1 and country", () => {
-    expect(billingDetailsComplete(defaults, true, { line1: "1 Main", country: "US" })).toBe(true);
-    expect(billingDetailsComplete(defaults, true, { line1: null, country: "US" })).toBe(false);
-    expect(billingDetailsComplete(defaults, false, { line1: "1 Main", country: "US" })).toBe(false);
+  const us = { country: "US", postal_code: "94103", state_code: "CA" };
+  it("defaults: a name, country and postal code are enough; line 1 and city are not asked", () => {
+    expect(billingDetailsComplete(defaults, true, us)).toBe(true);
+    expect(billingDetailsMissing(defaults, true, { country: "US" })).toEqual([
+      "state_code",
+      "postal_code",
+    ]);
+    expect(billingDetailsMissing(defaults, false, us)).toEqual(["first_name"]);
+    expect(billingDetailsMissing(defaults, true, {})).toEqual(["country"]);
   });
-  it("an optional or hidden line1/country cannot block", () => {
+  it("a mandatory postal code blocks, except where the country has none", () => {
+    expect(billingDetailsComplete(defaults, true, { country: "US", state_code: "CA" })).toBe(false);
+    expect(billingDetailsComplete(defaults, true, { country: "AE", state_code: "DU" })).toBe(true);
+  });
+  it("a field counts only where the config makes it mandatory", () => {
     const cfg = resolvePortalFieldConfig({
+      portalFieldConfig: { "billing.line1": "mandatory", "billing.postal_code": "show" },
+    });
+    expect(billingDetailsMissing(cfg, true, { country: "US", state_code: "CA" })).toEqual([
+      "line1",
+    ]);
+    const hidden = resolvePortalFieldConfig({
       portalFieldConfig: { "billing.line1": "hide", "billing.country": "show" },
     });
-    expect(billingDetailsComplete(cfg, true, { line1: null, country: null })).toBe(true);
+    expect(billingDetailsComplete(hidden, true, { postal_code: "94103" })).toBe(true);
   });
   it("a tax-forced country still blocks", () => {
     const cfg = withAddressFieldLocks(
       resolvePortalFieldConfig({ portalFieldConfig: { "billing.country": "show" } }),
       { country: true, state_code: false },
     );
-    expect(billingDetailsComplete(cfg, true, { line1: "1 Main", country: null })).toBe(false);
+    expect(billingDetailsComplete(cfg, true, {})).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { buildApp } from "@/index";
 import { newTraceId, withTraceContext } from "@/platform/trace";
 import { closeDb, withTenant } from "@/platform/db";
+import { runWithClockScope } from "@/platform/clock";
 import {
   createApiKey,
   createOrganization,
@@ -42,6 +43,7 @@ import {
   WEBHOOK_CHANGE_IN_PROGRESS,
 } from "@/modules/gateway/webhook-endpoint";
 import { ingestGatewayWebhook } from "@/modules/gateway/inbound";
+import { backfillEventLinks } from "@/modules/webhooks/event-link";
 import { config } from "@/platform/config";
 import { GATEWAYS } from "@/providers/gateway-catalog";
 import { resolveAdapter } from "@/providers/registry";
@@ -75,6 +77,7 @@ import type {
 } from "@/providers/types";
 import { TmtestProvider } from "@/providers/tmtest";
 import { ProviderIndeterminateError, ProviderRefusalError } from "@/providers/types";
+import { GENERIC_CLIENT_REFUSAL } from "@/providers/decline-codes";
 import { createCustomer } from "@/modules/customers/service";
 import {
   recordTransaction,
@@ -142,6 +145,7 @@ import {
   consumePaymentIntent,
   retryPaymentIntent,
   voidPaymentIntent,
+  failPaymentIntentFromGateway,
   listAttemptsForIntent,
   serializePaymentAttempt,
   expirePaymentIntents,
@@ -314,6 +318,24 @@ const bad = await api(
   "gwa-bad",
 );
 ok("C1: unsupported gateway_key → 400", bad.status === 400);
+
+// Credentials the adapter cannot build from are refused, not stored: such an account
+// would show buyers "no payment provider" with no reason.
+const incomplete = await api(
+  "POST",
+  `/v1/businesses/${testBiz.publicId}/gateway_accounts`,
+  {
+    gateway_key: "square",
+    label: "Square",
+    credentials: { access_token: "EAAAtest", application_id: "sandbox-sq0idb-test" },
+  },
+  "gwa-incomplete",
+);
+ok(
+  "C1: credentials missing a required key → 400 naming it",
+  incomplete.status === 400 && /location_id/.test(JSON.stringify(incomplete.json)),
+  `${incomplete.status} ${JSON.stringify(incomplete.json).slice(0, 200)}`,
+);
 
 // tmtest on a LIVE business → 400 (TL-6 invariant).
 const tmtestLive = await api(
@@ -607,7 +629,7 @@ ok("C1: get after delete → 404", gone.status === 404);
       attempts.length === 1 && attempts[0]!.status === "failed",
     );
     ok(
-      "C63+: …classified as OUR fault, non-retriable",
+      "C63+: …classified as OUR fault",
       attempts[0]?.errorCode === "gateway_request_rejected",
       attempts[0]?.errorCode ?? "(none)",
     );
@@ -1211,14 +1233,24 @@ ok("C1: get after delete → 404", gone.status === 404);
       return Response.json({ items: [...stubHooks].map(([u, id]) => ({ id, url: u })) });
     if (stubRefuse)
       return Response.json({ error: { description: "stubbed refusal" } }, { status: 400 });
+    // PUT /webhooks/:id changes that registration, its URL included.
+    const putId = method === "PUT" ? path.split("/")[2] : undefined;
+    if (putId) for (const [u, hid] of stubHooks) if (hid === putId) stubHooks.delete(u);
     const id =
-      stubHooks.get(String(body.url)) ?? `wh_stub${String(stubHooks.size).padStart(9, "0")}`;
+      putId ??
+      stubHooks.get(String(body.url)) ??
+      `wh_stub${String(stubHooks.size).padStart(9, "0")}`;
     stubHooks.set(String(body.url), id);
     return Response.json({ id });
   }) as typeof fetch;
   const registrations = () => stubCalls.filter((c) => c.method !== "GET");
-  const mutableConfig = config as { WEBHOOK_BASE_URL?: string };
+  const mutableConfig = config as {
+    WEBHOOK_BASE_URL?: string;
+    GATEWAY_WEBHOOK_BASE_URL?: string;
+  };
   const savedBase = mutableConfig.WEBHOOK_BASE_URL;
+  const savedGatewayBase = mutableConfig.GATEWAY_WEBHOOK_BASE_URL;
+  mutableConfig.GATEWAY_WEBHOOK_BASE_URL = undefined;
   mutableConfig.WEBHOOK_BASE_URL = "https://hooks.example.com";
   const storedCreds = async (gwa: string) =>
     decryptCredentials((await getGatewayAccount(orgId, wBiz.id, gwa))!.credentialsEnc);
@@ -1504,6 +1536,83 @@ ok("C1: get after delete → 404", gone.status === 404);
       JSON.stringify(delRefused.json),
     );
 
+    // Move to GATEWAY_WEBHOOK_BASE_URL. Accounts registered before it existed store no URL.
+    const legacyAccount = async (label: string) => {
+      const id = String((await createRzp(label)).json.id);
+      await updateGatewayAccount({
+        organizationId: orgId,
+        businessId: wBiz.id,
+        gwaPublicId: id,
+        credentials: { ...(await storedCreds(id)), webhook_url: null } as unknown as Record<
+          string,
+          string
+        >,
+      });
+      return id;
+    };
+    const moveId = await legacyAccount("move");
+    const refusedMoveId = await legacyAccount("moverefused");
+    const oldUrl = (await endpointOf(moveId)).notification_url;
+    const beforeMove = await storedCreds(moveId);
+    const beforeRefused = await storedCreds(refusedMoveId);
+    mutableConfig.GATEWAY_WEBHOOK_BASE_URL = "https://webhooks.example.com";
+    ok(
+      "WH: an account registered before the move still shows its old URL",
+      oldUrl.startsWith("https://hooks.example.com/") &&
+        (await endpointOf(moveId)).notification_url === oldUrl,
+      oldUrl,
+    );
+    stubCalls.length = 0;
+    const moved = await provisionWebhookEndpoint({
+      organizationId: orgId,
+      businessId: wBiz.id,
+      gatewayAccountPublicId: moveId,
+    });
+    const afterMove = await storedCreds(moveId);
+    const moveCalls = registrations();
+    ok(
+      "WH: re-check moves an old registration in place (same endpoint, same secret)",
+      moved.notification_url.startsWith("https://webhooks.example.com/") &&
+        moveCalls.length === 1 &&
+        moveCalls[0]!.method === "PUT" &&
+        moveCalls[0]!.path === `/webhooks/${String(beforeMove.webhook_endpoint_id)}` &&
+        moveCalls[0]!.body.url === moved.notification_url &&
+        afterMove.webhook_endpoint_id === beforeMove.webhook_endpoint_id &&
+        afterMove.webhook_secret === beforeMove.webhook_secret &&
+        afterMove.webhook_url === moved.notification_url &&
+        !stubHooks.has(oldUrl),
+      JSON.stringify(moveCalls.map((c) => [c.method, c.path])),
+    );
+    stubCalls.length = 0;
+    await provisionWebhookEndpoint({
+      organizationId: orgId,
+      businessId: wBiz.id,
+      gatewayAccountPublicId: moveId,
+    });
+    ok("WH: re-check after the move makes no gateway call", registrations().length === 0);
+    stubRefuse = true;
+    let moveError = "";
+    try {
+      await provisionWebhookEndpoint({
+        organizationId: orgId,
+        businessId: wBiz.id,
+        gatewayAccountPublicId: refusedMoveId,
+      });
+    } catch (e) {
+      moveError = e instanceof Error ? e.message : String(e);
+    }
+    stubRefuse = false;
+    const afterRefusedMove = await storedCreds(refusedMoveId);
+    ok(
+      "WH: a refused move keeps the old registration as it was",
+      /^We could not move the webhook to the new URL\./.test(moveError) &&
+        afterRefusedMove.webhook_endpoint_id === beforeRefused.webhook_endpoint_id &&
+        afterRefusedMove.webhook_url === undefined &&
+        (await endpointOf(refusedMoveId)).notification_url.startsWith("https://hooks.example.com/"),
+      moveError || "no error",
+    );
+    mutableConfig.GATEWAY_WEBHOOK_BASE_URL = undefined;
+
     stubCalls.length = 0;
     mutableConfig.WEBHOOK_BASE_URL = undefined;
     const createNoBase = await createRzp("nobase");
@@ -1514,6 +1623,7 @@ ok("C1: get after delete → 404", gone.status === 404);
   } finally {
     globalThis.fetch = realFetch;
     mutableConfig.WEBHOOK_BASE_URL = savedBase;
+    mutableConfig.GATEWAY_WEBHOOK_BASE_URL = savedGatewayBase;
   }
 }
 
@@ -3136,6 +3246,52 @@ ok("C1: get after delete → 404", gone.status === 404);
     "C7: expiry closes the open attempt",
     staleAttempts.every((a) => a.status === "failed" && a.errorCode === "intent_expired"),
   );
+
+  // The bank refused the buyer's 3-D Secure check while they were paying. The gateway's
+  // failure has no transaction to land on, so it went unrecorded and the sweep later
+  // called the attempt "expired" (2026-11-17). The reason now stays on the attempt.
+  {
+    const refused = (
+      await createPaymentIntent({
+        organizationId: orgId,
+        businessId: piBiz.id,
+        paymentMethodPublicId: tdsPm.publicId,
+        amountMinor: 4700,
+        currency: "USD",
+      })
+    ).intent;
+    const outcome = await handleProviderEvent("tmtest", {
+      providerEventId: `evt_auth_failed_${randomUUID()}`,
+      type: "charge.failed",
+      providerChargeId: refused.intentAtGateway!,
+      failureCode: "authentication_required",
+      failureMessage: "The bank could not verify the cardholder.",
+      occurredAt: new Date(),
+      raw: {},
+    });
+    const open = await listAttemptsForIntent(orgId, piBiz.id, refused.publicId);
+    ok("C7: a refused authentication is processed, not ignored", outcome === "processed");
+    ok(
+      "C7: ...its reason is on the attempt, which stays open for another card",
+      open.length === 1 &&
+        open[0]!.status === "requires_action" &&
+        open[0]!.errorCode === "authentication_required",
+    );
+    await withTenant(orgId, (tx) =>
+      tx
+        .update(paymentIntents)
+        .set({ expiresAt: new Date(Date.now() - 60_000) })
+        .where(eq(paymentIntents.publicId, refused.publicId)),
+    );
+    await expirePaymentIntents(new Date());
+    const closed = await listAttemptsForIntent(orgId, piBiz.id, refused.publicId);
+    ok(
+      "C7: expiry keeps the refusal instead of calling it an expiry",
+      closed[0]?.status === "failed" &&
+        closed[0]?.errorCode === "authentication_required" &&
+        closed[0]?.errorText === "The bank could not verify the cardholder.",
+    );
+  }
 
   // ── C7-TTL: the deadline comes from the RAIL, not from a flat hour ───────────
   /**
@@ -5405,6 +5561,365 @@ ok("C1: get after delete → 404", gone.status === 404);
   ok(
     "C7+: a setup refusal with no reason still reads setup_failed",
     bareAttempt?.status === "failed" && bareAttempt?.errorCode === "setup_failed",
+  );
+  // An event we do not act on (`setup_intent.created`) names the object only as the charge
+  // id; the intent filter must still find it.
+  await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `tmev_setupcreated_${rid}`,
+      type: "unknown",
+      providerChargeId: bareSetup.intent.intentAtGateway!,
+      occurredAt: new Date(),
+      raw: { data: {} },
+    },
+    { businessId: biz.id },
+  );
+  const bareByIntent = await listGatewayWebhooksPage(orgId, biz.id, {
+    filters: [{ field: "intent", op: "is", value: bareSetup.intent.intentAtGateway! }],
+  });
+  ok(
+    `C7+: the intent filter finds an unhandled event by its charge id [${bareByIntent.data.map((w) => w.type)}]`,
+    bareByIntent.data.length === 2 && bareByIntent.data.some((w) => w.type === "unknown"),
+  );
+
+  // ── C7-link: every stored event names our intent and attempt (0540) ─────────
+  const linkOf = async (providerEventId: string) => {
+    const [row] = await systemDb
+      .select({
+        paymentIntentId: providerEvents.paymentIntentId,
+        paymentAttemptId: providerEvents.paymentAttemptId,
+      })
+      .from(providerEvents)
+      .where(
+        and(
+          eq(providerEvents.providerEventId, providerEventId),
+          eq(providerEvents.businessId, biz.id),
+        ),
+      );
+    return row;
+  };
+  const [bareAttemptRow] = await listAttemptsForIntent(orgId, biz.id, bareSetup.intent.publicId);
+  const refusedLink = await linkOf(`tmev_setupfail_${rid}`);
+  ok(
+    "C7-link: an acted-on event is linked by the gateway id to its intent and attempt",
+    refusedLink?.paymentIntentId === refusedSetup.intent.id &&
+      refusedLink?.paymentAttemptId === refusedAttempt?.id,
+  );
+  const unknownLink = await linkOf(`tmev_setupcreated_${rid}`);
+  ok(
+    "C7-link: an event we do not act on is linked too",
+    unknownLink?.paymentIntentId === bareSetup.intent.id &&
+      unknownLink?.paymentAttemptId === bareAttemptRow?.id,
+  );
+  // A gateway that answers under its own id names our intent only by its public id.
+  const refSetup = await createPaymentIntent({
+    organizationId: orgId,
+    businessId: biz.id,
+    purpose: "setup",
+    customerPublicId: setupCus.publicId,
+    currency: "USD",
+    gatewayAccountId: acctLite.publicId,
+  });
+  const [refAttempt] = await listAttemptsForIntent(orgId, biz.id, refSetup.intent.publicId);
+  await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `tmev_linkref_${rid}`,
+      type: "unknown",
+      providerChargeId: `tmpsp_${rid}_own_id`,
+      ownership: "ours",
+      ownershipRef: refSetup.intent.publicId,
+      occurredAt: new Date(),
+      raw: { data: {} },
+    },
+    { businessId: biz.id },
+  );
+  const refLink = await linkOf(`tmev_linkref_${rid}`);
+  ok(
+    "C7-link: an event naming only our public id is linked to that intent's attempt",
+    refLink?.paymentIntentId === refSetup.intent.id && refLink?.paymentAttemptId === refAttempt?.id,
+  );
+  await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `tmev_linknone_${rid}`,
+      type: "unknown",
+      providerChargeId: `tmpi_${rid}_not_ours_either`,
+      occurredAt: new Date(),
+      raw: { data: {} },
+    },
+    { businessId: biz.id },
+  );
+  const noneLink = await linkOf(`tmev_linknone_${rid}`);
+  ok(
+    "C7-link: an event naming nothing of ours stays unlinked",
+    noneLink?.paymentIntentId === null && noneLink?.paymentAttemptId === null,
+  );
+  // Another business's intent is never linked, even by its public id.
+  const otherBiz = await createBusiness({
+    organizationId: orgId,
+    name: "PI Link Other",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  await handleProviderEvent(
+    "tmtest",
+    {
+      providerEventId: `tmev_linkforeign_${rid}`,
+      type: "unknown",
+      ownershipRef: refSetup.intent.publicId,
+      occurredAt: new Date(),
+      raw: { data: {} },
+    },
+    { businessId: otherBiz.id },
+  );
+  const [foreignLink] = await systemDb
+    .select({ paymentIntentId: providerEvents.paymentIntentId })
+    .from(providerEvents)
+    .where(
+      and(
+        eq(providerEvents.providerEventId, `tmev_linkforeign_${rid}`),
+        eq(providerEvents.businessId, otherBiz.id),
+      ),
+    );
+  ok(
+    "C7-link: the link is scoped to the delivering business",
+    foreignLink?.paymentIntentId === null,
+  );
+
+  // The attempt's "Webhook events" link filters on our ids.
+  const byAttempt = await listGatewayWebhooksPage(orgId, biz.id, {
+    filters: [{ field: "payment_attempt", op: "is", value: bareAttemptRow!.publicId }],
+  });
+  ok(
+    `C7-link: the payment_attempt filter lists every event of the attempt [${byAttempt.data.map((w) => w.type)}]`,
+    byAttempt.data.length === 2 && byAttempt.data.some((w) => w.type === "unknown"),
+  );
+  const byPi = await listGatewayWebhooksPage(orgId, biz.id, {
+    filters: [{ field: "payment_intent", op: "is", value: refSetup.intent.publicId }],
+  });
+  ok(
+    "C7-link: the payment_intent filter lists the intent's events",
+    byPi.data.length === 1 && byPi.data[0]!.type === "unknown",
+  );
+  // A row stored before the link existed matches by the gateway id it holds.
+  const legacySetup = await createPaymentIntent({
+    organizationId: orgId,
+    businessId: biz.id,
+    purpose: "setup",
+    customerPublicId: setupCus.publicId,
+    currency: "USD",
+    gatewayAccountId: acctLite.publicId,
+  });
+  const [legacyAttempt] = await listAttemptsForIntent(orgId, biz.id, legacySetup.intent.publicId);
+  await systemDb.insert(providerEvents).values({
+    providerKey: "tmtest",
+    providerEventId: `tmev_linklegacy_${rid}`,
+    type: "unknown",
+    businessId: biz.id,
+    outcome: "ignored",
+    normalized: { type: "unknown", providerChargeId: legacySetup.intent.intentAtGateway },
+  });
+  const byLegacyAttempt = await listGatewayWebhooksPage(orgId, biz.id, {
+    filters: [{ field: "payment_attempt", op: "is", value: legacyAttempt!.publicId }],
+  });
+  ok(
+    "C7-link: an unlinked older row is found by the attempt's gateway id",
+    byLegacyAttempt.data.length === 1 && byLegacyAttempt.data[0]!.type === "unknown",
+  );
+  const linkedOnly = await listGatewayWebhooksPage(orgId, biz.id, {
+    filters: [
+      { field: "payment_attempt", op: "is_present", value: "true" },
+      { field: "id", op: "is", value: byLegacyAttempt.data[0]!.id },
+    ],
+  });
+  ok("C7-link: is_present reads the stored link only", linkedOnly.data.length === 0);
+
+  // The backfill links that row: a dry run writes nothing, apply writes once.
+  const since = new Date(Date.now() - 3_600_000);
+  const dry = await backfillEventLinks({ since, apply: false, businessId: biz.id });
+  const afterDry = await linkOf(`tmev_linklegacy_${rid}`);
+  ok(
+    `C7-link: a backfill dry run finds the row and writes nothing [${dry.linked}/${dry.scanned}]`,
+    dry.linked >= 1 && dry.written === 0 && afterDry?.paymentIntentId === null,
+  );
+  const applied = await backfillEventLinks({ since, apply: true, businessId: biz.id });
+  const afterApply = await linkOf(`tmev_linklegacy_${rid}`);
+  ok(
+    `C7-link: the backfill links the row to its intent and attempt [${applied.written}]`,
+    applied.written === dry.linked &&
+      afterApply?.paymentIntentId === legacySetup.intent.id &&
+      afterApply?.paymentAttemptId === legacyAttempt?.id,
+  );
+  const rerun = await backfillEventLinks({ since, apply: true, businessId: biz.id });
+  ok(
+    `C7-link: a backfill rerun writes nothing [${rerun.written}]`,
+    rerun.written === 0 && rerun.linked === 0,
+  );
+
+  // ── C7-widen: a buyer-side refusal reaches the attempt however it arrives ─────
+  const openPi = async () =>
+    createPaymentIntent({
+      organizationId: orgId,
+      businessId: biz.id,
+      paymentMethodPublicId: (await vaultPm("4000000000003155")).publicId,
+      amountMinor: 3300,
+      currency: "USD",
+    });
+  const deliverFail = (ev: Partial<NormalizedProviderEvent> & { type: string }) =>
+    handleProviderEvent(
+      "tmtest",
+      {
+        providerEventId: `tmev_widen_${randomUUID().slice(0, 12)}`,
+        occurredAt: new Date(),
+        raw: { data: {} },
+        ...ev,
+      } as NormalizedProviderEvent,
+      { businessId: biz.id },
+    );
+
+  // A charge failure with NO code: booked with the generic code, the attempt stays open.
+  const noCode = await openPi();
+  const noCodeOut = await deliverFail({
+    type: "charge.failed",
+    providerChargeId: noCode.intent.intentAtGateway!,
+  });
+  const [noCodeAttempt] = await listAttemptsForIntent(orgId, biz.id, noCode.intent.publicId);
+  ok(
+    `C7-widen: a charge.failed with no code books charge_failed on the open attempt [${noCodeAttempt?.errorCode}]`,
+    noCodeOut === "processed" &&
+      noCodeAttempt?.status === noCode.attempt.status &&
+      noCodeAttempt?.errorCode === "charge_failed" &&
+      !!noCodeAttempt?.errorText,
+  );
+
+  // A gateway that answers under its OWN id (Adyen pspReference): found by our ref.
+  const byRef = await openPi();
+  const byRefOut = await deliverFail({
+    type: "intent.failed",
+    providerIntentId: `psp_${randomUUID().slice(0, 12)}`,
+    ownership: "ours",
+    ownershipRef: byRef.intent.publicId,
+    failureCode: "insufficient_funds",
+    providerFailureCode: "E308",
+  });
+  const [byRefAttempt] = await listAttemptsForIntent(orgId, biz.id, byRef.intent.publicId);
+  ok(
+    `C7-widen: intent.failed under an unknown id is matched by ownershipRef [${byRefOut}/${byRefAttempt?.status}]`,
+    byRefOut === "processed" &&
+      byRefAttempt?.status === "failed" &&
+      byRefAttempt?.errorCode === "insufficient_funds",
+  );
+  ok(
+    `C7-widen: the attempt keeps operator text, never the bare code [${byRefAttempt?.errorText}]`,
+    byRefAttempt?.errorText === "Insufficient funds. Gateway code: E308.",
+  );
+
+  // No code at all on intent.failed: the generic authorization code.
+  const bareRef = await openPi();
+  await deliverFail({
+    type: "intent.failed",
+    ownership: "ours",
+    ownershipRef: bareRef.intent.publicId,
+  });
+  const [bareRefAttempt] = await listAttemptsForIntent(orgId, biz.id, bareRef.intent.publicId);
+  ok(
+    `C7-widen: intent.failed with no id and no code books authorization_failed [${bareRefAttempt?.errorCode}]`,
+    bareRefAttempt?.status === "failed" && bareRefAttempt?.errorCode === "authorization_failed",
+  );
+
+  // A ref names every attempt of an intent: on attempt #2 an unknown id may be stale news.
+  const staleRefOut = await deliverFail({
+    type: "intent.failed",
+    providerIntentId: `psp_${randomUUID().slice(0, 12)}`,
+    ownership: "ours",
+    ownershipRef: retryPi.intent.publicId,
+    failureCode: "card_declined",
+  });
+  const afterStaleRef = await listAttemptsForIntent(orgId, biz.id, retryPi.intent.publicId);
+  ok(
+    "C7-widen: an ownershipRef match on attempt #2 under an unknown id is ignored",
+    staleRefOut === "ignored" &&
+      afterStaleRef[1]!.resourceVersion === retryAttempts[1]!.resourceVersion,
+  );
+
+  // A ref on a FOREIGN object is never matched.
+  const foreign = await openPi();
+  const foreignOut = await deliverFail({
+    type: "intent.failed",
+    ownership: "foreign",
+    ownershipRef: foreign.intent.publicId,
+    failureCode: "card_declined",
+  });
+  ok("C7-widen: a foreign object's ref is not matched", foreignOut === "ignored");
+
+  // ── C7-race: the browser's reasonless refusal and the webhook's reason, either order ──
+  const pspFail = (pi: { intent: { publicId: string } }, failureCode: string) =>
+    deliverFail({
+      type: "charge.failed",
+      providerChargeId: `psp_${randomUUID().slice(0, 12)}`,
+      ownership: "ours",
+      ownershipRef: pi.intent.publicId,
+      failureCode,
+    });
+  const clientFirst = await openPi();
+  await failPaymentIntentFromGateway(orgId, biz.id, clientFirst.intent.publicId, {
+    ...GENERIC_CLIENT_REFUSAL,
+  });
+  const clientFirstOut = await pspFail(clientFirst, "insufficient_funds");
+  const [clientFirstAttempt] = await listAttemptsForIntent(
+    orgId,
+    biz.id,
+    clientFirst.intent.publicId,
+  );
+  ok(
+    `C7-race: a webhook replaces the browser's reasonless refusal [${clientFirstAttempt?.errorCode}]`,
+    clientFirstOut === "processed" &&
+      clientFirstAttempt?.status === "failed" &&
+      clientFirstAttempt?.errorCode === "insufficient_funds",
+  );
+  const webhookFirst = await openPi();
+  await pspFail(webhookFirst, "insufficient_funds");
+  await failPaymentIntentFromGateway(orgId, biz.id, webhookFirst.intent.publicId, {
+    ...GENERIC_CLIENT_REFUSAL,
+  });
+  const [webhookFirstAttempt] = await listAttemptsForIntent(
+    orgId,
+    biz.id,
+    webhookFirst.intent.publicId,
+  );
+  ok(
+    `C7-race: the browser's reasonless refusal keeps the webhook's reason [${webhookFirstAttempt?.errorCode}]`,
+    webhookFirstAttempt?.status === "failed" &&
+      webhookFirstAttempt?.errorCode === "insufficient_funds",
+  );
+  const named = await openPi();
+  await failPaymentIntentFromGateway(orgId, biz.id, named.intent.publicId, {
+    code: "incorrect_cvc",
+    message: "The security code is not correct.",
+  });
+  const namedOut = await pspFail(named, "insufficient_funds");
+  const [namedAttempt] = await listAttemptsForIntent(orgId, biz.id, named.intent.publicId);
+  ok(
+    "C7-race: a failed attempt with a named reason is never overwritten",
+    namedOut === "ignored" && namedAttempt?.errorCode === "incorrect_cvc",
+  );
+
+  // ── C7-poll: the expiry sweep keeps the reason a poll found ─────────────────
+  const polled = await openPi();
+  await TmtestProvider.resolveChallenge(polled.intent.intentAtGateway!, false);
+  await withTenant(orgId, (tx) =>
+    tx
+      .update(paymentIntents)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(paymentIntents.id, polled.intent.id)),
+  );
+  await runWithClockScope({ onlyBusinessId: biz.id }, () => expirePaymentIntents(new Date()));
+  const [polledAttempt] = await listAttemptsForIntent(orgId, biz.id, polled.intent.publicId);
+  ok(
+    `C7-poll: a missed webhook keeps the gateway's reason, not intent_expired [${polledAttempt?.errorCode}]`,
+    polledAttempt?.status === "failed" && polledAttempt?.errorCode === "authentication_failed",
   );
 }
 

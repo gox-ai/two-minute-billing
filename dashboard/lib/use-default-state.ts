@@ -93,10 +93,11 @@ export function useFormResetSync(
   ref: React.RefObject<HTMLElement | null>,
   reapply: () => void,
 ): () => boolean {
-  // Kept in a ref so the listener below is registered once per form rather than
-  // re-subscribed on every render, without going stale.
+  // The listener below is registered once per form. A LAYOUT effect keeps the ref current:
+  // React resets the form in the commit that brings the saved defaults, and the microtask
+  // below runs before passive effects flush, so `useEffect` here re-applied the previous save.
   const latest = React.useRef(reapply);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     latest.current = reapply;
   });
   const resetting = React.useRef(false);
@@ -108,11 +109,15 @@ export function useFormResetSync(
     const onResetStart = () => {
       resetting.current = true;
     };
-    const onReset = () =>
+    const onReset = () => {
+      // After a refused save the control keeps the person's edit: the restore Radix
+      // reported was dropped above, so skipping the re-apply is all it takes.
+      const refused = form.dataset.saveOutcome === "refused";
       queueMicrotask(() => {
         resetting.current = false;
-        latest.current();
+        if (!refused) latest.current();
       });
+    };
     form.addEventListener("reset", onResetStart, true);
     form.addEventListener("reset", onReset);
     return () => {

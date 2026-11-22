@@ -21,11 +21,17 @@ import type { NormalizeWebhookInput, NormalizedProviderEvent } from "@/providers
 import { decryptCredentials, encryptCredentials } from "@/platform/secrets";
 import {
   activeWebhookSecretFallback,
-  buildNotificationUrl,
+  notificationUrlCandidates,
   setWebhookSecretFallback,
 } from "./webhook-endpoint";
 import { redactHeaders } from "@/providers/http";
-import { gatewayAccounts, businesses, providerEvents } from "@db/schema";
+import {
+  gatewayAccounts,
+  businesses,
+  paymentAttempts,
+  paymentIntents,
+  providerEvents,
+} from "@db/schema";
 import {
   clampLimit,
   filterConditions,
@@ -41,6 +47,8 @@ import {
   type ListFilter,
   type ListPage,
   cappedTotal,
+  SET_OPS,
+  splitMulti,
 } from "@/platform/list-query";
 import { businessTimezone } from "@/platform/business-tz";
 import { withTraceContext, newTraceId, stampTracePayload } from "@/platform/trace";
@@ -150,16 +158,19 @@ export async function ingestGatewayWebhook(input: {
 
 type DeliveryInput = Parameters<typeof ingestGatewayWebhook>[0];
 
+/** The URL the account is registered under, then any other it may have been signed for. */
+function notificationUrlsFor(acc: typeof gatewayAccounts.$inferSelect) {
+  const [notificationUrl, ...alternateNotificationUrls] = notificationUrlCandidates(acc);
+  return { notificationUrl, alternateNotificationUrls };
+}
+
 /** Verify and normalize a delivery (throws on a bad signature), plus what its log rows keep. */
 async function verifyDelivery(acc: typeof gatewayAccounts.$inferSelect, input: DeliveryInput) {
   const events = distinctEventIds(
     await normalizeWithFallbackSecret(acc, {
       payload: input.rawBody,
       headers: input.headers,
-      notificationUrl: buildNotificationUrl({
-        gatewayKey: acc.gatewayKey,
-        gatewayAccountPublicId: acc.publicId,
-      }),
+      ...notificationUrlsFor(acc),
       settledEventIds: (ids) => settledProviderEventIds(input.gatewayKey, acc.businessId, ids),
     }),
   );
@@ -660,6 +671,12 @@ export async function listGatewayWebhooks(
 
 // ── Paginated list (see docs/GUIDE.md §3.4 for the shared contract) ────────────
 
+/**
+ * The gateway object an event names: its intent id, else the charge id, where an event type
+ * we do not act on (`setup_intent.created`) keeps the object's id.
+ */
+const gatewayObjectId = sql`coalesce(${providerEvents.normalized}->>'providerIntentId', ${providerEvents.normalized}->>'providerChargeId')`;
+
 const GATEWAY_WEBHOOK_FILTERS: Record<string, FilterSpec> = {
   id: { column: providerEvents.id, kind: "text" },
   gateway_key: { column: providerEvents.providerKey, kind: "enum" },
@@ -671,13 +688,51 @@ const GATEWAY_WEBHOOK_FILTERS: Record<string, FilterSpec> = {
   response_status: { column: providerEvents.responseStatus, kind: "number" },
   request_url: { column: providerEvents.requestUrl, kind: "text" },
   transaction: { column: providerEvents.transactionPublicId, kind: "text" },
-  // The gateway's intent id (`seti_…`, `pi_…`, an order id). A setup refused in the buyer's
-  // browser reaches us only as a webhook, so this is how an attempt finds its refusal.
-  intent: { column: sql`${providerEvents.normalized}->>'providerIntentId'`, kind: "text" },
+  // The gateway's intent id (`seti_…`, `pi_…`, an order id). `payment_attempt` below is the
+  // link the dashboard uses; this one stays for searching by the gateway's own id.
+  intent: { column: gatewayObjectId, kind: "text" },
   received_at: { column: providerEvents.receivedAt, kind: "date" },
 };
 
-export const GATEWAY_WEBHOOK_FILTER_OPS = opsFromSpecs(GATEWAY_WEBHOOK_FILTERS);
+/**
+ * Our payment intent / attempt, by public id: the link `applyProviderEvent` stores (0540).
+ * A row stored before that link existed matches by the gateway ids the record holds.
+ */
+function linkFilterCondition(
+  businessId: string,
+  link: "payment_intent" | "payment_attempt",
+  op: string,
+  value: string,
+): SQL | undefined {
+  const linked =
+    link === "payment_intent" ? providerEvents.paymentIntentId : providerEvents.paymentAttemptId;
+  if (op === "is_present")
+    return value === "false" ? sql`${linked} IS NULL` : sql`${linked} IS NOT NULL`;
+  const members = op === "is" || op === "is_not" ? [value] : splitMulti(value);
+  if (!members.length) return undefined;
+  const list = sql.join(
+    members.map((m) => sql`${m}`),
+    sql`, `,
+  );
+  const ours =
+    link === "payment_intent"
+      ? sql`select ${paymentIntents.id} from ${paymentIntents} where ${paymentIntents.businessId} = ${businessId} and ${paymentIntents.publicId} in (${list})`
+      : sql`select ${paymentAttempts.id} from ${paymentAttempts} where ${paymentAttempts.businessId} = ${businessId} and ${paymentAttempts.publicId} in (${list})`;
+  const gatewayIds =
+    link === "payment_intent"
+      ? sql`select ${paymentAttempts.idAtGateway} from ${paymentAttempts} join ${paymentIntents} on ${paymentIntents.id} = ${paymentAttempts.paymentIntentId} where ${paymentIntents.businessId} = ${businessId} and ${paymentIntents.publicId} in (${list}) and ${paymentAttempts.idAtGateway} is not null
+          union select ${paymentIntents.intentAtGateway} from ${paymentIntents} where ${paymentIntents.businessId} = ${businessId} and ${paymentIntents.publicId} in (${list}) and ${paymentIntents.intentAtGateway} is not null`
+      : sql`select ${paymentAttempts.idAtGateway} from ${paymentAttempts} where ${paymentAttempts.businessId} = ${businessId} and ${paymentAttempts.publicId} in (${list}) and ${paymentAttempts.idAtGateway} is not null`;
+  const match = sql`(${linked} in (${ours}) or (${linked} is null and ${gatewayObjectId} in (${gatewayIds})))`;
+  return op === "is" || op === "in" ? match : sql`not ${match}`;
+}
+
+const GATEWAY_WEBHOOK_LINK_FIELDS = ["payment_intent", "payment_attempt"] as const;
+
+export const GATEWAY_WEBHOOK_FILTER_OPS: Record<string, readonly string[]> = {
+  ...opsFromSpecs(GATEWAY_WEBHOOK_FILTERS),
+  ...Object.fromEntries(GATEWAY_WEBHOOK_LINK_FIELDS.map((f) => [f, SET_OPS])),
+};
 
 const GATEWAY_WEBHOOK_SORTS = {
   received_at: providerEvents.receivedAt,
@@ -742,6 +797,16 @@ export async function listGatewayWebhooksPage(
   );
   if (search) conds.push(search);
   conds.push(...filterConditions(GATEWAY_WEBHOOK_FILTERS, f.filters, guard.tz));
+  for (const filter of f.filters ?? []) {
+    if (!(GATEWAY_WEBHOOK_LINK_FIELDS as readonly string[]).includes(filter.field)) continue;
+    const c = linkFilterCondition(
+      businessId,
+      filter.field as (typeof GATEWAY_WEBHOOK_LINK_FIELDS)[number],
+      filter.op,
+      filter.value,
+    );
+    if (c) conds.push(c);
+  }
 
   let total: number | null = null;
   if (!f.startingAfter) {

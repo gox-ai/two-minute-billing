@@ -451,6 +451,34 @@ export function decodeCheckoutcomIntent(id: string): CheckoutcomSyntheticIntent 
   }
 }
 
+/**
+ * The Flow intent id a session payment belongs to, rebuilt from the payment: the stored
+ * `intent_at_gateway`. Best effort: a payment whose fields differ falls back to our ref.
+ */
+export function checkoutcomFlowIntentOf(p: {
+  amount?: unknown;
+  currency?: unknown;
+  customer?: unknown;
+  metadata?: Record<string, unknown>;
+}): string | undefined {
+  const session = p.metadata?.cko_payment_session_id;
+  const ref = p.metadata?.[CHECKOUTCOM_OWNERSHIP_KEY];
+  const kind = p.metadata?.[KIND_KEY];
+  const cur = typeof p.currency === "string" ? p.currency.toUpperCase() : undefined;
+  if (typeof session !== "string" || !session || typeof ref !== "string" || !cur) return undefined;
+  if (kind !== "intent" && kind !== "setup") return undefined;
+  const customer = (p.customer as { id?: unknown } | undefined)?.id;
+  if (kind === "intent" && typeof p.amount !== "number") return undefined;
+  return encodeCheckoutcomIntent({
+    p: kind === "setup" ? "setup" : "payment",
+    ...(typeof customer === "string" && customer ? { c: customer } : {}),
+    s: session,
+    cur,
+    ...(kind === "intent" ? { a: String(fromCheckoutcomAmount(p.amount as number, cur)) } : {}),
+    r: ref,
+  });
+}
+
 // ── Webhooks ─────────────────────────────────────────────────────────────────
 
 /** `Cko-Signature`: HMAC-SHA256 of the raw body with the workflow's signature key, hex. */
@@ -482,6 +510,10 @@ export const CHECKOUTCOM_WEBHOOK_EVENTS: Record<string, string[]> = {
     "payment_approved",
     "payment_captured",
     "payment_declined",
+    // A Flow card check (setup) refused, and a payment the buyer let lapse or cancelled.
+    "card_verification_declined",
+    "payment_expired",
+    "payment_canceled",
     "payment_capture_declined",
     "payment_pending",
     "payment_capture_pending",
@@ -642,6 +674,24 @@ export function normalizeCheckoutcomEvent(
       ...((f.message ?? sig.message) ? { failureMessage: (f.message ?? sig.message)! } : {}),
     };
   };
+  /** A buyer-present attempt the gateway refused or that lapsed: matched on the stored id, then our ref. */
+  const buyerFailure = (f: Partial<NormalizedProviderEvent>): NormalizedProviderEvent => {
+    const hosted = reference?.startsWith("th-");
+    const intentId = hosted
+      ? CHECKOUTCOM_HOSTED_PREFIX + reference
+      : checkoutcomFlowIntentOf(d as Parameters<typeof checkoutcomFlowIntentOf>[0]);
+    return {
+      ...base,
+      ...own,
+      ...(hosted && own.ownership !== "ours"
+        ? { ownership: "ours" as const, ownershipRef: reference!.slice(3) }
+        : {}),
+      type: "charge.failed",
+      providerChargeId: payId,
+      ...(intentId ? { providerIntentId: intentId } : {}),
+      ...f,
+    };
+  };
   switch (type) {
     case "payment_captured": {
       // `amount` is what this capture took.
@@ -664,9 +714,41 @@ export function normalizeCheckoutcomEvent(
         return [{ ...base, ...own, type: "charge.succeeded", providerChargeId: payId }];
       return [{ ...base, ...own, type: "charge.pending", providerChargeId: payId }];
     case "payment_declined":
-      // A hold or a card check is refused in the call that made it; the event adds nothing.
-      if (kind === "intent" || kind === "setup") return [{ ...base, ...own, type: "unknown" }];
+    case "card_verification_declined":
+      // A buyer-present refusal (Flow, a 3DS hold, a hosted page): the reason goes on the
+      // open attempt; the buyer may still try again.
+      if (kind === "intent" || kind === "setup") return [buyerFailure(declined())];
       return [{ ...base, ...own, type: "charge.failed", providerChargeId: payId, ...declined() }];
+    case "payment_expired":
+    case "payment_canceled": {
+      const expired = type === "payment_expired";
+      if (kind === "intent" || kind === "setup")
+        return [
+          buyerFailure({
+            failureCode: "payment_abandoned",
+            failureRetriable: true,
+            failureMessage: expired
+              ? "The payment expired before the payer completed it."
+              : "The payment was cancelled before the payer completed it.",
+          }),
+        ];
+      // A renewal that waited for the payer's 3D Secure check, which never came.
+      if (kind === "charge")
+        return [
+          {
+            ...base,
+            ...own,
+            type: "charge.failed",
+            providerChargeId: payId,
+            failureCode: "authentication_required",
+            failureRetriable: true,
+            failureMessage: expired
+              ? "The payment expired at Checkout.com before the payer completed authentication."
+              : "The payment was cancelled at Checkout.com before the payer completed authentication.",
+          },
+        ];
+      return [{ ...base, ...own, type: "unknown", ...(payId ? { providerChargeId: payId } : {}) }];
+    }
     case "payment_capture_declined":
       // We book an approved authorization paid, so a refused capture withdraws that payment.
       return [
@@ -734,7 +816,10 @@ export function normalizeCheckoutcomEvent(
     case "payment_returned":
       return [{ ...base, ...own, type: "charge.reversed", providerChargeId: payId }];
     default:
-      return [{ ...base, type: "unknown" }];
+      // A payment event keeps its id, so the attempt can find it.
+      return type.startsWith("payment_") && payId
+        ? [{ ...base, ...own, type: "unknown", providerChargeId: payId }]
+        : [{ ...base, type: "unknown" }];
   }
 }
 

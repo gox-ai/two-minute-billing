@@ -675,6 +675,8 @@ async function patchEmailConfig(
     attachReceiptPdf: current?.attachReceiptPdf === true,
     linkTarget: current?.linkTarget ?? "portal",
     merchantUrl: current?.merchantUrl ?? null,
+    // Unset = off, matching resolveEmailConfig.
+    trackEngagement: current?.trackEngagement === true,
   };
   const merged: EmailConfigDto = { ...base, ...fields };
   const res = await patch(biz, { ...extra, email_config: merged }, fd, label);
@@ -706,6 +708,11 @@ export async function saveEmailsAction(
     fd.get("attach_receipt_pdf_present") === "1"
       ? { attachReceiptPdf: fd.get("attach_receipt_pdf") != null }
       : {};
+  // Sent only when the switch rendered: an unchecked switch posts nothing.
+  const tracking =
+    fd.get("track_engagement_present") === "1"
+      ? { trackEngagement: fd.get("track_engagement") != null }
+      : {};
   // Email links: the hosted portal, or the merchant's own http(s) page.
   let links: Partial<EmailConfigDto> = {};
   if (fd.get("link_target") != null) {
@@ -721,7 +728,12 @@ export async function saveEmailsAction(
       });
     links = { linkTarget, merchantUrl };
   }
-  return patchEmailConfig(biz, { enabled, types, ...receipt, ...links }, fd, "Email settings");
+  return patchEmailConfig(
+    biz,
+    { enabled, types, ...receipt, ...tracking, ...links },
+    fd,
+    "Email settings",
+  );
 }
 
 /** Settings → Email notifications → Sender. Identity only; transport is the SMTP page. */
@@ -1679,17 +1691,87 @@ export async function saveBillingModeAction(
   return patch(biz, body, fd, "Billing mode");
 }
 
-/** Billing rules → Round-off invoice amount. */
 /**
- * Hosted pages → may a customer type a coupon code (`allow_customer_coupons`, 0238)?
- *
- * A `SwitchField` posts nothing when it is OFF (an unchecked control has no value — the
- * hidden input renders only while checked), so absence IS the off answer here rather than
- * "not touched". Safe because this form carries exactly one control: if it was submitted
- * at all, the switch's state is on the wire one way or the other. A form that ever gains a
- * second field must switch to an explicit hidden marker.
+ * Settings → Checkout and Settings → Customer portal share ONE `storefront_config` column and
+ * the engine replaces it whole. Each page therefore sends the saved config with only ITS OWN
+ * keys overwritten: a key the page does not render must never be read from the form, because an
+ * unchecked switch posts nothing and would read as "off". Both pages send `expected_version`.
  */
-export async function saveHostedPagesAction(
+async function readStorefrontConfig(biz: string) {
+  try {
+    return { sc: (await getBusiness(biz))?.storefront_config ?? {} };
+  } catch {
+    return { error: actionError("We could not read the current settings. We saved nothing.") };
+  }
+}
+
+/**
+ * Settings → Checkout. Owns: layout, payment protection, consent, coupon codes (a business-level
+ * field that the portal also honours), one-time purchases, zero-value lines, PO number, redirects.
+ *
+ * `allow_customer_coupons`: a SwitchField posts nothing when OFF, so absence is the off answer.
+ * Safe because this page always renders the coupon card.
+ */
+export async function saveCheckoutSettingsAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("settings:manage", "admin");
+  const biz = str(fd, "biz");
+  if (!biz) return actionError("The business ID is missing. Reload the page.");
+  // Posted only while the coupon box is on (the field is hidden, not removed, when off).
+  const couponLimit = num(fd, "max_customer_coupon_codes");
+  const couponLimitValid =
+    couponLimit != null && Number.isInteger(couponLimit) && couponLimit >= 1 && couponLimit <= 10;
+  if (fd.get("allow_customer_coupons") === "on" && !couponLimitValid)
+    return actionError("Correct the highlighted fields.", {
+      errors: { max_customer_coupon_codes: "Enter a whole number from 1 to 10." },
+    });
+  const requireTerms = bool(fd, "require_terms");
+  const termsUrl = strOrNull(fd, "terms_url");
+  if (requireTerms && !termsUrl)
+    return actionError("Correct the highlighted fields.", {
+      errors: { terms_url: "Enter the URL of your terms." },
+    });
+  const cur = await readStorefrontConfig(biz);
+  if (cur.error) return cur.error;
+  return patch(
+    biz,
+    {
+      allow_customer_coupons: fd.get("allow_customer_coupons") === "on",
+      ...(couponLimitValid ? { max_customer_coupon_codes: couponLimit } : {}),
+      storefront_config: {
+        ...cur.sc,
+        hide_zero_value_lines: bool(fd, "hide_zero_value_lines"),
+        collect_po_number: bool(fd, "collect_po_number"),
+        default_return_url: strOrNull(fd, "default_return_url"),
+        default_cancel_url: strOrNull(fd, "default_cancel_url"),
+        one_time_save_payment_method: ((v) => (v === "never" || v === "always" ? v : "ask"))(
+          str(fd, "one_time_save_payment_method"),
+        ),
+        recurring_consent: bool(fd, "recurring_consent"),
+        require_terms: requireTerms,
+        terms_url: termsUrl,
+        privacy_url: strOrNull(fd, "privacy_url"),
+        marketing_consent: bool(fd, "marketing_consent"),
+        checkout_layout: str(fd, "checkout_layout") === "one_page" ? "one_page" : "steps",
+        bot_check_after_failures: ((n) =>
+          n != null && Number.isInteger(n) && n >= 1 && n <= 20 ? n : null)(
+          num(fd, "bot_check_after_failures"),
+        ),
+      },
+    },
+    fd,
+    "Checkout settings",
+  );
+}
+
+/**
+ * Settings → Customer portal. Owns every portal key, and none of the checkout ones. `bool` reads
+ * an unchecked switch as false, which is right even for the keys that default to true: this page
+ * always renders all of its own switches.
+ */
+export async function savePortalSettingsAction(
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
@@ -1705,14 +1787,6 @@ export async function saveHostedPagesAction(
     return actionError("Correct the highlighted fields.", {
       errors: { skip_renewal_limit: "Enter a whole number from 1 to 12." },
     });
-  // Posted only while the coupon box is on (the field is hidden, not removed, when off).
-  const couponLimit = num(fd, "max_customer_coupon_codes");
-  const couponLimitValid =
-    couponLimit != null && Number.isInteger(couponLimit) && couponLimit >= 1 && couponLimit <= 10;
-  if (fd.get("allow_customer_coupons") === "on" && !couponLimitValid)
-    return actionError("Correct the highlighted fields.", {
-      errors: { max_customer_coupon_codes: "Enter a whole number from 1 to 10." },
-    });
   // Empty = no limit. Posted only while restart is on (the field is hidden, not removed).
   const restartWindowRaw = str(fd, "restart_window_days").trim();
   const restartWindow = restartWindowRaw === "" ? null : Number(restartWindowRaw);
@@ -1724,8 +1798,6 @@ export async function saveHostedPagesAction(
     return actionError("Correct the highlighted fields.", {
       errors: { restart_window_days: "Enter a whole number from 1 to 3650, or leave it empty." },
     });
-  const requireTerms = bool(fd, "require_terms");
-  const termsUrl = strOrNull(fd, "terms_url");
   // The back link leaves the portal: https only (the engine refuses http too).
   const portalReturnUrl = strOrNull(fd, "portal_return_url");
   if (portalReturnUrl && !portalReturnUrl.startsWith("https://"))
@@ -1738,32 +1810,18 @@ export async function saveHostedPagesAction(
     return actionError("Correct the highlighted fields.", {
       errors: { seat_max: "Enter a maximum that is not less than the minimum." },
     });
-  if (requireTerms && !termsUrl)
-    return actionError("Correct the highlighted fields.", {
-      errors: { terms_url: "Enter the URL of your terms." },
-    });
+  const cur = await readStorefrontConfig(biz);
+  if (cur.error) return cur.error;
   return patch(
     biz,
     {
-      allow_customer_coupons: fd.get("allow_customer_coupons") === "on",
-      ...(couponLimitValid ? { max_customer_coupon_codes: couponLimit } : {}),
-      // 0243 — the `advanced_settings` group. Sent whole: these are switches and two
-      // URLs, and a partially-posted form must not read as "leave the rest alone".
       storefront_config: {
-        hide_zero_value_lines: bool(fd, "hide_zero_value_lines"),
-        collect_po_number: bool(fd, "collect_po_number"),
-        default_return_url: strOrNull(fd, "default_return_url"),
-        default_cancel_url: strOrNull(fd, "default_cancel_url"),
-        // Portal self-service permissions (2026-09-09). `bool` reads an unchecked switch as
-        // false, which is what we want even though these DEFAULT to true: the form always
-        // renders all three, so an absent value means the operator turned it off — not
-        // "unspecified". Sent whole for the same reason as the rest of this object.
+        ...cur.sc,
         allow_invoice_download: bool(fd, "allow_invoice_download"),
         allow_invoice_payment: bool(fd, "allow_invoice_payment"),
         allow_remove_payment_method: bool(fd, "allow_remove_payment_method"),
         allow_cancel_subscription: bool(fd, "allow_cancel_subscription"),
-        // A select, so it always posts; the enum is validated by the engine and an
-        // unrecognised value resolves to `end_of_term` rather than `immediately`.
+        // A select, so it always posts; an unrecognised value resolves to `end_of_term`.
         cancel_timing: str(fd, "cancel_timing") === "immediately" ? "immediately" : "end_of_term",
         allow_pause_resume: bool(fd, "allow_pause_resume"),
         allow_reactivate: bool(fd, "allow_reactivate"),
@@ -1781,32 +1839,18 @@ export async function saveHostedPagesAction(
         ...(skipLimitValid ? { skip_renewal_limit: skipLimit } : {}),
         // Rich text from the editor; empty clears it back to the default copy.
         portal_link_error_html: strOrNull(fd, "portal_link_error_html"),
-        one_time_save_payment_method: ((v) => (v === "never" || v === "always" ? v : "ask"))(
-          str(fd, "one_time_save_payment_method"),
+        portal_save_new_method: ((v) => (v === "never" || v === "always" ? v : "offer"))(
+          str(fd, "portal_save_new_method"),
         ),
+        portal_ask_delete_reason: bool(fd, "portal_ask_delete_reason"),
         portal_show_usage: bool(fd, "portal_show_usage"),
         portal_show_usage_projection: bool(fd, "portal_show_usage_projection"),
-        recurring_consent: bool(fd, "recurring_consent"),
-        require_terms: requireTerms,
-        terms_url: termsUrl,
-        privacy_url: strOrNull(fd, "privacy_url"),
-        marketing_consent: bool(fd, "marketing_consent"),
-        checkout_layout: str(fd, "checkout_layout") === "one_page" ? "one_page" : "steps",
-        wallets_first: bool(fd, "wallets_first"),
-        bot_check_after_failures: ((n) =>
-          n != null && Number.isInteger(n) && n >= 1 && n <= 20 ? n : null)(
-          num(fd, "bot_check_after_failures"),
-        ),
         allow_plan_changes: bool(fd, "allow_plan_changes"),
         seat_changes: ((v) => (v === "increase" || v === "both" ? v : "off"))(
           str(fd, "seat_changes"),
         ),
-        seat_min: ((n) => (n != null && Number.isInteger(n) && n >= 1 ? n : null))(
-          num(fd, "seat_min"),
-        ),
-        seat_max: ((n) => (n != null && Number.isInteger(n) && n >= 1 ? n : null))(
-          num(fd, "seat_max"),
-        ),
+        seat_min: ((n) => (n != null && Number.isInteger(n) && n >= 1 ? n : null))(seatMin),
+        seat_max: ((n) => (n != null && Number.isInteger(n) && n >= 1 ? n : null))(seatMax),
         allow_addon_changes: bool(fd, "allow_addon_changes"),
         shorter_period: ((v) => (v === "never" || v === "after_12_months" ? v : "always"))(
           str(fd, "shorter_period"),
@@ -1849,7 +1893,7 @@ export async function saveHostedPagesAction(
       },
     },
     fd,
-    "Hosted page settings",
+    "Portal settings",
   );
 }
 
@@ -2091,6 +2135,16 @@ const brandSchema = z.object({
         .regex(/^#[0-9a-fA-F]{6}$/, "Use a 6-digit hex color, for example #FF6700."),
     ])
     .optional(),
+  // Empty = automatic. Same hex rule as brand_color.
+  button_text_color: z
+    .union([
+      z.literal(""),
+      z
+        .string()
+        .trim()
+        .regex(/^#[0-9a-fA-F]{6}$/, "Use a 6-digit hex color, for example #FFFFFF."),
+    ])
+    .optional(),
 });
 
 export async function saveBrandAction(
@@ -2107,6 +2161,12 @@ export async function saveBrandAction(
       icon_url: data.icon_url || null,
       favicon_url: data.favicon_url || null,
       brand_color: data.brand_color ? data.brand_color.toUpperCase() : null,
+      // Absent (an older form) leaves it; empty clears it to automatic.
+      ...(data.button_text_color !== undefined
+        ? {
+            button_text_color: data.button_text_color ? data.button_text_color.toUpperCase() : null,
+          }
+        : {}),
     },
     fd,
     "Brand styles",
@@ -2281,4 +2341,48 @@ export async function saveMandateSizingAction(
   if (bps !== DEFAULT_MANDATE_HEADROOM_BPS) cfg.headroom_bps = bps;
   if (capMinor !== DEFAULT_MANDATE_RAIL_CAP_MINOR) cfg.rail_ceiling_cap_minor = capMinor;
   return patch(biz, { mandate_config: Object.keys(cfg).length ? cfg : null }, fd, "Mandates");
+}
+
+/**
+ * Settings → Gateways → where new payment methods go (`storefront_config.payment_routing`).
+ * The form posts `route:<CUR>:<method>` = `gwa_…` for every row, and `order:<CUR>` = the
+ * methods in the order shown. Merged into the stored storefront_config, which the PATCH
+ * replaces whole.
+ */
+export async function savePaymentRoutingAction(
+  _prev: ActionResult | null,
+  fd: FormData,
+): Promise<ActionResult> {
+  await requirePermission("settings:manage", "admin");
+  const biz = str(fd, "biz");
+  if (!biz) return actionError("The business ID is missing. Reload the page.");
+  const routing: Record<string, { order: string[]; gateways: Record<string, string> }> = {};
+  for (const [key, value] of fd.entries()) {
+    if (typeof value !== "string") continue;
+    const order = /^order:([A-Z]{3})$/.exec(key);
+    if (order) {
+      const cur = order[1]!;
+      routing[cur] ??= { order: [], gateways: {} };
+      routing[cur].order = value.split(",").filter((m) => /^[a-z_]{1,40}$/.test(m));
+      continue;
+    }
+    const route = /^route:([A-Z]{3}):([a-z_]{1,40})$/.exec(key);
+    if (route && value.startsWith("gwa_")) {
+      const cur = route[1]!;
+      routing[cur] ??= { order: [], gateways: {} };
+      routing[cur].gateways[route[2]!] = value;
+    }
+  }
+  let current;
+  try {
+    current = (await getBusiness(biz))?.storefront_config ?? null;
+  } catch {
+    return actionError("We could not read the current settings. We saved nothing.");
+  }
+  return patch(
+    biz,
+    { storefront_config: { ...current, payment_routing: routing } },
+    fd,
+    "Payment method routing",
+  );
 }

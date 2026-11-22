@@ -2,9 +2,8 @@ import type { PaymentProvider } from "./types";
 import { decryptCredentials } from "@/platform/secrets";
 import type { gatewayAccounts } from "@db/schema";
 import { runWithGatewayLogContext, type GatewayLogContext } from "./log-context";
-import { config } from "@/platform/config";
 import { GATEWAYS, gatewayDefinition } from "./gateway-catalog";
-import { gatewayNotificationUrl } from "./notification-url";
+import { accountNotificationUrl, gatewayWebhookBaseUrl } from "./notification-url";
 import { GATEWAY_FACTORIES, GatewayResolveError, type GatewayCredentials } from "./gateways";
 
 export { GatewayResolveError };
@@ -67,9 +66,7 @@ function buildAdapter(row: GatewayAccountRow): PaymentProvider {
   return GATEWAY_FACTORIES[def.key].build(creds, {
     businessId: row.businessId,
     livemode: row.livemode,
-    ...(config.WEBHOOK_BASE_URL
-      ? { notificationUrl: gatewayNotificationUrl(row.gatewayKey, row.publicId) }
-      : {}),
+    ...(gatewayWebhookBaseUrl() ? { notificationUrl: accountNotificationUrl(row, creds) } : {}),
   });
 }
 
@@ -128,15 +125,33 @@ export function resolveAdapterWithWebhookSecret(
     {
       businessId: row.businessId,
       livemode: row.livemode,
-      ...(config.WEBHOOK_BASE_URL
-        ? { notificationUrl: gatewayNotificationUrl(row.gatewayKey, row.publicId) }
-        : {}),
+      ...(gatewayWebhookBaseUrl() ? { notificationUrl: accountNotificationUrl(row, creds) } : {}),
     },
   );
   return withGatewayLogging(adapter, { businessId: row.businessId, gatewayAccountId: row.id });
 }
 
 /** Resolve (build + cache) the adapter for a gateway account row. */
+/**
+ * Build the adapter from credentials before they are stored, so an account that can never
+ * work (a required key missing or malformed) is refused at connect time. Throws
+ * `GatewayResolveError` with the adapter's own reason. Makes no network call.
+ */
+export function assertCredentialsBuild(
+  gatewayKey: string,
+  creds: Record<string, unknown>,
+  ctx: { businessId: string; livemode: boolean },
+): void {
+  const def = gatewayDefinition(gatewayKey);
+  if (!def) throw new GatewayResolveError(`Unknown gateway_key: ${gatewayKey}`);
+  try {
+    GATEWAY_FACTORIES[def.key].build(creds as GatewayCredentials, ctx);
+  } catch (e) {
+    if (e instanceof GatewayResolveError) throw e;
+    throw new GatewayResolveError(e instanceof Error ? e.message : String(e));
+  }
+}
+
 export function resolveAdapter(row: GatewayAccountRow): PaymentProvider {
   const key = `${row.id}:${row.resourceVersion}`;
   const cached = cacheGet(key);

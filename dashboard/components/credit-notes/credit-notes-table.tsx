@@ -192,7 +192,8 @@ export function CreditNotesTable({
             href={`/businesses/${biz}/credit_notes/${row.original.id}`}
             data-record-title
             className={cn(
-              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline",
+              // A long number wraps in a stacked row; the table keeps it on one line.
+              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline list-narrow:wrap-anywhere list-narrow:whitespace-normal",
               !row.original.number && "font-mono",
             )}
           >
@@ -208,7 +209,8 @@ export function CreditNotesTable({
           <Link
             href={`/businesses/${biz}/invoices/${row.original.invoice}`}
             className={cn(
-              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline",
+              // A long number wraps in a stacked row; the table keeps it on one line.
+              "inline-block text-sm font-medium whitespace-nowrap text-primary hover:underline list-narrow:wrap-anywhere list-narrow:whitespace-normal",
               !row.original.invoice_number && "font-mono",
             )}
           >
@@ -368,6 +370,13 @@ export function CreditNotesTable({
         group: "Identity",
         serverOps: TEXT_OPS_NN,
         keywords: "document credited",
+      },
+      {
+        id: "subscription",
+        label: "Subscription ID",
+        group: "Identity",
+        serverOps: TEXT_OPS,
+        hint: "The subscription of the credited invoice. Empty means a one-off invoice",
       },
 
       {

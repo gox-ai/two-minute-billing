@@ -11,11 +11,13 @@ import {
   errorText,
   gatewayFailure,
   microformFailure,
+  razorpayClientReason,
   refusalMessage,
   squareThrown,
   squareTokenFailure,
 } from "../../dashboard/lib/gateway-errors";
 import { PAYER_SAFE_INTERNAL_FAILURE } from "@/providers/decline-codes";
+import { signalFor } from "../../dashboard/lib/buyer-error-report";
 
 /** Every message a buyer reads is a sentence, never empty. */
 const sentence = (s: string | null) => {
@@ -23,7 +25,7 @@ const sentence = (s: string | null) => {
   expect(s!).toMatch(/[.!?]$/);
 };
 
-describe("refusalMessage and gatewayFailure keep the gateway's words whole", () => {
+describe("refusalMessage and gatewayFailure frame a reason", () => {
   it("adds the failed step and the next step around the reason", () => {
     expect(
       refusalMessage("We could not save your card.", "Your card was declined", "Try again."),
@@ -68,22 +70,25 @@ describe("refusalMessage and gatewayFailure keep the gateway's words whole", () 
   });
 });
 
-describe("each gateway's error maps to a message the dialog or caller shows", () => {
-  it("Braintree: a requestPaymentMethod rejection keeps Drop-in's message", () => {
+describe("each gateway's error reads as our words, never the gateway's", () => {
+  it("Braintree: a requestPaymentMethod rejection shows our lead and next step only", () => {
     const m = braintreeFailure("payment", {
       name: "DropinError",
       message: "No payment method is available.",
     });
-    expect(m).toContain("No payment method is available.");
-    sentence(m);
+    expect(m).toBe(
+      "We could not take your payment. Correct the details or use a different payment method. Then try again.",
+    );
     sentence(braintreeFailure("setup", undefined));
   });
 
-  it("Adyen: an error keeps Adyen's message; only CANCEL is silent", () => {
+  it("Adyen: an error never shows Adyen's text; only CANCEL is silent", () => {
     const m = adyenError({ name: "NETWORK_ERROR", message: "Payment refused" }, "pay", "payment");
-    expect(m).toContain("Payment refused");
+    expect(m).not.toContain("Payment refused");
     sentence(m);
-    sentence(adyenError({ name: "ERROR" }, "open", "setup"));
+    expect(adyenError({ name: "ERROR", message: "Invalid clientKey" }, "open", "setup")).toBe(
+      "We could not open the card form. Try again.",
+    );
     expect(adyenError({ name: "CANCEL", message: "closed" }, "pay", "payment")).toBeNull();
   });
   it("Adyen: a finished session with no result never shows a raw result code", () => {
@@ -119,73 +124,121 @@ describe("each gateway's error maps to a message the dialog or caller shows", ()
     );
   });
 
-  it("Checkout.com: Flow's onError message is kept", () => {
+  it("Checkout.com: Flow's onError text is not shown", () => {
     const m = checkoutcomFailure("payment", {
       type: "Request Failed",
       message: "Payment declined",
     });
-    expect(m).toContain("Payment declined");
+    expect(m).not.toContain("Payment declined");
     sentence(m);
     sentence(checkoutcomFailure("setup", null));
   });
 
-  it("Square: field errors are shown too; only a closed wallet sheet is silent", () => {
+  it("Square: field errors are shown; other error text and a thrown error are not", () => {
     const m = squareTokenFailure({
       status: "Invalid",
       errors: [
         { field: "cardNumber", type: "VALIDATION_ERROR", message: "Card number is not valid" },
         { field: "cvv", type: "VALIDATION_ERROR", message: "CVV is not valid" },
+        { type: "UNAUTHORIZED", message: "Application ID is not valid" },
       ],
     });
     expect(m).toContain("Card number is not valid.");
     expect(m).toContain("CVV is not valid.");
-    sentence(squareTokenFailure({ status: "Error" }));
+    expect(m).not.toContain("Application ID");
+    expect(squareTokenFailure({ status: "Error", errors: [{ message: "Rate limited" }] })).toBe(
+      "We could not save your payment method. Try again, or use a different method.",
+    );
     sentence(squareTokenFailure(undefined));
     expect(squareTokenFailure({ status: "Cancel" })).toBeNull();
-    expect(squareThrown(new Error("Verification failed"))).toContain("Verification failed");
+    expect(squareThrown(new Error("Verification failed"))).not.toContain("Verification failed");
   });
 
-  it("CyberSource: the message and each field's detail are kept", () => {
+  it("CyberSource: each field's detail is shown under our label; the top message is not", () => {
     const m = microformFailure({
-      message: "One or more fields failed validation",
+      message: "CREATE_TOKEN_VALIDATION_SERVERSIDE",
       details: [{ location: "number", message: "Validation error" }, { location: "securityCode" }],
     });
-    expect(m).toContain("One or more fields failed validation.");
+    expect(m).not.toContain("CREATE_TOKEN");
     expect(m).toContain("Card number: Validation error.");
     expect(m).toContain("Security code: This value is not correct.");
-    sentence(microformFailure(null));
+    sentence(microformFailure({ message: "Invalid capture context" }));
+    expect(microformFailure({ message: "Invalid capture context" })).not.toContain("capture");
   });
 
-  it("Authorize.net: the response's message texts are kept", () => {
+  it("Authorize.net: a response's message texts are never shown", () => {
     const m = acceptFailure(
       {
         messages: {
           resultCode: "Error",
-          message: [{ code: "E_WC_05", text: "Please provide valid credit card number." }],
+          message: [
+            {
+              code: "E_WC_21",
+              text: "User authentication failed due to invalid authentication values.",
+            },
+          ],
         },
       },
       false,
     );
-    expect(m).toContain("Please provide valid credit card number.");
-    sentence(acceptFailure(undefined, true));
+    expect(m).toBe(
+      "We could not read the card details. Try again. If the problem continues, contact the business.",
+    );
     expect(acceptFailure(undefined, true)).toContain("bank account");
   });
 
-  it("Cashfree: a modal error reads true for a close and a decline, reason before next step", () => {
-    const lead = "We could not take your payment.";
-    const next = "Try again, or use a different payment method.";
+  it("Cashfree: one message, true for a close and a decline, with no Cashfree text", () => {
+    const m =
+      "We could not take your payment. The payment did not finish. Try again, or use a different payment method.";
     expect(
       cashfreeFailure("order", { code: "payment_failed", message: "Transaction declined by bank" }),
-    ).toBe(`${lead} Transaction declined by bank. ${next}`);
-    expect(cashfreeFailure("order", { message: "Payment cancelled by user." })).toBe(
-      `${lead} Payment cancelled by user. ${next}`,
-    );
-    expect(cashfreeFailure("order", {})).toBe(`${lead} The payment did not finish. ${next}`);
-    expect(cashfreeFailure("order", undefined)).toBe(`${lead} The payment did not finish. ${next}`);
+    ).toBe(m);
+    expect(cashfreeFailure("order", { message: "Payment cancelled by user." })).toBe(m);
+    expect(cashfreeFailure("order", undefined)).toBe(m);
     // The portal wraps it in its own lead: not said twice.
     expect(
       refusalMessage("We could not take your payment.", cashfreeFailure("order", {}), ""),
     ).not.toMatch(/We could not take your payment\. We could not/);
-    sentence(cashfreeFailure("subscription", {}));
+    expect(cashfreeFailure("subscription", { message: "order_token expired" })).not.toContain(
+      "order_token",
+    );
+  });
+
+  it("RazorPay: a refusal in the sheet reads as our sentence for its reason", () => {
+    const insufficient = razorpayClientReason({
+      code: "BAD_REQUEST_ERROR",
+      reason: "insufficient_funds",
+      description: "Payment failed due to insufficient balance",
+    });
+    expect(insufficient).not.toContain("Payment failed due to");
+    expect(insufficient).toMatch(/^Your bank declined the payment/);
+    expect(
+      razorpayClientReason({
+        code: "GATEWAY_ERROR",
+        reason: "payment_failed",
+        description: "Your payment didn't go through due to a temporary issue.",
+      }),
+    ).toBe("Your bank declined the payment. Contact your bank, or use a different payment method.");
+    // Nothing to say about a cancelled or unknown refusal: a neutral sentence, never the description.
+    expect(razorpayClientReason({ reason: "payment_cancelled", description: "Cancelled" })).toBe(
+      "The authorization did not finish.",
+    );
+    expect(razorpayClientReason(undefined)).toBe("The authorization did not finish.");
+  });
+
+  it("RazorPay: the refusal's source and step ride on the noted signal", () => {
+    const text = razorpayClientReason({
+      code: "BAD_REQUEST_ERROR",
+      reason: "payment_failed",
+      description: "d",
+      source: "bank",
+      step: "payment_authorization",
+    });
+    expect(signalFor(text)).toMatchObject({
+      gateway: "razorpay",
+      type: "bank",
+      param: "payment_authorization",
+      declineCode: "payment_failed",
+    });
   });
 });

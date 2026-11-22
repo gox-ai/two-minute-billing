@@ -69,10 +69,10 @@ export default async function CheckoutPage() {
     return (
       <NoticeCard icon={<CheckCircle2 />} tone="success" title="This checkout is already complete">
         {res.data.mode === "change" && res.data.change?.reactivation
-          ? "Your subscription is already reactivated. Thank you!"
+          ? "Your subscription is already reactivated."
           : res.data.mode === "change"
-            ? "Your plan is already changed. Thank you!"
-            : "We created your subscription. Thank you!"}
+            ? "Your plan is already changed."
+            : "We created your subscription."}
       </NoticeCard>
     );
   }

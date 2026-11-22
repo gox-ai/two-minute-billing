@@ -14,7 +14,8 @@ import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
 import { createSubscription } from "@/modules/subscriptions/service";
-import { billSubscriptionPeriod } from "@/modules/invoicing/service";
+import { billSubscriptionPeriod, createInvoiceFromLines } from "@/modules/invoicing/service";
+import { bucketBalance } from "@/modules/customers/balances-read";
 import { settleUnmatchedGatewayCapture } from "@/modules/payments/settlement";
 import { refundExcessPayment, listExcessPayments } from "@/modules/refunds/excess";
 import { reverseRefund } from "@/modules/refunds/settlement";
@@ -286,6 +287,105 @@ ok(
     a6,
   },
 );
+// ── 7. Excess used up by two invoices: the list shows what is left, which is nothing ──
+// The shape seen in production: one excess payment, then two invoices that took all of it.
+const cusB = await createCustomer({
+  organizationId: orgId,
+  businessId: biz.id,
+  email: "excess-used@example.com",
+});
+const overpay = await withTenant(orgId, (tx) =>
+  settleUnmatchedGatewayCapture(tx, {
+    organizationId: orgId,
+    businessId: biz.id,
+    customerId: cusB.id,
+    invoiceId: invoice.id,
+    currency: "USD",
+    amountMinor: 569900n,
+    providerKey: first.providerKey,
+    providerChargeId: `ch_dup_${crypto.randomUUID()}`,
+    paymentMethodId: first.paymentMethodId,
+    reason: "second_checkout",
+    occurredAt: new Date(),
+  }),
+);
+if (!overpay.booked || overpay.disposition !== "excess")
+  throw new Error(`§7 not booked as excess: ${JSON.stringify(overpay)}`);
+ok("§7 the overpayment is booked as excess credit", true);
+const openInvoice = async (amountMinor: bigint) =>
+  (
+    await createInvoiceFromLines({
+      organizationId: orgId,
+      businessId: biz.id,
+      customerId: cusB.id,
+      currency: "USD",
+      lines: [{ description: "Usage", amountMinor }],
+      applyTax: false,
+      applyCredit: false,
+      collect: false,
+    })
+  ).invoice;
+const applyExcess = (inv: string, excess: number) =>
+  app.inject({
+    method: "POST",
+    url: `/v1/businesses/${biz.publicId}/invoices/${inv}/apply_credits`,
+    headers: { ...auth, "idempotency-key": crypto.randomUUID() },
+    payload: { refundable_minor: 0, excess_minor: excess },
+  });
+const listB = async () =>
+  (
+    await app.inject({
+      method: "GET",
+      url: `/v1/businesses/${biz.publicId}/customers/${cusB.publicId}/excess_payments`,
+      headers: auth,
+    })
+  ).json() as {
+    data: Array<{
+      payment: string;
+      held_minor: number;
+      remaining_minor: number;
+      refundable_minor: number;
+    }>;
+  };
+const invA = await openInvoice(18384n);
+const resA = await applyExcess(invA.publicId, 18384);
+ok("§7 apply_credits takes the first draw", resA.statusCode === 200, resA.body);
+const partly = (await listB()).data;
+ok(
+  "§7 partly used: the payment still holds the rest, and the received amount is unchanged",
+  partly.length === 1 &&
+    partly[0]!.payment === overpay.paymentPublicId &&
+    partly[0]!.held_minor === 569900 &&
+    partly[0]!.remaining_minor === 551516 &&
+    partly[0]!.refundable_minor === 551516,
+  partly,
+);
+// A refund is capped at the row's "Still held", so the screen and the API agree.
+const overRow = await app.inject({
+  method: "POST",
+  url: `/v1/businesses/${biz.publicId}/payments/${overpay.paymentPublicId}/refund`,
+  headers: { ...auth, "idempotency-key": crypto.randomUUID() },
+  payload: { amount_minor: 551517 },
+});
+ok(
+  "§7 a refund above the payment's Still held figure is refused in our words",
+  overRow.statusCode === 400 &&
+    /We could not refund \$5,515\.17\. You can refund up to \$5,515\.16 from this payment\./.test(
+      overRow.body,
+    ),
+  overRow.body,
+);
+const invB = await openInvoice(600000n);
+const resB = await applyExcess(invB.publicId, 551516);
+ok("§7 apply_credits takes the rest", resB.statusCode === 200, resB.body);
+const bucketB = await withTenant(orgId, (tx) =>
+  bucketBalance(tx, cusB.id, "excess_payment_balance", "USD"),
+);
+const usedUp = (await listB()).data;
+ok("§7 the excess balance is 0", bucketB === 0n, bucketB);
+ok("§7 a payment whose credit is all used is not listed", usedUp.length === 0, usedUp);
+const tooMuch = await applyExcess(invB.publicId, 1);
+ok("§7 apply_credits refuses credit the customer no longer has", tooMuch.statusCode === 400);
 await app.close();
 
 console.log(

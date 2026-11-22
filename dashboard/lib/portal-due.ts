@@ -7,6 +7,8 @@ export interface DueInvoice {
   amount_due_minor: number;
   due_date: string | null;
   payment_in_flight?: boolean;
+  /** A debit announced to the bank and not made yet: being collected too. */
+  collection_scheduled_at?: string | null;
 }
 
 /** One outstanding balance per currency — a business may bill the same buyer in more than one. */
@@ -24,13 +26,15 @@ export interface DueTotal {
  * is being collected, so it is neither "due" nor a reason to save a payment method.
  */
 export function summarizeDue(invoices: DueInvoice[]): DueTotal[] {
-  return summarize(invoices.filter((i) => !i.payment_in_flight));
+  return summarize(invoices.filter((i) => !collecting(i)));
 }
 
-/** The invoices whose payment the bank or provider is still confirming. */
+/** The invoices whose payment the bank or provider is still confirming, or will take. */
 export function summarizeInFlight(invoices: DueInvoice[]): DueTotal[] {
-  return summarize(invoices.filter((i) => i.payment_in_flight));
+  return summarize(invoices.filter(collecting));
 }
+
+const collecting = (i: DueInvoice) => Boolean(i.payment_in_flight || i.collection_scheduled_at);
 
 function summarize(invoices: DueInvoice[]): DueTotal[] {
   const now = Date.now();

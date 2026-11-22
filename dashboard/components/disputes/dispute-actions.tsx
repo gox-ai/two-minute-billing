@@ -35,6 +35,7 @@ export function RecordDisputeButton({
   availableMinor,
   currency,
   gatewayName,
+  reportedDaily = false,
 }: {
   biz: string;
   pay: string;
@@ -42,6 +43,8 @@ export function RecordDisputeButton({
   availableMinor: number;
   currency: string;
   gatewayName: string;
+  /** The gateway's disputes arrive a day late from its report (`dispute_recording.reported_daily`). */
+  reportedDaily?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -60,9 +63,9 @@ export function RecordDisputeButton({
           <DialogHeader>
             <DialogTitle>Record dispute</DialogTitle>
             <DialogDescription>
-              {gatewayName} does not send disputes to us. Enter the chargeback that your card
-              processor reported. We take the amount out of cash and hold it until you record the
-              outcome.
+              {reportedDaily
+                ? `${gatewayName} reports disputes in a daily report. Enter a chargeback that the report does not show yet. We take the amount out of cash and hold it until the outcome.`
+                : `${gatewayName} does not send disputes to us. Enter the chargeback that your card processor reported. We take the amount out of cash and hold it until you record the outcome.`}
             </DialogDescription>
           </DialogHeader>
           <ActionForm
@@ -96,17 +99,30 @@ export function RecordDisputeButton({
                 />
               </Field>
             </div>
-            <Field
-              name="opened_at"
-              label="Dispute date"
-              help="The date when the processor opened the dispute. Leave blank to use today."
-            >
-              <DateTimeField name="opened_at" granularity="date" />
-            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                name="opened_at"
+                label="Dispute date"
+                help="The date when the processor opened the dispute. Leave blank to use today."
+              >
+                <DateTimeField name="opened_at" granularity="date" />
+              </Field>
+              <Field
+                name="evidence_due_by"
+                label="Evidence due date"
+                help="Optional. The last date to send evidence to the processor."
+              >
+                <DateTimeField name="evidence_due_by" granularity="date" />
+              </Field>
+            </div>
             <Field
               name="processor_reference"
               label="Processor reference"
-              help="Optional. The case number that your processor gave the dispute."
+              help={
+                reportedDaily
+                  ? "Optional. The case number that your processor gave the dispute. With it, we do not record the dispute again from the report."
+                  : "Optional. The case number that your processor gave the dispute. You cannot record two disputes with the same case number."
+              }
             >
               <Input name="processor_reference" maxLength={200} />
             </Field>

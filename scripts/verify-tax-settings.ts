@@ -336,7 +336,7 @@ async function estimateAndBill(
 
 // ── G. inclusive customer: tax backed out, preview = booking ─────────────────────
 for (const region of [
-  { name: "US sales tax", country: "US", state: "CA", rateBps: 725, backedOut: 202n },
+  { name: "US sales tax", country: "US", state: "CA", rateBps: 725, backedOut: 203n }, // 3000 × 725 / 10725 = 202.80 → 203
   { name: "VAT", country: "DE", state: null, rateBps: 2000, backedOut: 500n },
 ] as const) {
   const b = await createBusiness({

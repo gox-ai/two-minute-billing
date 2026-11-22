@@ -22,10 +22,21 @@ export default async function BusinessEventsPage({
     resource_type?: string;
     resource_id?: string;
     source?: string;
+    customer?: string;
+    /** `field:op:value`, repeatable (see `urlFilters`). */
+    filter?: string | string[];
   }>;
 }) {
   const [{ biz }, search] = await Promise.all([params, searchParams]);
   await requirePermission("events:view", "developer");
+  // Narrows the first page too, so a link from a record never flashes the whole log.
+  const deepLinkFilters = urlFilters(search, {
+    type: true,
+    resource_type: true,
+    resource_id: true,
+    source: true,
+    customer: true,
+  });
 
   let businesses, page;
   let gatewayNames: Record<string, string> = {};
@@ -33,7 +44,7 @@ export default async function BusinessEventsPage({
     let accounts;
     [businesses, page, accounts] = await Promise.all([
       listBusinesses(),
-      listEventsForBusiness(biz, { limit: PAGE_SIZE }),
+      listEventsForBusiness(biz, { limit: PAGE_SIZE, filters: deepLinkFilters }),
       listGatewayAccounts(biz).catch(() => null),
     ]);
     gatewayNames = Object.fromEntries((accounts?.data ?? []).map((a) => [a.id, a.label]));
@@ -67,12 +78,7 @@ export default async function BusinessEventsPage({
         total={page.total ?? page.data.length}
         hasMore={page.has_more}
         nextCursor={page.next_cursor}
-        initialFilters={urlFilters(search, {
-          type: true,
-          resource_type: true,
-          resource_id: true,
-          source: true,
-        })}
+        initialFilters={deepLinkFilters}
       />
     </>
   );

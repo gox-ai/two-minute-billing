@@ -25,6 +25,8 @@ export default async function GatewayWebhooksPage({
     type?: string;
     transaction?: string;
     intent?: string;
+    payment_intent?: string;
+    payment_attempt?: string;
     all?: string;
   }>;
 }) {
@@ -65,6 +67,8 @@ export default async function GatewayWebhooksPage({
     type: true,
     transaction: true,
     intent: true,
+    payment_intent: true,
+    payment_attempt: true,
   });
   const initialFilters: ListServerFilter[] =
     fromUrl.length > 0 || search.all

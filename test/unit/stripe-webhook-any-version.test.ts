@@ -234,10 +234,12 @@ describe("Stripe money events book the same at every API version", () => {
     expect(one("charge.succeeded").type).toBe("charge.succeeded");
     expect(refunds("charge.refunded", 1)).toEqual(["1000n:succeeded"]);
     expect(refunds("charge.refunded", 2)).toEqual(["500n:succeeded", "1000n:succeeded"]);
-    // A Charge's `failure_code` is the generic code; the intent carries the issuer's.
+    // A Charge's `failure_code` is the generic code; its issuer `outcome.reason` wins, so
+    // both events of one decline agree.
     expect(one("charge.failed")).toMatchObject({
       type: "charge.failed",
-      providerFailureCode: "card_declined",
+      providerFailureCode: "insufficient_funds",
+      failureCode: "insufficient_funds",
     });
     expect(one("payment_intent.payment_failed")).toMatchObject({
       type: "charge.failed",

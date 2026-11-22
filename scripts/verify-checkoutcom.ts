@@ -412,15 +412,33 @@ const OPTS = {
       dec.providerFailureCode === "20051" &&
       dec.failureRetriable === true,
   );
+  const holdDec = map("payment_declined", {
+    id: "pay_5",
+    response_code: "20051",
+    metadata: { tmbilling_ref: "pi_X", tmbilling_kind: "intent" },
+  })[0]!;
   ok(
-    "payment_declined on a hold → unknown (refused in the call)",
-    map("payment_declined", { id: "pay_5", metadata: { tmbilling_kind: "intent" } })[0]?.type ===
-      "unknown",
+    "payment_declined on a hold → charge.failed on the open attempt, matched by the pay id",
+    holdDec.type === "charge.failed" &&
+      holdDec.providerChargeId === "pay_5" &&
+      holdDec.ownershipRef === "pi_X" &&
+      holdDec.failureCode === "insufficient_funds",
+  );
+  const checkDec = map("card_verification_declined", {
+    id: "pay_5",
+    response_code: "20054",
+    metadata: { tmbilling_ref: "pi_X", tmbilling_kind: "setup" },
+  })[0]!;
+  ok(
+    "card_verification_declined on a card check → charge.failed with the reason",
+    checkDec.type === "charge.failed" && checkDec.failureCode === "expired_card",
   );
   ok(
-    "payment_declined on a card check → unknown",
-    map("payment_declined", { id: "pay_5", metadata: { tmbilling_kind: "setup" } })[0]?.type ===
-      "unknown",
+    "payment_expired on a Flow payment → payment_abandoned",
+    map("payment_expired", {
+      id: "pay_5",
+      metadata: { tmbilling_ref: "pi_X", tmbilling_kind: "intent" },
+    })[0]?.failureCode === "payment_abandoned",
   );
   const capDec = map("payment_capture_declined", { id: "pay_6", response_code: "20006" })[0]!;
   ok(
@@ -702,6 +720,18 @@ const OPTS = {
     answer = () => ({
       status: 422,
       body: { error_type: "request_invalid", error_codes: ["amount_invalid"] },
+    });
+    const requestFault = await cko.charge(base);
+    ok(
+      "a documented request fault is our refused request, hidden from the payer",
+      requestFault.status === "failed" &&
+        requestFault.failure?.code === "gateway_request_rejected" &&
+        requestFault.failure.ruleId === "checkoutcom.code.amount_invalid",
+    );
+
+    answer = () => ({
+      status: 422,
+      body: { error_type: "request_invalid", error_codes: ["billing_descriptor_name_invalid"] },
     });
     ok(
       "an unrecognised 422 throws (our bug)",

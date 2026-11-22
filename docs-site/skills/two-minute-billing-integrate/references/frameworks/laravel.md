@@ -63,6 +63,12 @@ class Tmbilling
             case 'subscription_created':
             case 'subscription_changed':
             case 'subscription_canceled':
+            case 'subscription_activated':
+            case 'subscription_cancel_scheduled':
+            case 'subscription_scheduled_cancellation_removed':
+            case 'subscription_reactivated':
+            case 'subscription_paused':
+            case 'subscription_resumed':
                 $sub = self::get('/v1/businesses/'.self::biz().'/subscriptions/'.$content['subscription']['id']);
                 $accountId = $sub['metadata']['app_account_id'] ?? null; // set at checkout
                 if (! $accountId) return;

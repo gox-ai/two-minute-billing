@@ -1120,6 +1120,26 @@ export function CustomersTable({
         hint: "Percent. We store it as basis points, so 10 means 1000 bps",
       },
 
+      // ── Usage and credit ─────────────────────────────────────────────────────
+      {
+        id: "days_since_last_usage",
+        label: "Days since last usage",
+        type: "number",
+        group: "Usage and credit",
+        serverOps: NUMBER_OPS,
+        keywords: "stopped inactive churn usage events idle",
+        hint: "Whole days. A customer who never sent usage has no value",
+      },
+      {
+        id: "credit_runway_days",
+        label: "Credit runway (days)",
+        type: "number",
+        group: "Usage and credit",
+        serverOps: NUMBER_OPS,
+        keywords: "prepaid balance run out low credit",
+        hint: "Days the credit lasts at the use of the last 7 days. A customer with no use in that time has no value",
+      },
+
       // ── Dates ────────────────────────────────────────────────────────────────
       { id: "created_at", label: "Created", type: "date", group: "Dates", serverOps: DATE_OPS },
       { id: "updated_at", label: "Updated", type: "date", group: "Dates", serverOps: DATE_OPS },

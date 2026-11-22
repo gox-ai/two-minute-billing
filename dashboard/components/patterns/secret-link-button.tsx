@@ -23,11 +23,14 @@ export function SecretLinkButton({
   mint,
   children,
   variant = "button",
+  size = "sm",
 }: {
   mint: () => Promise<SecretLinkResult>;
   children: React.ReactNode;
   /** `link` renders a text link, for a card's header actions. */
   variant?: "button" | "link";
+  /** `default` matches the other buttons of a record header. */
+  size?: "sm" | "default";
 }) {
   const [pending, startTransition] = React.useTransition();
   const [revealed, setRevealed] = React.useState<{ label: string; secret: string } | null>(null);
@@ -51,7 +54,7 @@ export function SecretLinkButton({
           {children}
         </button>
       ) : (
-        <Button type="button" variant="outline" size="sm" onClick={onClick} disabled={pending}>
+        <Button type="button" variant="outline" size={size} onClick={onClick} disabled={pending}>
           {children}
         </Button>
       )}

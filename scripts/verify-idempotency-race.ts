@@ -1448,8 +1448,9 @@ console.log("");
   //    mechanism itself rather than by a stored response. Verified in auth/service.ts.
   //  - /auth/signup/confirm (0354): the same — the sign-up token is single-use, spent in the
   //    consuming UPDATE's WHERE (`isNull(consumedAt)`), so a replay is refused by the mechanism.
-  //  - /auth/team_alerts/confirm (0495): the same — the confirmation token is single-use,
-  //    cleared by the confirming UPDATE (`status = 'pending'` in its WHERE).
+  //  - /auth/team_alerts/confirm (0495): retired by 0533; it writes nothing and answers 410.
+  //  - /auth/notification_destinations/confirm (0533): the token is single-use, cleared by the
+  //    confirming UPDATE (`status = 'pending'` in its WHERE), so a replay is refused.
   //  - /auth/login/mfa: the second half of /login, and guarded the same STRONGER way as
   //    reset/accept above — the challenge is single-use and spent in the consuming UPDATE's
   //    own WHERE, so a replay is refused by the mechanism rather than by a stored response.
@@ -1497,6 +1498,10 @@ console.log("");
   //    spends the code in its consuming UPDATE's WHERE (`isNull(usedAt)`), so a replay is refused.
   //  - /subscriptions/count: a read sent as POST because its filter sets do not fit a query
   //    string. It writes nothing, so there is nothing to replay.
+  //  - /checkout/v1/client_errors and /portal/v1/client_errors (0539): the buyer's browser
+  //    reports a payment error it showed, by `sendBeacon`, which cannot set an
+  //    Idempotency-Key. A repeat is deduped in the handler (same session and text within
+  //    5 seconds is one row), and booking on an attempt never replaces a named reason.
   const exempt = new Set([
     // Billy (the assistant), dashboard session routes: a repeat is safe without the pair.
     // confirm claims the action in a conditional UPDATE (proposed → running; a repeat is a 409)
@@ -1545,6 +1550,12 @@ console.log("");
     "DELETE /auth/me/avatar",
     "DELETE /auth/sessions/:id",
     "POST /auth/sessions/revoke_others",
+    "POST /checkout/v1/client_errors",
+    "POST /portal/v1/client_errors",
+    // Storefront analytics beacons (0547): counters and first-touch fields on one row per
+    // session; a repeat adds a few seconds of time on a step and moves no money.
+    "POST /checkout/v1/visits",
+    "POST /portal/v1/visits",
     "POST /checkout/v1/coupon",
     "DELETE /checkout/v1/coupon",
     // A public payment link: no credential, so no tenant to scope a stored response to,
@@ -1558,6 +1569,26 @@ console.log("");
     "POST /auth/reset_password",
     "POST /auth/signup/confirm",
     "POST /auth/team_alerts/confirm",
+    // Notifications (0533), pre-tenant like the rest of /auth/*. The PUTs, PATCH, read and
+    // read_all SET a state; the DELETEs land on the same state twice; a device upserts by its
+    // endpoint. A test sends one message by design (rate limited per member). Create refuses a
+    // second copy of an email address; a second Google Chat space is one more row, no money.
+    // Resend is limited per address (10 minutes apart, 3 a day).
+    "PUT /auth/notifications/preferences",
+    "PUT /auth/notifications/settings",
+    "POST /auth/notifications/push/subscriptions",
+    "DELETE /auth/notifications/push/subscriptions/:id",
+    "POST /auth/notifications/push/subscriptions/:id/test",
+    "POST /auth/notifications/:id/read",
+    "POST /auth/notifications/read_all",
+    // Sets the notice's dismissed time; a replay sets it again.
+    "POST /auth/notifications/notice/dismiss",
+    "POST /auth/notification_destinations",
+    "PATCH /auth/notification_destinations/:id",
+    "DELETE /auth/notification_destinations/:id",
+    "POST /auth/notification_destinations/:id/test",
+    "POST /auth/notification_destinations/:id/resend",
+    "POST /auth/notification_destinations/confirm",
     "POST /auth/signup_requests",
     "POST /auth/signup/invite",
     "POST /auth/mfa/reset/cancel",

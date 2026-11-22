@@ -210,6 +210,9 @@ export function serializeInvoice(
      */
     promotional_discount_minor: Number(promotionalDiscount),
     credits_applied_minor: Number(creditsApplied),
+    // Which bucket paid: a reader (or the assistant) must not have to guess.
+    refundable_credits_applied_minor: Number(inv.refundableCreditsAppliedMinor ?? 0n),
+    excess_payments_applied_minor: Number(inv.excessPaymentsAppliedMinor ?? 0n),
     grant_credits_pre_tax_minor: Number(grantPreTax),
     grant_credits_post_tax_minor: Number(grantPostTax),
     amount_paid_minor: Number(paid),

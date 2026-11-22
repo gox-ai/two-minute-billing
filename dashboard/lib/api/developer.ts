@@ -124,11 +124,16 @@ function eventsQuery(filters: EventListFilters): string {
     occurred_before,
     ...list
   } = filters;
+  // A `customer:is:` builder row is the footprint param, not a column: the engine
+  // rejects it as a filter, so it leaves the rows and becomes `customer`.
+  const isCustomer = (f: { field: string; op: string }) => f.field === "customer" && f.op === "is";
+  const footprint = customer ?? list.filters?.find(isCustomer)?.value;
+  if (list.filters) list.filters = list.filters.filter((f) => !isCustomer(f));
   const sp = new URLSearchParams();
   type?.forEach((t) => sp.append("type", t));
   if (resource_type) sp.set("resource_type", resource_type);
   if (resource_id) sp.set("resource_id", resource_id);
-  if (customer) sp.set("customer", customer);
+  if (footprint) sp.set("customer", footprint);
   if (source) sp.set("source", source);
   if (occurred_after) sp.set("occurred_after", occurred_after);
   if (occurred_before) sp.set("occurred_before", occurred_before);

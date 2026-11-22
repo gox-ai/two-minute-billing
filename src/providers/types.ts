@@ -115,6 +115,12 @@ export interface ProviderCapabilities {
    */
   setupCollectsFirstCharge?: MethodType[];
   /**
+   * Methods a `payment` intent can also SAVE for later off-session charges, in the same
+   * buyer step (`CreateIntentInput.saveForFuture`). Each entry is proved in the gateway's
+   * sandbox with webhooks before it is listed.
+   */
+  paymentSavesMethod?: MethodType[];
+  /**
    * Rails on which the GATEWAY tells the payer about each debit itself (GoCardless
    * advance notices, Cashfree's default flow). Our own pre-debit email is skipped there,
    * so the payer does not get two notices with possibly different figures.
@@ -307,6 +313,14 @@ export class ProviderIndeterminateError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ProviderIndeterminateError";
+  }
+}
+
+/** `submitClientResult` on an intent whose challenge takes no browser answer. */
+export class ClientResultUnsupportedError extends Error {
+  constructor() {
+    super("This payment method does not accept a confirmation from the browser.");
+    this.name = "ClientResultUnsupportedError";
   }
 }
 
@@ -1356,6 +1370,11 @@ export interface ProvisionedWebhook {
   webhookId?: string;
   /** Provider's id for the endpoint object, for later update/delete. */
   providerEndpointId?: string;
+  /**
+   * The registration at `previousUrl` now points at `url`: same endpoint, same secret.
+   * Absent = the caller removes the registration at `previousUrl` itself.
+   */
+  movedFromPreviousUrl?: boolean;
 }
 
 export interface NormalizeWebhookInput {
@@ -1367,6 +1386,8 @@ export interface NormalizeWebhookInput {
    * the URL together with the body, so its check needs the exact string.
    */
   notificationUrl?: string;
+  /** Other URLs the account was registered under recently. A URL-signing gateway accepts them too. */
+  alternateNotificationUrls?: readonly string[];
   /**
    * Which of these provider event ids this delivery's scope has already settled. An adapter
    * that reads the gateway to map an event skips the read for those: the engine dedups them
@@ -1510,6 +1531,12 @@ export interface CreateIntentInput {
    * collects this amount (the first invoice) instead of a token auth amount.
    */
   firstChargeMinor?: bigint;
+  /**
+   * `payment` only, on a method in `capabilities.paymentSavesMethod`: the buyer agreed to
+   * keep this instrument for later off-session charges. The gateway stores it while it
+   * charges, and `consumeIntent` returns it as `paymentMethod`.
+   */
+  saveForFuture?: boolean;
   description?: string;
   metadata?: Record<string, string>;
   /** When our intent expires. A gateway whose payment page outlives it can close at the same time. */
@@ -1561,7 +1588,15 @@ export interface ConsumeIntentInput {
  * nowhere to land.
  */
 export type ConsumeIntentResult =
-  | { purpose: "payment"; charge: ChargeResult }
+  | {
+      purpose: "payment";
+      charge: ChargeResult;
+      /**
+       * The instrument a `saveForFuture` payment stored, when the charge succeeded and the
+       * gateway named it. Absent: nothing was saved (the engine says so to the buyer).
+       */
+      paymentMethod?: ProviderPaymentMethodRef;
+    }
   /**
    * Exactly ONE of `paymentMethod` / `failure` is present. A refused setup (3DS
    * declined on the vault, mandate rejected) is an ordinary outcome and must
@@ -1720,8 +1755,20 @@ export interface FetchedIntent {
    * `consumeIntent` receives it as `intentId` — adapters stay stateless.
    */
   gatewayIntentId?: string;
-  /** `submitClientResult` only, with `status: 'failed'`: the refusal, normalized. */
-  failure?: { code: string; message: string };
+  /**
+   * With `status: 'failed'`: the refusal, normalized the way `ChargeResult.failure` is. Set
+   * by `submitClientResult`, and by `fetchIntent` when the gateway's answer carries the
+   * reason; the engine writes it on the open attempt, so a missed webhook keeps its why.
+   */
+  failure?: {
+    code: string;
+    providerCode?: string;
+    /** Our rule's sentence, else the gateway's text. */
+    message?: string;
+    retriable?: boolean;
+    ruleId?: string;
+    exposedToPayer?: boolean;
+  };
   /**
    * `submitClientResult` only: the method that paid (`ChargeResult.methodUsed` vocabulary).
    * The engine keeps it on the attempt for a capture that names no method.
@@ -2097,6 +2144,13 @@ export interface PaymentProvider {
   }): Promise<FetchedIntent>;
 
   /**
+   * The methods this ACCOUNT has turned on at the gateway, where the gateway can say (a
+   * Stripe account must activate ACH and SEPA). Null when unknown. Read before offering a
+   * method the account may not take; the static `capabilities` say what the ADAPTER can do.
+   */
+  activeMethodTypes?(): Promise<MethodType[] | null>;
+
+  /**
    * Ask the gateway what became of an intent — the intent-side twin of
    * {@link fetchChargeStatus}, and it exists for the same reason as its two siblings:
    * a callback that never came, or came late.
@@ -2162,8 +2216,16 @@ export interface PaymentProvider {
    * all simply don't implement this; the caller then falls back to displaying a
    * locally-generated secret for the operator to paste.
    * Must be idempotent-ish: re-provisioning the same URL should not error.
+   *
+   * `previousUrl` is the URL the account is registered under now, when it differs from
+   * `url`. An adapter that can change a registration's URL in place does so and returns
+   * `movedFromPreviousUrl`; otherwise the caller removes the old registration afterwards.
    */
-  provisionWebhookEndpoint?(input: { url: string; secret?: string }): Promise<ProvisionedWebhook>;
+  provisionWebhookEndpoint?(input: {
+    url: string;
+    secret?: string;
+    previousUrl?: string;
+  }): Promise<ProvisionedWebhook>;
 
   /**
    * Optional: remove the registration whose URL is exactly `url` (the deleted account's

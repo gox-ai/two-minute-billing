@@ -228,3 +228,28 @@ describe("resolveGuide: options, headings and page chrome", () => {
       );
   });
 });
+
+describe("resolveGuide scope", () => {
+  const go = (screen: string, scope: "one_record" | "whole_business") =>
+    resolveGuide({
+      ...base,
+      known: new Set(["sub_9"]),
+      input: {
+        screen,
+        scope,
+        params: { sub: "sub_9" },
+        steps: [{ control: "Excess payments", say: "Select Excess payments." }],
+      },
+    });
+  it("refuses a business-wide screen for a question about one record", () => {
+    expect(
+      go("/businesses/{business}/settings/billing-rules/credits-flexibility", "one_record"),
+    ).toHaveProperty("error", expect.stringMatching(/whole business/));
+  });
+  it("keeps the record's own screen, and a settings screen for a business-wide question", () => {
+    expect(go("/businesses/biz_A1/subscriptions/{sub}", "one_record")).toHaveProperty("guide");
+    expect(
+      go("/businesses/{business}/settings/billing-rules/credits-flexibility", "whole_business"),
+    ).toHaveProperty("guide");
+  });
+});

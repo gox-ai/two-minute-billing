@@ -12,6 +12,7 @@ import {
 import { listTransactions, listGatewayWebhooks, listGatewayRequests } from "@/lib/api/payments";
 import { listEmails } from "@/lib/api/emails";
 import { listAuditLogs, listBusinessAuditLogs } from "@/lib/api/audit";
+import { listOrders } from "@/lib/api/orders";
 import { listRetries } from "@/lib/api/retries";
 import { listPaymentIntents } from "@/lib/api/payments";
 import { listEventsForBusiness, listDeliveries } from "@/lib/api/developer";
@@ -75,6 +76,9 @@ const FETCHERS: Record<
       ...params,
       scope: { subscription: scope.subscription },
     })),
+  }),
+  orders: async (biz, params, scope) => ({
+    ...(await listOrders(biz, { ...params, scope: { customer: scope.customer } })),
   }),
   credit_notes: async (biz, params, scope) => ({
     ...(await listCreditNotes(biz, scope.invoice, { ...params, customer: scope.customer })),
@@ -141,7 +145,9 @@ const FETCHERS: Record<
    * silently unfiltered list under a narrowed label. Reading them off
    * `params.filters` is what makes the segments real.
    */
-  payment_intents: async (biz, params) => {
+  // `customer` is a scope param (the customer page's History tab) or a builder row
+  // (its "View all" link).
+  payment_intents: async (biz, params, scope) => {
     const pick = (field: string) =>
       params.filters?.find((f) => f.field === field && f.op === "is")?.value;
     return {
@@ -150,6 +156,7 @@ const FETCHERS: Record<
         startingAfter: params.startingAfter ?? undefined,
         status: pick("status"),
         purpose: pick("purpose"),
+        customer: scope.customer ?? pick("customer"),
       })),
     };
   },

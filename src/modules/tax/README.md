@@ -197,3 +197,9 @@ A per-state override vector (keyed on the **place of supply**) wins over the reg
 - **2026-11-03 (0489, browser check)** — `inclusiveTaxMinorFor`: the tax inside a gross, backed out as
   `computeInvoiceTax` does (floored, combined rate; per line under per-line rounding), for estimates.
 - **2026-11-11** — A state registration saved without a name (the home state at GST setup, an API call without `state_name`) takes the known subdivision name; the region read names older unnamed rows the same way. `verify:tax` checks it.
+- **2026-11-17** — **Inclusive tax backs out half-up** (`backOutMinor`). `gross × r / (10000 + r)`
+  truncated, so on about half of all amounts the tax inside a tax-inclusive price came out 1 minor
+  unit low and the net 1 high (₹117 at 18%: 1784.75 → 1784, now 1785). Exclusive tax and credit notes
+  (`credit-notes/note-tax.ts`) already rounded half-up; all three now agree. One helper serves both
+  `computeInvoiceTax` branches (pooled and per-line) and `inclusiveTaxMinorFor`, so an estimate still
+  states the tax its invoice books. Issued invoices are unchanged.

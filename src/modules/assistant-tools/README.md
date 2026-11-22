@@ -61,6 +61,20 @@ None (read-only).
 - The SDK (`@modelcontextprotocol/sdk` 1.32.2) negotiates up to protocol 2025-11-25.
 
 ## Changelog
+- **2026-11-18 (feat/customer-zero-balances)** — `credit_balances` in `get_customer` maps the
+  API's `balances[]` only. The API now lists a used-up currency at 0 itself, so the fallback that
+  added zero rows from the excess-payments list is gone. Billy sees the same rows.
+- **2026-11-18 (part 2)** — Each credit bucket is named for a reader. `get_customer` adds the
+  customer's excess payments (`include_used`) and `credit_balances` (every currency the customer
+  holds or held credit in, zeros stated: the API omits a currency whose balances are 0).
+  `leanExcessPayment` gives the model `received_minor` and `still_held_minor` in place of
+  `held_minor`, which read as "still held" and was not. `explain_balance` uses the same rows.
+  Invoices now carry `refundable_credits_applied_minor` / `excess_payments_applied_minor`.
+- **2026-11-18 (fix/excess-credit-and-billy)** — Ids are opaque. Every id input says to use it as
+  given (an imported id may have no prefix). A 404 from `must` adds "use the id exactly as it was
+  given … do not read a different record in its place". `get_timeline` takes an optional `kind`,
+  needed for an id with no prefix. `search_customers` says it is not for a customer whose id
+  the turn already has.
 - **2026-11-12 (fix/billy-upcoming-by-type)** — `query_records` (`query.ts`): one aggregation
   over ANY list the caller can read, over every matching row. `resource` is a list path (the same
   guard and deny list as `read_api`); `filters` run in the list route; `with_payer` joins each

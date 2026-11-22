@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/states";
 import { G } from "@/components/analytics/glossary";
 import { money, moneyCompact } from "@/lib/format";
+import { fmtUnits, unitCount, unitInfo, type CreditUnit } from "@/lib/credits";
 import type { BatchEntry, AnalyticsResult } from "@/lib/analytics-api";
 import { axisLabel } from "@/components/analytics/series-format";
 import { BucketBars } from "./charts";
@@ -37,12 +38,15 @@ export function creditsZones({
   basis,
   batch,
   lowCredit,
+  units,
 }: {
   biz: string;
   basis: Basis;
   batch: BatchEntry[];
   /** Customers whose credit runs out within 7 days (the customers list's own count). */
   lowCredit: number | null;
+  /** The business's credit units, to name and format credit with no money value. */
+  units: CreditUnit[];
 }): { current: React.ReactNode; performance: React.ReactNode } {
   const cur = basis.currency;
   const total = (key: string) => pick(batch, key)?.total ?? null;
@@ -56,39 +60,95 @@ export function creditsZones({
   );
   const byUnit = slices(pick(batch, "c_by_unit"));
 
+  // Credit in a unit with no money value has no face value: it shows in its own units. A
+  // business with only such credit shows no money figure; one with both shows both.
+  const perUnit = (key: string) => slices(pick(batch, key));
+  const unitKeys = [
+    ...new Set(
+      ["cu_balance", "cu_granted", "cu_used", "cu_expired"].flatMap((k) =>
+        perUnit(k).map((r) => r.key),
+      ),
+    ),
+  ];
+  const unitOf = (key: string) => unitInfo(units, key, cur);
+  const inUnit = (key: string, slot: string) =>
+    perUnit(slot).find((r) => r.key === key)?.total ?? 0;
+  const hasUnits = unitKeys.length > 0;
+  const hasMoney =
+    !hasUnits ||
+    ["c_balance", "c_liability", "c_granted", "c_used", "c_expired", "c_prepaid"].some(
+      (k) => (total(k) ?? 0) !== 0,
+    );
+  const oneUnit = unitKeys.length === 1 ? unitOf(unitKeys[0]!) : null;
+  const unitExpiring = oneUnit
+    ? perUnit("cu_expiring").sort((a, z) => HORIZON.indexOf(a.key) - HORIZON.indexOf(z.key))
+    : [];
+  const unitsExpiringByUnit = perUnit("cu_expiring_by_unit");
+
   const current = (
     <Stack>
-      <Grid>
-        <Tile
-          span={3}
-          label="Credit balance"
-          info={G.creditBalance}
-          value={moneyOrDash(balance)}
-          title={balance == null ? undefined : money(balance, cur)}
-          note="face value"
-        />
-        <Tile
-          span={3}
-          label="Credit liability"
-          info={G.creditLiability}
-          value={moneyOrDash(total("c_liability"))}
-          note="paid credit not used yet"
-          href={`/businesses/${biz}/reports/credits`}
-        />
-        <Tile
-          span={3}
-          label="Customers with credit"
-          value={countOrDash(total("c_customers"))}
-          href={`${customers}?filter=credit_balance:gt:0`}
-        />
-        <Tile
-          span={3}
-          label="Prepaid account balance"
-          info={G.prepaidBalance}
-          value={moneyOrDash(total("c_prepaid"))}
-          note="kept apart from credit"
-        />
-      </Grid>
+      {hasMoney ? (
+        <Grid>
+          <Tile
+            span={3}
+            label="Credit balance"
+            info={G.creditBalance}
+            value={moneyOrDash(balance)}
+            title={balance == null ? undefined : money(balance, cur)}
+            note="face value"
+          />
+          <Tile
+            span={3}
+            label="Credit liability"
+            info={G.creditLiability}
+            value={moneyOrDash(total("c_liability"))}
+            note="paid credit not used yet"
+            href={`/businesses/${biz}/reports/credits`}
+          />
+          <Tile
+            span={3}
+            label="Customers with credit"
+            value={countOrDash(total("c_customers"))}
+            // The list filter reads face value: it cannot find a holder of units only.
+            href={hasUnits ? undefined : `${customers}?filter=credit_balance:gt:0`}
+          />
+          <Tile
+            span={3}
+            label="Prepaid account balance"
+            info={G.prepaidBalance}
+            value={moneyOrDash(total("c_prepaid"))}
+            note="kept apart from credit"
+          />
+        </Grid>
+      ) : null}
+      {hasUnits ? (
+        <Grid>
+          {unitKeys.slice(0, hasMoney ? 4 : 3).map((key) => {
+            const u = unitOf(key);
+            return (
+              <Tile
+                key={key}
+                span={3}
+                label={
+                  hasMoney || unitKeys.length > 1 ? `Balance in ${u.plural}` : "Credit balance"
+                }
+                info={G.creditBalance}
+                value={unitCount(inUnit(key, "cu_balance"), u)}
+                note={
+                  hasMoney || unitKeys.length > 1 ? "no money value" : `${u.plural}, no money value`
+                }
+              />
+            );
+          })}
+          {hasMoney ? null : (
+            <Tile
+              span={3}
+              label="Customers with credit"
+              value={countOrDash(total("c_customers"))}
+            />
+          )}
+        </Grid>
+      ) : null}
       <Grid>
         <Block
           span={6}
@@ -100,15 +160,42 @@ export function creditsZones({
             </BlockLink>
           }
         >
-          {expiring.length > 0 ? (
-            <BarList
-              rows={expiring.map((r) => ({
-                key: r.key,
-                label: EXPIRY_LABEL[r.key] ?? r.label,
-                total: r.total,
-              }))}
-              format={(n) => moneyCompact(n, cur)}
-            />
+          {(hasMoney && expiring.length > 0) ||
+          unitExpiring.length > 0 ||
+          (!oneUnit && unitsExpiringByUnit.length > 0) ? (
+            <div className="flex flex-col gap-4">
+              {hasMoney && expiring.length > 0 ? (
+                <BarList
+                  rows={expiring.map((r) => ({
+                    key: r.key,
+                    label: EXPIRY_LABEL[r.key] ?? r.label,
+                    total: r.total,
+                  }))}
+                  format={(n) => moneyCompact(n, cur)}
+                />
+              ) : null}
+              {oneUnit && unitExpiring.length > 0 ? (
+                <BarList
+                  rows={unitExpiring.map((r) => ({
+                    key: r.key,
+                    label: EXPIRY_LABEL[r.key] ?? r.label,
+                    total: r.total,
+                  }))}
+                  format={(n) => fmtUnits(n, oneUnit)}
+                />
+              ) : null}
+              {!oneUnit && unitsExpiringByUnit.length > 0 ? (
+                <Lines>
+                  {unitsExpiringByUnit.map((r) => (
+                    <Line
+                      key={r.key}
+                      label={`Held in ${unitOf(r.key).plural}`}
+                      value={fmtUnits(r.total, unitOf(r.key))}
+                    />
+                  ))}
+                </Lines>
+              ) : null}
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground">No customer holds credit now.</p>
           )}
@@ -147,18 +234,40 @@ export function creditsZones({
   const used = total("c_used");
   const expired = total("c_expired");
   const usedSeries = pick(batch, "c_used_series");
+  const unitUsedSeries = oneUnit ? pick(batch, "cu_used_series") : null;
   const sources = slices(pick(batch, "c_granted_by"));
+  const unitSources = oneUnit ? perUnit("cu_granted_by") : [];
 
   const performance = (
     <Stack>
       <Grid>
         <Block span={8} title="Credit flow" info={G.creditFlow}>
-          <div className="flex flex-wrap gap-x-8 gap-y-2">
-            <Lead value={moneyOrDash(granted)} note="granted" />
-            <Lead value={moneyOrDash(used)} note="used" />
-            <Lead value={moneyOrDash(expired)} note="expired unused" />
+          <div className="flex flex-col gap-4">
+            {hasMoney ? (
+              <div className="flex flex-wrap gap-x-8 gap-y-2">
+                <Lead value={moneyOrDash(granted)} note="granted" />
+                <Lead value={moneyOrDash(used)} note="used" />
+                <Lead value={moneyOrDash(expired)} note="expired unused" />
+              </div>
+            ) : null}
+            {unitKeys.map((key) => {
+              const u = unitOf(key);
+              return (
+                <div key={key} className="flex flex-wrap gap-x-8 gap-y-2">
+                  <Lead
+                    value={unitCount(inUnit(key, "cu_granted"), u)}
+                    note={`${u.plural} granted`}
+                  />
+                  <Lead value={unitCount(inUnit(key, "cu_used"), u)} note={`${u.plural} used`} />
+                  <Lead
+                    value={unitCount(inUnit(key, "cu_expired"), u)}
+                    note={`${u.plural} expired unused`}
+                  />
+                </div>
+              );
+            })}
           </div>
-          {usedSeries && usedSeries.series.length > 0 ? (
+          {hasMoney && usedSeries && usedSeries.series.length > 0 ? (
             <div className="mt-4">
               <BucketBars
                 labels={pts(usedSeries).labels}
@@ -167,6 +276,19 @@ export function creditsZones({
                 tone="brand"
                 kind="money"
                 currency={usedSeries.currency ?? cur}
+              />
+            </div>
+          ) : !hasMoney && oneUnit && unitUsedSeries && unitUsedSeries.series.length > 0 ? (
+            <div className="mt-4">
+              <BucketBars
+                labels={pts(unitUsedSeries).labels}
+                // In whole units: the series is in the unit's smallest step.
+                values={pts(unitUsedSeries).values.map((v) =>
+                  v == null ? null : v / 10 ** oneUnit.decimals,
+                )}
+                seriesLabel={`${oneUnit.plural.charAt(0).toUpperCase()}${oneUnit.plural.slice(1)} used`}
+                tone="brand"
+                kind="count"
               />
             </div>
           ) : null}
@@ -183,12 +305,25 @@ export function creditsZones({
           </Lines>
         </Block>
       </Grid>
-      {sources.length > 0 ? (
+      {hasMoney && sources.length > 0 ? (
         <Grid>
           <Block span={12} title="Credit granted, by where it came from">
             <BarList
               rows={sources.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
               format={(n) => moneyCompact(n, cur)}
+            />
+          </Block>
+        </Grid>
+      ) : null}
+      {oneUnit && unitSources.length > 0 ? (
+        <Grid>
+          <Block
+            span={12}
+            title={`${oneUnit.plural.charAt(0).toUpperCase()}${oneUnit.plural.slice(1)} granted, by where they came from`}
+          >
+            <BarList
+              rows={unitSources.map((r) => ({ key: r.key, label: r.label, total: r.total }))}
+              format={(n) => fmtUnits(n, oneUnit)}
             />
           </Block>
         </Grid>
@@ -393,6 +528,7 @@ export function salesZones({
         label="Orders, 30 days"
         info={G.orders}
         value={countOrDash(total("s_orders30"))}
+        href={`/businesses/${biz}/orders?filter=created_at:in_last:30`}
       />
       <Tile span={3} label="Order revenue, 30 days" value={moneyOrDash(total("s_revenue30"))} />
       <Tile span={3} label="Average order value, 30 days" value={moneyOrDash(total("s_aov30"))} />

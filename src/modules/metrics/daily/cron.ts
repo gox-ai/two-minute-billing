@@ -4,9 +4,9 @@
  * Per business: one business's failure is logged and skipped, not allowed to cost the
  * estate its day (or its current value).
  */
-import { eq } from "drizzle-orm";
+import { exists, or, sql } from "drizzle-orm";
 import { systemDb, withTenant } from "@/platform/db";
-import { businesses, subscriptions } from "@db/schema";
+import { businesses, creditGrants, invoices, subscriptions, usageEvents } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { computeMetricPeriod } from "./compute";
 import { writeMetricDay } from "./write";
@@ -26,10 +26,22 @@ export interface CronBusiness {
   calendar: BusinessCalendar;
 }
 
-/** Only businesses that HAVE a subscription — a business with none writes nothing anyway. */
-export async function businessesWithSubscriptions(): Promise<CronBusiness[]> {
+/**
+ * Every business with billing activity of any model: subscriptions, one-time invoices,
+ * metered usage or credit grants. A business with none of these writes nothing anyway.
+ */
+export async function businessesWithBillingActivity(): Promise<CronBusiness[]> {
+  const any = (
+    table: typeof subscriptions | typeof invoices | typeof usageEvents | typeof creditGrants,
+  ) =>
+    exists(
+      systemDb
+        .select({ one: sql`1` })
+        .from(table)
+        .where(sql`${table.businessId} = ${businesses.id}`),
+    );
   const rows = await systemDb
-    .selectDistinct({
+    .select({
       id: businesses.id,
       organizationId: businesses.organizationId,
       timezone: businesses.timezone,
@@ -37,7 +49,7 @@ export async function businessesWithSubscriptions(): Promise<CronBusiness[]> {
       fiscalYearStartMonth: businesses.fiscalYearStartMonth,
     })
     .from(businesses)
-    .innerJoin(subscriptions, eq(subscriptions.businessId, businesses.id));
+    .where(or(any(subscriptions), any(invoices), any(usageEvents), any(creditGrants)));
   return rows.map(({ weekStart, fiscalYearStartMonth, ...b }) => ({
     ...b,
     calendar: calendarOf({ weekStart, fiscalYearStartMonth }),
@@ -58,7 +70,7 @@ async function writeMetricDayForAll(
   dayOf: (b: CronBusiness) => string,
   event: string,
 ): Promise<{ businesses: number; failed: number }> {
-  const rows = await businessesWithSubscriptions();
+  const rows = await businessesWithBillingActivity();
   let failed = 0;
   for (const b of rows) {
     const day = dayOf(b);
@@ -152,7 +164,7 @@ export async function writeMetricDayForYesterday(now: Date) {
   };
   const result = await writeMetricDayForAll(yesterdayFor, "metric_daily_yesterday_written");
   let coarseFailed = 0;
-  for (const b of await businessesWithSubscriptions()) {
+  for (const b of await businessesWithBillingActivity()) {
     const day = yesterdayFor(b);
     try {
       await writeCoarseGrains(day, b);

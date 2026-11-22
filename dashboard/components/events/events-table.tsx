@@ -73,6 +73,10 @@ const NATIVE_ONLY =
 const SOURCE_OPTIONS = [
   { value: "api", label: "API" },
   { value: "dashboard", label: "Dashboard" },
+  { value: "portal", label: "Customer portal" },
+  { value: "checkout", label: "Checkout" },
+  { value: "webhook", label: "Gateway notification" },
+  { value: "mcp", label: "AI agent (MCP)" },
   { value: "scheduled_job", label: "Billing clock / jobs" },
   { value: "migration", label: "Migration" },
   { value: "system", label: "System" },
@@ -180,7 +184,20 @@ export function EventsTable({
   const columns = React.useMemo<ColumnDef<EventRecord>[]>(
     () => [
       {
+        accessorKey: "occurred_at",
+        id: "occurred_at",
+        header: "Created",
+        // A log is scanned by time: on a phone it sits opposite the event name.
+        meta: { phone: "aside" },
+        cell: ({ row }) => (
+          <TextCell className="whitespace-nowrap">
+            {fmtDateTime(row.original.occurred_at, tz)}
+          </TextCell>
+        ),
+      },
+      {
         id: "event",
+        meta: { phone: "title" },
         header: "Event",
         accessorFn: (e) => e.event_type,
         cell: ({ row }) => {
@@ -235,18 +252,6 @@ export function EventsTable({
         },
       },
       {
-        accessorKey: "occurred_at",
-        id: "occurred_at",
-        header: "Created",
-        // A log is scanned by time: on a phone it sits opposite the event name.
-        meta: { phone: "aside" },
-        cell: ({ row }) => (
-          <TextCell className="whitespace-nowrap">
-            {fmtDateTime(row.original.occurred_at, tz)}
-          </TextCell>
-        ),
-      },
-      {
         id: "source",
         header: "Source",
         accessorFn: (e) => e.source ?? "",
@@ -292,6 +297,14 @@ export function EventsTable({
         group: "Identity",
         serverOps: TEXT_OPS,
         hint: NATIVE_ONLY,
+      },
+      // Not a column: `customer:is:` becomes the engine's footprint param (`eventsQuery`).
+      {
+        id: "customer",
+        label: "Customer ID",
+        group: "Identity",
+        serverOps: ["is"],
+        hint: "The customer and all its subscriptions, invoices, credit notes and payments.",
       },
 
       {

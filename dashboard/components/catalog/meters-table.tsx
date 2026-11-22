@@ -53,7 +53,11 @@ export function MetersTable({
       {
         accessorKey: "event_name",
         header: "Event name",
-        cell: ({ row }) => <TextCell className="font-mono">{row.original.event_name}</TextCell>,
+        cell: ({ row }) => (
+          <TextCell className="block max-w-64 font-mono wrap-anywhere">
+            {row.original.event_name}
+          </TextCell>
+        ),
       },
       {
         id: "aggregation",

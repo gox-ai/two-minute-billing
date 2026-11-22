@@ -119,10 +119,14 @@ export const resetCookieOptions = () => ({ ...base(), path: "/reset-password", m
 /** Scoped to the cancel page; an hour, since the owner may read the email and click later. */
 export const mfaResetCookieOptions = () => ({ ...base(), path: "/two-factor-reset", maxAge: 3600 });
 
-/** Team alert address confirmation (0495): the parked token, and "confirmed" for the page. */
-export const TEAM_ALERT_CONFIRM_COOKIE = "tmb_team_alert_confirm";
-export const TEAM_ALERT_DONE_COOKIE = "tmb_team_alert_done";
-export const teamAlertCookieOptions = () => ({ ...base(), path: "/team-alerts", maxAge: 900 });
+/** Outside address confirmation for notifications (0533): the parked token, and "confirmed". */
+export const DESTINATION_CONFIRM_COOKIE = "tmb_destination_confirm";
+export const DESTINATION_DONE_COOKIE = "tmb_destination_done";
+export const destinationCookieOptions = () => ({
+  ...base(),
+  path: "/notifications/confirm",
+  maxAge: 900,
+});
 
 /** Same shape as the reset cookie, scoped to the invite page. */
 export const inviteCookieOptions = () => ({ ...base(), path: "/invite", maxAge: 600 });

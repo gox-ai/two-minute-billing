@@ -33,7 +33,7 @@ import {
   portalMakeDefaultShippingAction,
   portalSaveShippingAddressAction,
 } from "./actions";
-import { Glyph, Row, RowList } from "../../chrome";
+import { Row, RowList } from "../../chrome";
 import { shippingLines } from "./shipping-format";
 
 /** What the engine requires of a ship-to (region and postal code only where the country has them). */
@@ -112,12 +112,9 @@ export function ShippingAddresses({
           {addresses.map((a) => (
             <Row key={a.id}>
               <div className="flex min-w-0 flex-1 items-start gap-3">
-                <Glyph>
-                  <Truck />
-                </Glyph>
                 <div className="min-w-0">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-medium">
+                    <span className="text-sm font-medium wrap-break-word">
                       {a.label?.trim() || "Shipping address"}
                     </span>
                     {a.is_default ? <Chip>Default</Chip> : null}

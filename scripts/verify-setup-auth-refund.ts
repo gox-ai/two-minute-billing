@@ -134,12 +134,12 @@ function gatewayCapture(ref: string, amount: number, status = "captured") {
   return { orderId, chargeId };
 }
 
-const captureEvent = (chargeId: string, orderId: string) => ({
+const captureEvent = (chargeId: string, orderId: string, occurredAt = new Date()) => ({
   providerEventId: `evt_${uniq()}`,
   type: "charge.succeeded" as const,
   providerChargeId: chargeId,
   providerIntentId: orderId,
-  occurredAt: new Date(),
+  occurredAt,
   raw: { stub: true },
 });
 
@@ -217,9 +217,30 @@ async function main() {
     !logged(at, "unmatched_capture_ours_unattributed"),
   );
 
-  // A2: tagged ours, booked nowhere: still the error, with its durable row.
+  // A2a: tagged ours, booked nowhere YET: the charge request may still be committing its row.
+  // Errors so the retry finds it, and raises no lost-money alert.
+  const young = gatewayCapture(`txn_${uniq()}`, 70000);
+  const youngEv = captureEvent(young.chargeId, young.orderId);
+  at = mark();
+  const r2a = await handleProviderEvent("razorpay", youngEv, { businessId: bizB.id }).catch(
+    (e: Error) => e.name,
+  );
+  const [youngRow] = await systemDb
+    .select()
+    .from(providerEvents)
+    .where(eq(providerEvents.providerEventId, youngEv.providerEventId));
+  ok(
+    `a young unbooked capture of ours is retried, not dropped (${r2a}, outcome=${youngRow?.outcome})`,
+    youngRow?.outcome === "error",
+  );
+  ok(
+    "…and raises no unmatched_capture_ours_unattributed alert",
+    !logged(at, "unmatched_capture_ours_unattributed"),
+  );
+
+  // A2: tagged ours, booked nowhere past the wait: still the error, with its durable row.
   const lost = gatewayCapture(`txn_${uniq()}`, 70000);
-  const lostEv = captureEvent(lost.chargeId, lost.orderId);
+  const lostEv = captureEvent(lost.chargeId, lost.orderId, new Date(Date.now() - 20 * 60_000));
   at = mark();
   const r2 = await handleProviderEvent("razorpay", lostEv, { businessId: bizB.id });
   ok(`an unbooked capture of ours is ignored, not booked (${r2})`, r2 === "ignored");

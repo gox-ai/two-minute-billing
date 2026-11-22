@@ -94,7 +94,9 @@ const H = (p: string) => `${HELP_ORIGIN}/help/${p}`;
  * is a developer's; every other one an operator's. The wording of the question never decides.
  */
 const audienceFor = (want: string[]) =>
-  want.some((w) => w.includes("/help/developers/")) ? ("developer" as const) : ("operator" as const);
+  want.some((w) => w.includes("/help/developers/"))
+    ? ("developer" as const)
+    : ("operator" as const);
 const GOLDEN: Array<[string, string[]]> = [
   [
     "How do I retry a declined card automatically?",
@@ -225,7 +227,7 @@ const SCREENS: Array<[string, string[]]> = [
   ["write off an invoice as bad debt", ["/businesses/{business}/invoices/{inv}"]],
   ["use our own OpenAI key for the assistant", ["/settings/assistant"]],
   ["invite a teammate", ["/team"]],
-  ["disconnect an AI app", ["/developer"]],
+  ["disconnect an AI app", ["/developer/connected-apps"]],
   [
     "create a coupon",
     ["/businesses/{business}/catalog/coupons/new", "/businesses/{business}/catalog/coupons"],
@@ -341,9 +343,7 @@ let apiOk = 0;
 for (const [q, page, text] of APIQ) {
   const h = (
     await searchDocs(q, { sources: ["help", "api"], limit: 3, audience: "developer" })
-  ).find(
-    (x) => (x.url ?? "").split("#")[0] === page,
-  );
+  ).find((x) => (x.url ?? "").split("#")[0] === page);
   if (h?.body.includes(text)) apiOk++;
   else
     console.log(

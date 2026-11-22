@@ -5,6 +5,7 @@
  * the tool's main route needs; it only decides whether the tool is LISTED for a credential.
  * The route itself still enforces its permission on every call.
  */
+import { BROWSER_REPORTED } from "@/modules/payment-intents/browser-failure";
 import { z } from "zod";
 import type { PermissionKey } from "@/modules/auth/permissions";
 import { routeErrorMessage, type QueryValue, type RouteResult } from "./route-call";
@@ -70,7 +71,15 @@ export interface ToolDef {
 
 // ── shared inputs ──────────────────────────────────────────────────────────────
 
-const id = (what: string) => z.string().min(1).max(100).describe(`The ${what} id.`);
+/** Ids are opaque: an imported record keeps its source id, which may have no `cus_`-style prefix. */
+const id = (what: string) =>
+  z
+    .string()
+    .min(1)
+    .max(100)
+    .describe(
+      `The ${what} id, exactly as a tool or the member's page gave it. An imported record's id may have no prefix: never add or change one.`,
+    );
 
 const listInput = {
   filters: z
@@ -111,7 +120,12 @@ function listQuery(args: Record<string, unknown>): Record<string, QueryValue | u
 function must(r: RouteResult, what: string): unknown {
   if (r.status >= 200 && r.status < 300) return r.body;
   const reason = routeErrorMessage(r) ?? `The API answered ${r.status}.`;
-  throw new ToolError(`We could not read ${what}. ${reason}`, r.status);
+  // A missing id is most often a changed one: say so, rather than invite a search for another.
+  const hint =
+    r.status === 404
+      ? " Use the id exactly as it was given, with no prefix added or changed. Do not read a different record in its place."
+      : "";
+  throw new ToolError(`We could not read ${what}. ${reason}${hint}`, r.status);
 }
 
 /** A secondary part of an overview: its body, or why it is missing. Never fails the tool. */
@@ -274,6 +288,96 @@ const leanAttempt = (a: Row): Row => ({
   created_at: a.created_at ?? null,
 });
 
+/** A payment intent row, lean: its state and why its newest attempt failed. */
+const leanIntent = (r: Row): Row => ({
+  id: r.id ?? null,
+  customer: r.customer ?? null,
+  status: r.status ?? null,
+  purpose: r.purpose ?? null,
+  amount_minor: r.amount_minor ?? null,
+  currency: r.currency ?? null,
+  attempt_count: r.attempt_count ?? null,
+  last_attempt_status: r.last_attempt_status ?? null,
+  last_error: r.last_error ?? null,
+  gateway_key: r.gateway_key ?? null,
+  created_at: r.created_at ?? null,
+  expires_at: r.expires_at ?? null,
+});
+
+/** A list body with each row made lean; any other body (an `unavailable` part) as it is. */
+/**
+ * An excess payment, named for a reader: `held_minor` reads as "still held" and is not (it is
+ * what the payment put on the balance), so the model gets `received_minor` and
+ * `still_held_minor` instead.
+ */
+const leanExcessPayment = (r: Row): Row => ({
+  payment: r.payment ?? null,
+  invoice: r.invoice ?? null,
+  currency: r.currency ?? null,
+  received_minor: r.held_minor ?? null,
+  still_held_minor: r.remaining_minor ?? null,
+  refundable_minor: r.refundable_minor ?? null,
+  gateway: r.gateway ?? null,
+  created_at: r.created_at ?? null,
+});
+
+/**
+ * The customer's balance in each bucket, named for a reader. The API lists every currency the
+ * customer holds or held credit in, zeros included, so a used-up balance reads as 0.
+ */
+function creditBalances(customer: unknown): Row[] {
+  const rows = (customer as { balances?: Row[] } | null)?.balances ?? [];
+  return rows
+    .filter((b) => typeof b.currency_code === "string")
+    .map((b) => ({
+      currency: b.currency_code,
+      promotional_credits_minor: b.promotional_credits ?? 0,
+      refundable_credits_minor: b.refundable_credits ?? 0,
+      excess_payments_minor: b.excess_payments ?? 0,
+    }));
+}
+
+const leanRows = (body: unknown, lean: (r: Row) => Row): unknown => {
+  const b = body as { data?: unknown; has_more?: unknown } | null;
+  if (!b || !Array.isArray(b.data)) return body;
+  return { data: (b.data as Row[]).map(lean), has_more: b.has_more === true };
+};
+
+/** A gateway call, without headers and bodies: the model reads one in full with read_api. */
+const leanGatewayCall = (r: Row): Row => ({
+  id: r.id ?? null,
+  operation: r.operation ?? null,
+  method: r.method ?? null,
+  status: r.status ?? null,
+  error: r.error ?? null,
+  source: r.source ?? null,
+  duration_ms: r.duration_ms ?? null,
+  created_at: r.created_at ?? null,
+});
+
+const leanWebhook = (r: Row): Row => ({
+  id: r.id ?? null,
+  type: r.type ?? null,
+  outcome: r.outcome ?? null,
+  error: r.error ?? null,
+  response_status: r.response_status ?? null,
+  transaction: r.transaction ?? null,
+  received_at: r.received_at ?? null,
+});
+
+/** The gateway-request filter for one attempt's calls: its span, else its trace. */
+export function attemptCallsQuery(a: Row): Record<string, QueryValue> | null {
+  if (typeof a.span_id === "string" && a.span_id) return { "span_id[is]": a.span_id };
+  if (typeof a.trace_id === "string" && a.trace_id) return { "trace_id[is]": a.trace_id };
+  return null;
+}
+
+/** Newest attempts whose gateway calls an intent read includes. */
+const INTENT_CALLS_ATTEMPTS = 5;
+/** Gateway calls per attempt, and webhooks per intent. */
+const INTENT_CALLS_MAX = 10;
+const INTENT_WEBHOOKS_MAX = 20;
+
 /** Rows in the collections queue. */
 const COLLECTIONS_MAX = 50;
 /** Entries in a timeline. */
@@ -287,6 +391,13 @@ const RECORD_KINDS: Record<string, string> = {
   pi_: "payment_intent",
   txn_: "transaction",
 };
+const TIMELINE_KINDS = [
+  "customer",
+  "subscription",
+  "invoice",
+  "payment_intent",
+  "transaction",
+] as const;
 
 // ── read_api guard ─────────────────────────────────────────────────────────────
 
@@ -392,7 +503,7 @@ export const TOOLS: ToolDef[] = [
     title: "Search customers",
     description:
       "Find customers by name, email, company or id (query), or by filters such as mrr, has_unpaid_invoices, cannot_be_charged, payment_method_expiring, subscription_status, country. " +
-      "Returns a page of customers with ids for the other tools.",
+      "Returns a page of customers with ids for the other tools. Not for a customer whose id you have (the member's page, a mention, an earlier read): read that one with get_customer.",
     perms: ["customers:view"],
     input: {
       query: z.string().max(200).optional().describe("Free text: name, email, company or id."),
@@ -433,18 +544,22 @@ export const TOOLS: ToolDef[] = [
     name: "get_customer",
     title: "Customer overview",
     description:
-      "Everything about one customer in one call: the customer record, their subscriptions, their 10 most recent invoices, their payment methods, and their open disputes.",
+      "Everything about one customer in one call: the customer record (with its credit balances by type), their subscriptions, their 10 most recent invoices (each with the credit applied to it by type), their payment methods, their open disputes, their excess payments (what each put on the balance and what is still held), and their 10 most recent payment intents (status, and the last error when the newest attempt failed). " +
+      "For one payment intent in full, use get_payment_attempts.",
     perms: ["customers:view"],
     input: { customer: id("customer (cus_…)") },
     run: async (ctx, a) => {
       const c = seg(a.customer);
-      const [customer, subscriptions, invoices, paymentMethods, disputes] = await Promise.all([
-        ctx.get(`customers/${c}`),
-        ctx.get("subscriptions", { "customer[is]": String(a.customer), limit: 25 }),
-        ctx.get("invoices", { "customer[is]": String(a.customer), limit: 10 }),
-        ctx.get(`customers/${c}/payment_methods`),
-        ctx.get("disputes", { customer: String(a.customer), open: "true", limit: 10 }),
-      ]);
+      const [customer, subscriptions, invoices, paymentMethods, disputes, intents, excess] =
+        await Promise.all([
+          ctx.get(`customers/${c}`),
+          ctx.get("subscriptions", { "customer[is]": String(a.customer), limit: 25 }),
+          ctx.get("invoices", { "customer[is]": String(a.customer), limit: 10 }),
+          ctx.get(`customers/${c}/payment_methods`),
+          ctx.get("disputes", { customer: String(a.customer), open: "true", limit: 10 }),
+          ctx.get("payment_intents", { customer: String(a.customer), limit: 10 }),
+          ctx.get(`customers/${c}/excess_payments`, { include_used: "true" }),
+        ]);
       return {
         customer: must(customer, `the customer ${String(a.customer)}`),
         subscriptions: part(subscriptions),
@@ -452,6 +567,11 @@ export const TOOLS: ToolDef[] = [
         payment_methods: part(paymentMethods),
         // Needs payments:view; without it the part says why.
         open_disputes: part(disputes),
+        // Open intents write no transaction, so a buyer stuck on a payment page shows only here.
+        recent_payment_intents: leanRows(part(intents), leanIntent),
+        // Needs credits:view; a used-up overpayment stays here with nothing still held.
+        excess_payments: leanRows(part(excess), leanExcessPayment),
+        credit_balances: creditBalances(part(customer)),
       };
     },
   },
@@ -679,16 +799,53 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "get_payment_attempts",
-    title: "Payment attempts",
+    title: "Payment intent and attempts",
     description:
-      "Every attempt on one payment intent (pi_…): the gateway's answer, decline code and reason, and timing. Use it to explain why a payment failed.",
+      "One payment intent (pi_…) in full: the intent (payment_intent), every attempt oldest first (data) with the gateway's answer, error code and text, and timing, " +
+      "the gateway calls of the newest attempts (gateway_calls on each attempt), and the webhooks the gateway sent about the intent (webhooks). " +
+      "reported_by_browser marks a refusal the gateway showed only on the payment page, never to our server. Use it to explain why a payment failed.",
     perms: ["payments:view"],
     input: { payment_intent: id("payment intent (pi_…)") },
-    run: async (ctx, a) =>
-      must(
-        await ctx.get(`payment_intents/${seg(a.payment_intent)}/attempts`),
-        `the attempts on ${String(a.payment_intent)}`,
-      ),
+    run: async (ctx, a) => {
+      const pi = String(a.payment_intent);
+      const intent = must(
+        await ctx.get(`payment_intents/${seg(pi)}`),
+        `the payment intent ${pi}`,
+      ) as Row;
+      const attempts = Array.isArray(intent.attempts) ? (intent.attempts as Row[]) : [];
+      const traced = attempts.slice(-INTENT_CALLS_ATTEMPTS);
+      // Gateway logs need gateways:view; without it each part says why.
+      const [calls, webhooks] = await Promise.all([
+        Promise.all(
+          traced.map((at) => {
+            const q = attemptCallsQuery(at);
+            return q ? ctx.get("gateway_requests", { ...q, limit: INTENT_CALLS_MAX }) : null;
+          }),
+        ),
+        ctx.get("gateway_webhooks", { "payment_intent[is]": pi, limit: INTENT_WEBHOOKS_MAX }),
+      ]);
+      const callsOf = new Map(traced.map((at, i) => [at, calls[i]]));
+      return {
+        object: "list",
+        payment_intent: leanIntent(intent),
+        data: attempts.map((at) => {
+          const r = callsOf.get(at);
+          return {
+            id: at.id ?? null,
+            ...leanAttempt(at),
+            id_at_gateway: at.id_at_gateway ?? null,
+            reported_by_browser:
+              typeof at.error_text === "string" && at.error_text.endsWith(BROWSER_REPORTED),
+            gateway_calls: !callsOf.has(at)
+              ? { unavailable: "Not read: an older attempt." }
+              : r
+                ? leanRows(part(r), leanGatewayCall)
+                : { unavailable: "This attempt made no traced gateway call." },
+          };
+        }),
+        webhooks: leanRows(part(webhooks), leanWebhook),
+      };
+    },
   },
   {
     name: "get_metrics",
@@ -922,14 +1079,14 @@ export const TOOLS: ToolDef[] = [
     name: "explain_balance",
     title: "Explain a customer's balances",
     description:
-      "Where a customer's credit comes from and goes: promotional credits, excess payments (overpayments held for them), credit grants with their movements, and their wallet.",
+      "Where a customer's credit comes from and goes: promotional credits, excess payments (each overpayment with what it put on the balance and what is still held after invoices used it, also when all of it is used), credit grants with their movements, and their wallet.",
     perms: ["customers:view"],
     input: { customer: id("customer (cus_…)") },
     run: async (ctx, a) => {
       const c = seg(a.customer);
       const [promo, excess, grants, movements, wallet] = await Promise.all([
         ctx.get(`customers/${c}/promotional_credits`),
-        ctx.get(`customers/${c}/excess_payments`),
+        ctx.get(`customers/${c}/excess_payments`, { include_used: "true" }),
         ctx.get(`customers/${c}/credit_grants`),
         ctx.get(`customers/${c}/credit_transactions`),
         ctx.get(`customers/${c}/wallet`),
@@ -937,7 +1094,7 @@ export const TOOLS: ToolDef[] = [
       if (promo.status === 404) must(promo, `the customer ${String(a.customer)}`);
       return {
         promotional_credits: part(promo),
-        excess_payments: part(excess),
+        excess_payments: leanRows(part(excess), leanExcessPayment),
         credit_grants: part(grants),
         credit_movements: part(movements),
         wallet: part(wallet),
@@ -948,18 +1105,24 @@ export const TOOLS: ToolDef[] = [
     name: "get_timeline",
     title: "Record timeline",
     description:
-      'What happened to one record, newest first: its events, and for a customer also the emails sent to them and their payments; for an invoice also its payments. Give a customer (cus_…), subscription (sub_…), invoice (inv_…), payment intent (pi_…) or transaction (txn_…) id. Use it for "what happened to this customer" and "when was this invoice sent and paid". ' +
+      'What happened to one record, newest first: its events, and for a customer also the emails sent to them and their payments; for an invoice also its payments. Give a customer (cus_…), subscription (sub_…), invoice (inv_…), payment intent (pi_…) or transaction (txn_…) id, and its kind. Use it for "what happened to this customer" and "when was this invoice sent and paid". ' +
       `At most ${TIMELINE_MAX} entries. A part the member cannot read is left out and named in notes.`,
     perms: ["events:view"],
-    input: { record: id("customer, subscription, invoice, payment intent or transaction") },
+    input: {
+      record: id("customer, subscription, invoice, payment intent or transaction"),
+      kind: z
+        .enum(TIMELINE_KINDS)
+        .optional()
+        .describe("What the record is. Needed when its id has no prefix (an imported record)."),
+    },
     run: async (ctx, a) => {
       const record = String(a.record);
       const prefix = Object.keys(RECORD_KINDS).find((p) => record.startsWith(p));
-      if (!prefix)
+      const kind = (a.kind as string | undefined) ?? (prefix ? RECORD_KINDS[prefix] : undefined);
+      if (!kind)
         throw new ToolError(
-          "We could not read the timeline. Give a cus_, sub_, inv_, pi_ or txn_ id.",
+          "We could not read the timeline. Give the record's kind: customer, subscription, invoice, payment_intent or transaction.",
         );
-      const kind = RECORD_KINDS[prefix]!;
       const limit = TIMELINE_MAX;
       const isCustomer = kind === "customer";
       const [events, emails, payments] = await Promise.all([
@@ -1251,11 +1414,15 @@ export const TOOLS: ToolDef[] = [
     description:
       'Count, sum, average, min, max or group ANY list of this business, over every matching row, not only a page: "how much will PayPal customers pay next month", "how many trials end this week by plan", "unpaid total by country", "which plan churned most". ' +
       "resource is a list path after /v1/businesses/{business}/ (subscriptions, invoices, transactions, customers, credit_notes, payment_requests, payment_intents, disputes, retries, events, emails, usage_events, unbilled_charges, coupons, prices, products, customers/cus_…/credit_grants, …). " +
-      'filters are the list\'s own "field[op]" filters (they run in the database: use them first); with_payer joins each row\'s customer and how they pay; where filters the rows read, on any field including payer.pays_with.type; group_by and metrics say what to count. ' +
+      "filters are the list's own \"field[op]\" filters (they run in the database: use them first); with_payer joins each row's customer and how they pay; where filters the rows read, on any field including payer.pays_with.type; group_by and metrics say what to count. " +
       "Money fields end in _minor. The answer holds the figures and a few sample rows; complete: false means the row or time budget cut the read. Use this instead of listing rows and adding them up yourself.",
     perms: [],
     input: {
-      resource: z.string().min(1).max(200).describe("The list path, e.g. subscriptions or invoices."),
+      resource: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe("The list path, e.g. subscriptions or invoices."),
       filters: listInput.filters,
       with_payer: z
         .boolean()
@@ -1281,8 +1448,16 @@ export const TOOLS: ToolDef[] = [
         )
         .max(5)
         .optional()
-        .describe('Default: count. Example: [{"op": "sum", "field": "recurring_amount_minor"}, {"op": "count_distinct", "field": "customer"}].'),
-      sample: z.number().int().min(0).max(10).optional().describe("Sample rows to return. Default 3."),
+        .describe(
+          'Default: count. Example: [{"op": "sum", "field": "recurring_amount_minor"}, {"op": "count_distinct", "field": "customer"}].',
+        ),
+      sample: z
+        .number()
+        .int()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe("Sample rows to return. Default 3."),
       max_rows: z
         .number()
         .int()

@@ -51,12 +51,21 @@ export interface PageContext {
   record: RecordRef | null;
 }
 
+/**
+ * Literal pages beside a record id under the record folders (`customers/new`). Every other
+ * segment there is a record id, used AS-IS: an imported record keeps its source id, which
+ * may have no `cus_`/`inv_` prefix. A unit test keeps this list in step with the routes.
+ */
+export const RECORD_FOLDER_PAGES = new Set(["new"]);
+const RECORD_ID = /^[A-Za-z0-9_-]{2,100}$/;
+
 /** The business and the record the member is looking at, from the URL. */
 export function pageContextOf(pathname: string): { biz: string | null; page: PageContext } {
-  const m = /^\/businesses\/([^/]+)(?:\/([^/]+)\/([^/]+))?/.exec(pathname);
+  const m = /^\/businesses\/([^/?#]+)(?:\/([^/?#]+)\/([^/?#]+))?/.exec(pathname);
   const type = m?.[2] ? RECORD_SEGMENTS[m[2]] : undefined;
   const id = m?.[3];
-  const record = type && id && /_[A-Za-z0-9]/.test(id) ? { type, id } : null;
+  const record =
+    type && id && RECORD_ID.test(id) && !RECORD_FOLDER_PAGES.has(id) ? { type, id } : null;
   return { biz: m?.[1] ?? null, page: { path: pathname, record } };
 }
 
@@ -69,10 +78,24 @@ const ID_ROUTES: Array<[RegExp, string]> = [
   [/^pi_/, "payment_intents"],
 ];
 
-/** The dashboard page of a record id, or null for an id with no page. */
-export function recordHref(biz: string, id: string): string | null {
+/** Record folders by the API's `object` name, for an id whose prefix says nothing. */
+export const RECORD_ROUTES: Record<string, string> = {
+  invoice: "invoices",
+  customer: "customers",
+  subscription: "subscriptions",
+  credit_note: "credit_notes",
+  transaction: "transactions",
+  payment_intent: "payment_intents",
+};
+
+/**
+ * The dashboard page of a record id, or null for an id with no page. A prefixed id names its
+ * own folder; an imported id (no prefix) needs `route`, the folder of the record it came from.
+ */
+export function recordHref(biz: string, id: string, route?: string | null): string | null {
   const hit = ID_ROUTES.find(([re]) => re.test(id));
-  return hit ? `/businesses/${biz}/${hit[1]}/${id}` : null;
+  const folder = hit?.[1] ?? (route && RECORD_ID.test(id) ? route : null);
+  return folder ? `/businesses/${biz}/${folder}/${id}` : null;
 }
 
 const PAYMENT_STARTERS = [
@@ -115,10 +138,18 @@ export function startersFor(type: string, state?: string): string[] {
     if (INVOICE_OWED.includes(state))
       return ["Why is this invoice unpaid?", "What will dunning do next?", "Explain this invoice."];
     if (state === "paid")
-      return ["Explain this invoice.", "Was any of it refunded?", "What changed from the last invoice?"];
+      return [
+        "Explain this invoice.",
+        "Was any of it refunded?",
+        "What changed from the last invoice?",
+      ];
   }
   if (type === "customer" && state === "unpaid")
-    return ["Why did their last payment fail?", "Summarize this customer.", "What credit do they have?"];
+    return [
+      "Why did their last payment fail?",
+      "Summarize this customer.",
+      "What credit do they have?",
+    ];
   if (type === "subscription" && state === "cancelled")
     return [
       "Why did this subscription end?",

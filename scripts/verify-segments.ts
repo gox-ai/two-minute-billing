@@ -26,7 +26,7 @@ import { createCustomer } from "@/modules/customers/service";
 import { vaultPaymentMethod } from "@/modules/payment-methods/service";
 import { createProduct, createPrice } from "@/modules/catalog/service";
 import { createSubscription } from "@/modules/subscriptions/service";
-import { businesses, customerSegments } from "@db/schema";
+import { businesses, customerSegments, invoiceLineItems, invoices } from "@db/schema";
 import {
   createSegment,
   deleteSegment,
@@ -228,8 +228,68 @@ await customerWith(null);
   ok("…and totals their MRR exactly, in minor units", h.totals.mrrByCurrency.USD === 56_000);
   ok("Low MRR (paying, under 5,000) finds the small one alone", l.totals.customers === 1);
   ok(
+    "…and reads revenue billed as a currency map (no invoices here, so empty)",
+    Object.keys(l.totals.revenueBilledByCurrency).length === 0,
+  );
+  ok(
     "…and excludes the customer with no subscription at all",
     l.totals.mrrByCurrency.USD === 2_000,
+  );
+}
+
+// ── B2. revenue_billed_by_currency against real invoices ─────────────────────
+{
+  const bizRev = await mkBiz(orgId, "Segments Revenue");
+  const buyer = await createCustomer({
+    organizationId: orgId,
+    businessId: bizRev.id,
+    email: `rev${Math.random()}@a.com`,
+  });
+  let n = 0;
+  const put = (status: string, currency: string, lines: number[]) =>
+    withTenant(orgId, async (tx) => {
+      const total = lines.reduce((a, b) => a + b, 0);
+      const [inv] = await tx
+        .insert(invoices)
+        .values({
+          organizationId: orgId,
+          businessId: bizRev.id,
+          customerId: buyer.id,
+          publicId: `inv_segrev_${++n}_${Date.now()}`,
+          status,
+          currency,
+          subtotalMinor: BigInt(total),
+          totalMinor: BigInt(total),
+        })
+        .returning({ id: invoices.id });
+      for (const [i, amount] of lines.entries()) {
+        await tx.insert(invoiceLineItems).values({
+          organizationId: orgId,
+          businessId: bizRev.id,
+          invoiceId: inv!.id,
+          publicId: `il_segrev_${n}_${i}_${Date.now()}`,
+          description: "one_time",
+          quantity: 1,
+          unitAmountMinor: BigInt(amount),
+          amountMinor: BigInt(amount),
+          discountMinor: 0n,
+          kind: "one_time",
+        });
+      }
+    });
+  // Hand-computed: USD 1000 + 2500 + 700 = 4200, EUR 400. The pending invoice's 9999 never counts.
+  await put("paid", "USD", [1000, 2500]);
+  await put("payment_due", "USD", [700]);
+  await put("paid", "EUR", [400]);
+  await put("pending", "USD", [9999]);
+  const r = await resolveSegment(orgId, bizRev.id, []);
+  ok(
+    "revenue billed is summed per currency from the invoices (USD 4,200 and EUR 400, no pending invoice)",
+    r.totals.revenueBilledByCurrency.USD === 4_200 && r.totals.revenueBilledByCurrency.EUR === 400,
+  );
+  ok(
+    "…and never adds the two currencies together",
+    Object.keys(r.totals.revenueBilledByCurrency).sort().join(",") === "EUR,USD",
   );
 }
 

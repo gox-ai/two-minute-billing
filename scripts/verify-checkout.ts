@@ -893,14 +893,14 @@ ok("preview carries line items", (chgView?.change?.preview?.lines.length ?? 0) >
     await throws(
       "another customer's payment method is refused on this link",
       () => resolveHeldPaymentMethod(chgCtx!, theirs.publicId),
-      /No such payment method/,
+      /We could not find that payment method/,
     );
     // The SAME wording as a nonexistent id: a public link must not become an oracle for
     // which payment-method ids are real.
     await throws(
       "a nonexistent id answers identically (no existence oracle)",
       () => resolveHeldPaymentMethod(chgCtx!, "pm_nope"),
-      /No such payment method/,
+      /We could not find that payment method/,
     );
   }
 
@@ -1156,7 +1156,7 @@ await setCheckoutCustomer(noCardCtx!, { email: "nocard@example.com" });
 await throws(
   "create mode still requires a payment method token",
   () => completeCheckout(noCardCtx!, {}),
-  /payment method token is required/,
+  /Add a payment method/,
 );
 
 // ═══ FIRST-PERIOD BILLING ════════════════════════════════════════════════════
@@ -1633,7 +1633,8 @@ const subEventsBefore = (
 await throws(
   "a declined first charge refuses the checkout",
   () => completeCheckout(declineCtx!, { paymentMethodToken: "tok_4000000000000341" }),
-  /^We could not start your subscription\. .+ We did not charge you\. Try again, or use a different payment method\.$/,
+  // Our sentence may carry its own next step ("Contact your bank, …"); then no second one.
+  /^We could not start your subscription\. .+ We did not charge you\.( Try again, or use a different payment method\.)?$/,
 );
 const declinedSubs = await withTenant(orgId, (tx) =>
   tx.select().from(subscriptions).where(eq(subscriptions.customerId, declineCust.id)),
@@ -2822,7 +2823,7 @@ ok(
   ok(
     "route: another customer's setup_intent is refused by /checkout/v1/complete (400)",
     stolenIntent.statusCode === 400 &&
-      /belongs to a different customer/i.test(String(body(stolenIntent).error?.message)),
+      /could not find this payment method setup/i.test(String(body(stolenIntent).error?.message)),
   );
 
   // ── POSITIVE CONTROLS on an OPEN link, so the refusals below mean something ──
@@ -2838,6 +2839,15 @@ ok(
   ok("route: the checkout completes over HTTP (201)", completed.statusCode === 201);
   const doneCustomer = String(body(completed).customer_id);
   const doneSubscription = String(body(completed).subscription_id);
+  // Provenance: events a hosted checkout raises are the buyer's (`checkout`), not `api`.
+  const doneEvents = await systemDb
+    .select({ source: events.source, type: events.type })
+    .from(events)
+    .where(eq(events.resourceId, doneSubscription));
+  ok(
+    "provenance: the checkout's subscription events carry source=checkout",
+    doneEvents.length > 0 && doneEvents.every((e) => e.source === "checkout"),
+  );
 
   // ═══ A SPENT LINK IS NOT A LIVE CHECKOUT ══════════════════════════════════
   // `resolveCheckoutSession` keeps a COMPLETED session resolvable so /complete can
@@ -4409,7 +4419,7 @@ ok(
   );
   ok(
     "view carries the business defaults for untouched fields",
-    fcView?.field_config["billing.line1"] === "mandatory",
+    fcView?.field_config["billing.postal_code"] === "mandatory",
   );
   ok("view says the PO number is collected", fcView?.collect_po_number === true);
   await withTenant(orgId, (tx) =>
@@ -4534,7 +4544,7 @@ ok(
   const mMissing = await post(mTok, { email: "ship-must@example.com", address: billing });
   ok(
     "shipping mandatory: a details post without one is refused (400)",
-    mMissing.statusCode === 400 && mMissing.body.includes("shipping_address"),
+    mMissing.statusCode === 400 && mMissing.body.includes("Enter a shipping address."),
   );
   const { city: _c, ...noCity } = shipTo("7 Pier St");
   const mPartial = await post(mTok, {

@@ -127,6 +127,11 @@ export const ORPHAN_INTENT_WHERE = (now: Date) => sql`
       select 1 from payment_intents pi
       where pi.intent_at_gateway = (pe.payload::jsonb -> 'data' -> 'object' ->> 'id')
     )
+    and not exists (
+      select 1 from payments p
+      where p.business_id = pe.business_id
+        and p.provider_charge_id = (pe.payload::jsonb -> 'data' -> 'object' ->> 'id')
+    )
     -- A VOID IS THE REMEDIATION THIS ALERT ASKS FOR, so it has to clear it. Nothing above
     -- looks at the intent's state at the gateway, only at whether we hold a row — so an
     -- operator who did exactly what the alert text says ("either void it or let the capture
@@ -195,6 +200,13 @@ export const ORPHAN_LOG_WHERE = (now: Date) => sql`
     and not exists (
       select 1 from payment_intents pi
       where pi.intent_at_gateway = (gl.response_body::jsonb ->> 'id')
+    )
+    -- A capture booked with no transaction (an unmatched capture, booked and refunded by
+    -- the webhook) is recorded all the same.
+    and not exists (
+      select 1 from payments p
+      where p.business_id = gl.business_id
+        and p.provider_charge_id = (gl.response_body::jsonb ->> 'id')
     )
     -- …and the flow it belonged to was not recorded under some OTHER id. See above: this
     -- is the clause that keeps every successful RazorPay order out.

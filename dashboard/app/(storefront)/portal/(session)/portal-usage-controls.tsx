@@ -1,9 +1,8 @@
-import { Gauge } from "lucide-react";
 import { money } from "@/lib/format";
 import { fmtDate } from "@/lib/format-date";
 import { runwayLabel } from "@/lib/usage-controls";
 import type { PortalCreditRunway, PortalSpendLimit } from "@/lib/portal-api";
-import { Glyph, Row, RowList, StorefrontSection } from "../../chrome";
+import { Row, RowList, StorefrontSection } from "../../chrome";
 import { AddLimitButton, OwnLimitActions } from "./portal-limit-forms";
 
 const PER: Record<PortalSpendLimit["interval"], string> = {
@@ -64,9 +63,6 @@ export function PortalUsageControlsSection({
         {runway && (runway.balance_minor > 0 || runway.runway_days != null) ? (
           <Row className="flex-row items-center gap-3">
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <Glyph>
-                <Gauge />
-              </Glyph>
               <div className="min-w-0">
                 <div className="text-sm font-medium">{runwayText}</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">

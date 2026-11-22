@@ -2,6 +2,7 @@
  * The assistant's records: organization settings, the member's conversations and messages, and
  * the usage ledger behind the monthly cap. Every read and write is inside `withTenant`.
  */
+import { notPlatformOrg } from "@/modules/tenancy/platform-org";
 import { memberData, memberSteps } from "./visibility";
 import {
   and,
@@ -827,7 +828,12 @@ export async function sweepAttachments(now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - ATTACHMENT_RETENTION_DAYS * 86_400_000);
   const rows = await systemDb
     .delete(assistantAttachments)
-    .where(lt(assistantAttachments.createdAt, cutoff))
+    .where(
+      and(
+        lt(assistantAttachments.createdAt, cutoff),
+        notPlatformOrg(assistantAttachments.organizationId),
+      ),
+    )
     .returning({ id: assistantAttachments.id });
   return rows.length;
 }

@@ -5,6 +5,7 @@ import { offlineMethodOptions } from "@/lib/offline-methods";
 import { ActionForm } from "@/components/form/action-form";
 import { Field } from "@/components/form/field";
 import { DateTimeField } from "@/components/form/datetime-field";
+import { RepeatRefundNotice, useRepeatRefund } from "@/components/form/repeat-refund";
 import { SubmitButton } from "@/components/form/submit-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +74,7 @@ export function RefundCreditNoteButton({
   gatewayAccount?: { id: string; name: string } | null;
 }) {
   const [open, setOpen] = React.useState(false);
+  const repeat = useRepeatRefund();
   return (
     <>
       <Button {...triggerProps(trigger)} onClick={() => setOpen(true)}>
@@ -92,6 +94,7 @@ export function RefundCreditNoteButton({
           <ActionForm
             action={refundCreditNoteAction}
             onSuccess={() => setOpen(false)}
+            onRefused={repeat.onRefused}
             className="space-y-4"
           >
             <input type="hidden" name="biz" value={biz} />
@@ -135,6 +138,7 @@ export function RefundCreditNoteButton({
             >
               <Input name="comment" maxLength={500} />
             </Field>
+            <RepeatRefundNotice message={repeat.message} onClear={repeat.clear} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel

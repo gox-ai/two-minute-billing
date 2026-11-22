@@ -27,6 +27,8 @@
  *   mandate_spent               → park        a used one-shot mandate — only a new one recovers it
  *   gateway_limit_exceeded      → park        a GATEWAY/ACCOUNT limit — a human must raise it
  *   recurring_not_enabled       → park        MERCHANT config — a human must fix it
+ *   gateway_request_rejected    → retry       OUR request was refused; the ops alert
+ *                                             `gateway_request_faults` gets it fixed (2026-11-17)
  *   ─────────────────────────── ─ ─────────── ──────────────────────────────────────
  *   stolen_card                 → park (held)  card is dead — hold for a new one, even with parking off
  *   lost_card                   → park (held)  card is dead — hold for a new one, even with parking off
@@ -37,6 +39,19 @@
  *   bank_account_closed         → park        ACH/SEPA return — a new instrument recovers it
  *   bank_account_not_found      → park        ACH/SEPA return — a new instrument recovers it
  *   bank_account_invalid_details → park       ACH/SEPA return — a new instrument recovers it
+ *   bank_account_restricted     → park        rail may not debit this account — a new one recovers it
+ *   bank_account_not_verified   → park        account check not completed — the payer must finish it
+ *   incorrect_address           → park        billing address / postal code wrong — the payer corrects it
+ *   debit_cancelled_by_payer    → park (cycle) the payer stopped ONE mandate debit; any mode
+ *   ─────────────────────────── ─ ─────────── ──────────────────────────────────────
+ *   payment_method_unusable     → retry       held dead method: each rung books a no-charge attempt
+ *   invoice_attempt_limit       → retry       8 presentations on the invoice; the schedule runs out
+ *   card_attempt_limit          → retry       the card's network window is full; same
+ *   payment_abandoned           → none        not a decline (`NO_DUNNING_EFFECT`)
+ *   setup_cancelled             → none        payer left the authorization page; same
+ *   intent_expired              → none        the intent or hold ended unpaid; same
+ *   card_not_supported          → park        card type not accepted; a new card recovers it
+ *   billing_details_required    → park        the payer adds a billing name and address
  *
  * `retry` is the liberal default: any code not explicitly mapped to park/terminate
  * retries, which is the current (fixed-mode) behavior for retriable failures.
@@ -59,6 +74,10 @@ export const PARK = new Set<string>([
   // Blocked, inactive, not enrolled, the wrong type, or barred from this kind of payment.
   // No retry changes that; only a different card pays.
   "card_restricted",
+  // The card type is not accepted on this rail. A retry cannot change that.
+  "card_not_supported",
+  // Billing name or address missing. Only the payer can add it.
+  "billing_details_required",
   "incorrect_cvc",
   "incorrect_number",
   "authentication_required",
@@ -123,12 +142,6 @@ export const PARK = new Set<string>([
    * further than any fixed retry schedule reaches. A retry inside this cycle cannot succeed.
    */
   "mandate_cycle_limit_exceeded",
-  // The GATEWAY refused the REQUEST, not the card (#63): Stripe's
-  // `payment_intent_payment_attempt_failed`, which the adapter now books as an
-  // attempt instead of letting it vanish. Ours to fix and the payer can do nothing,
-  // so it parks in both modes; re-presenting an identical malformed request cannot
-  // succeed, which is why it must never reach the retry schedule.
-  "gateway_request_rejected",
   /**
    * ── BANK-DEBIT RETURNS (ACH / SEPA), 2026-09-05 ───────────────────────────────
    *
@@ -145,6 +158,13 @@ export const PARK = new Set<string>([
   "bank_account_closed",
   "bank_account_not_found",
   "bank_account_invalid_details",
+  "bank_account_restricted",
+  // The account check (micro-deposits) is not done: only the payer finishing it, or a
+  // different account, recovers it.
+  "bank_account_not_verified",
+  // The billing address or postal code does not match the issuer's: a retry sends the same
+  // details, so it waits for the payer to correct them, like `incorrect_cvc`.
+  "incorrect_address",
   // The instrument is GONE at the gateway (#69): Stripe answers "No such PaymentMethod"
   // with a generic code, so only a message rule sees it. Retrying cannot conjure the
   // method back; the customer has to add another one, which is a park, not a schedule.
@@ -181,6 +201,26 @@ export const PARK = new Set<string>([
   // Above the business's card limit (0482, `invoicing/card-limit.ts`): no card was presented,
   // a retry changes nothing, and another method pays it.
   "card_limit_exceeded",
+  "debit_cancelled_by_payer",
+]);
+
+/**
+ * The payer opted out of ONE mandate debit (RBI lets them skip a debit or revoke the mandate;
+ * these codes are the former). The invoice parks for this cycle in every mode, whatever
+ * `retriable` says: a retry fires a new notice the payer just refused. The mandate stays
+ * active, the backup is not charged (`STOP_FALLBACK`), and the next cycle charges as usual.
+ */
+export const PARK_FOR_CYCLE = new Set<string>(["debit_cancelled_by_payer"]);
+
+/**
+ * Not a decline: the payer left a hosted page, cancelled a setup, or the intent expired, so
+ * no instrument was asked to pay. The invoice's dunning does not move, the attempt is not
+ * counted, no method is branded and no attempt cap counts it.
+ */
+export const NO_DUNNING_EFFECT = new Set<string>([
+  "payment_abandoned",
+  "setup_cancelled",
+  "intent_expired",
 ]);
 
 /**
@@ -302,12 +342,6 @@ export const PARK_EVEN_IN_FIXED_MODE = new Set<string>([
   // subscription because NPCI's cycle allowance is spent would punish the payer for a rule
   // neither party can move.
   "mandate_cycle_limit_exceeded",
-  // The GATEWAY refused the REQUEST, not the card (#63): Stripe's
-  // `payment_intent_payment_attempt_failed`, which the adapter now books as an
-  // attempt instead of letting it vanish. Ours to fix and the payer can do nothing,
-  // so it parks in both modes; re-presenting an identical malformed request cannot
-  // succeed, which is why it must never reach the retry schedule.
-  "gateway_request_rejected",
   // The instrument is GONE at the gateway (#69): Stripe answers "No such PaymentMethod"
   // with a generic code, so only a message rule sees it. Retrying cannot conjure the
   // method back; the customer has to add another one, which is a park, not a schedule.
@@ -365,8 +399,6 @@ export const PARK_EVEN_IN_FIXED_MODE = new Set<string>([
 export const MERCHANT_SIDE_PARK = new Set<string>([
   "recurring_not_enabled",
   "gateway_limit_exceeded",
-  // #63: the gateway rejected OUR request. Nobody but us can clear it.
-  "gateway_request_rejected",
   // The gateway account this instrument is bound to is disabled or in the wrong mode.
   // Ours to fix, in our own settings, and it takes every customer on that account down
   // at once — exactly the shape this alert exists for.

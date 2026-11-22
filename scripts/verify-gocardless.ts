@@ -523,8 +523,8 @@ function declines() {
       d("validation_failed").exposedToPayer === false,
   );
   ok(
-    "decline: an unknown cause passes through retriable",
-    d("some_new_cause").code === "some_new_cause" && d("some_new_cause").retriable,
+    "decline: an unknown cause books charge_failed, retriable",
+    d("some_new_cause").code === "charge_failed" && d("some_new_cause").retriable,
   );
 }
 

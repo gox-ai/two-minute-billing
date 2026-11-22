@@ -34,6 +34,7 @@ export const RESET_KEEP = new Set([
   // Platform state, not tenant data.
   "dependency_health",
   "buyer_request_rejections",
+  "buyer_client_errors",
 ]);
 
 export class ResetTestBusinessError extends Error {}

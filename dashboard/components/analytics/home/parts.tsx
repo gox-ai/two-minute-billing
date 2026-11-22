@@ -459,16 +459,24 @@ export function Headline({
   span = 4,
   bare = false,
   info,
-  icon: Icon,
   note,
   spark,
   featured = false,
   href,
   tone,
+  wide = false,
+  aside,
 }: {
   label: string;
   value: string;
   title?: string;
+  /**
+   * The card fills a row on its own: on a wide card the figure, the sparkline and the stats
+   * (or `aside`) sit side by side. On a narrow card they stack.
+   */
+  wide?: boolean;
+  /** Wide only: drawn in the stats' place, beside the figure. */
+  aside?: React.ReactNode;
   /** What the card counts, behind an (i) beside the label. */
   info?: CardInfo;
   /** The card is a way into the list behind the figure. */
@@ -483,13 +491,11 @@ export function Headline({
   span?: Span | null;
   /** A cell inside a surface that already draws the card (the one-business panel). */
   bare?: boolean;
-  /** Leads the header row. */
-  icon?: React.ComponentType<{ className?: string }>;
   /** One line under the figure: what it is made of ("6 of 180 customers"). */
   note?: React.ReactNode;
   /** The figure's own series, drawn under it. Null points are gaps. */
   spark?: Array<number | null> | null;
-  /** The row's one ink card with a brand glow. */
+  /** The row's one ink card. */
   featured?: boolean;
 }) {
   const shown = stats.filter((s) => s.value != null);
@@ -563,36 +569,68 @@ export function Headline({
         span ? spanClass(span) : undefined,
       )}
     >
+      {/* Words only: an icon repeated what the label says (decided 2026-11-17). */}
       <div className="flex items-start gap-2 border-b px-4 py-3 text-sm leading-snug font-medium">
-        {Icon ? (
-          <Icon
-            className={cn(
-              "size-4 shrink-0 translate-y-px",
-              feature ? "text-primary" : "text-foreground/70",
-            )}
-          />
-        ) : null}
         <span className="min-w-0 wrap-break-word">{label}</span>
         {info ? <InfoTip label={label} info={info} /> : null}
       </div>
-      {/* The figure sits at the top of the body, so a card with no note keeps its figure on
-          the row's line instead of centring it. A sparkline sits beside, never under. */}
-      <div className="flex flex-1 items-start gap-3 px-4 pt-3.5 pb-4">
-        <div className="flex min-w-0 flex-col">
-          {figure}
-          {note ? (
-            <span className="mt-1.5 text-sm text-muted-foreground tabular-nums">{note}</span>
-          ) : null}
+      {wide ? (
+        // Sized by the card, not the window: Billy's panel narrows the page.
+        <div className="@container/headline flex-1">
+          <div className="flex flex-col gap-4 px-4 pt-3.5 pb-4 @3xl/headline:flex-row @3xl/headline:items-center @3xl/headline:gap-8">
+            <div className="flex min-w-0 shrink-0 flex-col">
+              {figure}
+              {note ? (
+                <span className="mt-1.5 text-sm text-muted-foreground tabular-nums">{note}</span>
+              ) : null}
+            </div>
+            {spark ? (
+              <Sparkline
+                values={spark}
+                className="h-14 w-full min-w-0 @3xl/headline:max-w-md @3xl/headline:flex-1"
+              />
+            ) : null}
+            <div className="min-w-0 @3xl/headline:ms-auto @3xl/headline:w-80 @3xl/headline:shrink-0">
+              {aside ?? statRow("")}
+            </div>
+          </div>
         </div>
-        {/* A set width, not flex-1: the leftover space depends on the figure's length, so
-            sparklines in one row came out at different widths. */}
-        {spark ? (
-          <Sparkline values={spark} className="ms-auto h-12 w-28 min-w-16 shrink self-center" />
-        ) : null}
-      </div>
-      {statRow("border-t px-4 pt-3 pb-3.5")}
+      ) : (
+        <>
+          {/* The figure sits at the top of the body, so a card with no note keeps its figure
+              on the row's line instead of centring it. A sparkline sits beside, never under. */}
+          <div className="flex flex-1 items-start gap-3 px-4 pt-3.5 pb-4">
+            <div className="flex min-w-0 flex-col">
+              {figure}
+              {note ? (
+                <span className="mt-1.5 text-sm text-muted-foreground tabular-nums">{note}</span>
+              ) : null}
+            </div>
+            {/* A set width, not flex-1: the leftover space depends on the figure's length, so
+                sparklines in one row came out at different widths. */}
+            {spark ? (
+              <Sparkline values={spark} className="ms-auto h-12 w-28 min-w-16 shrink self-center" />
+            ) : null}
+          </div>
+          {statRow("border-t px-4 pt-3 pb-3.5")}
+        </>
+      )}
     </Card>
   );
+  if (href && shown.some((s) => s.href)) {
+    // A link cannot hold a link: the card's own link sits behind, and the card lets clicks
+    // through to it except on its stat links and the (i).
+    return (
+      <div
+        className={cn("group relative min-w-0 self-stretch", span ? spanClass(span) : undefined)}
+      >
+        <Link href={href} aria-label={label} className="absolute inset-0 rounded-xl" />
+        <div className="pointer-events-none relative h-full *:h-full [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
+          {card}
+        </div>
+      </div>
+    );
+  }
   return href ? (
     <Link
       href={href}

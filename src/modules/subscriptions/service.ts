@@ -4311,6 +4311,24 @@ export interface ReactivationItemInput {
  * `items` are the FULL desired set (plan + add-ons + charges); the frontend
  * already auto-includes mandatory add-ons, so no mandatory expansion happens here.
  */
+/**
+ * The fresh term a reactivation opens at `now`: the aligned start, the anchor day it takes
+ * (its own day of month) and the end. Shared with `estimateReactivate`, which prices it.
+ */
+export function reactivationTerm(
+  now: Date,
+  interval: Interval,
+  intervalCount: number,
+  mode: BillingMode,
+): { start: Date; end: Date; anchorDay: number | null } {
+  const start = alignTermStart(now, mode);
+  const anchorDay =
+    interval === "month" || interval === "year"
+      ? localDatePartsInTz(start, mode.timezone).day
+      : null;
+  return { start, end: advancePeriod(start, interval, intervalCount, anchorDay, mode), anchorDay };
+}
+
 export async function reactivateSubscriptionWithOptions(input: {
   organizationId: string;
   businessId: string;
@@ -4451,7 +4469,8 @@ export async function reactivateSubscriptionWithOptions(input: {
     // is the same day-early-renewal bug `editTrialEnd` had (the anchor day and the term
     // start then disagree about which calendar day the term is on).
     const mode = await billingModeFor(tx, input.businessId);
-    const termStart = alignTermStart(now, mode);
+    const fresh = reactivationTerm(now, interval, intervalCount, mode);
+    const termStart = fresh.start;
     const trialEnd = isTrial ? alignTrialEnd(input.trialEnd!, mode) : null;
     // The FIRST real term of a trialling subscription is stamped here, not at creation
     // (a trial has no term), so this is the boundary most signups actually get.
@@ -4472,12 +4491,8 @@ export async function reactivateSubscriptionWithOptions(input: {
     //
     // `null` outside month/year mirrors both sibling sites: a day-of-month means nothing to a
     // day/week term, and `advancePeriod` hands those straight to `addInterval`.
-    const reactivatedAnchorDay =
-      interval === "month" || interval === "year"
-        ? localDatePartsInTz(termStart, mode.timezone).day
-        : null;
-    const periodEnd =
-      trialEnd ?? advancePeriod(termStart, interval, intervalCount, reactivatedAnchorDay, mode);
+    const reactivatedAnchorDay = fresh.anchorDay;
+    const periodEnd = trialEnd ?? fresh.end;
 
     const [updated] = await tx
       .update(subscriptions)

@@ -2,6 +2,7 @@ import { PendingLink } from "@/components/reports/pending-link";
 import { RecordCard } from "@/components/patterns/record-page";
 import { cn } from "@/lib/utils";
 import type { Segment } from "@/lib/api/segments";
+import { starterApplies } from "@/lib/billing-models";
 
 // Until the page column splits (59.5rem) the rail is a wrapped row of pills, so it costs a few lines above the table.
 const GROUP =
@@ -25,6 +26,7 @@ export function SegmentRail({
   segments,
   current,
   custom,
+  models = null,
 }: {
   biz: string;
   segments: Segment[];
@@ -32,9 +34,13 @@ export function SegmentRail({
   current: string | null;
   /** True when the chips no longer match any saved segment. */
   custom: boolean;
+  /** The business's billing models: a starter for a model it does not have is hidden. */
+  models?: readonly string[] | null;
 }) {
   const base = `/businesses/${biz}/reports/customers`;
-  const starters = segments.filter((s) => s.is_starter);
+  const starters = segments.filter(
+    (s) => s.is_starter && (s.id === current || starterApplies(s.starter_key, models)),
+  );
   const saved = segments.filter((s) => !s.is_starter);
 
   const entry = (href: string, label: string, active: boolean, title?: string) => (

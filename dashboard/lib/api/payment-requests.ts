@@ -1,3 +1,5 @@
+import type { CreatedThrough } from "@/lib/created-through";
+import type { PaymentInitiator } from "@/lib/payment-trigger";
 // Typed fetchers for payment requests. Server-only.
 // Shapes mirror src/modules/payment-requests/service.ts `serializePaymentRequest`.
 import { apiGet, apiGetOrNull, apiWrite, listQuery } from "@/lib/api";
@@ -20,6 +22,10 @@ export interface PaymentRequestLine {
 
 export interface PaymentRequest {
   object: "payment_request";
+  /** Detail only: who sent it. */
+  created_through?: CreatedThrough | null;
+  /** Detail only: what started the charge that paid it. */
+  initiated_by?: PaymentInitiator | null;
   id: string;
   status: PaymentRequestStatus;
   mode: "charge" | "link";

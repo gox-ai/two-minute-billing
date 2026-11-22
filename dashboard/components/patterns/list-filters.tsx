@@ -56,6 +56,8 @@ export interface ListFilterField<T> {
   param?: string;
   /** Operators the endpoint supports for this field (server mode). */
   serverOps?: string[];
+  /** The operator a new row starts on, when not the first one offered. Must be in `serverOps`. */
+  defaultOp?: string;
   /** `money` only: minor-unit exponent. 2 for INR/USD, 0 for JPY. Defaults to 2. */
   moneyExponent?: number;
   /** Muted note under the value control — units, or what a value means. */
@@ -182,6 +184,12 @@ const BOOLEAN_OPTIONS = [
 
 export function fieldType<T>(field?: ListFilterField<T>): ListFilterType {
   return field?.type ?? "text";
+}
+
+/** The operator a new row for this field starts on. */
+function startOp<T>(field: ListFilterField<T> | undefined, server: boolean): Operator {
+  const ops = operatorsFor(field, server);
+  return (ops.find((o) => o.id === field?.defaultOp) ?? ops[0]!).id;
 }
 
 export function operatorsFor<T>(
@@ -801,15 +809,14 @@ export function FilterBuilder<T>({
     onDraftChange(draft.map((r) => (r.key === key ? { ...r, ...p } : r)));
 
   const changeField = (key: number, fieldId: string) => {
-    const ops = operatorsFor(fieldsById[fieldId], server);
-    patch(key, { field: fieldId, op: ops[0]!.id, value: "" });
+    patch(key, { field: fieldId, op: startOp(fieldsById[fieldId], server), value: "" });
   };
 
   const addRow = () => {
     const field = fields[0];
     onDraftChange([
       ...draft,
-      { key: nextKey(), field: field?.id ?? "", op: operatorsFor(field, server)[0]!.id, value: "" },
+      { key: nextKey(), field: field?.id ?? "", op: startOp(field, server), value: "" },
     ]);
   };
 

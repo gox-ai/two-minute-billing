@@ -88,7 +88,8 @@ export async function registerPaymentMethodRoutes(app: FastifyInstance) {
             paymentMethodPublicId: pm.publicId,
             collectOpenInvoices: parsed.data.collect_open_invoices,
           });
-          collected = res.collected;
+          // The public shape stays `{ invoice, status }` (openapi `collected_invoices`).
+          collected = res.collected.map(({ invoice, status }) => ({ invoice, status }));
         } catch (collectErr) {
           log.error(collectErr, {
             event: "collect_on_pm_update_failed",

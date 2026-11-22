@@ -33,15 +33,16 @@ const BUDGET: Record<string, number> = {
   "plain in-app link": 0,
   "bare ResizeObserver": 6,
   "lower-case placeholder": 4,
-  "table without phone": 40,
+  "table without phone": 37,
   "off-token motion": 2,
-  "native title tooltip": 78,
+  "native title tooltip": 77,
   "stock placeholder name": 0,
   "toast richColors": 0,
+  "arrow reorder buttons": 0,
   "contraction in UI text": 7,
   "off-glossary verb": 29,
   "British spelling": 11,
-  "angle-bracket nav path": 1,
+  "angle-bracket nav path": 0,
 };
 
 type Rule = { name: string; why: string } & (
@@ -197,6 +198,12 @@ const RULES: Rule[] = [
     name: "toast richColors",
     re: /<[A-Z]\w*\b[^>]*\srichColors\b/g,
     why: "remove it; tones come from our tokens in components/ui/sonner.tsx",
+  },
+  {
+    // Lists reorder by drag and drop only (user decision 2026-11-19): up/down buttons look poor.
+    name: "arrow reorder buttons",
+    re: /aria-label=\{?[`"'][^`"']*\bMove\b[^`"']*\b(?:up|down)\b/g,
+    why: "use <SortableList> (components/ui/sortable-list.tsx): a grip handle with drag and drop and keyboard moves",
   },
 ];
 

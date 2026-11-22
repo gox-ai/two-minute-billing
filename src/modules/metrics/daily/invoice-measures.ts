@@ -9,7 +9,13 @@ import {
   payments,
   subscriptions,
 } from "@db/schema";
-import { billedRevenueByInvoice, REVENUE_TYPES } from "@/modules/payments/attribution";
+import {
+  billedRevenueByInvoice,
+  REVENUE_DEDUCTIONS,
+  REVENUE_TYPES,
+  type LineDeductions,
+} from "@/modules/payments/attribution";
+import { creditNoteRevenue } from "./credit-note-revenue";
 import type { DimensionId } from "./measures";
 import type { MetricDailyRow } from "./write";
 
@@ -57,6 +63,8 @@ export const INVOICE_MEASURE_DIMS: Record<string, readonly DimensionId[]> = {
   credit_notes_issued: [],
   billing_non_recurring: [],
   revenue_billed: ["revenue_type", "product", "meter"],
+  revenue_billed_gross: ["revenue_type", "product", "meter"],
+  revenue_deductions: ["revenue_deduction", "revenue_type", "product"],
   billed_customers: [],
   revenue_per_customer: [],
   tax_charged: [],
@@ -78,13 +86,15 @@ export const INVOICE_MEASURE_DIMS: Record<string, readonly DimensionId[]> = {
   mrr_at_risk: [],
 };
 
-/** The sixteen dated by a window, as opposed to the four that can only describe "now". */
+/** The eighteen dated by a window, as opposed to the four that can only describe "now". */
 export const INVOICE_FLOW_MEASURES = [
   "billing_gross",
   "billing_net",
   "credit_notes_issued",
   "billing_non_recurring",
   "revenue_billed",
+  "revenue_billed_gross",
+  "revenue_deductions",
   "tax_charged",
   "taxable_base",
   "exempt_base",
@@ -163,6 +173,12 @@ export async function computeInvoiceMeasures(input: {
   const issued = sql`${invoices.createdAt} >= ${startsAt} and ${invoices.createdAt} < ${endsAt}`;
   const billed = inArray(invoices.status, [...BILLED_STATUSES]);
   const billedInWindow = sql`${billed} and ${issued}`;
+  /**
+   * The total the invoice PRINTS: the stored total less the promotional balance and the
+   * pre-tax grants (`invoicing/serialize.ts`). Billing and the taxable base read this one;
+   * the stored column keeps the promo slice because the ledger and reversals need it.
+   */
+  const printedTotal = sql`(${invoices.totalMinor} - ${invoices.promotionalCreditsAppliedMinor} - ${invoices.grantCreditsPreTaxMinor})`;
 
   /**
    * WHAT IS STILL OWED ON AN INVOICE — cash subtracted, floored at zero.
@@ -192,7 +208,7 @@ export async function computeInvoiceMeasures(input: {
       currency: invoices.currency,
       held: sql<string>`count(*) filter (where ${invoices.createdAt} < ${endsAt})`.as("held"),
       billedTotal:
-        sql<string>`coalesce(sum(${invoices.totalMinor}) filter (where ${billedInWindow}), 0)`.as(
+        sql<string>`coalesce(sum(${printedTotal}) filter (where ${billedInWindow}), 0)`.as(
           "billed_total",
         ),
       voided:
@@ -384,36 +400,61 @@ export async function computeInvoiceMeasures(input: {
     set.add(d.customerId);
     customersBy.set(cur, set);
   }
-  const revenueBy = new Map<
-    string,
-    {
-      total: bigint;
-      byType: Map<string, bigint>;
-      byProduct: Map<string, bigint>;
-      byMeter: Map<string, bigint>;
+  type Acc = {
+    total: bigint;
+    byType: Map<string, bigint>;
+    byProduct: Map<string, bigint>;
+    byMeter: Map<string, bigint>;
+  };
+  const acc = (): Acc => ({
+    total: 0n,
+    byType: new Map(),
+    byProduct: new Map(),
+    byMeter: new Map(),
+  });
+  const add = (
+    a: Acc,
+    l: { type: string; productId: string | null; meterId: string | null },
+    v: bigint,
+  ) => {
+    a.total += v;
+    a.byType.set(l.type, (a.byType.get(l.type) ?? 0n) + v);
+    const product = l.productId ?? "none";
+    a.byProduct.set(product, (a.byProduct.get(product) ?? 0n) + v);
+    if (l.type === "usage") {
+      const meter = l.meterId ?? "none";
+      a.byMeter.set(meter, (a.byMeter.get(meter) ?? 0n) + v);
     }
-  >();
+  };
+  // Per currency: net, gross, and each deduction. gross − Σ deductions = net, per slice.
+  const revenueBy = new Map<string, Acc>();
+  const grossBy = new Map<string, Acc>();
+  const deductionBy = new Map<string, Map<string, Acc>>();
+  const of = <T>(m: Map<string, T>, k: string, make: () => T): T => {
+    const v = m.get(k) ?? make();
+    m.set(k, v);
+    return v;
+  };
   for (const d of billedDocs) {
     const f = folded.get(d.id);
     if (!f) continue;
     const cur = d.currency.toUpperCase();
-    const acc = revenueBy.get(cur) ?? {
-      total: 0n,
-      byType: new Map(),
-      byProduct: new Map(),
-      byMeter: new Map(),
-    };
     for (const l of f.lines) {
-      acc.total += l.amountMinor;
-      acc.byType.set(l.type, (acc.byType.get(l.type) ?? 0n) + l.amountMinor);
-      const product = l.productId ?? "none";
-      acc.byProduct.set(product, (acc.byProduct.get(product) ?? 0n) + l.amountMinor);
-      if (l.type === "usage") {
-        const meter = l.meterId ?? "none";
-        acc.byMeter.set(meter, (acc.byMeter.get(meter) ?? 0n) + l.amountMinor);
+      add(of(revenueBy, cur, acc), l, l.amountMinor);
+      add(of(grossBy, cur, acc), l, l.grossMinor);
+      const byKind = of(deductionBy, cur, () => new Map<string, Acc>());
+      for (const k of Object.keys(l.deductions) as Array<keyof LineDeductions>) {
+        if (l.deductions[k] !== 0n) add(of(byKind, k, acc), l, l.deductions[k]);
       }
     }
-    revenueBy.set(cur, acc);
+  }
+  // Credit notes: a deduction of the period the note was raised in. A month can go negative.
+  for (const note of await creditNoteRevenue(tx, businessId, from, toExclusive)) {
+    const byKind = of(deductionBy, note.currency, () => new Map<string, Acc>());
+    for (const sl of note.slices) {
+      add(of(revenueBy, note.currency, acc), sl, -sl.amountMinor);
+      add(of(byKind, "credit_note", acc), sl, sl.amountMinor);
+    }
   }
 
   const byCurrency = <T extends { currency: string }>(list: readonly T[]) =>
@@ -434,6 +475,7 @@ export async function computeInvoiceMeasures(input: {
   const held = new Set<string>();
   for (const d of docs) if (n(d.held) > 0n) held.add(d.currency.toUpperCase());
   for (const c of credits) held.add(c.currency.toUpperCase());
+  for (const c of revenueBy.keys()) held.add(c);
 
   for (const currency of held) {
     const d = docs.find((r) => r.currency.toUpperCase() === currency);
@@ -445,17 +487,32 @@ export async function computeInvoiceMeasures(input: {
     push("credit_notes_issued", "", "", currency, credited);
     push("billing_non_recurring", "", "", currency, n(lineBy.get(currency)?.nonRecurring));
     // Every type is written, zero included: the set is closed, so a zero is measured.
+    const pushRevenue = (measure: string, a: Acc | undefined) => {
+      push(measure, "", "", currency, a?.total ?? 0n);
+      for (const t of REVENUE_TYPES) {
+        push(measure, "revenue_type", t, currency, a?.byType.get(t) ?? 0n);
+      }
+      for (const [product, v] of a?.byProduct ?? []) push(measure, "product", product, currency, v);
+      if (measure !== "revenue_deductions") {
+        for (const [meter, v] of a?.byMeter ?? []) push(measure, "meter", meter, currency, v);
+      }
+    };
     const revenue = revenueBy.get(currency);
-    push("revenue_billed", "", "", currency, revenue?.total ?? 0n);
-    for (const t of REVENUE_TYPES) {
-      push("revenue_billed", "revenue_type", t, currency, revenue?.byType.get(t) ?? 0n);
+    pushRevenue("revenue_billed", revenue);
+    pushRevenue("revenue_billed_gross", grossBy.get(currency));
+    // Deductions: the headline, each kind (zero included: a closed set), and the type and
+    // product split of all of them together.
+    const kinds = deductionBy.get(currency);
+    const all = acc();
+    for (const k of REVENUE_DEDUCTIONS) {
+      const a = kinds?.get(k);
+      push("revenue_deductions", "revenue_deduction", k, currency, a?.total ?? 0n);
+      if (!a) continue;
+      all.total += a.total;
+      for (const [t, v] of a.byType) all.byType.set(t, (all.byType.get(t) ?? 0n) + v);
+      for (const [p, v] of a.byProduct) all.byProduct.set(p, (all.byProduct.get(p) ?? 0n) + v);
     }
-    for (const [product, v] of revenue?.byProduct ?? []) {
-      push("revenue_billed", "product", product, currency, v);
-    }
-    for (const [meter, v] of revenue?.byMeter ?? []) {
-      push("revenue_billed", "meter", meter, currency, v);
-    }
+    pushRevenue("revenue_deductions", all);
     const billedCustomers = BigInt(customersBy.get(currency)?.size ?? 0);
     push("billed_customers", "", "", currency, billedCustomers);
     push("revenue_per_customer", "", "", currency, revenue?.total ?? 0n, billedCustomers);

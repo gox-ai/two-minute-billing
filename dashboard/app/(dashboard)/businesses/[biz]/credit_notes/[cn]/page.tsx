@@ -1,3 +1,4 @@
+import { createdThroughLabel } from "@/lib/created-through";
 import { notFound } from "next/navigation";
 import { billingRules } from "@/lib/billing-rules";
 import Link from "next/link";
@@ -31,6 +32,7 @@ import {
 import { ErrorState, EmptyState } from "@/components/states";
 import { money } from "@/lib/format";
 import { fmtDateTime, fmtRange } from "@/lib/format-date";
+import { NoWrapDates } from "@/components/patterns/nowrap-dates";
 import { ActivityLogCard } from "@/components/activity-log-card";
 import { CommentsCard } from "@/components/comments/comments-card";
 import { Button } from "@/components/ui/button";
@@ -408,11 +410,8 @@ export default async function CreditNoteDetail({
               {lineItems.length === 0 ? (
                 <EmptyState title="No line items" />
               ) : (
-                <Table phone="stack" className="table-fixed max-lg:min-w-0">
-                  <colgroup>
-                    <col />
-                    <col className="w-40" />
-                  </colgroup>
+                // Auto layout: the amount widens its own column instead of breaking.
+                <Table phone="stack" fit>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Line item</TableHead>
@@ -429,9 +428,9 @@ export default async function CreditNoteDetail({
                           {/* Service period credited, inherited from the invoice line. */}
                           {it.period_start ? (
                             <div className="text-xs text-muted-foreground">
-                              <span className="whitespace-nowrap">
+                              <NoWrapDates>
                                 {fmtRange(it.period_start, it.period_end, tz)}
-                              </span>
+                              </NoWrapDates>
                             </div>
                           ) : null}
                         </TableCell>
@@ -446,7 +445,9 @@ export default async function CreditNoteDetail({
               {/* The PDF's ladder, in its order: gross, bucket returns, tax, Total, then
                     what was drawn against it and what remains. The top rows only on a note
                     that records a gross of its own (`showGrossLadder`). */}
-              <div className="ml-auto max-w-xs space-y-1 px-5 py-4 text-sm max-sm:ml-0 max-sm:max-w-none">
+              {/* As wide as its longest row (20rem at least), never wider than the card;
+                  a label wraps, an amount never does. */}
+              <div className="ml-auto w-fit max-w-full min-w-xs space-y-1 px-5 py-4 text-sm max-sm:ml-0 max-sm:w-auto max-sm:min-w-0 [&_.tabular-nums]:whitespace-nowrap">
                 {showGrossLadder ? (
                   <>
                     <div className="flex justify-between gap-8">
@@ -509,7 +510,16 @@ export default async function CreditNoteDetail({
           <RecordCard id="details" title="Details">
             <Facts
               rows={[
-                { label: "Status", value: <StatusChip status={creditNoteChipStatus(note)} /> },
+                {
+                  label: "Status",
+                  // Wraps in the narrow side card rather than running past it.
+                  value: (
+                    <StatusChip
+                      status={creditNoteChipStatus(note)}
+                      className="shrink whitespace-normal"
+                    />
+                  ),
+                },
                 { label: "Type", value: <KindBadge kind={note.kind} /> },
                 {
                   label: "Customer",
@@ -541,6 +551,7 @@ export default async function CreditNoteDetail({
                 { label: "Reason", value: reasonLabel(note.reason_code) },
                 note.reason ? { label: "Note", value: note.reason } : null,
                 { label: "Created", value: fmtDateTime(note.created_at, tz) },
+                { label: "Created through", value: createdThroughLabel(note.created_through) },
                 note.voided_at
                   ? { label: "Voided at", value: fmtDateTime(note.voided_at, tz) }
                   : null,
@@ -565,7 +576,7 @@ export default async function CreditNoteDetail({
                   <li key={r.transaction} className="flex flex-wrap items-center gap-2 text-sm">
                     <StatusChip status={r.status} />
                     <span className="min-w-0 flex-1 wrap-anywhere">
-                      <span className="font-medium tabular-nums">
+                      <span className="font-medium whitespace-nowrap tabular-nums">
                         {money(r.amount_minor, r.currency)}
                       </span>{" "}
                       {refundStatusPhrase(r.status)}{" "}
@@ -632,15 +643,15 @@ export default async function CreditNoteDetail({
                   >
                     <Chip className="uppercase">Allocated</Chip>
                     <span className="min-w-0 flex-1 wrap-anywhere">
-                      <span className="font-medium tabular-nums">
+                      <span className="font-medium whitespace-nowrap tabular-nums">
                         {money(a.amount_minor, note.currency)}
                       </span>{" "}
                       was allocated to invoice{" "}
                       <Link
                         href={`/businesses/${biz}/invoices/${a.invoice}`}
-                        className="font-medium whitespace-nowrap text-primary hover:underline"
+                        className="inline-flex max-w-full min-w-0 align-bottom text-primary hover:underline"
                       >
-                        {a.invoice}
+                        <MiddleEllipsis value={a.invoice} className="text-xs" />
                       </Link>{" "}
                       on {fmtDateTime(a.allocated_at, tz)}
                     </span>

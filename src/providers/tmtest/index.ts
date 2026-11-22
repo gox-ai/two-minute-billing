@@ -49,6 +49,7 @@ import type {
   BuyerAuthorization,
   InitiateVaultSetupInput,
 } from "../types";
+import { ClientResultUnsupportedError } from "../types";
 import { ProviderIndeterminateError, ProviderRefusalError } from "../types";
 import type { CancelPendingChargeInput, CancelPendingChargeResult } from "../types";
 import {
@@ -56,6 +57,7 @@ import {
   expiryFromToken,
   isNeedsAttentionAmount,
   isPendingRefundAmount,
+  isSaveFailsAmount,
 } from "./instruments";
 import { signTmtest, verifyTmtest } from "./signing";
 import * as store from "./store";
@@ -121,6 +123,15 @@ async function canonicalIntentId(id: string): Promise<string> {
   if (!id.startsWith(`${CLIENT_RESULT_ALIAS_PREFIX}_`)) return id;
   const row = await store.getCharge(id);
   return row?.kind === CLIENT_RESULT_KIND && row.parentChargeId ? row.parentChargeId : id;
+}
+
+/** `checkout_params` key: a payment the buyer asked to keep the card of (`saveForFuture`). */
+const SAVE_FLAG = "saveForFuture";
+function withSaveFlag(
+  params: Record<string, unknown> | null,
+  save: boolean,
+): Record<string, unknown> | null {
+  return save ? { ...(params ?? {}), [SAVE_FLAG]: true } : params;
 }
 
 /** The stored check-out descriptor, or null. The column also holds a `form_post` return URL. */
@@ -205,6 +216,8 @@ export class TmtestProvider implements PaymentProvider {
     // The test gateway must be able to stand in for ANY real adapter's intent
     // behaviour, or the flows the real ones gain go unverified in CI.
     intentPurposes: ["payment", "setup"],
+    // A buyer-picks card payment can also keep the card (`saveForFuture`).
+    paymentSavesMethod: ["card"],
     intentVoid: true,
     // The test gateway must be able to stand in for RazorPay's poll too — without it
     // the #15 path (ask the gateway rather than trust our status) could only ever be
@@ -243,7 +256,7 @@ export class TmtestProvider implements PaymentProvider {
   private readonly createIntentFault: "reject" | "reject_stranding" | "indeterminate" | null;
 
   /** Refuse every CHARGE with a named failure, for the paths that learn from one. */
-  private readonly chargeFault: "mandate_missing" | null;
+  private readonly chargeFault: "mandate_missing" | "request_rejected" | null;
 
   /** Make `ensureCustomer` refuse (bad keys) or time out. Off unless the account asks. */
   private readonly ensureCustomerFault: "reject" | "indeterminate" | null;
@@ -288,7 +301,7 @@ export class TmtestProvider implements PaymentProvider {
        * fixture keeps its behaviour; `mandateMissingRefusal` is unreachable without it.
        */
       perDebitMandateReference?: boolean;
-      chargeFault?: "mandate_missing" | null;
+      chargeFault?: "mandate_missing" | "request_rejected" | null;
       ensureCustomerFault?: "reject" | "indeterminate" | null;
       buyerAuthMode?: "sdk" | "form_post" | null;
       buyerPaymentDialog?: boolean;
@@ -337,8 +350,10 @@ export class TmtestProvider implements PaymentProvider {
     if (options.gatewayNotifiesPayer?.length)
       capabilities = { ...capabilities, gatewayNotifiesPayer: options.gatewayNotifiesPayer };
     this.capabilities = capabilities;
-    if (this.buyerAuthMode === "sdk" || this.instrumentlessPaymentMode() === "sdk")
-      this.submitClientResult = (input) => this.acceptClientResult(input);
+    // Always present: a checkout-rail intent (UPI and the like) is answered by the test
+    // dialog in the browser. Other intents take a browser answer only in `sdk` mode.
+    const sdkAnswers = this.buyerAuthMode === "sdk" || this.instrumentlessPaymentMode() === "sdk";
+    this.submitClientResult = (input) => this.acceptClientResult(input, sdkAnswers);
   }
 
   /** The challenge for a payment intent with no vaulted instrument; null = none. */
@@ -388,15 +403,19 @@ export class TmtestProvider implements PaymentProvider {
    * Success answers a NEW id (`tmtx_…`), as a nonce gateway answers with the transaction
    * the nonce became; every intent method here maps it back.
    */
-  private async acceptClientResult(input: {
-    intentId: string;
-    purpose: IntentPurpose;
-    clientResult: Record<string, string>;
-    idempotencyKey: string;
-  }): Promise<FetchedIntent> {
+  private async acceptClientResult(
+    input: {
+      intentId: string;
+      purpose: IntentPurpose;
+      clientResult: Record<string, string>;
+      idempotencyKey: string;
+    },
+    sdkAnswers = true,
+  ): Promise<FetchedIntent> {
     const intentId = await canonicalIntentId(input.intentId);
     const row = await store.getCharge(intentId);
     if (!row) return { intentId: input.intentId, status: "unknown" };
+    if (!sdkAnswers && !storedCheckout(row)) throw new ClientResultUnsupportedError();
     const prior = await store.getChargeByIdempotencyKey(row.businessId, input.idempotencyKey);
     if (prior?.kind === CLIENT_RESULT_KIND) return this.clientResultAnswer(prior, intentId);
     // Past the challenge: report where it stands, as the gateway would.
@@ -723,6 +742,26 @@ export class TmtestProvider implements PaymentProvider {
           retriable: false,
         },
         raw: { chargeFault: "mandate_missing" },
+      };
+    }
+    // Stand in for a gateway refusing OUR request (revoked keys, a malformed request).
+    if (this.chargeFault === "request_rejected") {
+      logSyntheticGatewayRequest({
+        gatewayKey: this.key,
+        operation: "charge",
+        status: 400,
+        responseBody: { error: "charge_fault=request_rejected" },
+      });
+      return {
+        status: "failed",
+        providerChargeId: "",
+        failure: {
+          code: "gateway_request_rejected",
+          message: "tmtest: refused the request (charge_fault=request_rejected)",
+          // As a real adapter literal says; the engine retries it anyway.
+          retriable: false,
+        },
+        raw: { chargeFault: "request_rejected" },
       };
     }
     const chargeId = newId("tmch");
@@ -1300,7 +1339,10 @@ export class TmtestProvider implements PaymentProvider {
       currency: input.currency,
       status: requiresAction ? "requires_action" : "authorized",
       idempotencyKey: input.idempotencyKey ?? null,
-      checkoutParams: requiresAction ? this.challengeParams(checkout, input.returnUrl) : null,
+      checkoutParams: withSaveFlag(
+        requiresAction ? this.challengeParams(checkout, input.returnUrl) : null,
+        input.saveForFuture === true,
+      ),
     });
     logSyntheticGatewayRequest({
       gatewayKey: this.key,
@@ -1345,9 +1387,23 @@ export class TmtestProvider implements PaymentProvider {
       : (input.purpose ?? (isSetupIntentId(input.intentId) ? "setup" : "payment"));
     if (purpose === "setup") return { purpose, paymentMethod: await this.consumeSetup(input, row) };
     const charge = await this.capturePayment(input, row);
+    // Pay and save: the card the buyer paid with is kept (the default test card when the
+    // challenge named none), as a gateway stores it while it charges.
+    let saved: ProviderPaymentMethodRef | undefined;
+    if (
+      row &&
+      charge.status !== "failed" &&
+      row.checkoutParams?.[SAVE_FLAG] === true &&
+      !(this.magicAmounts && isSaveFailsAmount(row.amountMinor))
+    ) {
+      const fresh = await store.getCharge(row.chargeId);
+      const v = fresh?.vaultId ? await store.getVault(fresh.vaultId) : null;
+      saved = v ? refFromVault(v) : await vaultToken(DEFAULT_SETUP_TOKEN);
+    }
     return {
       purpose,
       charge: asked === input.intentId ? charge : { ...charge, providerChargeId: asked },
+      ...(saved ? { paymentMethod: saved } : {}),
     };
   }
 
@@ -1603,6 +1659,8 @@ export class TmtestProvider implements PaymentProvider {
     return {
       intentId: input.intentId,
       status,
+      // The refusal is on the row already read, so the poll reports why.
+      ...(status === "failed" && row.errorCode ? { failure: { code: row.errorCode } } : {}),
       // The intent row IS the charge on this gateway (one row, one id), unlike
       // RazorPay's order/payment split — so the charge id is the intent id.
       providerChargeId: row.chargeId,
@@ -1632,7 +1690,10 @@ export class TmtestProvider implements PaymentProvider {
     if (row.status === "voided") return "unknown";
     const isIntent = row.kind === "intent" || row.kind === "setup_intent";
     if (approve) {
-      if (row.kind === "setup_intent" && !row.vaultId) {
+      if (
+        (row.kind === "setup_intent" || row.checkoutParams?.[SAVE_FLAG] === true) &&
+        !row.vaultId
+      ) {
         const minted = await vaultToken(token ?? DEFAULT_SETUP_TOKEN);
         await store.setChargeVault(id, minted.providerPaymentMethodId);
       }

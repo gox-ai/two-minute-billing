@@ -34,6 +34,7 @@ export default async function PaymentLinkUnavailable({
     logo_url: page.business.logo_url,
     icon_url: page.business.icon_url ?? null,
     brand_color: page.business.brand_color,
+    button_text_color: page.business.button_text_color ?? null,
     livemode: page.business.livemode,
   };
   return (

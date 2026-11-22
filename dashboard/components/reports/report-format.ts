@@ -71,6 +71,7 @@ export function reportIsEmpty(report: ReportPayload): boolean {
     report.points.length === 0 &&
     (report.rows?.length ?? 0) === 0 &&
     (report.matrix?.rows.length ?? 0) === 0 &&
+    (report.grid?.rows.length ?? 0) === 0 &&
     (report.table?.rows.length ?? 0) === 0
   );
 }
@@ -79,6 +80,21 @@ export function reportIsEmpty(report: ReportPayload): boolean {
 export function dimensionLabel(d: string): string {
   const base = d.replace(/_id$/, "").replace(/_/g, " ");
   return base.charAt(0).toUpperCase() + base.slice(1);
+}
+
+const NO_VALUE: Record<string, string> = {
+  country: "No country",
+  gateway: "No gateway",
+  coupon: "No coupon",
+  product: "No product",
+  plan: "No plan",
+};
+
+/** A split row's label. The engine's "none" key (a row with no value) reads "No <thing>". */
+export function splitRowLabel(dimension: string, key: string, label: string): string {
+  return key.toLowerCase() === "none" || label.toLowerCase() === "none"
+    ? (NO_VALUE[dimension] ?? `No ${dimension.replace(/_/g, " ")}`)
+    : label;
 }
 
 /** A breakdown row, with the destination its group resolved to (or none). */

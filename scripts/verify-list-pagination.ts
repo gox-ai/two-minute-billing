@@ -1151,14 +1151,15 @@ async function assertPagedContract<T>(
   });
 
   // An intent ROUTES to a gateway account, so each business needs one that handles USD.
-  const seedIntents = async (businessId: string, tag: string, n: number) => {
-    await createGatewayAccount({
-      organizationId: orgIdP,
-      businessId,
-      gatewayKey: "tmtest",
-      label: `TM Test ${tag}`,
-      credentials: {},
-    });
+  const seedIntents = async (businessId: string, tag: string, n: number, gateway = true) => {
+    if (gateway)
+      await createGatewayAccount({
+        organizationId: orgIdP,
+        businessId,
+        gatewayKey: "tmtest",
+        label: `TM Test ${tag}`,
+        credentials: {},
+      });
     const customer = await createCustomer({
       organizationId: orgIdP,
       businessId,
@@ -1183,15 +1184,49 @@ async function assertPagedContract<T>(
         });
       }
     });
+    return customer.publicId;
   };
-  await seedIntents(bizP.id, "main", 5);
-  await seedIntents(otherP.id, "other", 1);
+  const cusMain = await seedIntents(bizP.id, "main", 5);
+  // A second payer on the same business: the customer filter must leave its intents out.
+  const cusSecond = await seedIntents(bizP.id, "second", 2, false);
+  const cusOther = await seedIntents(otherP.id, "other", 1);
 
   await assertPagedContract(
     "payment intents",
     (limit, cursor) => listPaymentIntentsPage(orgIdP, bizP.id, { limit, startingAfter: cursor }),
     (r) => r.intent.publicId,
+    7,
+  );
+  await assertPagedContract(
+    "payment intents by customer",
+    (limit, cursor) =>
+      listPaymentIntentsPage(orgIdP, bizP.id, {
+        customerPublicId: cusMain,
+        limit,
+        startingAfter: cursor,
+      }),
+    (r) => r.intent.publicId,
     5,
+  );
+  {
+    const second = await listPaymentIntentsPage(orgIdP, bizP.id, {
+      customerPublicId: cusSecond,
+      limit: 100,
+    });
+    ok(
+      "payment intents: the customer filter returns only that customer's intents",
+      second.total === 2 && second.data.every((r) => r.customerPublicId === cusSecond),
+    );
+  }
+  ok(
+    "payment intents: an unknown customer is an empty page, not every intent",
+    (await listPaymentIntentsPage(orgIdP, bizP.id, { customerPublicId: "cus_nope", limit: 100 }))
+      .total === 0,
+  );
+  ok(
+    "payment intents: another business's customer matches nothing here",
+    (await listPaymentIntentsPage(orgIdP, bizP.id, { customerPublicId: cusOther, limit: 100 }))
+      .total === 0,
   );
   ok(
     "payment intents: a purpose filter narrows in SQL",

@@ -564,8 +564,8 @@ async function main() {
     const link = msg.html.match(/https:\/\/portal\.test\/checkout\/s\/(cstk_[A-Za-z0-9_-]+)/);
     ok("subscription_restart: the button is a checkout link", !!link, msg.html.slice(0, 200));
     ok(
-      "subscription_restart: the button says Restart subscription",
-      msg.html.includes("Restart subscription"),
+      "subscription_restart: the button says Reactivate subscription",
+      msg.html.includes("Reactivate subscription"),
     );
     ok("subscription_restart: the plan is named", msg.text.includes("Insight Plan"));
     const ctx = link ? await resolveCheckoutSession(link[1]!) : null;

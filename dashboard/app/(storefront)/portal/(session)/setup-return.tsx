@@ -3,8 +3,12 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { reportBuyerError } from "@/lib/buyer-error-report";
 import { Loader2 } from "lucide-react";
 import { portalCompleteVaultAction } from "./actions";
+import { AddMethodResult } from "./add-method-result";
+import type { AddMethodOutcome } from "./portal-state";
+import type { PortalMe } from "@/lib/portal-api";
 import {
   clearPendingVaultSetup,
   consumeSetupReturn,
@@ -23,9 +27,10 @@ import {
  * also echoes it back as `approval_token_id`, which covers a tab where
  * sessionStorage isn't available.
  */
-export function SetupReturn({ scope }: { scope: string }) {
+export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
+  const [outcome, setOutcome] = React.useState<AddMethodOutcome | null>(null);
   // The exchange must run exactly once per return, even under StrictMode's
   // double-invoked effects in dev.
   const ran = React.useRef(false);
@@ -45,7 +50,9 @@ export function SetupReturn({ scope }: { scope: string }) {
 
     const setupToken = ret.approvalToken ?? pending?.setupToken;
     if (!setupToken) {
-      toast.error("We could not finish adding that payment method. Start again.");
+      const text = "We could not finish adding that payment method. Start again.";
+      toast.error(text);
+      reportBuyerError(text, { step: "setup_return" });
       return;
     }
 
@@ -94,16 +101,21 @@ export function SetupReturn({ scope }: { scope: string }) {
       if (!res.ok) {
         // Not "we failed" — the honest state is "not confirmed HERE yet", because the
         // refresh above may already be painting the card this toast is apologising for.
-        return void toast.error(
+        const text =
           res.error ??
-            "We could not confirm that payment method here. If you approved it, it will show here soon.",
-        );
+          "We could not confirm that payment method here. If you approved it, it will show here soon.";
+        reportBuyerError(text, { step: "setup_return" });
+        return void toast.error(text);
       }
-      toast.success("Payment method added");
+      if (res.outcome) setOutcome(res.outcome);
+      else toast.success("Payment method added.");
     })();
   }, [scope, router]);
 
-  if (!busy) return null;
+  if (!busy)
+    return (
+      <AddMethodResult outcome={outcome} onClose={() => setOutcome(null)} me={me} scope={scope} />
+    );
   return (
     <div className="flex items-center gap-2 rounded-xl border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
       <Loader2 className="size-4 animate-spin" /> Finishing setup with your payment provider…

@@ -54,7 +54,9 @@ module Billing
   def apply(event)
     content = event.fetch("content")
     case event.fetch("event_type")
-    when "subscription_created", "subscription_changed", "subscription_canceled"
+    when "subscription_created", "subscription_changed", "subscription_canceled",
+         "subscription_activated", "subscription_cancel_scheduled", "subscription_scheduled_cancellation_removed",
+         "subscription_reactivated", "subscription_paused", "subscription_resumed"
       sub = request(:get, "/v1/businesses/#{BIZ}/subscriptions/#{content.dig("subscription", "id")}")
       account_id = sub.dig("metadata", "app_account_id") # set at checkout
       return if account_id.blank?

@@ -75,6 +75,17 @@ export class InvoiceOpsError extends Error {
   }
 }
 
+/** The collection waits for a pre-debit notice: scheduled for `until`, not refused. */
+export class InvoiceCollectionScheduledError extends InvoiceOpsError {
+  constructor(
+    message: string,
+    public readonly until: Date,
+  ) {
+    super(message);
+    this.name = "InvoiceCollectionScheduledError";
+  }
+}
+
 async function loadInvoice(
   orgId: string,
   businessId: string,
@@ -851,7 +862,8 @@ export async function collectInvoiceNow(
       // Surfaced to the operator as a refusal, not a 500: an automated collector is
       // charging this invoice right now, and the honest answer is "try again in a moment"
       // rather than a second charge or a stack trace.
-      if (e instanceof CollectionDeferredError) throw new InvoiceOpsError(e.message);
+      if (e instanceof CollectionDeferredError)
+        throw new InvoiceCollectionScheduledError(e.message, e.until);
       if (e instanceof CollectionInFlightError) {
         throw new InvoiceOpsError("A collection attempt is already in progress for this invoice");
       }

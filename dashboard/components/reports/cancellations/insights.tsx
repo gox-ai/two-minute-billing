@@ -98,14 +98,14 @@ export function InsightTable({
   const count = rows.reduce((a, r) => a + r.count, 0);
   return (
     // Compact (half-width) tables fix their number columns, each at its widest figure
-    // (a 7-digit amount, "100.0%"), so the label gets the rest and fits on one line.
+    // (the largest amount the engine takes, "100.0%"), so the label gets the rest.
     <Table className={compact ? "table-fixed" : undefined}>
       <TableHeader>
         <TableRow>
           <TableHead>{groupLabel}</TableHead>
           <TableHead className={cn("text-right", compact && "w-26")}>Cancellations</TableHead>
           {showMoney ? (
-            <TableHead className={cn("text-right", compact && "w-30")}>MRR lost</TableHead>
+            <TableHead className={cn("text-right", compact && "w-44")}>MRR lost</TableHead>
           ) : null}
           <TableHead className={cn("text-right", compact && "w-20")}>Share</TableHead>
         </TableRow>

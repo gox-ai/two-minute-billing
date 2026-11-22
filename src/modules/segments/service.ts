@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
+import { stampNow } from "@/platform/clock";
 import { publicId } from "@/platform/ids";
 import { customerSegments, customers, subscriptions } from "@db/schema";
 import { isOrder } from "@/modules/metrics/daily/order-predicate";
@@ -16,11 +17,16 @@ import {
   mrrFilterRefusal,
 } from "@/modules/customers/service";
 import { filterDefinitions } from "@/modules/custom-fields/service";
+import { billedRevenueByInvoice } from "@/modules/payments/attribution";
+import { reportableCustomer } from "@/modules/metrics/reportable";
 import { apiStatusSql } from "@/modules/subscriptions/status-sql";
 import { refusalFor } from "./attributes";
 import { STARTER_BY_PUBLIC_ID, STARTER_SEGMENTS, starterPublicId } from "./starters";
 
 const log = createLogger("segments");
+
+/** How far back a segment's revenue billed reads. */
+export const REVENUE_WINDOW_MONTHS = 12;
 
 /**
  * Customer segments — a saved, named POPULATION, and the thing "compare segments"
@@ -344,6 +350,10 @@ export async function resolveSegment(
  * The population is materialized once and both figures read it; correlated per-customer
  * counts make each evaluation a pass over every customer. `jit = off` because at book
  * scale compiling the plan costs as much as running it.
+ *
+ * Revenue billed is the `revenue_billed` measure's own fold (before tax, net of discounts,
+ * every revenue type) over the invoices of the last {@link REVENUE_WINDOW_MONTHS} months, by
+ * currency. It is read from the invoices, not stored: a segment is today's membership.
  */
 async function segmentTotals(
   organizationId: string,
@@ -352,7 +362,11 @@ async function segmentTotals(
     filters: CustomerSegmentFilter[];
     customFieldDefs: Awaited<ReturnType<typeof filterDefinitions>>;
   },
-): Promise<{ customers: number; mrrByCurrency: Record<string, number> }> {
+): Promise<{
+  customers: number;
+  mrrByCurrency: Record<string, number>;
+  revenueBilledByCurrency: Record<string, number>;
+}> {
   return withTenant(organizationId, async (tx) => {
     await tx.execute(sql`set local jit = off`);
     const pop = await customerPopulationSql(tx, businessId, args);
@@ -376,7 +390,33 @@ async function segmentTotals(
       // Integer minor units: `sum()` over bigint arrives as text, never a float.
       else if (r.currency) mrrByCurrency[r.currency] = Number(r.v);
     }
-    return { customers, mrrByCurrency };
+    // The business's own clock, so a time-travelled test business reads its simulated year.
+    const since = stampNow(businessId).toISOString();
+    const docs = (await tx.execute(sql`
+      with pop as materialized (${pop})
+      select i.id, i.currency from invoices i
+      where i.business_id = ${businessId}
+        and i.customer_id in (select id from pop)
+        and i.status in ('posted', 'payment_due', 'not_paid', 'paid')
+        and i.created_at >= ${since}::timestamptz - make_interval(months => ${REVENUE_WINDOW_MONTHS})
+        and ${reportableCustomer(sql`i.customer_id`)}`)) as unknown as Array<{
+      id: string;
+      currency: string;
+    }>;
+    const folded = await billedRevenueByInvoice(
+      tx,
+      docs.map((d) => d.id),
+    );
+    const revenue = new Map<string, bigint>();
+    for (const d of docs) {
+      const cur = d.currency.toUpperCase();
+      for (const l of folded.get(d.id)?.lines ?? []) {
+        revenue.set(cur, (revenue.get(cur) ?? 0n) + l.amountMinor);
+      }
+    }
+    const revenueBilledByCurrency: Record<string, number> = {};
+    for (const [cur, v] of revenue) revenueBilledByCurrency[cur] = Number(v);
+    return { customers, mrrByCurrency, revenueBilledByCurrency };
   });
 }
 

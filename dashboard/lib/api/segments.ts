@@ -83,6 +83,8 @@ export interface SegmentPopulation {
   segment: string | null;
   /** ISO code → integer minor units. A MAP, always: currencies are not addable. */
   mrr_by_currency: Record<string, number>;
+  /** Revenue billed in the last 12 months, every type, before tax. Absent on an older engine. */
+  revenue_billed_by_currency?: Record<string, number>;
 }
 
 export const listSegments = (biz: string) =>

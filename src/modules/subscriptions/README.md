@@ -121,6 +121,23 @@ scheduled_cancellation_removed/trial_ending/renewal_skipped/skip_scheduled/sched
   removal candidate under either (a subscription with no plan bills nothing).
 
 ## Changelog
+- **2026-11-22** — Detail route returns `created_through`.
+- **2026-11-20 (feat/detail-revenue-metrics)** — Subscription detail adds
+  `revenue_billed_minor`: lifetime net billed revenue before tax and less credit notes, from
+  `metrics/record-revenue.ts`. The existing `revenue_to_date_minor` stays cash collected net of
+  refunds. The subscription page shows Revenue with Cash collected beneath it. Gate:
+  `verify:metric-revenue-net`.
+- **2026-11-17** — `estimateReactivate` prices a billed term with `planSubscriptionPeriodInvoice`
+  over the rows the booking writes (`reactivationTerm` gives both the same term). A cancel leaves
+  deferred charges pending and the fresh term's invoice bills them; the old quote left them out,
+  so a charge-first reactivation was refunded and refused at commit (charged 283000, invoice
+  294413). Credit grants, rounding and withholding now come with the planner too. Item lines keep
+  the `<model> (<price>) ×N` label; a trial still uses `estimateFreshTermMoney`. `termOnly` prices
+  the term alone (the portal restart price). A mismatch now logs
+  `reactivation_charge_amount_mismatch` with both figures. Gate: `verify:portal-restart`.
+- **2026-11-16** — `estimateFreshTermMoney` (reactivation and signup estimates) reports `discount_lines`
+  when the discount peek names its rows: the promotional slice first, then each coupon, summing to
+  `discount_minor` as on the renewal estimate. A quote can now say which coupon it took off.
 - **2026-11-15 (0531)** — **`failed_change_charge: apply_when_paid`: a change applies only once
   its invoice is paid.** The new-business default (`NEW_BUSINESS_BILLING_RULES`); existing
   businesses keep their value, and `start_dunning` / `next_renewal` / `revert` are unchanged.
@@ -4018,3 +4035,31 @@ prorate(base, now)`, so a later cancel can only reach zero). A remainder clamp s
   Under `plan_credits.grant_when: invoice_paid` a mid-term change's grant is held for the change
   invoice (`settleHeldChangeGrants`), whatever the rule. Soft declines are unchanged. Gate:
   `verify:change-invoice-revert` (62 checks).
+- **2026-11-17** — `UnbilledChargesPreview.tax_lines` (optional): the added tax of the invoice a
+  cancel would raise for pending charges, by component. `tax_minor` also counts tax inside
+  tax-inclusive prices, so a reader needs the rows to tell "plus" from "including"; every other
+  estimate shape already carried them. Both branches fill it (the coupon-priced preview from
+  `previewInvoiceFromLines`, the list-priced one from `estimateTax`).
+- **2026-11-17** — `gateway_request_rejected` (the gateway refused OUR request) RETRIES on the
+  dunning schedule on every gateway: out of `PARK`, `PARK_EVEN_IN_FIXED_MODE` and
+  `MERCHANT_SIDE_PARK` (now 3 codes), and every rule answers retriable
+  (`OUR_REQUEST_REFUSED` in `builtInDeclineAnswer`, `withBuiltInRetry` before overrides). It
+  stays in `NOT_THE_INSTRUMENTS_FAULT`, so the card is never branded. The back-office alert
+  `gateway_request_faults` names it. A merchant override can still set it non-retriable.
+  `recurring_not_enabled`, `gateway_limit_exceeded` and `gateway_account_unavailable` still park.
+  Where dunning would end (schedule or period spent) on our refused request
+  (`isOurRequestFault`), `planFailureRearm` parks instead of exhausting (`requestFault`), and
+  `sweepExpiredParkedDunning` never closes that park: no final action, ops ends it.
+  `sweepParkedReminders` skips it too (no payer reminder), by the same scan filter
+  (`notParkedOnOurRequestSql`, invoicing/request-fault-park.ts). Cover:
+  `test/unit/request-fault-never-final-action.test.ts`, `verify:dunning` Case R.
+- **2026-11-17** — Dunning policy for dead cards, caps and India rails (PR 3). `planFailureRearm`:
+  `debit_cancelled_by_payer` parks for the cycle in every mode (`PARK_FOR_CYCLE`); an async
+  failure on a rail where the gateway runs its own retries (Razorpay UPI, `gatewayRunsRetries`)
+  parks; on a NACH rail only insufficient funds (and failures that never reached the bank)
+  retries, other returns park (`nachMayRetry`); `payment_abandoned` returns `unchanged`
+  (`NO_DUNNING_EFFECT`: nothing moves, the attempt is not counted). `NETWORK_RETRY_CAP` adds
+  `card: 2` (India card mandate; a known-foreign issuer is uncapped), `enach`/`pnach`. The
+  dunning pass no longer defers a capped card; `collectInvoice` books the capped rung. The
+  parked deadline attempt and the combined retry hold a dead method too. Cover:
+  `verify:dunning` DA–DF, `verify:dunning-smart`, `test/unit/network-retry-cap.test.ts`.

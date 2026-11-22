@@ -84,7 +84,8 @@ const DUPLICATE_TRANSACTION = "11";
 const RECORD_NOT_FOUND = "E00040";
 const DUPLICATE_RECORD = "E00039";
 const AUTHENTICATION_FAILED = "E00007";
-const INVALID_NONCE = "E00114";
+/** The browser's token: invalid data, invalid, expired (E00113–E00115). */
+const INVALID_NONCE = new Set(["E00113", "E00114", "E00115"]);
 /** A capture repeated on a captured transaction: answered `responseCode 1`, transId 0. */
 const ALREADY_CAPTURED = "311";
 /**
@@ -286,6 +287,15 @@ export class AuthorizenetApiError extends Error {
     super(`Authorize.net ${operation}: ${plain ?? "error"} (${code ?? "?"})`);
     this.text = plain;
     this.name = "AuthorizenetApiError";
+  }
+}
+
+/** E00007: the API Login ID or Transaction Key was refused. Nothing was created. */
+export class AuthorizenetKeysError extends AuthorizenetApiError {
+  constructor(operation: string, text: string | undefined) {
+    super(operation, AUTHENTICATION_FAILED, text);
+    this.message = `Authorize.net refused the API Login ID or Transaction Key on ${operation}`;
+    this.name = "AuthorizenetKeysError";
   }
 }
 
@@ -845,7 +855,15 @@ export function normalizeAuthorizenetNotification(
       if (code === "1")
         return [{ ...base, ...own, type: "intent.authorized", providerIntentId: id }];
       if (code === "4") return [{ ...base, ...own, type: "review.opened", providerIntentId: id }];
-      return [{ ...base, ...own, type: "intent.failed", providerIntentId: id }];
+      return [
+        {
+          ...base,
+          ...own,
+          type: "intent.failed",
+          providerIntentId: id,
+          ...(tx ? failureFields(tx) : {}),
+        },
+      ];
     }
     case "payment.refund.created": {
       // One event per refund, carrying that refund's own amount (WH), never a total. Its
@@ -915,7 +933,10 @@ export function normalizeAuthorizenetNotification(
         if (st === "authorizedPendingCapture")
           return [closed, { ...base, ...own, type: "intent.authorized", providerIntentId: id }];
         if (REFUSED.has(st))
-          return [closed, { ...base, ...own, type: "intent.failed", providerIntentId: id }];
+          return [
+            closed,
+            { ...base, ...own, type: "intent.failed", providerIntentId: id, ...failureFields(tx) },
+          ];
         return [closed];
       }
       const r = chargeResultFromTransaction(tx);
@@ -935,7 +956,16 @@ export function normalizeAuthorizenetNotification(
       if (!id) break;
       const closed = { ...base, ...own, type: "review.closed" as const, providerChargeId: id };
       if (authOnly)
-        return [closed, { ...base, ...own, type: "intent.failed", providerIntentId: id }];
+        return [
+          closed,
+          {
+            ...base,
+            ...own,
+            type: "intent.failed",
+            providerIntentId: id,
+            ...(tx ? failureFields(tx) : {}),
+          },
+        ];
       return [
         closed,
         {
@@ -969,6 +999,9 @@ export function normalizeAuthorizenetNotification(
     }
   }
   // Customer and subscription events (ARB is never used), captureOnly and anything newer.
+  // A payment event keeps its transaction id, so the attempt can find it.
+  if (type.startsWith("payment.") && id)
+    return [{ ...base, ...own, type: "unknown", providerChargeId: id }];
   return [{ ...base, type: "unknown" }];
 }
 
@@ -1149,8 +1182,8 @@ export class AuthorizenetProvider implements PaymentProvider {
         `We could not read Authorize.net's answer to ${operation} (HTTP ${res.status}).`,
       );
     }
-    if (firstMessage(json)?.code === AUTHENTICATION_FAILED)
-      throw new Error(`Authorize.net refused the API Login ID or Transaction Key on ${operation}`);
+    const auth = firstMessage(json);
+    if (auth?.code === AUTHENTICATION_FAILED) throw new AuthorizenetKeysError(operation, auth.text);
     return json;
   }
 
@@ -1360,13 +1393,11 @@ export class AuthorizenetProvider implements PaymentProvider {
       }
       return { ref: this.refOf(cp, { ...pp, customerPaymentProfileId: ppId }) };
     }
-    if (m?.code === INVALID_NONCE)
+    if (m?.code && INVALID_NONCE.has(m.code))
       return {
-        failure: {
-          code: "invalid_client_result",
-          message: "The card details expired. Enter them again.",
-          retriable: true,
-        },
+        failure: authorizenetFailure(
+          authorizenetDeclineSignal({ reasonCode: m.code, text: m.text }),
+        ),
       };
     // The check's own answer: `responseCode,subcode,reasonCode,text,…` (measured).
     const direct = String(
@@ -1737,6 +1768,13 @@ export class AuthorizenetProvider implements PaymentProvider {
         transactionRequest,
       });
     } catch (e) {
+      // A refusal of our keys created nothing: a failed charge of ours, never the payer's.
+      if (e instanceof AuthorizenetApiError) {
+        const f = authorizenetFailure(
+          authorizenetDeclineSignal({ reasonCode: e.code, text: e.text }),
+        );
+        if (f.ruleId) return { status: "failed", providerChargeId: "", failure: f };
+      }
       if (!(e instanceof ProviderIndeterminateError) || !opts.customerProfileId) throw e;
       const found = await this.findByReference(opts.customerProfileId, ref).catch(() => null);
       if (found) return chargeResultFromTransaction(found, opts);
@@ -2178,9 +2216,11 @@ export class AuthorizenetProvider implements PaymentProvider {
               ? "failed"
               : "unknown";
     const amount = toMinor(tx.authAmount);
+    const failed = status === "failed" ? transactionFailure(tx) : null;
     return {
       intentId: id,
       status,
+      ...(failed ? { failure: { code: failed.code, message: failed.message } } : {}),
       providerChargeId: tx.transId,
       ...(amount != null ? { amountMinor: amount } : {}),
       raw: tx,

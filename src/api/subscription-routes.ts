@@ -1,4 +1,5 @@
 import { CommitmentError, getCommitment, setCommitment } from "@/modules/subscriptions/commitment";
+import { createdThrough } from "@/modules/events/provenance";
 import {
   missingReason,
   FAILED_CHANGE_CHARGES,
@@ -195,6 +196,7 @@ import {
 import { creditHandlingFor } from "@/modules/subscriptions/downgrade-credit";
 import { cfKeys, parseRequest } from "./strict-params";
 import { collectedRevenue } from "@/modules/payments/revenue";
+import { billedRevenueForRecord } from "@/modules/metrics/record-revenue";
 import { currentEventContext } from "@/platform/event-context";
 import {
   listRenewalSkips,
@@ -836,9 +838,14 @@ const cancelEstimateBody = z.object({
  * `end_of_billing_term` ends at the close of the billed term. With no advance invoicing a
  * billed term IS the current one, so it is `end_of_term`.
  */
-/** Who is changing: the dashboard's own session, or an API key. */
-const changeSource = (): ChangeSource =>
-  currentEventContext()?.source === "dashboard" ? "dashboard" : "api";
+/** A member in our UI: the dashboard itself, or a change they confirmed in the assistant. */
+const byMember = (): boolean => {
+  const source = currentEventContext()?.source;
+  return source === "dashboard" || source === "assistant";
+};
+
+/** Who is changing: a member in our UI, or an API key. */
+const changeSource = (): ChangeSource => (byMember() ? "dashboard" : "api");
 
 /** The direction of an item edit and the business's policy for it, read in one transaction. */
 async function changePolicyFor(
@@ -1974,26 +1981,35 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           },
         });
       }
-      const [dues, recurring, revenue, skips] = await Promise.all([
+      const [dues, recurring, cash, billedRevenue, skips] = await Promise.all([
         subscriptionDues(req.organization!.id, detail.subscription.id),
         recurringAmountForSubscription(req.organization!.id, detail.subscription),
         collectedRevenue(req.organization!.id, { subscriptionId: detail.subscription.id }),
+        billedRevenueForRecord(req.organization!.id, business.id, {
+          subscriptionId: detail.subscription.id,
+        }),
         skipViewOf(req.organization!.id, detail.subscription),
       ]);
       // One currency per subscription, so at most one row; none = nothing collected yet.
-      const collected = revenue.find((r) => r.currency === detail.subscription.currency);
-      return serializeSubscription(detail.subscription, business, {
-        items: detail.items,
-        customer: detail.customerPublicId,
-        default_payment_method: detail.defaultPaymentMethodPublicId,
-        ship_to: detail,
-        discount: detail.discount,
-        pending_change: detail.pendingChange,
-        dues,
-        recurring_amount_minor: recurring,
-        revenue: collected ?? { amount_minor: 0, paid_invoices_count: 0, first_paid_at: null },
-        renewalSkips: skips,
-      });
+      const collected = cash.find((r) => r.currency === detail.subscription.currency);
+      return {
+        ...serializeSubscription(detail.subscription, business, {
+          items: detail.items,
+          customer: detail.customerPublicId,
+          default_payment_method: detail.defaultPaymentMethodPublicId,
+          ship_to: detail,
+          discount: detail.discount,
+          pending_change: detail.pendingChange,
+          dues,
+          recurring_amount_minor: recurring,
+          revenueBilled:
+            billedRevenue.find((r) => r.currency === detail.subscription.currency)?.amount_minor ??
+            0,
+          revenue: collected ?? { amount_minor: 0, paid_invoices_count: 0, first_paid_at: null },
+          renewalSkips: skips,
+        }),
+        created_through: await createdThrough(req.organization!.id, "subscription", subId),
+      };
     },
   );
 
@@ -4038,8 +4054,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
   // A skip names one upcoming renewal; at it the clock advances the period without
   // charging the recurring items, and a fixed term does not count it.
   const renewalAtBody = z.object({ renewal_at: z.string().datetime({ offset: true }) });
-  const skipSource = (): SkipSource =>
-    currentEventContext()?.source === "dashboard" ? "dashboard" : "api";
+  const skipSource = (): SkipSource => (byMember() ? "dashboard" : "api");
 
   withSub(
     "/v1/businesses/:biz/subscriptions/:sub/skip_renewal",

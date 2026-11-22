@@ -20,7 +20,7 @@ export function DashboardTabs({
 }: {
   basePath: string;
   /** Every current search param; all of them survive the switch except `tab`. */
-  search: Record<string, string | undefined>;
+  search: Record<string, string | string[] | undefined>;
   /** e.g. `All Transactions`. */
   listLabel: string;
   active: "dashboard" | "list";
@@ -28,7 +28,9 @@ export function DashboardTabs({
   const href = (tab: "dashboard" | "list") => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(search)) {
-      if (k !== "tab" && v != null && v !== "") qs.set(k, v);
+      if (k === "tab") continue;
+      // `filter` repeats; each value survives on its own.
+      for (const one of Array.isArray(v) ? v : [v]) if (one) qs.append(k, one);
     }
     // `dashboard` is the default, so it stays out of the URL.
     if (tab === "list") qs.set("tab", "list");

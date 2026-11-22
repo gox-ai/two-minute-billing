@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CreditCard, FileText, ShieldCheck } from "lucide-react";
+import { CreditCard, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { brandCss } from "@/lib/brand";
 import { SafeHtml } from "@/components/safe-html";
@@ -30,6 +30,7 @@ export interface PreviewBrand {
   icon_url?: string | null;
   favicon_url?: string | null;
   brand_color?: string | null;
+  button_text_color?: string | null;
 }
 
 /**
@@ -48,7 +49,7 @@ function PreviewFrame({
   children: React.ReactNode;
   className?: string;
 }) {
-  const css = brandCss(brand.brand_color);
+  const css = brandCss(brand.brand_color, brand.button_text_color);
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -62,8 +63,10 @@ function PreviewFrame({
           // dashboard would preview a page that cannot exist.
           "force-light",
           // `bg-sidebar` is the storefront's own recessed ground, so a hosted-page
-          // preview sits on the same surface the real page does.
-          "rounded-xl border bg-sidebar p-4 select-none sm:p-6",
+          // preview sits on the same surface the real page does. `text-foreground`
+          // re-resolves inherited text against the light tokens; without it, the dark
+          // dashboard's near-white text shows through.
+          "rounded-xl border bg-sidebar p-4 text-foreground select-none sm:p-6",
           className,
         )}
       >
@@ -89,25 +92,18 @@ export function PortalPreview({ brand }: { brand: PreviewBrand }) {
             {brand.logo_url ? null : (
               <div className="truncate text-sm font-semibold tracking-tight">{brand.name}</div>
             )}
-            <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-              Billing portal
-            </div>
+            <div className="text-xs text-muted-foreground">Billing portal</div>
           </div>
         </div>
         <div className="overflow-hidden rounded-xl border bg-card">
           <div className="px-4 py-4">
-            <div className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-              Amount due
-            </div>
+            <div className="text-xs text-muted-foreground">Amount due</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">$1,240.00</div>
             <div className="mt-1 text-xs text-muted-foreground">
               2 open invoices · due 12 Sep 2026
             </div>
           </div>
           <div className="flex items-center gap-3 border-t px-4 py-3">
-            <span className="flex size-8 items-center justify-center rounded-md border bg-muted/60 text-muted-foreground">
-              <FileText className="size-4" />
-            </span>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">INV-0042</div>
               <div className="text-xs text-muted-foreground">21 Aug 2026</div>

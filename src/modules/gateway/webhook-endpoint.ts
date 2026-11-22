@@ -29,7 +29,13 @@ import { withTenant } from "@/platform/db";
 import { config } from "@/platform/config";
 import { encryptCredentials, decryptCredentials } from "@/platform/secrets";
 import { resolveAdapter } from "@/providers/registry";
-import { gatewayNotificationUrl } from "@/providers/notification-url";
+import {
+  WEBHOOK_URL_KEY,
+  accountNotificationUrl,
+  accountNotificationUrlCandidates,
+  gatewayNotificationUrl,
+  gatewayWebhookBaseUrl,
+} from "@/providers/notification-url";
 import { GATEWAYS, gatewayDefinition, type WebhookEndpointMode } from "@/providers/gateway-catalog";
 import type { ProvisionedWebhook } from "@/providers/types";
 import { gatewayAccounts } from "@db/schema";
@@ -207,9 +213,9 @@ export function generateWebhookSecret(): string {
 }
 
 /**
- * The public URL a gateway should POST to for this account. The account's public id
+ * The public URL a NEW registration for this account uses. The account's public id
  * rides in `?id=` so inbound events are attributed to the exact account (see
- * `ingestGatewayWebhook`).
+ * `ingestGatewayWebhook`). The URL it is registered under now: `currentNotificationUrl`.
  */
 export function buildNotificationUrl(input: {
   gatewayKey: string;
@@ -218,6 +224,24 @@ export function buildNotificationUrl(input: {
   // ONE shape for every gateway. The per-business path segment and Stripe's separate
   // `/v1/webhooks/stripe` path were removed 2026-08-01.
   return gatewayNotificationUrl(input.gatewayKey, input.gatewayAccountPublicId);
+}
+
+/** The URL this account is registered under now (stored, else the pre-move base). */
+export function currentNotificationUrl(row: {
+  gatewayKey: string;
+  publicId: string;
+  credentialsEnc: string;
+}): string {
+  return accountNotificationUrl(row, decryptCredentials(row.credentialsEnc));
+}
+
+/** Every URL a delivery for this account may be signed for (Square signs the URL). */
+export function notificationUrlCandidates(row: {
+  gatewayKey: string;
+  publicId: string;
+  credentialsEnc: string;
+}): string[] {
+  return accountNotificationUrlCandidates(row, decryptCredentials(row.credentialsEnc));
 }
 
 export interface WebhookEndpointInfo {
@@ -263,11 +287,8 @@ export async function getWebhookEndpointInfo(input: {
     return r;
   });
 
-  const url = buildNotificationUrl({
-    gatewayKey: row.gatewayKey,
-    gatewayAccountPublicId: row.publicId,
-  });
   const creds = decryptCredentials(row.credentialsEnc);
+  const url = accountNotificationUrl(row, creds);
   const secret = typeof creds.webhook_secret === "string" ? creds.webhook_secret : null;
   const webhookId = typeof creds.webhook_id === "string" ? creds.webhook_id : null;
   const endpointId =
@@ -334,9 +355,16 @@ export async function provisionWebhookEndpoint(input: {
   // still be unregistered, so they still get the registration attempt.
   const registered =
     existing.configured && existing.mode !== "paste_required" && existing.mode !== "url_only";
-  if (!input.force && (registered || (existing.configured && !config.WEBHOOK_BASE_URL)))
+  // Registered under an older base (`GATEWAY_WEBHOOK_BASE_URL` changed): provisioning moves it.
+  const targetUrl = buildNotificationUrl({
+    gatewayKey: existing.gateway_key,
+    gatewayAccountPublicId: input.gatewayAccountPublicId,
+  });
+  const currentUrl = existing.notification_url;
+  const moving = registered && currentUrl !== targetUrl;
+  if (!input.force && !moving && (registered || (existing.configured && !gatewayWebhookBaseUrl())))
     return getWebhookEndpointInfo({ ...input, reveal: true });
-  if (!config.WEBHOOK_BASE_URL)
+  if (!gatewayWebhookBaseUrl())
     throw new GatewayError(
       "WEBHOOK_BASE_URL is not configured. Set it to the public base URL of this API before you provision webhooks.",
     );
@@ -361,24 +389,32 @@ export async function provisionWebhookEndpoint(input: {
   // re-registering would delete both endpoints at this URL and strand the next secret.
   if (typeof creds.webhook_secret_next === "string" && creds.webhook_secret_next)
     throw new GatewayError(WEBHOOK_CHANGE_IN_PROGRESS);
+  const adapter = resolveAdapter(row);
+  // Only a gateway that can remove the old registration moves; otherwise both would deliver.
+  const previousUrl = moving && adapter.removeWebhookEndpoint ? currentUrl : undefined;
+  if (moving && !previousUrl && !input.force)
+    return getWebhookEndpointInfo({ ...input, reveal: true });
+  const url = moving && !previousUrl ? currentUrl : targetUrl;
+  const target = { url, ...(previousUrl ? { previousUrl } : {}) };
+  let provisioned: ProvisionedWebhook | null = null;
   const secretMode = webhookSecretMode(row.gatewayKey);
   if (secretMode === "credential" || secretMode === "operator_pasted") {
     // No secret of ours to generate: the signing key is an API credential, or the
     // operator pastes the gateway's. Register the URL when the adapter can.
-    const adapter = resolveAdapter(row);
     if (!adapter.provisionWebhookEndpoint)
       return getWebhookEndpointInfo({ ...input, reveal: false });
-    const provisioned = await adapter.provisionWebhookEndpoint({ url: existing.notification_url });
+    provisioned = await adapter.provisionWebhookEndpoint(target);
     if (provisioned.providerEndpointId) creds.webhook_endpoint_id = provisioned.providerEndpointId;
     if (provisioned.webhookId) creds.webhook_id = provisioned.webhookId;
+    if (provisioned.providerEndpointId || provisioned.webhookId) creds[WEBHOOK_URL_KEY] = url;
   } else if (secretMode === "provider_minted") {
-    const adapter = resolveAdapter(row);
     if (!adapter.provisionWebhookEndpoint)
       throw new GatewayError(`${row.gatewayKey} adapter cannot provision webhook endpoints`);
-    const provisioned = await adapter.provisionWebhookEndpoint({ url: existing.notification_url });
+    provisioned = await adapter.provisionWebhookEndpoint(target);
     rotateWebhookSecret(creds, provisioned.webhookSecret, row.gatewayKey);
     if (provisioned.webhookId) creds.webhook_id = provisioned.webhookId;
     if (provisioned.providerEndpointId) creds.webhook_endpoint_id = provisioned.providerEndpointId;
+    creds[WEBHOOK_URL_KEY] = url;
   } else {
     // WE own the secret. Register the endpoint carrying it so the operator has nothing
     // to paste. Registration is best-effort: a merchant without webhook API access — or a
@@ -391,14 +427,9 @@ export async function provisionWebhookEndpoint(input: {
         : null;
     const secret = !input.force && current ? current : generateWebhookSecret();
     const wasRegistered = typeof creds.webhook_endpoint_id === "string";
-    const adapter = resolveAdapter(row);
-    let provisioned: ProvisionedWebhook | null = null;
     if (adapter.provisionWebhookEndpoint) {
       try {
-        provisioned = await adapter.provisionWebhookEndpoint({
-          url: existing.notification_url,
-          secret,
-        });
+        provisioned = await adapter.provisionWebhookEndpoint({ ...target, secret });
       } catch (e) {
         log.warn("[gateway] webhook auto-registration failed; falling back to operator paste", {
           event: "gateway_webhook_autoregister_failed",
@@ -424,9 +455,21 @@ export async function provisionWebhookEndpoint(input: {
         `We could not rotate the webhook secret. ${name} did not confirm the new secret, so the current secret stays active. Try again later.`,
       );
     }
+    // A failed move leaves the registration at the old URL working; keep it as it is.
+    if (!provisioned && previousUrl) {
+      const name = gatewayDefinition(row.gatewayKey)?.displayName ?? row.gatewayKey;
+      throw new GatewayError(
+        `We could not move the webhook to the new URL. ${name} did not accept it, so the current URL stays active. Try again later.`,
+      );
+    }
     rotateWebhookSecret(creds, provisioned?.webhookSecret ?? secret, row.gatewayKey);
-    if (provisioned?.providerEndpointId) creds.webhook_endpoint_id = provisioned.providerEndpointId;
-    else delete creds.webhook_endpoint_id;
+    if (provisioned?.providerEndpointId) {
+      creds.webhook_endpoint_id = provisioned.providerEndpointId;
+      creds[WEBHOOK_URL_KEY] = url;
+    } else {
+      delete creds.webhook_endpoint_id;
+      delete creds[WEBHOOK_URL_KEY];
+    }
   }
 
   await withTenant(input.organizationId, async (tx) => {
@@ -435,6 +478,27 @@ export async function provisionWebhookEndpoint(input: {
       .set({ credentialsEnc: encryptCredentials(creds), updatedAt: new Date() })
       .where(eq(gatewayAccounts.id, row.id));
   });
+
+  // Registered at the new URL. Retire the old registration unless the gateway moved it.
+  if (previousUrl && provisioned && !provisioned.movedFromPreviousUrl) {
+    try {
+      await adapter.removeWebhookEndpoint?.({ url: previousUrl });
+    } catch (e) {
+      log.warn("[gateway] webhook moved, but the old registration was not removed", {
+        event: "gateway_webhook_move_remove_failed",
+        gateway: row.gatewayKey,
+        gatewayAccount: row.publicId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  if (previousUrl && provisioned)
+    log.info("[gateway] webhook moved to the new base URL", {
+      event: "gateway_webhook_moved",
+      gateway: row.gatewayKey,
+      gatewayAccount: row.publicId,
+      inPlace: provisioned.movedFromPreviousUrl === true,
+    });
 
   return getWebhookEndpointInfo({ ...input, reveal: true });
 }
@@ -489,7 +553,7 @@ export async function registerWebhookEndpointOnCreate(input: {
   gatewayAccountPublicId: string;
   gatewayKey: string;
 }): Promise<void> {
-  if (!config.WEBHOOK_BASE_URL || webhookSecretMode(input.gatewayKey) === "none") return;
+  if (!gatewayWebhookBaseUrl() || webhookSecretMode(input.gatewayKey) === "none") return;
   try {
     await provisionWebhookEndpoint(input);
   } catch (e) {
@@ -526,10 +590,13 @@ export async function removeWebhookEndpointOnDelete(
 ): Promise<WebhookRemovalReport> {
   const def = gatewayDefinition(row.gatewayKey);
   if (!def || def.webhook.secret === "none") return { status: "not_applicable", instructions: [] };
-  const url = buildNotificationUrl({
-    gatewayKey: row.gatewayKey,
-    gatewayAccountPublicId: row.publicId,
-  });
+  let url: string;
+  try {
+    url = currentNotificationUrl(row);
+  } catch {
+    // Unreadable credentials: the pre-move URL is the best guess.
+    url = gatewayNotificationUrl(row.gatewayKey, row.publicId, config.WEBHOOK_BASE_URL);
+  }
   const manual = def.webhook.removalInstructions?.(url) ?? [
     `In the ${def.displayName} dashboard, delete the webhook with this URL: ${url}`,
   ];
@@ -550,7 +617,7 @@ export async function removeWebhookEndpointOnDelete(
       ? { status: "manual", instructions: manual }
       : { status: "not_applicable", instructions: [] };
   // Without a public base URL we never registered anything from here.
-  if (!config.WEBHOOK_BASE_URL) return { status: "manual", instructions: manual };
+  if (!gatewayWebhookBaseUrl()) return { status: "manual", instructions: manual };
   try {
     const r = await adapter.removeWebhookEndpoint({ url });
     log.info("[gateway] webhook registration removed with its account", {

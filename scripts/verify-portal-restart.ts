@@ -7,6 +7,7 @@
  *    a decline keeps it cancelled and the session open; a good card restarts it
  *  - `restart_price`: `current` bills today's catalogue price, `keep` the frozen one
  *  - a replayed Idempotency-Key returns the same checkout
+ *  - a pending charge on the cancelled subscription is quoted and charged with the new term
  *
  *   pnpm verify:portal-restart
  */
@@ -23,7 +24,8 @@ import {
   setCheckoutCustomer,
   completeCheckout,
 } from "@/modules/checkout/service";
-import { cancelSubscription } from "@/modules/subscriptions/service";
+import { cancelSubscription, cancelSubscriptionWithOptions } from "@/modules/subscriptions/service";
+import { addAdHocCharge } from "@/modules/subscriptions/items";
 import { createPortalSession } from "@/modules/customer-portal/service";
 import { clearPublicRateLimits } from "./lib/rate-limit-reset";
 import {
@@ -193,8 +195,9 @@ const newReactivate = await http(`/portal/v1/subscriptions/${a.sub.publicId}/rea
   body: {},
 });
 ok(
-  "on: /reactivate points at Restart subscription",
-  newReactivate.status === 409 && /Restart subscription/.test(JSON.stringify(newReactivate.json)),
+  "on: /reactivate points at Reactivate subscription",
+  newReactivate.status === 409 &&
+    /Reactivate subscription/.test(JSON.stringify(newReactivate.json)),
 );
 
 // Another customer's session cannot reach it.
@@ -443,6 +446,103 @@ ok(
   `add-on: the new term bills plan + 2 × 500 (got ${addInv?.totalMinor} ${addInv?.status})`,
   Number(addInv?.totalMinor) === planMinor + 1000 && addInv?.status === "paid",
 );
+
+// ── Reactivation with a deferred charge still pending: the quote is what is charged ────
+// A cancel can leave a deferred charge pending, and the fresh term's invoice bills it. A quote
+// without it charged less than the invoice, so the charge was refunded and the page refused.
+{
+  const yProd = await createProduct({
+    organizationId: orgId,
+    businessId: biz.id,
+    name: "Pro",
+    kind: "plan",
+  });
+  const yPlan = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: yProd.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 199000,
+    interval: "year",
+  });
+  const ySeat = await createPrice({
+    organizationId: orgId,
+    businessId: biz.id,
+    productId: addonProd.id,
+    type: "recurring",
+    model: "per_unit",
+    currency: "USD",
+    amountMinor: 12000,
+    interval: "year",
+  });
+  const yItems = [
+    { price: yPlan.publicId, quantity: 1 },
+    { price: ySeat.publicId, quantity: 7 },
+  ];
+  const s = await createCheckoutSession({
+    organizationId: orgId,
+    businessId: biz.id,
+    items: yItems,
+  });
+  const sctx = await resolveCheckoutSession(s.token);
+  const cus = await setCheckoutCustomer(sctx!, { email: "restart-yearly@example.com" });
+  await completeCheckout(sctx!, { paymentMethodToken: "tok_4242" });
+  const [ysub] = await withTenant(orgId, (tx) =>
+    tx.select().from(subscriptions).where(eq(subscriptions.customerId, cus.id)),
+  );
+  await addAdHocCharge({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscriptionId: ysub!.id,
+    description: "Per seat, yearly - Prorated Charges",
+    amountMinor: 11400,
+    priceId: ySeat.id,
+    invoiceNow: false,
+    now: new Date(),
+  });
+  await cancelSubscriptionWithOptions({
+    organizationId: orgId,
+    businessId: biz.id,
+    subscriptionId: ysub!.id,
+    now: new Date(),
+    cancelOption: "immediately",
+  });
+  const ys = await createCheckoutSession({
+    organizationId: orgId,
+    businessId: biz.id,
+    mode: "change",
+    subscriptionId: ysub!.publicId,
+    reactivate: true,
+    items: yItems,
+  });
+  const yctx = await resolveCheckoutSession(ys.token);
+  const quoted = (await getCheckoutView(yctx!))?.change?.preview?.amountDueMinor;
+  ok(
+    `pending charge: the page quotes the term plus the pending charge (got ${quoted}, want 294400)`,
+    quoted === 294400,
+  );
+  let yErr = "";
+  try {
+    // No card on the page: the saved one is charged.
+    await completeCheckout(yctx!, {});
+  } catch (e) {
+    yErr = (e as Error).message;
+  }
+  const [yInv] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(invoices)
+      .where(eq(invoices.subscriptionId, ysub!.id))
+      .orderBy(desc(invoices.createdAt))
+      .limit(1),
+  );
+  ok(
+    `pending charge, saved card: reactivated and billed what was quoted (${yErr || "ok"}; got ${yInv?.totalMinor} ${yInv?.status})`,
+    !yErr && Number(yInv?.amountDueMinor) === quoted && yInv?.status === "paid",
+  );
+}
 
 await app.close();
 await closeDb();

@@ -18,6 +18,8 @@ export class ShippingAddressError extends Error {
   constructor(
     message: string,
     readonly status: 400 | 409 = 400,
+    /** The customer's words when `message` names ids only an operator can read. */
+    readonly payerMessage: string = message,
   ) {
     super(message);
     this.name = "ShippingAddressError";
@@ -407,6 +409,7 @@ export async function archiveShippingAddress(input: {
       throw new ShippingAddressError(
         `We could not archive this address. Subscription ${users.map((u) => u.publicId).join(", ")} ships to it. Change the subscription's shipping address first.`,
         409,
+        "We could not archive this address. A live subscription ships to it. Change the shipping address of the subscription first.",
       );
     // Subscriptions with no address of their own ship to the default, so it is in use too.
     if (current.isDefault) {
@@ -425,6 +428,7 @@ export async function archiveShippingAddress(input: {
         throw new ShippingAddressError(
           `We could not archive this address. It is the default, and subscription ${onDefault.map((u) => u.publicId).join(", ")} ships to the default. Make another address the default first.`,
           409,
+          "We could not archive this address. It is the default, and a live subscription ships to the default. Make a different address the default first.",
         );
     }
     const [row] = await tx

@@ -1,5 +1,6 @@
+import { notPlatformOrg } from "@/modules/tenancy/platform-org";
 import type { FastifyRequest } from "fastify";
-import { lt } from "drizzle-orm";
+import { lt, and } from "drizzle-orm";
 import { systemDb } from "@/platform/db";
 import { buyerRequestRejections } from "@db/schema";
 import { createLogger } from "@/platform/logger";
@@ -9,6 +10,11 @@ const log = createLogger("ops.buyer-rejections");
 
 /** Rows older than this are deleted by `sweepBuyerRejections`. */
 export const BUYER_REJECTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+const recorded = new WeakSet<FastifyRequest>();
+
+/** Whether this request already has its rejection row (one per refused request). */
+export const buyerRejectionRecorded = (req: FastifyRequest): boolean => recorded.has(req);
 
 /**
  * Record a refused request body when it came from a buyer surface; a no-op for every other
@@ -23,6 +29,7 @@ export function recordBuyerRejection(
   const portal = req?.portalSession;
   const checkout = req?.checkoutSession;
   if (!req || (!portal && !checkout)) return;
+  recorded.add(req);
   const row = {
     surface: portal ? "portal" : "checkout",
     method: req.method,
@@ -51,7 +58,13 @@ export async function sweepBuyerRejections(now: Date): Promise<{ deleted: number
   const deleted = await systemDb
     .delete(buyerRequestRejections)
     .where(
-      lt(buyerRequestRejections.createdAt, new Date(now.getTime() - BUYER_REJECTION_RETENTION_MS)),
+      and(
+        lt(
+          buyerRequestRejections.createdAt,
+          new Date(now.getTime() - BUYER_REJECTION_RETENTION_MS),
+        ),
+        notPlatformOrg(buyerRequestRejections.organizationId),
+      ),
     )
     .returning({ id: buyerRequestRejections.id });
   return { deleted: deleted.length };
