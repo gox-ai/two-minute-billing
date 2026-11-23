@@ -68,5 +68,7 @@ run too (user decision 2); 0 keeps the data.
 refusals, exclusions, RLS + mode gate, filters, erasure, shutdown flush); `verify:retention`.
 
 ## Changelog
+- **2026-11-23** — `OWN_TOKEN_RE` masks every prefix we mint: added `mfrc_`, `sgni_`, `sgnp_`,
+  `tb_`, `uwt_`, `ndc_`, `tmo_at_`/`tmo_rt_`/`tmo_cd_`. Unit test `request-log-redact-prefixes`.
 - **2026-10-25** — Created (design L): capture, redaction, buffered writer, read API, retention,
   erasure, `Request-Id` header.

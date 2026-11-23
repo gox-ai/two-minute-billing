@@ -2753,7 +2753,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
   // mandatory add-ons the reactivation will not book).
   app.post(
     "/v1/businesses/:biz/subscriptions/:sub/reactivate_estimate",
-    { preHandler: [authenticate, requirePerm("subscriptions:manage")] },
+    { preHandler: [authenticate, requirePerm("subscriptions:estimate")] },
     async (req, reply) => {
       const business = await resolveBusiness(req, reply);
       if (!business) return;

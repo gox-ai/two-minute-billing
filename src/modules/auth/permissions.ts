@@ -70,7 +70,7 @@ const DEFS = {
   ),
   // ── Subscriptions ──
   "subscriptions:view": d("read", "any", "Subscriptions", "View subscriptions"),
-  "subscriptions:count": d("write", "any", "Subscriptions", "Count subscriptions with a filter"),
+  "subscriptions:count": d("read", "any", "Subscriptions", "Count subscriptions with a filter"),
   "subscriptions:estimate": d(
     "read",
     "ops",
@@ -122,7 +122,7 @@ const DEFS = {
   // `ops`, not `any`, since 2026-11-03: a developer may not charge a customer.
   "invoices:collect": d("write", "ops", "Invoices", "Collect or retry payment of an invoice"),
   "invoices:void": d("write", "manager", "Invoices", "Void and write off invoices"),
-  "invoices:estimate": d("write", "any", "Invoices", "Estimate an invoice for unbilled charges"),
+  "invoices:estimate": d("read", "any", "Invoices", "Estimate an invoice for unbilled charges"),
   "credit_notes:view": d("read", "any", "Invoices", "View credit notes"),
   "credit_notes:manage": d(
     "write",
@@ -185,7 +185,7 @@ const DEFS = {
   "comments:manage": d("write", "ops", "Communications", "Add, edit and delete comments"),
   // ── Reports ──
   "reports:view": d("read", "any", "Reports", "View reports, metrics and analytics"),
-  "reports:query": d("write", "any", "Reports", "Run analytics queries"),
+  "reports:query": d("read", "any", "Reports", "Run analytics queries"),
   "reports:export": d("read", "any", "Reports", "Export raw data"),
   "usage_margin:view": d("read", "manager", "Reports", "View usage cost and margin"),
   "views:view": d(

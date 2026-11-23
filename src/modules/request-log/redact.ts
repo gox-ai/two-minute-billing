@@ -76,7 +76,7 @@ export function isSecretKey(key: string): boolean {
 
 // Our own credentials, by prefix. Stripe-style secret keys share the `sk_live_` shape.
 const OWN_TOKEN_RE =
-  /\b(sk_(?:test|live|all|sbox)_|whsec_|pstk_|psst_|cstk_|sess_|invt_|prst_|mfas_|mfac_)[A-Za-z0-9_-]{16,}/g;
+  /\b(sk_(?:test|live|all|sbox)_|whsec_|pstk_|psst_|cstk_|sess_|invt_|prst_|mfas_|mfac_|mfrc_|sgni_|sgnp_|tb_|uwt_|ndc_|tmo_(?:at|rt|cd)_)[A-Za-z0-9_-]{16,}/g;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g;
 

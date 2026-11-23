@@ -4,8 +4,8 @@
 #   app.env    the engine's settings: keys, URLs, mail, storage (written by init-env.sh)
 #
 # Order: postgres → init (migrations + first org, then exits) → api → worker and dashboard
-# → proxy. An upgrade is a new TMBILLING_VERSION and `docker compose up -d`: init migrates
-# while the old api/worker still serve, then they are replaced, the worker last.
+# → proxy. Upgrade with ./upgrade.sh (a new TMBILLING_VERSION, then `docker compose up -d`): init
+# migrates while the old api/worker still serve, then they are replaced, the worker last.
 name: two-minute-billing
 
 x-engine: &engine

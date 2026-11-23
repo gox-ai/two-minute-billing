@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 
 /**
  * The form-safe Select.
@@ -40,22 +41,10 @@ export interface SelectOption {
   group?: string;
 }
 
-export function SelectField({
-  name,
-  options,
-  defaultValue = "",
-  value: controlledValue,
-  onValueChange,
-  placeholder,
-  className,
-  id,
-  ariaLabel,
-  disabled,
-  required,
-  size = "default",
-  "aria-invalid": ariaInvalid,
-  "aria-describedby": ariaDescribedBy,
-}: {
+/** Lists longer than this get a search box: scrolling 11+ rows to find one is slow. */
+const SEARCH_FROM = 11;
+
+type SelectFieldProps = {
   name?: string;
   options: SelectOption[];
   defaultValue?: string;
@@ -77,7 +66,58 @@ export function SelectField({
   size?: "sm" | "default";
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
-}) {
+};
+
+/**
+ * A long list renders as `Combobox` (same form contract, plus search). Only when every label
+ * is plain text, because search matches the label.
+ */
+export function SelectField(props: SelectFieldProps) {
+  const { options } = props;
+  if (options.length >= SEARCH_FROM && options.every((o) => typeof o.label === "string")) {
+    return (
+      <Combobox
+        name={props.name}
+        options={options.map((o) => ({
+          value: o.value,
+          label: o.label as string,
+          disabled: o.disabled,
+          group: o.group,
+        }))}
+        defaultValue={props.defaultValue}
+        value={props.value}
+        onValueChange={props.onValueChange}
+        placeholder={props.placeholder}
+        className={props.className}
+        id={props.id}
+        ariaLabel={props.ariaLabel}
+        disabled={props.disabled}
+        required={props.required}
+        size={props.size}
+        aria-invalid={props["aria-invalid"]}
+        aria-describedby={props["aria-describedby"]}
+      />
+    );
+  }
+  return <PlainSelectField {...props} />;
+}
+
+function PlainSelectField({
+  name,
+  options,
+  defaultValue = "",
+  value: controlledValue,
+  onValueChange,
+  placeholder,
+  className,
+  id,
+  ariaLabel,
+  disabled,
+  required,
+  size = "default",
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
+}: SelectFieldProps) {
   const [internal, setInternal] = useDefaultState(defaultValue);
 
   /**

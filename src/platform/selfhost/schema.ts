@@ -45,6 +45,25 @@ export function readJournal(root: string): JournalEntry[] | null {
   return (JSON.parse(readFileSync(path, "utf8")) as { entries: JournalEntry[] }).entries;
 }
 
+/**
+ * The oldest schema this release upgrades: the public journal's `floor`, written by
+ * `publish:oss`. Null in the private repo, whose journal is the whole chain.
+ */
+export function readJournalFloor(root: string): JournalEntry | null {
+  const path = join(root, "db/migrations/meta/_journal.json");
+  if (!existsSync(path)) return null;
+  return (JSON.parse(readFileSync(path, "utf8")) as { floor?: JournalEntry }).floor ?? null;
+}
+
+/** Refuse, before any change, a database older than the floor: its migrations are not here. */
+export function assertUpgradable(appliedWhen: number, floor: JournalEntry | null): void {
+  if (!floor || appliedWhen === 0 || appliedWhen >= floor.when) return;
+  throw new Error(
+    `This database's schema is older than ${floor.tag}, the oldest schema this release can ` +
+      "upgrade. Upgrade to an earlier release first, then to this one. No migration was applied.",
+  );
+}
+
 /** The newest migration this code expects: the later of the baseline cut and the journal. */
 export function expectedSchemaWhen(root: string): number {
   const baseline = join(root, "db/baseline.sql");
@@ -94,6 +113,7 @@ export async function installSchema(ownerUrl: string, root: string): Promise<Ins
           "newer than it cannot be chosen. Record the baseline it was built from first.",
       );
     }
+    if (!baselineApplied) assertUpgradable(await appliedSchemaWhen(sql), readJournalFloor(root));
     if (readJournal(root)) {
       await migrate(drizzle(sql), { migrationsFolder: join(root, "db/migrations") });
     }

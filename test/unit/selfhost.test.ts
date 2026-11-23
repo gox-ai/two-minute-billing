@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertPlainSql, parseBaselineCut, readJournal } from "@/platform/selfhost/schema";
+import {
+  assertPlainSql,
+  assertUpgradable,
+  parseBaselineCut,
+  readJournal,
+  readJournalFloor,
+} from "@/platform/selfhost/schema";
 import {
   BootstrapError,
   bootstrapInputFromEnv,
@@ -43,6 +49,28 @@ describe("the baseline cut", () => {
   it("refuses a psql meta-command, with its line", () => {
     expect(() => assertPlainSql("select 1;\n\\connect other\n")).toThrow(/line 2/);
     expect(() => assertPlainSql("select '\\x';\n")).not.toThrow();
+  });
+});
+
+describe("the upgrade floor", () => {
+  const floor = { tag: "0502_x", when: 1000 };
+
+  it("refuses a database older than the floor, naming it", () => {
+    expect(() => assertUpgradable(999, floor)).toThrow(/older than 0502_x/);
+  });
+
+  it("allows the floor itself, anything newer, an empty database and no floor", () => {
+    expect(() => assertUpgradable(1000, floor)).not.toThrow();
+    expect(() => assertUpgradable(5000, floor)).not.toThrow();
+    expect(() => assertUpgradable(0, floor)).not.toThrow();
+    expect(() => assertUpgradable(1, null)).not.toThrow();
+  });
+
+  it("the full chain has no floor; a public journal starts right after its floor", () => {
+    const journal = readJournal(ROOT) ?? [];
+    const floor = readJournalFloor(ROOT);
+    if (journal[0]?.tag.startsWith("0000_")) expect(floor).toBeNull();
+    else expect(journal.every((e) => e.when > floor!.when)).toBe(true);
   });
 });
 
@@ -117,6 +145,15 @@ describe("the image entrypoint", () => {
       encoding: "utf8",
     });
     expect(r.stdout).toBe(secret);
+  });
+});
+
+describe("the deploy scripts", () => {
+  it("are executable, because the docs run them as ./name.sh", () => {
+    const dir = join(ROOT, "deploy/docker");
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".sh"))) {
+      expect(statSync(join(dir, f)).mode & 0o111, f).not.toBe(0);
+    }
   });
 });
 

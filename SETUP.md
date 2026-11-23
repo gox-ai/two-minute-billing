@@ -206,6 +206,23 @@ from a host of its own, point that host at the API (forward only `/mcp`, `/oauth
 
 ---
 
+## Upgrading
+
+Any release upgrades straight to any later one. Back up the database first (`pg_dump -Fc`), then:
+
+```bash
+git fetch --tags && git checkout vX.Y.Z   # the release you want
+pnpm install
+pnpm db:migrate                           # applies only the changes this database lacks
+```
+
+Restart the API, the worker and the dashboard after it. Read the notes of each release you skip
+on the [releases page](https://github.com/gox-ai/two-minute-billing/releases): a few releases need
+a step of their own. There is no downgrade; to go back, restore the backup and check out the
+previous tag.
+
+---
+
 ## Starting over
 
 ```bash

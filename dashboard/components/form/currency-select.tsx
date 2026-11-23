@@ -2,16 +2,7 @@
 
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Field } from "@/components/form/field";
 
 const POPULAR = ["USD", "EUR", "GBP", "INR", "AUD", "CAD", "SGD", "JPY"];
@@ -81,54 +72,29 @@ export function CurrencySelect({
     () => allCurrencies().filter((c) => !POPULAR.includes(c) && !omit.has(c)),
     [omit],
   );
-  // Radix warns if a Select gets both `value` and `defaultValue`.
+  const choices: ComboboxOption[] = [
+    ...(allowEmpty ? [{ value: " ", label: "None" }] : []),
+    ...(restricted
+      ? restricted.map((c) => ({ value: c, label: label(c) }))
+      : [
+          ...popular.map((c) => ({ value: c, label: label(c), group: "Popular" })),
+          ...rest.map((c) => ({ value: c, label: label(c), group: "All currencies" })),
+        ]),
+  ];
   const controlled = value !== undefined;
   return (
-    <Select
+    <Combobox
       name={name}
+      id={id ?? name}
+      options={choices}
       {...(controlled
         ? { value, onValueChange }
-        : { defaultValue: defaultValue?.toUpperCase() || undefined, onValueChange })}
-    >
-      <SelectTrigger id={id ?? name} className={className}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent position="popper" className="max-h-72">
-        {allowEmpty ? (
-          <>
-            <SelectItem value=" ">None</SelectItem>
-            <SelectSeparator />
-          </>
-        ) : null}
-        {restricted ? (
-          restricted.map((c) => (
-            <SelectItem key={c} value={c}>
-              {label(c)}
-            </SelectItem>
-          ))
-        ) : (
-          <>
-            <SelectGroup>
-              <SelectLabel>Popular</SelectLabel>
-              {popular.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {label(c)}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-            <SelectSeparator />
-            <SelectGroup>
-              <SelectLabel>All currencies</SelectLabel>
-              {rest.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {label(c)}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </>
-        )}
-      </SelectContent>
-    </Select>
+        : { defaultValue: defaultValue?.toUpperCase() || "", onValueChange })}
+      placeholder={placeholder}
+      searchPlaceholder="Search currencies…"
+      emptyMessage="No currency matches."
+      className={className}
+    />
   );
 }
 
@@ -226,18 +192,17 @@ export function CurrenciesField({
         </span>
       )}
       {addable.length === 0 ? null : (
-        <Select value="" onValueChange={(c) => setSelected((s) => (s.includes(c) ? s : [...s, c]))}>
-          <SelectTrigger className="w-56" aria-label="Add a currency">
-            <SelectValue placeholder="Add a currency…" />
-          </SelectTrigger>
-          <SelectContent position="popper" className="max-h-72">
-            {addable.map((c) => (
-              <SelectItem key={c} value={c}>
-                {label(c)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Combobox
+          value=""
+          onValueChange={(c) => setSelected((s) => (s.includes(c) || !c ? s : [...s, c]))}
+          options={addable.map((c) => ({ value: c, label: label(c) }))}
+          className="w-56"
+          contentClassName="w-72"
+          ariaLabel="Add a currency"
+          placeholder="Add a currency…"
+          searchPlaceholder="Search currencies…"
+          emptyMessage="No currency matches."
+        />
       )}
     </div>
   );

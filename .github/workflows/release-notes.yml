@@ -1,0 +1,80 @@
+# Create the GitHub Release for a tag, with its upgrade notes.
+#
+# Runs on a release tag of the PUBLIC repository only (`pnpm release:oss` pushes it).
+# The "Upgrading" section counts the database changes since the previous tag and copies this
+# release's manual steps, if any, from the "Version notes" of the self-host help page.
+name: Release notes
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.repository.private == false && github.repository == 'gox-ai/two-minute-billing'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write the notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # The tag just before this one in version order (a later tag may already exist).
+          PREV=$(git tag -l 'v*' --sort=v:refname | awk -v t="$TAG" '$0 == t { print p; exit } { p = $0 }')
+          : > /tmp/prev-baseline.sql
+          echo '{"entries":[]}' > /tmp/prev-journal.json
+          if [ -n "$PREV" ]; then
+            git show "$PREV:db/baseline.sql" > /tmp/prev-baseline.sql
+            git show "$PREV:db/migrations/meta/_journal.json" > /tmp/prev-journal.json
+          fi
+          CHANGES=$(node -e '
+            const fs = require("fs");
+            const cut = /^-- baseline-cut: \S+ (\d+)$/m.exec(fs.readFileSync("/tmp/prev-baseline.sql", "utf8"));
+            const prev = JSON.parse(fs.readFileSync("/tmp/prev-journal.json", "utf8")).entries;
+            const from = Math.max(cut ? Number(cut[1]) : 0, ...prev.map((e) => e.when));
+            const next = JSON.parse(fs.readFileSync("db/migrations/meta/_journal.json", "utf8")).entries;
+            console.log(next.filter((e) => e.when > from).length);
+          ')
+          # This tag's "#### vX.Y.Z" entry under "Version notes", without its heading.
+          STEPS=$(awk -v h="#### $TAG" '
+            $0 == h { on = 1; next }
+            on && /^##/ { exit }
+            on { print }
+          ' docs-site/content/help/40.developers/01.getting-started/06.self-host-docker.md)
+          GUIDE="https://twominutebilling.com/help/developers/getting-started/self-host-docker#upgrade"
+          {
+            echo "## Upgrading"
+            echo
+            if [ -n "$PREV" ] && [ "$CHANGES" = 0 ]; then
+              echo "No database changes since $PREV."
+            elif [ -n "$PREV" ]; then
+              echo "From $PREV: $CHANGES database changes, applied by \`init\` (Docker) or \`pnpm db:migrate\` (source)."
+            else
+              echo "First release."
+            fi
+            echo
+            if [ -n "$(echo "$STEPS" | tr -d '[:space:]')" ]; then
+              echo "**Manual steps for this release:**"
+              echo "$STEPS"
+            else
+              echo "No manual steps."
+            fi
+            echo
+            echo "Back up first. Any earlier release upgrades straight to this one; read the upgrade notes of each release you skip. Steps: [Upgrade]($GUIDE)."
+          } > /tmp/notes.md
+          cat /tmp/notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRE=""; case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/notes.md $PRE

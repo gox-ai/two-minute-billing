@@ -53,6 +53,7 @@
     "verify:read-routing": "tsx scripts/lib/verify-run.ts scripts/verify-read-routing.ts",
     "verify:baseline-grants": "tsx scripts/lib/verify-run.ts scripts/verify-baseline-grants.ts",
     "verify:selfhost-init": "tsx scripts/lib/verify-run.ts scripts/verify-selfhost-init.ts",
+    "verify:oss-upgrade": "tsx scripts/verify-oss-upgrade.ts",
     "verify:segments": "tsx scripts/lib/verify-run.ts scripts/verify-segments.ts",
     "verify:segment-analytics": "tsx scripts/lib/verify-run.ts scripts/verify-segment-analytics.ts",
     "verify:movement-matview": "tsx scripts/lib/verify-run.ts scripts/verify-movement-matview.ts",

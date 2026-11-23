@@ -2,13 +2,7 @@
 
 import * as React from "react";
 import { useDefaultState } from "@/lib/use-default-state";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import type { MethodTypeMeta } from "./gateway-meta";
 
 /**
@@ -85,18 +79,16 @@ export function MethodTypesField({
         </span>
       )}
       {addable.length > 0 ? (
-        <Select value="" onValueChange={(v) => setSelected((s) => (s.includes(v) ? s : [...s, v]))}>
-          <SelectTrigger className="w-64" aria-label="Add a payment method">
-            <SelectValue placeholder="Add a payment method…" />
-          </SelectTrigger>
-          <SelectContent position="popper" className="max-h-72">
-            {addable.map((m) => (
-              <SelectItem key={m.value} value={m.value}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Combobox
+          value=""
+          onValueChange={(v) => setSelected((s) => (s.includes(v) || !v ? s : [...s, v]))}
+          options={addable.map((m) => ({ value: m.value, label: m.label }))}
+          className="w-64"
+          ariaLabel="Add a payment method"
+          placeholder="Add a payment method…"
+          searchPlaceholder="Search payment methods…"
+          emptyMessage="No payment method matches."
+        />
       ) : null}
       {comingSoon.length > 0 ? (
         <span className="text-xs text-muted-foreground">

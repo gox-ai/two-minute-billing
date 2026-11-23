@@ -110,6 +110,9 @@ export async function createGatewayAccountAction(
     credentials,
     currencies: collectCurrencies(formData),
     method_types: collectMethodTypes(formData),
+    ...(formData.has("international_switch")
+      ? { international_enabled: formData.get("international_enabled") === "on" }
+      : {}),
   });
   if (!res.ok) return fromWrite(res, "");
   revalidatePath(gatewaysPath(biz));

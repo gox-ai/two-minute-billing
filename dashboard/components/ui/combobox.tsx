@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   Command,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -60,6 +61,8 @@ import {
  * for Radix. The value handed to `onValueChange` and posted is always the real one.
  */
 const EMPTY = "__empty__";
+// cmdk trims an item's value, so a blank one (`" "` is a stored "None") also needs the sentinel.
+const cmdkValue = (v: string) => (v.trim() ? v : EMPTY);
 
 export interface ComboboxOption {
   value: string;
@@ -73,6 +76,8 @@ export interface ComboboxOption {
   /** Right-aligned muted text on the row: a dial code, an offset, a country count. */
   hint?: string;
   disabled?: boolean;
+  /** Group heading; consecutive options sharing one are grouped. */
+  group?: string;
 }
 
 export function Combobox({
@@ -165,7 +170,7 @@ export function Combobox({
   const haystack = React.useMemo(() => {
     const m = new Map<string, string>();
     for (const o of options) {
-      const key = (o.value || EMPTY).toLowerCase();
+      const key = cmdkValue(o.value).toLowerCase();
       m.set(key, `${o.label} ${o.keywords ?? ""} ${o.hint ?? ""} ${o.value}`.toLowerCase());
     }
     return m;
@@ -197,6 +202,32 @@ export function Combobox({
   }, [filled, optionFor]);
 
   const selected = options.find((o) => o.value === real);
+
+  const groups: Array<{ label?: string; items: ComboboxOption[] }> = [];
+  for (const opt of options) {
+    const last = groups[groups.length - 1];
+    if (last && last.label === opt.group) last.items.push(opt);
+    else groups.push({ label: opt.group, items: [opt] });
+  }
+  const renderItem = (o: ComboboxOption) => (
+    <CommandItem
+      key={o.value || EMPTY}
+      value={cmdkValue(o.value)}
+      disabled={o.disabled}
+      onSelect={() => commit(o.value)}
+    >
+      <CheckIcon
+        className={cn("size-4 shrink-0", o.value === real ? "opacity-100" : "opacity-0")}
+        aria-hidden
+      />
+      <span className="flex-1 truncate">{o.label}</span>
+      {o.hint ? (
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+          {o.hint}
+        </span>
+      ) : null}
+    </CommandItem>
+  );
   const triggerLabel = selected?.label ?? (real ? selectedLabel : undefined);
 
   return (
@@ -290,28 +321,15 @@ export function Combobox({
             />
             <CommandList className="max-h-72">
               <CommandEmpty>{loading ? "Searching…" : emptyMessage}</CommandEmpty>
-              {options.map((o) => (
-                <CommandItem
-                  key={o.value}
-                  value={o.value || EMPTY}
-                  disabled={o.disabled}
-                  onSelect={() => commit(o.value)}
-                >
-                  <CheckIcon
-                    className={cn(
-                      "size-4 shrink-0",
-                      o.value === real ? "opacity-100" : "opacity-0",
-                    )}
-                    aria-hidden
-                  />
-                  <span className="flex-1 truncate">{o.label}</span>
-                  {o.hint ? (
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {o.hint}
-                    </span>
-                  ) : null}
-                </CommandItem>
-              ))}
+              {groups.map((g, gi) =>
+                g.label ? (
+                  <CommandGroup key={`${gi}:${g.label}`} heading={g.label}>
+                    {g.items.map(renderItem)}
+                  </CommandGroup>
+                ) : (
+                  g.items.map(renderItem)
+                ),
+              )}
             </CommandList>
           </Command>
         </PopoverContent>

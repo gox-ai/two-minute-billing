@@ -250,8 +250,10 @@ upgrades and backups:
 | `ghcr.io/gox-ai/two-minute-billing-engine` | The API, the billing worker and the one-time `init` (schema, first admin) |
 | `ghcr.io/gox-ai/two-minute-billing-dashboard` | The dashboard, hosted checkout and customer portal |
 
-`init-env.sh` sets `TMBILLING_VERSION` to the release you checked out; to upgrade, change it and
-run `docker compose pull && docker compose up -d`. To check that an image came from this
+**Upgrades.** Any release upgrades straight to any later one: `./upgrade.sh` in `deploy/docker`
+backs up, checks out the newest release, pulls it and starts it, and `init` applies the database
+changes before the API restarts (`./upgrade.sh --dry-run` shows the plan first). Each [release](https://github.com/gox-ai/two-minute-billing/releases) lists its changes and
+any manual steps; there is no downgrade, so keep the backup. To check that an image came from this
 repository's release workflow:
 
 ```bash

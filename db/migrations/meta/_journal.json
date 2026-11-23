@@ -1,5 +1,318 @@
 {
   "version": "7",
   "dialect": "postgresql",
-  "entries": []
+  "entries": [
+    {
+      "idx": 503,
+      "version": "7",
+      "when": 1793791000000,
+      "tag": "0503_mcp_oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 504,
+      "version": "7",
+      "when": 1793792000000,
+      "tag": "0504_assistant_docs",
+      "breakpoints": true
+    },
+    {
+      "idx": 505,
+      "version": "7",
+      "when": 1793793000000,
+      "tag": "0505_assistant",
+      "breakpoints": true
+    },
+    {
+      "idx": 506,
+      "version": "7",
+      "when": 1793794000000,
+      "tag": "0506_assistant_docs_ui_code",
+      "breakpoints": true
+    },
+    {
+      "idx": 507,
+      "version": "7",
+      "when": 1793795000000,
+      "tag": "0507_assistant_allowance",
+      "breakpoints": true
+    },
+    {
+      "idx": 508,
+      "version": "7",
+      "when": 1793795600000,
+      "tag": "0508_billy",
+      "breakpoints": true
+    },
+    {
+      "idx": 509,
+      "version": "7",
+      "when": 1793795700000,
+      "tag": "0509_assistant_docs_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 510,
+      "version": "7",
+      "when": 1793795800000,
+      "tag": "0510_assistant_doc_vectors",
+      "breakpoints": true
+    },
+    {
+      "idx": 511,
+      "version": "7",
+      "when": 1793795900000,
+      "tag": "0511_assistant_embedding_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 512,
+      "version": "7",
+      "when": 1793796000000,
+      "tag": "0512_support_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 513,
+      "version": "7",
+      "when": 1793796100000,
+      "tag": "0513_support_notice_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 516,
+      "version": "7",
+      "when": 1793796400000,
+      "tag": "0516_coupon_billing_periods",
+      "breakpoints": true
+    },
+    {
+      "idx": 517,
+      "version": "7",
+      "when": 1793797000000,
+      "tag": "0517_transfer_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 519,
+      "version": "7",
+      "when": 1793798200000,
+      "tag": "0519_assistant_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 520,
+      "version": "7",
+      "when": 1793799400000,
+      "tag": "0520_coupons_everywhere",
+      "breakpoints": true
+    },
+    {
+      "idx": 521,
+      "version": "7",
+      "when": 1793800600000,
+      "tag": "0521_late_usage_invoices",
+      "breakpoints": true
+    },
+    {
+      "idx": 522,
+      "version": "7",
+      "when": 1793999400000,
+      "tag": "0522_usage_cost_daily",
+      "breakpoints": true
+    },
+    {
+      "idx": 523,
+      "version": "7",
+      "when": 1794200000000,
+      "tag": "0523_usage_grace_hold",
+      "breakpoints": true
+    },
+    {
+      "idx": 524,
+      "version": "7",
+      "when": 1794300000000,
+      "tag": "0524_model_price_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 525,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0525_credit_units_without_rate",
+      "breakpoints": true
+    },
+    {
+      "idx": 526,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0526_meter_credit_cost",
+      "breakpoints": true
+    },
+    {
+      "idx": 527,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0527_credit_holds_in_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 528,
+      "version": "7",
+      "when": 1794700000000,
+      "tag": "0528_credit_unit_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 529,
+      "version": "7",
+      "when": 1794800000000,
+      "tag": "0529_credit_void_reasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 530,
+      "version": "7",
+      "when": 1794900000000,
+      "tag": "0530_credit_overage",
+      "breakpoints": true
+    },
+    {
+      "idx": 531,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0531_subscription_pending_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 532,
+      "version": "7",
+      "when": 1795100000000,
+      "tag": "0532_payment_attempt_gateway_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 533,
+      "version": "7",
+      "when": 1795200000000,
+      "tag": "0533_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 534,
+      "version": "7",
+      "when": 1795300000000,
+      "tag": "0534_notifications_team_alerts_notice",
+      "breakpoints": true
+    },
+    {
+      "idx": 535,
+      "version": "7",
+      "when": 1795400000000,
+      "tag": "0535_notification_group_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 536,
+      "version": "7",
+      "when": 1795500000000,
+      "tag": "0536_ops_invariant_acknowledged",
+      "breakpoints": true
+    },
+    {
+      "idx": 537,
+      "version": "7",
+      "when": 1795600000000,
+      "tag": "0537_checkout_session_charge_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 538,
+      "version": "7",
+      "when": 1795700000000,
+      "tag": "0538_payment_method_mandate_failure",
+      "breakpoints": true
+    },
+    {
+      "idx": 539,
+      "version": "7",
+      "when": 1795800000000,
+      "tag": "0539_buyer_client_errors",
+      "breakpoints": true
+    },
+    {
+      "idx": 540,
+      "version": "7",
+      "when": 1796000000000,
+      "tag": "0540_provider_event_intent_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 541,
+      "version": "7",
+      "when": 1796100000000,
+      "tag": "0541_payment_intents_customer_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 542,
+      "version": "7",
+      "when": 1796200000000,
+      "tag": "0542_business_button_text_color",
+      "breakpoints": true
+    },
+    {
+      "idx": 543,
+      "version": "7",
+      "when": 1796200100000,
+      "tag": "0543_payment_intents_saved_method_chosen",
+      "breakpoints": true
+    },
+    {
+      "idx": 544,
+      "version": "7",
+      "when": 1796200200000,
+      "tag": "0544_payment_intents_save_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 545,
+      "version": "7",
+      "when": 1796200300000,
+      "tag": "0545_payment_intents_method_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 546,
+      "version": "7",
+      "when": 1796200400000,
+      "tag": "0546_customers_new_method_gateway",
+      "breakpoints": true
+    },
+    {
+      "idx": 547,
+      "version": "7",
+      "when": 1796200500000,
+      "tag": "0547_storefront_visits",
+      "breakpoints": true
+    },
+    {
+      "idx": 548,
+      "version": "7",
+      "when": 1796200600000,
+      "tag": "0548_email_engagement",
+      "breakpoints": true
+    },
+    {
+      "idx": 549,
+      "version": "7",
+      "when": 1796200700000,
+      "tag": "0549_postal_codes",
+      "breakpoints": true
+    }
+  ],
+  "floor": {
+    "tag": "0502_payment_method_collect_open_invoices",
+    "when": 1793790000000
+  }
 }

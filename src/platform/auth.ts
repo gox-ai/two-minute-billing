@@ -179,7 +179,7 @@ export const SESSION_COOKIE = "tmb_session";
  * Enforcement is by METHOD rather than by annotation, deliberately: a rule that depends on
  * every route remembering to declare something is a rule with holes, and "no writes" is exactly
  * the kind of claim that must hold for routes nobody thought about. That leaves this short list
- * of POSTs which mutate nothing — three estimates and a template preview. Refusing them would
+ * of POSTs which mutate nothing — estimates, previews and the analytics batch query. Refusing them would
  * make a read key unable to answer "what would this cost", which is most of what read access is
  * for.
  *
@@ -193,8 +193,13 @@ export const READ_SCOPE_POSTS: ReadonlySet<string> = new Set([
   "/v1/businesses/:biz/subscriptions/:sub/estimate",
   "/v1/businesses/:biz/subscriptions/:sub/cancel_estimate",
   "/v1/businesses/:biz/customers/:cus/subscription_estimate",
+  "/v1/businesses/:biz/subscriptions/:sub/reactivate_estimate",
+  "/v1/businesses/:biz/unbilled_charges/invoice_now_estimate",
+  "/v1/businesses/:biz/subscriptions/count",
   "/v1/businesses/:biz/emails/templates/:type/preview",
   "/v1/businesses/:biz/prices/:price/rate_change_preview",
+  // A batch of analytics questions; POST only because the batch does not fit a query string.
+  "/v1/analytics/query",
   // MCP's JSON-RPC envelope is a POST; every tool behind it is a read (src/api/mcp-routes.ts).
   "/mcp",
   "/mcp/:biz",

@@ -98,6 +98,12 @@ None.
   party is in their account.
 
 ## Changelog
+- **2026-11-23** — More POST-shaped reads: `invoices:estimate` and `subscriptions:count` are
+  read-mode, `reactivate_estimate` takes `subscriptions:estimate`, and all three joined
+  `READ_SCOPE_POSTS`. The request log counts them as reads.
+- **2026-11-23** — `reports:query` is read-mode and `POST /v1/analytics/query` joined
+  `READ_SCOPE_POSTS`: it writes nothing. Read keys and restricted orgs can run it, and the request
+  log now counts the dashboard's chart loads as reads (dashboard reads are not logged).
 - **2026-11-09** — Access-request notices go through the job queue. `submitSignupRequest` queues
   `access_request_notice_send` (chat + email, key `access_request_notice:<channel>:<request>`) in
   the transaction that stores the request; the engine worker sends them within seconds and retries
