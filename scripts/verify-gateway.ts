@@ -4801,6 +4801,20 @@ ok("C1: get after delete → 404", gone.status === 404);
         await systemDb.select().from(tmtestCharges).where(eq(tmtestCharges.businessId, biz.id))
       ).every((c) => c.amountMinor !== 1189n),
     );
+    const askedToAuthorize = (
+      await systemDb
+        .select({ data: events.data })
+        .from(events)
+        .where(and(eq(events.businessId, biz.id), eq(events.type, "payment_source_updated")))
+    ).filter((e) => {
+      const d = e.data as { mandate_missing?: boolean; payment_source?: { id?: string } };
+      return d.mandate_missing === true && d.payment_source?.id === barePm.publicId;
+    });
+    ok(
+      "#103: …and the customer is asked to authorize ONCE, not once per refused debit",
+      askedToAuthorize.length === 1,
+      `${askedToAuthorize.length} events`,
+    );
     ok(
       "#103: …and re-authorising clears it without anyone resetting the status",
       mandateMissingRefusal(

@@ -237,6 +237,13 @@ const givePaid = async (c: { publicId: string }, amount: number, priceMinor: num
     }),
   ) as Promise<{ id: string }>;
 const settle = (t: Date) => at(t, () => runSettleCreditUsage(t));
+/** The balance API's outcome for the unit: must agree with what the gate did (#445). */
+const outcome = async (c: { publicId: string }, t: Date) =>
+  (
+    (await at(t, () => must(200, "GET", `customers/${c.publicId}/access`))) as {
+      available_units: Array<{ unit: string; on_exhausted?: Record<string, unknown> }>;
+    }
+  ).available_units.find((u) => u.unit === "credit")?.on_exhausted;
 
 // ── Setup: a unit with no rate (whole credits), a meter that costs 1 credit per unit ──
 await must(201, "POST", "credit_units", {
@@ -369,6 +376,26 @@ check(
   n1.error?.code === "insufficient_credit" && (await row(neither.id)) === 2n,
   n1,
 );
+const oNeither = await outcome(neither, plus(4 * MIN));
+check(
+  "balance API: no money price states refuse for the unit (billed none, floor 0)",
+  oNeither?.policy === "bill" && oNeither.billed === "none" && oNeither.overdraft_units === 0,
+  oNeither,
+);
+const oMeter = await outcome(meterBuyer, plus(4 * MIN));
+check(
+  "balance API: the meter's own price states bill for the unit (billed all)",
+  oMeter?.billed === "all",
+  oMeter,
+);
+await setConfig(null, { overage: "10" });
+const oUnit = await outcome(neither, plus(4 * MIN));
+check(
+  "balance API: the unit's overage price states bill for every meter (billed all)",
+  oUnit?.policy === "bill" && oUnit.billed === "all" && oUnit.source === "business_blocking_off",
+  oUnit,
+);
+await setConfig(null);
 await inStep("after the price cases");
 
 // ── 2. The money part on the period invoice; the correctness rule ───────────────────
@@ -454,6 +481,12 @@ check(
     o1r[1]!.unitsUncovered === 0n &&
     (await row(od.id)) === -4n,
   o1r,
+);
+const oOd = await outcome(od, plus(6 * MIN));
+check(
+  "balance API: block with a floor of 5 states the floor (billed none, 5 units)",
+  oOd?.policy === "block" && oOd.billed === "none" && oOd.overdraft_units === 5,
+  oOd,
 );
 const o2 = await send(plus(7 * MIN), od, 2);
 check("past the floor (-6 of -5): refused whole", o2.error?.code === "insufficient_credit");

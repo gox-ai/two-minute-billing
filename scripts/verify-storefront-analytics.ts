@@ -520,8 +520,10 @@ ok("RLS hides another organization's rows", rlsRows.length === 0);
 
 // ── Rate limit ───────────────────────────────────────────────────────────────
 const s5 = await mint(A);
+// The window is a fixed minute: a run that crosses its edge starts counting again, so send
+// up to two windows' worth and stop at the first refusal.
 let last = 0;
-for (let i = 0; i <= STOREFRONT_VISIT_RATE_PER_SESSION; i++)
+for (let i = 0; i <= 2 * STOREFRONT_VISIT_RATE_PER_SESSION + 1 && last !== 429; i++)
   last = (await visit("checkout", s5.token, { kind: "view" })).statusCode;
 ok("the per-session rate limit holds (429)", last === 429, last);
 

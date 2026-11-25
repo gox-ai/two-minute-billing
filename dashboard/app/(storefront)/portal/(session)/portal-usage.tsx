@@ -2,7 +2,7 @@ import { portalSubscriptionUsage, portalSubscriptionUsageDaily } from "@/lib/por
 import { UsageDailyChart } from "@/components/usage/usage-daily-chart";
 import { formatDecimalQuantity } from "@/lib/meters";
 import { localDate } from "@/lib/model-prices";
-import { readStorefrontToken } from "@/lib/storefront-session";
+import { portalAuthFor } from "@/lib/portal-entry";
 import { creditAmount, hasUsage } from "@/lib/api/current-usage";
 import { money } from "@/lib/format";
 import { fmtDate } from "@/lib/format-date";
@@ -17,11 +17,13 @@ const units = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "unit" : 
 export async function PortalUsage({
   subscription,
   tz,
+  session,
 }: {
   subscription: string;
   tz?: string | null;
+  session?: string;
 }) {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session ?? "");
   if (!token) return null;
   const [res, daily] = await Promise.all([
     portalSubscriptionUsage(token, subscription).catch(() => null),

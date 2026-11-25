@@ -1592,6 +1592,15 @@ const tasks: Record<string, Task> = {
     await sendQueuedSignInCode(p);
   },
 
+  /** "Email me a new link": mint and send a fresh link for an expired one. */
+  new_link_send: async (payload, helpers) => {
+    const p = payload as import("@/modules/customer-portal/new-link").NewLinkJob | null;
+    if (!p?.organizationId || !p.businessId || !p.rowId || !p.kind)
+      throw new Error("new_link_send: payload needs kind, organizationId, businessId, rowId");
+    const { sendQueuedNewLink } = await import("@/modules/customer-portal/new-link");
+    helpers.logger.info("new_link_send", { kind: p.kind, result: await sendQueuedNewLink(p) });
+  },
+
   /** Apply one async transfer run, item by item (0517). Resumable; a lease keeps it single. */
   transfer_run: async (payload, helpers) => {
     const p = payload as { run?: string } | null;

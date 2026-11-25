@@ -719,7 +719,7 @@ export function PortalFields({
         />
       </SettingsCard>
 
-      <SettingsCard title="Portal links" meta="Self-serve portal">
+      <SettingsCard title="Portal and checkout links" meta="Emails and the API">
         <LinkErrorMessage saved={d.linkErrorHtml} />
         <SwitchRow
           name="portal_email_code"
@@ -749,8 +749,8 @@ export function PortalFields({
         />
         <SettingRow
           placement="end"
-          label="How long a portal link in an email works"
-          help="In days, from 1 to 14. Empty means 5 days."
+          label="How long a link in an email works"
+          help="In days, from 1 to 14. This applies to Pay now, Change payment method, payment request, checkout reminder and restart links. Empty means 5 days for portal links, 48 hours for a checkout reminder and 24 hours for a restart link."
           control={
             <Input
               name="portal_email_link_days"
@@ -760,7 +760,7 @@ export function PortalFields({
               defaultValue={d.portalEmailLinkDays ?? ""}
               placeholder="5"
               className="w-20 tabular-nums"
-              aria-label="Email portal link days"
+              aria-label="Email link days"
             />
           }
         />

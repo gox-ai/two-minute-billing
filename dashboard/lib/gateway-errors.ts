@@ -15,6 +15,8 @@ import {
 } from "../../src/providers/payer-wording";
 import { noteGatewaySignal, type GatewaySignal } from "./buyer-error-report";
 
+export { NOT_YET_APPROVED_TEXT } from "../../src/providers/payer-wording";
+
 export { RETRY_IN_FORM };
 
 /**
@@ -38,7 +40,9 @@ export function refusalMessage(failed: string, reason: string, nextStep: string)
   const said = reason.trim();
   const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
   // A reason that already carries its next step keeps it: never two next steps.
-  const stepped = /\b(try again|contact|do not pay|use a different)\b/i.test(sentence);
+  const stepped = /\b(try again|contact|do not pay|use a different|refresh the page)\b/i.test(
+    sentence,
+  );
   // Our own fault (the engine's sentence): never send the buyer to a different method.
   const next = OUR_FAULT.test(sentence) ? PAYER_NEXT_STEP.ourFault : nextStep;
   const step = next && !stepped ? ` ${next}` : "";

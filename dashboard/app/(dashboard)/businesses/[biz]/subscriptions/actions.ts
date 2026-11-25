@@ -958,7 +958,7 @@ export async function estimateSubscriptionReactivationAction(
   term?: "continue" | "new",
   onChargeFailure?: "refuse" | "dun",
 ): Promise<{ ok: true; estimate: ChangeEstimate } | { ok: false; error: string }> {
-  await requirePermission("subscriptions:manage", "manager");
+  await requirePermission("subscriptions:estimate", "manager");
   if (!biz || !sub) return { ok: false, error: "Nothing to estimate" };
   if (items.length === 0) return { ok: false, error: "Add at least one line to preview" };
   const res = await apiPost(`/v1/businesses/${biz}/subscriptions/${sub}/reactivate_estimate`, {

@@ -16,6 +16,8 @@ import {
   refusalMessage,
 } from "../../payment-dialog";
 import { portalPayInvoiceAction, portalPayGatewaysAction, portalPayOptionsAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
+import { withPortalSession } from "@/lib/portal-path";
 import type { PortalGateway, PortalMe, PortalPayOptions } from "@/lib/portal-api";
 import { instrumentLabel } from "@/lib/instrument-label";
 import { paymentMethodTypeLabel } from "@/lib/filter-options";
@@ -222,6 +224,7 @@ export function PayInvoiceButton({
     onIdle: () => void;
   };
 }) {
+  const session = usePortalSession();
   const btnRef = React.useRef<HTMLButtonElement>(null);
   React.useEffect(() => {
     if (!focus) return;
@@ -356,11 +359,11 @@ export function PayInvoiceButton({
     setStarted(true);
     setBusy(true);
     const [opts, listed] = await Promise.all([
-      portalPayOptionsAction(invoice, avoidGateway).catch(() => ({
+      portalPayOptionsAction(session, invoice, avoidGateway).catch(() => ({
         ok: false as const,
         error: "",
       })),
-      portalPayGatewaysAction(currency).catch(() => ({ ok: false as const, error: "" })),
+      portalPayGatewaysAction(session, currency).catch(() => ({ ok: false as const, error: "" })),
     ]);
     const gws = listed.ok ? listed.gateways : [];
     // Apple Pay opens on the gateway's own page. Shown only where the browser can pay with it.
@@ -466,6 +469,7 @@ export function PayInvoiceButton({
     if (!inlineFor) setBusy(true);
     try {
       const res = await portalPayInvoiceAction(
+        session,
         invoice,
         window.location.origin,
         undefined,
@@ -534,6 +538,7 @@ export function PayInvoiceButton({
         // Re-post the SAME call carrying the authorized intent; the server consumes it
         // against this invoice.
         const done = await portalPayInvoiceAction(
+          session,
           invoice,
           window.location.origin,
           pending.payment_intent.id,
@@ -576,6 +581,7 @@ export function PayInvoiceButton({
         if (result.status === "dismissed") return;
         if (result.status === "failed") return void refuse(result.message);
         const done = await portalPayInvoiceAction(
+          session,
           invoice,
           window.location.origin,
           pending.payment_intent.id,
@@ -629,7 +635,7 @@ export function PayInvoiceButton({
           clientSecret: action.clientSecret,
           publishableKey: action.publishableKey,
           intentId: pending.payment_intent.id,
-          returnUrl: `${window.location.origin}/portal?pay=return`,
+          returnUrl: `${window.location.origin}${withPortalSession("/portal?pay=return", session)}`,
           saved: paymentMethod != null,
           ...(inlineFor ? { inline: true } : {}),
         });
@@ -727,6 +733,7 @@ export function PayInvoiceButton({
       // consumes against this invoice. A refusal is returned, so the dialog shows it.
       onAuthorized={async (_token, { pending: inFlight }) => {
         const done = await portalPayInvoiceAction(
+          session,
           invoice,
           window.location.origin,
           stripeChallenge.intentId,

@@ -235,7 +235,8 @@ export interface StorefrontConfig {
   portalEmailCode: boolean;
   /** Entry window of a link an integration mints, in hours (1–24). Null = 1 hour. */
   portalLinkHours: number | null;
-  /** Entry window of a link in an email, in days (1–14). Null = 5 days. */
+  /** Lifetime of every link in an email, in days (1–14): portal links, checkout reminders,
+   *  restart links. Null = 5 days / 48 h / the checkout TTL respectively. */
   portalEmailLinkDays: number | null;
   /** How long a portal session lasts once open, in hours (1–168). Null = 72 hours. */
   portalSessionHours: number | null;

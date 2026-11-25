@@ -419,7 +419,7 @@ export interface CheckoutCustomer {
   billing_details_missing?: string[];
 }
 
-export const checkoutListPaymentMethods = (token: string) =>
+export const checkoutListPaymentMethods = (token: CheckoutAuth) =>
   checkoutFetch<{ object: "list"; data: CheckoutPaymentMethod[] }>(
     token,
     "/checkout/v1/payment_methods",
@@ -608,8 +608,14 @@ export interface CheckoutAddressInput {
   phone?: string;
 }
 
+/**
+ * A checkout token, or a token with the session (`cosess_…`) the page shows. With the
+ * session the API refuses a token that opens any other one (two tabs, one cookie).
+ */
+export type CheckoutAuth = string | { token: string; session: string };
+
 async function checkoutFetch<T>(
-  token: string,
+  auth: CheckoutAuth,
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<{
@@ -641,7 +647,8 @@ async function checkoutFetch<T>(
       // one. So this dedupes network-level retries of one request, which is what the engine's
       // idempotency is for, and double-submit protection stays a UI concern.
       ...(init?.method && init.method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${typeof auth === "string" ? auth : auth.token}`,
+      ...(typeof auth === "string" ? {} : { "X-Checkout-Session": auth.session }),
       // The buyer's forwarded chain, untouched — see `lib/forwarded-for.ts`.
       ...(await forwardedFor()),
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -662,20 +669,20 @@ async function checkoutFetch<T>(
   return { ok: false, status: res.status, ...(error ? { error } : {}), payload: json };
 }
 
-export const checkoutSession = (token: string) =>
+export const checkoutSession = (token: CheckoutAuth) =>
   checkoutFetch<CheckoutView>(token, "/checkout/v1/session");
 
-export const checkoutSetCustomer = (token: string, body: CheckoutCustomerInput) =>
+export const checkoutSetCustomer = (token: CheckoutAuth, body: CheckoutCustomerInput) =>
   checkoutFetch<CheckoutCustomer>(token, "/checkout/v1/customer", { method: "POST", body });
 
 /**
  * Add / remove a coupon code the BUYER typed. Both answer with the RE-PRICED view, so the
  * page shows the new total from one round trip instead of posting and then re-reading.
  */
-export const checkoutAddCoupon = (token: string, code: string) =>
+export const checkoutAddCoupon = (token: CheckoutAuth, code: string) =>
   checkoutFetch<CheckoutView>(token, "/checkout/v1/coupon", { method: "POST", body: { code } });
 
-export const checkoutRemoveCoupon = (token: string, code: string) =>
+export const checkoutRemoveCoupon = (token: CheckoutAuth, code: string) =>
   checkoutFetch<CheckoutView>(token, `/checkout/v1/coupon?code=${encodeURIComponent(code)}`, {
     method: "DELETE",
   });
@@ -724,7 +731,7 @@ export interface CheckoutGatewayList {
   debit_currency: string | null;
 }
 
-export const checkoutGateways = (token: string) =>
+export const checkoutGateways = (token: CheckoutAuth) =>
   checkoutFetch<CheckoutGatewayList>(token, "/checkout/v1/gateways");
 
 /**
@@ -734,7 +741,7 @@ export const checkoutGateways = (token: string) =>
  * instant and very often `paid` a few seconds later. Polling this is what lets the
  * done screen wait for the real answer instead of publishing the snapshot as a verdict.
  */
-export const checkoutInvoiceState = (token: string, invoice: string) =>
+export const checkoutInvoiceState = (token: CheckoutAuth, invoice: string) =>
   checkoutFetch<CheckoutInvoiceState>(
     token,
     `/checkout/v1/invoice?invoice=${encodeURIComponent(invoice)}`,
@@ -751,7 +758,7 @@ export type CheckoutConsentPost = {
 /** `methodType` is the RAIL — card / UPI Autopay / netbanking e-mandate. Omitted, the
  *  API defaults to `card`, which is why the checkout could only ever add a card. */
 export const checkoutBeginSetup = (
-  token: string,
+  token: CheckoutAuth,
   returnUrl: string,
   cancelUrl: string,
   gatewayAccount?: string,
@@ -822,7 +829,7 @@ export type CheckoutCompleteResult =
  * did until now — is what left a challenged buyer holding a red toast and no way forward.
  */
 export const checkoutComplete = async (
-  token: string,
+  token: CheckoutAuth,
   completion: CheckoutCompletion = {},
   gatewayAccount?: string,
   /**
@@ -984,7 +991,7 @@ export async function getPricingPage(biz: string): Promise<PricingPage | null> {
 }
 
 /** Change one line of a payment-link checkout (0 removes an optional line). */
-export const checkoutSetItem = (token: string, price: string, quantity: number) =>
+export const checkoutSetItem = (token: CheckoutAuth, price: string, quantity: number) =>
   checkoutFetch<{ object: "checkout_items"; updated: boolean }>(token, "/checkout/v1/items", {
     method: "POST",
     body: { price, quantity },
@@ -992,7 +999,7 @@ export const checkoutSetItem = (token: string, price: string, quantity: number) 
 
 /** Record that the page was shown, with its layout and the buyer's device class. */
 export const checkoutRecordView = (
-  token: string,
+  token: CheckoutAuth,
   body: { layout: "steps" | "one_page"; device_class: "mobile" | "tablet" | "desktop" },
 ) =>
   checkoutFetch<{ object: "checkout_view"; recorded: boolean }>(token, "/checkout/v1/viewed", {

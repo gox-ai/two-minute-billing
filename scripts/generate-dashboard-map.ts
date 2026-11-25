@@ -31,6 +31,12 @@ export interface Screen {
   headings: string[];
   /** Labels from a declared catalogue (`data-map-options`): each is also a control. */
   options?: string[];
+  /**
+   * A control reached through a dropdown menu (an item, or a field of the dialog an item opens)
+   * → the label of the trigger that opens the menu ("" when it has no static label). None of
+   * them is on the page until the menu is open.
+   */
+  menus?: Record<string, string>;
 }
 
 const LABEL_TAGS = new Set([
@@ -583,7 +589,67 @@ function importsOf(
  */
 export type LabelKind = "control" | "option" | "heading" | "crumb" | "title";
 /** `field`: it labels a form field that posts a value (an element with a `name`). */
-type Labelled = { group: string | null; label: string; kind: LabelKind; field?: true };
+type Labelled = {
+  group: string | null;
+  label: string;
+  kind: LabelKind;
+  field?: true;
+  /** The trigger of the dropdown menu this control is an item of. */
+  menu?: string;
+};
+
+// The dropdown menus being walked: each `<DropdownMenu>` pushes its trigger's label, each
+// `<DropdownMenuContent>` the label of the menu it is in. The walk is synchronous, so a
+// component rendered inside a menu's content is tagged too.
+const menuTriggers: string[] = [];
+const openMenus: string[] = [];
+const menuWalked = new WeakSet<object>();
+/** `<MoreMenu label>`'s trigger name: the label (default "More"), else "" when it is computed. */
+function moreMenuLabel(menu: Node): string {
+  const a = ((menu.openingElement as Node).attributes as Node[]).find(
+    (x) => x.type === "JSXAttribute" && (x.name as Node).name === "label",
+  );
+  if (!a) return "More";
+  const v = literal(a.value as Node);
+  return v ? clean(v) : "";
+}
+
+/** What a member clicks to open a `<DropdownMenu>`: its trigger's name, else "". */
+function menuTriggerLabel(menu: Node): string {
+  let trigger: Node | null = null;
+  const find = (n: unknown): void => {
+    if (trigger || !n || typeof n !== "object") return;
+    if (Array.isArray(n)) return n.forEach(find);
+    const x = n as Node;
+    if (x.type === "JSXElement") {
+      const nm = nameOf((x.openingElement as Node).name as Node);
+      if (nm === "DropdownMenuTrigger") {
+        trigger = x;
+        return;
+      }
+      if (nm === "DropdownMenu" && x !== menu) return;
+    }
+    for (const k in x) if (k !== "loc" && k !== "start" && k !== "end") find(x[k]);
+  };
+  find(menu.children);
+  if (!trigger) return "";
+  const attr = (el: Node, ...keys: string[]) => {
+    for (const a of (el.openingElement as Node).attributes as Node[])
+      if (a.type === "JSXAttribute" && keys.includes(((a.name as Node).name as string) ?? "")) {
+        const v = literal(a.value as Node);
+        if (v) return clean(v);
+      }
+    return null;
+  };
+  const t = trigger as Node;
+  const child = (t.children as Node[]).find((c) => c.type === "JSXElement");
+  return (
+    attr(t, "aria-label") ??
+    (child ? (attr(child, "aria-label", "ariaLabel") ?? (textOf(child) || null)) : null) ??
+    textOf(t) ??
+    ""
+  );
+}
 /** Props that name the field an element posts: a field label is a control on any screen. */
 const FIELD_LABEL_PROPS = new Set(["label", "ariaLabel", "aria-label"]);
 
@@ -867,7 +933,15 @@ export function labelsIn(
     field = false,
   ) => {
     const label = v ? clean(v) : "";
-    if (useful(label)) out.push({ group, label, kind, ...(field ? { field: true as const } : {}) });
+    const menu = kind === "control" && openMenus.length ? openMenus.at(-1)! : undefined;
+    if (useful(label))
+      out.push({
+        group,
+        label,
+        kind,
+        ...(field ? { field: true as const } : {}),
+        ...(menu !== undefined ? { menu } : {}),
+      });
   };
   // Page chrome, read by type: the value of a `Crumb[]` prop, what that value is built from
   // (`crumbs`, `[...baseCrumbs, …]`, `ruleCrumbs(biz, "Pause")`), and any `Crumb[]` declaration.
@@ -922,6 +996,27 @@ export function labelsIn(
     if (Array.isArray(n)) return n.forEach((x) => visit(x, group));
     const node = n as Node;
     if (skip.has(node)) return;
+    if (node.type === "JSXElement" && !menuWalked.has(node)) {
+      const nm = nameOf((node.openingElement as Node).name as Node);
+      if (nm === "DropdownMenu" || nm === "DropdownMenuContent" || nm === "MoreMenu") {
+        menuWalked.add(node);
+        const stack = nm === "DropdownMenu" ? menuTriggers : openMenus;
+        stack.push(
+          nm === "DropdownMenu"
+            ? menuTriggerLabel(node)
+            : nm === "MoreMenu"
+              ? moreMenuLabel(node)
+              : (menuTriggers.at(-1) ?? ""),
+        );
+        try {
+          visit(node, group);
+        } finally {
+          stack.pop();
+          menuWalked.delete(node);
+        }
+        return;
+      }
+    }
     if (node.type === "JSXElement") {
       const open = node.openingElement as Node;
       const name = nameOf(open.name as Node);
@@ -1149,6 +1244,9 @@ export async function buildDashboardMap(): Promise<Screen[]> {
         ...(actions ?? []),
       ]),
     ];
+    const menus: Record<string, string> = {};
+    for (const l of labelled)
+      if (l.menu !== undefined && !(l.label in menus)) menus[l.label] = l.menu;
     screens.push({
       route,
       scope,
@@ -1158,6 +1256,7 @@ export async function buildDashboardMap(): Promise<Screen[]> {
       groups,
       headings,
       ...(options.length ? { options } : {}),
+      ...(Object.keys(menus).length ? { menus } : {}),
     });
   }
   // Chrome every screen shares ("Loading", "Reload", "Required") names no screen: drop a label
@@ -1182,6 +1281,11 @@ export async function buildDashboardMap(): Promise<Screen[]> {
       .filter((g) => g.controls.length);
     const acts = new Set(s.groups.find((g) => g.title === ACTIONS)?.controls);
     s.controls = s.controls.filter((c) => kept(c) || acts.has(c)).slice(0, 300);
+    if (s.menus) {
+      const left = new Set(s.controls);
+      for (const k of Object.keys(s.menus)) if (!left.has(k)) delete s.menus[k];
+      if (!Object.keys(s.menus).length) delete s.menus;
+    }
   }
   return screens;
 }

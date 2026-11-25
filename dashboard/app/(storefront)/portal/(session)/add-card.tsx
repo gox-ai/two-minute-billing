@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import type { Country } from "@/lib/api/geo";
 import { InlineBillingDetails } from "./inline-billing-details";
 import { portalBeginSetupAction, portalCompleteVaultAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
+import { withPortalSession } from "@/lib/portal-path";
 import { AddMethodResult } from "./add-method-result";
 import type { AddMethodOutcome } from "./portal-state";
 import { savePendingVaultSetup, clearPendingVaultSetup } from "@/lib/pending-vault-setup";
@@ -151,6 +153,7 @@ export function AddCard({
   /** Above this a mandate debit needs the payer's bank approval; null outside INR. */
   unattendedLimitMinor: number | null;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [setup, setSetup] = React.useState<PortalVaultSetup | null>(null);
   /** What the new method did to the open invoices, shown once it is saved. */
@@ -257,6 +260,7 @@ export function AddCard({
     clientResult?: Record<string, string>,
   ) => {
     const res = await portalCompleteVaultAction(
+      session,
       {
         ...(paymentIntent ? { paymentIntent } : {}),
         ...(providerToken ? { providerToken } : {}),
@@ -320,6 +324,7 @@ export function AddCard({
     setRefusal(null);
     setStarting(true);
     const res = await portalBeginSetupAction(
+      session,
       window.location.origin,
       selected,
       activeMethodType,
@@ -571,7 +576,7 @@ export function AddCard({
             brandColor={me.business.brand_color}
             confirmLabel="Save card"
             busyLabel="Saving…"
-            returnUrl={`${window.location.origin}/portal?setup=return`}
+            returnUrl={`${window.location.origin}${withPortalSession("/portal?setup=return", session)}`}
             // A method that redirects leaves this tab; `SetupReturn` completes it.
             onBeforeConfirm={() =>
               savePendingVaultSetup(scope, {

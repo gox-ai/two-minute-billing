@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
-import { portalExchange, portalPeek } from "@/lib/portal-api";
+import { portalExchange, portalPeek, portalResume } from "@/lib/portal-api";
 import { portalLinkLanding } from "@/lib/portal-link-landing";
-import { rememberPortalBusiness, setStorefrontToken } from "@/lib/storefront-session";
+import { enterPortal } from "@/lib/portal-entry";
+import { readStorefrontToken, rememberPortalBusiness } from "@/lib/storefront-session";
 
 /**
  * Portal entry. The URL in the operator's minted link points here and nowhere else.
@@ -37,9 +38,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   // Remembering the business on failure too lets that card carry the business's own
   // message; the redirect target is unchanged either way.
   if (session.business) await rememberPortalBusiness(session.business);
-  if (session.ok) await setStorefrontToken("portal", session.token);
   // `forward_url` is one of the engine's closed set of `/portal…` paths, never off-site.
-  redirect(
-    session.ok && session.forwardUrl?.startsWith("/portal") ? session.forwardUrl : "/portal",
-  );
+  if (session.ok)
+    await enterPortal(
+      session.token,
+      session.forwardUrl?.startsWith("/portal") ? session.forwardUrl : "/portal",
+      session.session,
+    );
+  const latest = await readStorefrontToken("portal");
+  const again = await portalResume(token, latest);
+  if (again && latest) await enterPortal(latest, again);
+  redirect("/portal");
 }

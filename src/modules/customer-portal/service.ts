@@ -114,6 +114,8 @@ export async function createPortalSession(input: {
   createdBy?: string;
   /** Where the link is going — picks the entry window. Defaults to the API's one hour. */
   kind?: PortalLinkKind;
+  /** The operator's lifetime for this one link, overriding the business setting. */
+  accessTtlMs?: number;
   /** Where the buyer lands after signing out (absolute http(s) URL). Absent = the portal's own signed-out card. */
   redirectUrl?: string | null;
   /** Portal path the link opens on (one of `PORTAL_FORWARD_PATHS`). Absent = `/portal`. */
@@ -143,7 +145,7 @@ export async function createPortalSession(input: {
     )[0] ?? null;
   const biz = await (input.tx ? bizRow(input.tx) : withTenant(input.organizationId, bizRow));
   const expiresAt = new Date(now + sessionTtlFor(biz));
-  const accessExpiresAt = new Date(now + accessTtlFor(kind, biz));
+  const accessExpiresAt = new Date(now + (input.accessTtlMs ?? accessTtlFor(kind, biz)));
   const insert = (tx: Tx) =>
     tx.insert(portalSessions).values({
       organizationId: input.organizationId,
@@ -308,6 +310,33 @@ export async function peekPortalAccessToken(accessToken: string): Promise<{
     )
     .limit(1);
   return row ? { ...row, kind: row.kind ?? "api" } : null;
+}
+
+/**
+ * A spent link clicked again in the browser that spent it. The exchange stores the session
+ * on the link's own row, so a live session cookie for THAT row proves the clicker already
+ * holds the session: reopen the link's page instead of the expired card. Grants nothing
+ * the cookie does not already grant.
+ */
+export async function resumeSpentPortalLink(
+  accessToken: string,
+  sessionToken: string,
+): Promise<{ forwardUrl: string | null } | null> {
+  if (!accessToken.startsWith("pstk_") || !sessionToken.startsWith("psst_")) return null;
+  const [row] = await systemDb
+    .select({ forwardUrl: portalSessions.forwardUrl })
+    .from(portalSessions)
+    .where(
+      and(
+        eq(portalSessions.accessTokenHash, tokenHash(accessToken)),
+        eq(portalSessions.tokenHash, tokenHash(sessionToken)),
+        eq(portalSessions.status, "logged_in"),
+        gt(portalSessions.expiresAt, new Date()),
+        isNull(portalSessions.revokedAt),
+      ),
+    )
+    .limit(1);
+  return row ? { forwardUrl: row.forwardUrl } : null;
 }
 
 async function businessPublicIdOf(businessId: string): Promise<string | null> {

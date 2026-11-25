@@ -195,6 +195,8 @@ export async function mintRestartSession(input: {
   price: "current" | "keep";
   returnUrl?: string;
   cancelUrl?: string;
+  /** An emailed restart link's lifetime (`portal_email_link_days`). Default: the checkout TTL. */
+  ttlMs?: number;
 }): Promise<{ url: string; expiresAt: Date }> {
   let items: CheckoutItemInput[] | undefined;
   if (input.price === "current") {
@@ -213,6 +215,7 @@ export async function mintRestartSession(input: {
     mode: "change",
     subscriptionId: input.subscription.publicId,
     reactivate: true,
+    ...(input.ttlMs ? { ttlMs: input.ttlMs } : {}),
     ...(items ? { items } : {}),
     ...(input.returnUrl ? { redirectUrl: input.returnUrl } : {}),
     ...(input.cancelUrl ? { cancelUrl: input.cancelUrl } : {}),

@@ -503,6 +503,38 @@ async function main() {
     to: "accounts@buyer.test",
   });
   ok("an explicit recipient override sends anyway", overridden.ok, overridden.error);
+
+  // The operator's link lifetime overrides the business setting for this one email.
+  {
+    const { portalSessions } = await import("@db/schema");
+    const { createHash } = await import("node:crypto");
+    await sendAdhocEmail(noEmail.orgId, noEmail.bizId, {
+      type: "payment_method_request",
+      customerId: noEmail.cusPid,
+      to: "accounts@buyer.test",
+      linkValidDays: 9,
+    });
+    const tok = lastSent().html.match(/\/portal\/s\/(pstk_[A-Za-z0-9_-]+)/);
+    const [linkRow] = tok
+      ? await withTenant(noEmail.orgId, (tx) =>
+          tx
+            .select({ accessExpiresAt: portalSessions.accessExpiresAt })
+            .from(portalSessions)
+            .where(
+              eq(
+                portalSessions.accessTokenHash,
+                createHash("sha256").update(tok[1]!).digest("hex"),
+              ),
+            ),
+        )
+      : [];
+    const left = (linkRow?.accessExpiresAt?.getTime() ?? 0) - Date.now();
+    ok(
+      "linkValidDays 9: the emailed portal link works 9 days",
+      left > 9 * 86_400_000 - 60_000 && left <= 9 * 86_400_000,
+      linkRow,
+    );
+  }
   ok(
     "the override is what the row records",
     (await rowFor(noEmail.orgId, overridden.email_id))?.toAddress === "accounts@buyer.test",
@@ -571,6 +603,65 @@ async function main() {
     const ctx = link ? await resolveCheckoutSession(link[1]!) : null;
     ok("subscription_restart: the link reactivates", ctx?.reactivate === true);
     ok("subscription_restart: keep lists no items", (ctx?.items?.length ?? 0) === 0, ctx?.items);
+
+    // An expired restart link can get a new one while the subscription is still cancelled.
+    {
+      const { checkoutNewLinkJob, sendQueuedNewLink } =
+        await import("@/modules/customer-portal/new-link");
+      const job = link ? await checkoutNewLinkJob(link[1]!) : null;
+      ok("new link: a restart link qualifies", job?.kind === "restart", job);
+      const n = sent.length;
+      const r = job ? await sendQueuedNewLink(job) : null;
+      const fresh = lastSent().html.match(/\/checkout\/s\/(cstk_[A-Za-z0-9_-]+)/)?.[1];
+      const freshCtx = fresh ? await resolveCheckoutSession(fresh) : null;
+      ok(
+        "new link: a new restart checkout is emailed",
+        r === "sent" &&
+          sent.length === n + 1 &&
+          !!fresh &&
+          fresh !== link?.[1] &&
+          freshCtx?.reactivate === true,
+        { r, fresh: !!fresh },
+      );
+      ok(
+        "new link: it keeps the old link's price choice (keep = no items)",
+        (freshCtx?.items?.length ?? 0) === 0,
+      );
+    }
+
+    // The business's email link lifetime replaces the checkout's own.
+    const { businesses } = await import("@db/schema");
+    const { checkoutSessions } = await import("@db/schema");
+    const { tokenHash } = await import("@/modules/checkout/service");
+    await withTenant(f.orgId, (tx) =>
+      tx
+        .update(businesses)
+        .set({ storefrontConfig: { portal_email_link_days: 6 } })
+        .where(eq(businesses.id, f.bizId)),
+    );
+    await sendAdhocEmail(f.orgId, f.bizId, {
+      type: "subscription_restart",
+      subscriptionId: f.subPid,
+      restartPrice: "keep",
+    });
+    const six = lastSent().html.match(/\/checkout\/s\/(cstk_[A-Za-z0-9_-]+)/);
+    const [sixRow] = six
+      ? await withTenant(f.orgId, (tx) =>
+          tx
+            .select({ expiresAt: checkoutSessions.expiresAt })
+            .from(checkoutSessions)
+            .where(eq(checkoutSessions.tokenHash, tokenHash(six[1]!))),
+        )
+      : [];
+    const sixLeft = (sixRow?.expiresAt.getTime() ?? 0) - Date.now();
+    ok(
+      "subscription_restart: a 6-day email link setting keeps the link 6 days",
+      sixLeft > 6 * 86_400_000 - 3_600_000 && sixLeft <= 6 * 86_400_000,
+      sixRow?.expiresAt,
+    );
+    await withTenant(f.orgId, (tx) =>
+      tx.update(businesses).set({ storefrontConfig: {} }).where(eq(businesses.id, f.bizId)),
+    );
 
     // The preview must not mint a checkout; another business's subscription does not resolve.
     const { previewAdhocEmail } = await import("@/modules/emails/adhoc-service");

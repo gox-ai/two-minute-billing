@@ -384,6 +384,14 @@ export const EMAIL_TYPES: EmailTypeMeta[] = [
     description:
       "Sends the code a customer asked for to sign in to the billing portal. You can change the words. The code is always included.",
   },
+  {
+    key: "new_link",
+    group: "Customer portal",
+    system: true,
+    label: "New link",
+    description:
+      "Sends a new link when a customer selects Email me a new link on an expired link. It goes only to the email address on file. You can change the words.",
+  },
 ];
 
 /** Engine-fired types only — the ones the per-type opt-in toggles actually govern. */

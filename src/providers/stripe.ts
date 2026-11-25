@@ -1367,6 +1367,8 @@ export class StripeProvider implements PaymentProvider {
     refunds: true,
     partialRefunds: true,
     currencies: [], // any Stripe-supported currency
+    // A card mandate (India e-mandate) debits only in its own currency: see the catalog.
+    mandateCurrencyAuthoritative: ["card"],
     // Bank debits settle ASYNCHRONOUSLY (ACH/SEPA take days): a charge returns
     // `pending` → transaction `in_progress`, and the terminal outcome arrives only
     // as an inbound webhook (payment_intent.succeeded / .payment_failed). Enabling

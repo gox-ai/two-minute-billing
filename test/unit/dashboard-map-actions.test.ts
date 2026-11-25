@@ -92,3 +92,26 @@ describe("literals", () => {
     ]);
   });
 });
+
+describe("dashboard map: controls inside a menu", () => {
+  let screens: Screen[];
+  beforeAll(async () => {
+    screens = await buildDashboardMap();
+  }, 180_000);
+  const at = (route: string) => screens.find((s) => s.route === `/businesses/{business}${route}`);
+
+  it("names the MoreMenu trigger for an item, and leaves a control outside the menu untagged", () => {
+    const inv = at("/invoices/{inv}");
+    expect(inv?.menus?.["Issue a refund"]).toBe("More");
+    expect(inv?.menus?.["Record an offline refund"]).toBe("More");
+    expect(inv?.controls).toContain("Pause dunning");
+    expect(inv?.menus?.["Pause dunning"]).toBeUndefined();
+  });
+  it("names a Radix menu's trigger by its aria-label", () => {
+    expect(at("/catalog/coupons")?.menus?.["Clone Coupon"]).toBe("Row actions");
+  });
+  it("keeps only controls the screen lists", () => {
+    for (const s of screens)
+      for (const k of Object.keys(s.menus ?? {})) expect(s.controls).toContain(k);
+  });
+});

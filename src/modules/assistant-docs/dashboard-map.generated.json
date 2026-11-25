@@ -13,6 +13,7 @@
       "Create a test subscription",
       "Business name",
       "Default currency",
+      "None",
       "Create business",
       "Reporting currency",
       "Converted",
@@ -77,6 +78,7 @@
           "Business name",
           "New business name",
           "Default currency",
+          "None",
           "Loading organization",
           "Businesses",
           "Portfolio",
@@ -124,7 +126,7 @@
       },
       {
         "title": "Create business",
-        "controls": ["Business name", "Default currency", "Create business"]
+        "controls": ["Business name", "Default currency", "None", "Create business"]
       }
     ],
     "headings": ["Create business", "What happens next"]
@@ -1012,7 +1014,11 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "View associated subscriptions": "Row actions",
+      "Edit": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/addons/new",
@@ -1043,6 +1049,7 @@
       "Unit of measure",
       "Add the first price now",
       "Currency",
+      "None",
       "Frequency",
       "Frequency count",
       "Billing interval",
@@ -1119,6 +1126,7 @@
         "controls": [
           "Add the first price now",
           "Currency",
+          "None",
           "Frequency",
           "Frequency count",
           "Billing interval",
@@ -1235,7 +1243,11 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "View associated subscriptions": "Row actions",
+      "Edit": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/charges/new",
@@ -1266,6 +1278,7 @@
       "Unit of measure",
       "Add the first price now",
       "Currency",
+      "None",
       "Frequency",
       "Frequency count",
       "Billing interval",
@@ -1342,6 +1355,7 @@
         "controls": [
           "Add the first price now",
           "Currency",
+          "None",
           "Frequency",
           "Frequency count",
           "Billing interval",
@@ -1560,7 +1574,12 @@
         "controls": ["View all"]
       }
     ],
-    "headings": ["Add codes", "Coupon set", "Rename coupon set", "Codes", "Activity log"]
+    "headings": ["Add codes", "Coupon set", "Rename coupon set", "Codes", "Activity log"],
+    "menus": {
+      "Name": "More",
+      "Rename": "More",
+      "View parent coupon": "More"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/coupons",
@@ -1630,7 +1649,12 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "View details": "Row actions",
+      "Edit Coupon": "Row actions",
+      "Clone Coupon": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/coupons/{cpn}",
@@ -1745,7 +1769,11 @@
       "Redemption history",
       "Activity log",
       "Comments"
-    ]
+    ],
+    "menus": {
+      "Clone coupon": "More",
+      "View subscriptions that use it": "More"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/coupons/{cpn}/edit",
@@ -1769,6 +1797,7 @@
       "Percentage",
       "Fixed amount",
       "Amount",
+      "None",
       "Apply on",
       "Invoice amount",
       "Each specified item",
@@ -1818,7 +1847,8 @@
           "Percentage",
           "Fixed amount",
           "Amount",
-          "Currency"
+          "Currency",
+          "None"
         ]
       },
       {
@@ -1895,6 +1925,7 @@
       "Percentage",
       "Fixed amount",
       "Amount",
+      "None",
       "Apply on",
       "Invoice amount",
       "Each specified item",
@@ -1943,7 +1974,8 @@
           "Percentage",
           "Fixed amount",
           "Amount",
-          "Currency"
+          "Currency",
+          "None"
         ]
       },
       {
@@ -2128,7 +2160,11 @@
         ]
       }
     ],
-    "headings": ["Send test event", "Meter", "What it counts", "Credit cost"]
+    "headings": ["Send test event", "Meter", "What it counts", "Credit cost"],
+    "menus": {
+      "Edit meter": "More",
+      "Archive meter": "More"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/meters/{meter}/edit",
@@ -2479,7 +2515,11 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "View associated subscriptions": "Row actions",
+      "Edit": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/plans/new",
@@ -2510,6 +2550,7 @@
       "Unit of measure",
       "Add the first price now",
       "Currency",
+      "None",
       "Frequency",
       "Frequency count",
       "Billing interval",
@@ -2586,6 +2627,7 @@
         "controls": [
           "Add the first price now",
           "Currency",
+          "None",
           "Frequency",
           "Frequency count",
           "Billing interval",
@@ -2717,7 +2759,17 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "View associated plans": "Row actions",
+      "View associated add-ons": "Row actions",
+      "View associated charges": "Row actions",
+      "Edit product group": "Row actions",
+      "Delete product group": "Row actions",
+      "Create plan": "Row actions",
+      "Create add-on": "Row actions",
+      "Create charge": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/product_groups/{grp}",
@@ -2779,7 +2831,18 @@
         "controls": ["View all"]
       }
     ],
-    "headings": ["View associated", "Product group", "Products in this group", "Activity log"]
+    "headings": ["View associated", "Product group", "Products in this group", "Activity log"],
+    "menus": {
+      "Create product": "Create product",
+      "Create plan": "Create product",
+      "Create addon": "Create product",
+      "Create charge": "Create product",
+      "Plans": "More",
+      "Add-ons": "More",
+      "One-time products": "More",
+      "View associated subscriptions": "Row actions",
+      "Edit": "Row actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/product_groups/{grp}/edit",
@@ -3052,7 +3115,12 @@
       "Activity log",
       "Comments",
       "Events"
-    ]
+    ],
+    "menus": {
+      "Add price": "More",
+      "View details": "Price actions",
+      "Edit": "Price actions"
+    }
   },
   {
     "route": "/businesses/{business}/catalog/products/{prod}/edit",
@@ -3085,6 +3153,7 @@
       "Unit of measure",
       "Add the first price now",
       "Currency",
+      "None",
       "Frequency",
       "Frequency count",
       "Billing interval",
@@ -3176,6 +3245,7 @@
         "controls": [
           "Add the first price now",
           "Currency",
+          "None",
           "Frequency",
           "Frequency count",
           "Billing interval",
@@ -3395,6 +3465,7 @@
       "Frequency",
       "Pricing model",
       "Price ID",
+      "None",
       "Billed",
       "Recurring",
       "Once",
@@ -3502,6 +3573,7 @@
         "title": "Price",
         "controls": [
           "Currency",
+          "None",
           "Billed",
           "Recurring",
           "Once",
@@ -3663,6 +3735,7 @@
       "Frequency",
       "Pricing model",
       "Price ID",
+      "None",
       "Billed",
       "Recurring",
       "Once",
@@ -3770,6 +3843,7 @@
         "title": "Price",
         "controls": [
           "Currency",
+          "None",
           "Billed",
           "Recurring",
           "Once",
@@ -4000,7 +4074,10 @@
         ]
       }
     ],
-    "headings": []
+    "headings": [],
+    "menus": {
+      "Configure": ""
+    }
   },
   {
     "route": "/businesses/{business}/catalog/tax/{txg}",
@@ -4402,7 +4479,23 @@
       "Refunds and allocations",
       "Activity log",
       "Comments"
-    ]
+    ],
+    "menus": {
+      "View invoice": "More",
+      "Amount": "More",
+      "Refund method": "More",
+      "Refund date": "More",
+      "Reference number": "More",
+      "Comment": "More",
+      "Record refund": "More",
+      "Reason": "More",
+      "Done": "More",
+      "Email": "More",
+      "To": "More",
+      "name@example.com": "More",
+      "Note": "More",
+      "Add a covering message…": "More"
+    }
   },
   {
     "route": "/businesses/{business}/credit_notes/new",
@@ -4674,6 +4767,7 @@
       "When",
       "Collection",
       "Select Currency",
+      "None",
       "Add Charge",
       "Add one to the catalog",
       "Amount",
@@ -4704,7 +4798,7 @@
       },
       {
         "title": "Currency",
-        "controls": ["Select Currency"]
+        "controls": ["Select Currency", "None"]
       },
       {
         "title": "Action bar",
@@ -4725,6 +4819,7 @@
       "When",
       "Collection",
       "Select Currency",
+      "None",
       "Add one to the catalog",
       "Amount",
       "From date",
@@ -4753,7 +4848,7 @@
       },
       {
         "title": "Currency",
-        "controls": ["Select Currency"]
+        "controls": ["Select Currency", "None"]
       },
       {
         "title": "Action bar",
@@ -4827,6 +4922,7 @@
       "Unit",
       "Money",
       "Currency",
+      "None",
       "Price, before tax",
       "Tax",
       "Tax treatment",
@@ -4891,6 +4987,7 @@
           "Unit",
           "Money",
           "Currency",
+          "None",
           "Price, before tax",
           "Tax",
           "Tax treatment",
@@ -5003,6 +5100,7 @@
       "Last name",
       "Company",
       "Preferred currency",
+      "None",
       "Select currency",
       "Language / locale",
       "No language",
@@ -5040,7 +5138,6 @@
       "records@example.com",
       "Metadata",
       "Metadata as JSON",
-      "None",
       "True",
       "False",
       "Suggestions",
@@ -5078,6 +5175,7 @@
         "title": "Billing preferences",
         "controls": [
           "Preferred currency",
+          "None",
           "Select currency",
           "Language / locale",
           "No language",
@@ -5258,6 +5356,7 @@
       "Charge now",
       "Send a payment link",
       "Send to",
+      "Days the link works",
       "Add charge",
       "Create quick charge",
       "Record offline payment",
@@ -5272,6 +5371,7 @@
       "Record payment",
       "Manage credits",
       "Currency",
+      "None",
       "Manage promotional credits",
       "Action",
       "Credit action",
@@ -5310,6 +5410,7 @@
       "Billing",
       "New subscription",
       "No subscriptions",
+      "Create a portal link",
       "No payment methods",
       "Gateway",
       "Gateway account",
@@ -5458,6 +5559,7 @@
           "Edit customer",
           "View invoice",
           "Automatic: primary, then backups",
+          "Days the link works",
           "No payment method on file",
           "Request a card",
           "Automatic retry",
@@ -5520,12 +5622,14 @@
           "Charge now",
           "Send a payment link",
           "Send to",
+          "Days the link works",
           "Add charge",
           "Create quick charge",
           "Record offline payment",
           "Manage credits",
           "Amount",
           "Currency",
+          "None",
           "Manage promotional credits",
           "Action",
           "Credit action",
@@ -5597,7 +5701,7 @@
       },
       {
         "title": "Payment methods",
-        "controls": ["No payment methods"]
+        "controls": ["Create a portal link", "Days the link works", "No payment methods"]
       },
       {
         "title": "Balances & credits",
@@ -5744,7 +5848,66 @@
       "Activity log",
       "Comments",
       "Clear personal data"
-    ]
+    ],
+    "menus": {
+      "Create subscription": "More",
+      "Collect payment": "More",
+      "Close": "More",
+      "Payment method": "More",
+      "Automatic: primary, then backups": "More",
+      "Request payment": "More",
+      "How to request payment": "More",
+      "Charge now": "More",
+      "Send a payment link": "More",
+      "Send to": "More",
+      "Days the link works": "More",
+      "Add charge": "More",
+      "Create quick charge": "More",
+      "Record offline payment": "More",
+      "Invoice": "More",
+      "Select an invoice…": "More",
+      "Amount": "More",
+      "Method": "More",
+      "Select…": "More",
+      "Payment date": "More",
+      "Reference number": "More",
+      "Note": "More",
+      "Record payment": "More",
+      "Manage credits": "More",
+      "Currency": "More",
+      "None": "More",
+      "Manage promotional credits": "More",
+      "Action": "More",
+      "Credit action": "More",
+      "Add credits": "More",
+      "Deduct credits": "More",
+      "Set balance to": "More",
+      "Description": "More",
+      "e.g. Referral bonus": "More",
+      "Save": "More",
+      "Record excess payment": "More",
+      "Source": "More",
+      "Payment source": "More",
+      "Received offline: cash, check or bank transfer": "More",
+      "Description (optional)": "More",
+      "Edit billing address": "More",
+      "Not set": "More",
+      "City": "More",
+      "Place for this postal code": "More",
+      "Select a place…": "More",
+      "Country": "More",
+      "Select a country…": "More",
+      "Retry": "More",
+      "Address line 3": "More",
+      "+ Add address line 3": "More",
+      "Save address": "More",
+      "Edit Customer": "More",
+      "Restore": "More",
+      "Restore customer?": "More",
+      "Archive": "More",
+      "Archive customer?": "More",
+      "API requests": "More"
+    }
   },
   {
     "route": "/businesses/{business}/customers/{cus}/usage-controls",
@@ -6028,6 +6191,7 @@
       "Last name",
       "Company",
       "Preferred currency",
+      "None",
       "Select currency",
       "Language / locale",
       "No language",
@@ -6065,7 +6229,6 @@
       "records@example.com",
       "Metadata",
       "Metadata as JSON",
-      "None",
       "True",
       "False",
       "Suggestions",
@@ -6103,6 +6266,7 @@
         "title": "Billing preferences",
         "controls": [
           "Preferred currency",
+          "None",
           "Select currency",
           "Language / locale",
           "No language",
@@ -7114,6 +7278,7 @@
       "Search customers",
       "Create customer",
       "Currency (optional)",
+      "None",
       "Description",
       "Add item",
       "Net days",
@@ -7199,6 +7364,7 @@
           "Create customer",
           "Currency",
           "Currency (optional)",
+          "None",
           "Description",
           "Add item",
           "Net days",
@@ -7558,7 +7724,79 @@
       "Activity log",
       "Comments",
       "Void invoice?"
-    ]
+    ],
+    "menus": {
+      "View receipts": "More",
+      "Close this invoice?": "More",
+      "Retry now": "More",
+      "Regenerate this voided invoice?": "More",
+      "Done": "More",
+      "Email": "More",
+      "To": "More",
+      "name@example.com": "More",
+      "Note": "More",
+      "Add a covering message…": "More",
+      "Edit PO number": "More",
+      "Save PO number": "More",
+      "PO number": "More",
+      "e.g. 4500123": "More",
+      "First name": "More",
+      "Last name": "More",
+      "Phone": "More",
+      "Company": "More",
+      "Address line 1": "More",
+      "Address line 2": "More",
+      "Address line 3": "More",
+      "City": "More",
+      "State": "More",
+      "Zip / postal code": "More",
+      "Country (2-letter)": "More",
+      "Edit address": "More",
+      "Save addresses": "More",
+      "Set expected payment date": "More",
+      "Save date": "More",
+      "Expected payment date": "More",
+      "Automatic: primary, then backups": "More",
+      "Payment method": "More",
+      "Collect": "More",
+      "Refundable credit available": "More",
+      "Excess payments available": "More",
+      "Credit to apply": "More",
+      "Amount due after": "More",
+      "Apply credits": "More",
+      "Record an offline payment": "More",
+      "Payment date": "More",
+      "Reference number": "More",
+      "Record payment": "More",
+      "Amount": "More",
+      "Remaining amount": "More",
+      "Write off the remaining amount": "More",
+      "Keep the remaining amount due": "More",
+      "Amount more than due": "More",
+      "Keep it as credit for the customer": "More",
+      "Record that you returned it": "More",
+      "Mark paid (full)": "More",
+      "Mark invoice paid?": "More",
+      "Reason code": "More",
+      "Reason": "More",
+      "Comment": "More",
+      "Create a credit note": "More",
+      "This credit note should": "More",
+      "What this credit note should do": "More",
+      "Adjust the amount due": "More",
+      "Provide refundable credits": "More",
+      "Advanced: edit line items ›": "More",
+      "Create credit note": "More",
+      "Record an offline refund": "More",
+      "Refund method": "More",
+      "Refund date": "More",
+      "Record refund": "More",
+      "Issue a refund": "More",
+      "Possible repeat refund": "More",
+      "Refund again": "More",
+      "Issue refund": "More",
+      "Pay out credit note": "More"
+    }
   },
   {
     "route": "/businesses/{business}/ops",
@@ -7841,7 +8079,16 @@
       "Activity log",
       "Comments",
       "JSON metadata"
-    ]
+    ],
+    "menus": {
+      "View receipts": "More",
+      "Done": "More",
+      "Email": "More",
+      "To": "More",
+      "name@example.com": "More",
+      "Note": "More",
+      "Add a covering message…": "More"
+    }
   },
   {
     "route": "/businesses/{business}/payment_intents",
@@ -7995,7 +8242,11 @@
         "controls": ["No attempts recorded"]
       }
     ],
-    "headings": ["Summary", "Timeline", "Customer", "Attempts"]
+    "headings": ["Summary", "Timeline", "Customer", "Attempts"],
+    "menus": {
+      "Void intent": "More",
+      "Void this intent at the gateway?": "More"
+    }
   },
   {
     "route": "/businesses/{business}/payment_requests",
@@ -8045,7 +8296,9 @@
       "Charge",
       "Send to",
       "Note",
+      "Days the link works",
       "Send",
+      "Create a payment link",
       "Cash",
       "Check",
       "Bank transfer",
@@ -8078,7 +8331,7 @@
     "groups": [
       {
         "title": null,
-        "controls": ["View payment requests", "The last charge failed"]
+        "controls": ["View payment requests", "Create a payment link", "The last charge failed"]
       },
       {
         "title": "Charge the payment request",
@@ -8086,7 +8339,7 @@
       },
       {
         "title": "Send the payment request again",
-        "controls": ["Send to", "Note", "Send"]
+        "controls": ["Send to", "Note", "Days the link works", "Send"]
       },
       {
         "title": "Payment request",
@@ -8140,7 +8393,28 @@
       "Invoices",
       "Details",
       "Receipts"
-    ]
+    ],
+    "menus": {
+      "Cash": "More",
+      "Check": "More",
+      "Bank transfer": "More",
+      "Other": "More",
+      "Amount": "More",
+      "Method": "More",
+      "Payment method": "More",
+      "Select a method": "More",
+      "Payment date": "More",
+      "Reference": "More",
+      "Record payment": "More",
+      "Send to": "More",
+      "Note": "More",
+      "Days the link works": "More",
+      "Send": "More",
+      "View customer": "More",
+      "Reason": "More",
+      "Keep the request": "More",
+      "Cancel request": "More"
+    }
   },
   {
     "route": "/businesses/{business}/prices/new",
@@ -11056,6 +11330,7 @@
       "Money value",
       "Has a money value",
       "No money value",
+      "None",
       "Overdraft limit, in units",
       "Negative balance when plan credits renew",
       "Carry it",
@@ -11092,6 +11367,7 @@
           "Has a money value",
           "No money value",
           "Currency",
+          "None",
           "Decimal places"
         ]
       },
@@ -11129,6 +11405,7 @@
       "Money value",
       "Has a money value",
       "No money value",
+      "None",
       "Overdraft limit, in units",
       "Negative balance when plan credits renew",
       "Carry it",
@@ -11156,6 +11433,7 @@
           "Has a money value",
           "No money value",
           "Currency",
+          "None",
           "Decimal places"
         ]
       },
@@ -11392,6 +11670,7 @@
       "Apply",
       "Currency",
       "Select a currency",
+      "None",
       "Existing rates are not converted",
       "Save",
       "Default price type",
@@ -11415,6 +11694,7 @@
           "I set the exchange rate myself",
           "Two Minute Billing sets it for me",
           "Exchange rate",
+          "None",
           "Existing rates are not converted",
           "Save"
         ]
@@ -11429,7 +11709,7 @@
       },
       {
         "title": "Add currency",
-        "controls": ["Currency", "Select a currency", "Add currency"]
+        "controls": ["Currency", "Select a currency", "None", "Add currency"]
       },
       {
         "title": "Price types",
@@ -11452,7 +11732,11 @@
       "Remove ?",
       "Price types",
       "Smart routing rules"
-    ]
+    ],
+    "menus": {
+      "Manage currency": "",
+      "Remove": ""
+    }
   },
   {
     "route": "/businesses/{business}/settings/custom-fields",
@@ -12541,6 +12825,7 @@
       "Send credit note",
       "Restart link",
       "Sign-in code",
+      "New link",
       "Change timing",
       "Edit template",
       "Links in emails",
@@ -12611,6 +12896,7 @@
           "Send credit note",
           "Restart link",
           "Sign-in code",
+          "New link",
           "Change timing",
           "Edit template"
         ]
@@ -12691,7 +12977,8 @@
       "Request payment method",
       "Send credit note",
       "Restart link",
-      "Sign-in code"
+      "Sign-in code",
+      "New link"
     ]
   },
   {
@@ -12881,7 +13168,13 @@
       "Layout",
       "Preview",
       "Insert with a fallback"
-    ]
+    ],
+    "menus": {
+      "Insert": "",
+      "Insert with a fallback…": "",
+      "Show selection only when set": "",
+      "Show selection only when empty": ""
+    }
   },
   {
     "route": "/businesses/{business}/settings/gateways",
@@ -13038,7 +13331,10 @@
         "controls": ["Save"]
       }
     ],
-    "headings": ["Balance", "Settings", "Credentials", "Apple Pay & Google Pay", "Webhooks"]
+    "headings": ["Balance", "Settings", "Credentials", "Apple Pay & Google Pay", "Webhooks"],
+    "menus": {
+      "Delete…": "More actions"
+    }
   },
   {
     "route": "/businesses/{business}/settings/gateways/new",
@@ -13571,8 +13867,8 @@
       "Let customers sign in with an email code",
       "How long an API portal link works",
       "API portal link hours",
-      "How long a portal link in an email works",
-      "Email portal link days",
+      "How long a link in an email works",
+      "Email link days",
       "How long a customer stays signed in",
       "Portal session hours",
       "Pay an invoice",
@@ -13697,13 +13993,13 @@
         "controls": ["Ask why when a customer deletes their last payment method"]
       },
       {
-        "title": "Portal links",
+        "title": "Portal and checkout links",
         "controls": [
           "Let customers sign in with an email code",
           "How long an API portal link works",
           "API portal link hours",
-          "How long a portal link in an email works",
-          "Email portal link days",
+          "How long a link in an email works",
+          "Email link days",
           "How long a customer stays signed in",
           "Portal session hours"
         ]
@@ -13744,7 +14040,7 @@
       "Cancelling, pausing, skipping and reactivating",
       "Pay now with a new card",
       "Delete a payment method",
-      "Portal links",
+      "Portal and checkout links",
       "Links to one task",
       "Hidden in the portal",
       "Coupon codes"
@@ -14518,7 +14814,14 @@
       "Change options",
       "Billing",
       "JSON metadata"
-    ]
+    ],
+    "menus": {
+      "Change plan": "",
+      "Change frequency": "",
+      "Add manual discount": "",
+      "Edit": "",
+      "Remove": ""
+    }
   },
   {
     "route": "/businesses/{business}/subscriptions/{sub}",
@@ -14683,6 +14986,7 @@
       "To",
       "name@example.com",
       "Add a covering message…",
+      "Days the link works",
       "Gateway",
       "Gateway account",
       "Reference ID",
@@ -14969,6 +15273,7 @@
       {
         "title": "Payment method",
         "controls": [
+          "Days the link works",
           "Gateway",
           "Gateway account",
           "Reference ID",
@@ -15099,7 +15404,60 @@
       "Activity log",
       "Comments",
       "Edit price for this customer"
-    ]
+    ],
+    "menus": {
+      "Resume subscription": "More",
+      "New term's charge": "More",
+      "Charges handling": "More",
+      "Unpaid invoices": "More",
+      "Pause subscription": "More",
+      "When to pause": "More",
+      "Immediately": "More",
+      "On a specific date": "More",
+      "For a number of billing cycles, then resume": "More",
+      "Pause on": "More",
+      "Skip billing cycles": "More",
+      "Unbilled charges": "More",
+      "Leave them as unbilled charges": "More",
+      "Invoice them now": "More",
+      "Delete them": "More",
+      "Dunning (payment retries)": "More",
+      "Dunning handling": "More",
+      "Continue retries while paused": "More",
+      "Stop retries": "More",
+      "Plan credits while paused": "More",
+      "Renewal to skip": "More",
+      "Skip renewal": "More",
+      "Price of the new term": "More",
+      "Current price of the plan": "More",
+      "Price the subscription had": "More",
+      "Done": "More",
+      "Create link": "More",
+      "Change term end": "More",
+      "Term ends at": "More",
+      "Prorate the difference": "More",
+      "Invoice the proration immediately": "More",
+      "Edit trial end date": "More",
+      "New trial end date": "More",
+      "Save": "More",
+      "Add coupon": "More",
+      "Add manual discount": "More",
+      "Discount type": "More",
+      "Percent off": "More",
+      "Fixed amount off": "More",
+      "Amount off": "More",
+      "Duration": "More",
+      "Discount duration": "More",
+      "Next invoice only": "More",
+      "Forever (until removed)": "More",
+      "Note": "More",
+      "Add discount": "More",
+      "Add charge": "More",
+      "Create quick charge": "More",
+      "Change customer details": "More",
+      "Delete subscription": "More",
+      "Delete this subscription?": "More"
+    }
   },
   {
     "route": "/businesses/{business}/subscriptions/new",
@@ -15319,7 +15677,13 @@
         "controls": ["Create subscription", "Cancel"]
       }
     ],
-    "headings": ["First invoice preview", "Customer", "Items", "Billing", "Invoicing"]
+    "headings": ["First invoice preview", "Customer", "Items", "Billing", "Invoicing"],
+    "menus": {
+      "Change plan": "",
+      "Change frequency": "",
+      "Edit": "",
+      "Remove": ""
+    }
   },
   {
     "route": "/businesses/{business}/time_travel",
@@ -15871,7 +16235,10 @@
       "Number prefixes",
       "Items",
       "Stop the copy?"
-    ]
+    ],
+    "menus": {
+      "More actions": "More actions"
+    }
   },
   {
     "route": "/developer/connected-apps",
@@ -16051,7 +16418,32 @@
         ]
       }
     ],
-    "headings": ["API keys", "Edit access", "Rotate this API key?"]
+    "headings": ["API keys", "Edit access", "Rotate this API key?"],
+    "menus": {
+      "Access": "",
+      "Full access": "",
+      "Full access (you cannot give a permission that you do not have)": "",
+      "Read only": "",
+      "Read only (you cannot give a permission that you do not have)": "",
+      "Custom": "",
+      "No access": "",
+      "Read": "",
+      "Read and write": "",
+      "Edit access": "",
+      "Save": "",
+      "Rotate": "",
+      "The old key stops": "",
+      "When the old key stops": "",
+      "Immediately": "",
+      "After 1 hour": "",
+      "After 24 hours": "",
+      "After 7 days": "",
+      "Rotate key": "",
+      "Copy": "",
+      "Done": "",
+      "Revoke": "",
+      "Revoke this API key?": ""
+    }
   },
   {
     "route": "/developer/webhooks",
@@ -16122,7 +16514,16 @@
         ]
       }
     ],
-    "headings": ["Webhook endpoints"]
+    "headings": ["Webhook endpoints"],
+    "menus": {
+      "Disable this endpoint?": "",
+      "Rotate secret": "",
+      "Copy": "",
+      "Done": "",
+      "Rotate the signing secret?": "",
+      "Delete": "",
+      "Delete this endpoint?": ""
+    }
   },
   {
     "route": "/developer/logs",
@@ -16839,7 +17240,12 @@
       "Price history",
       "List price",
       "Your cost"
-    ]
+    ],
+    "menus": {
+      "Set your cost": "",
+      "End your cost": "",
+      "View history": ""
+    }
   },
   {
     "route": "/settings/notifications/{id}",
@@ -17193,7 +17599,11 @@
         ]
       }
     ],
-    "headings": ["Invite a teammate", "Members"]
+    "headings": ["Invite a teammate", "Members"],
+    "menus": {
+      "Resend invite": "",
+      "Remove from organization": ""
+    }
   },
   {
     "route": "/team/roles",

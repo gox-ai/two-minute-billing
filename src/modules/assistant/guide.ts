@@ -17,6 +17,11 @@ export interface GuideStep {
   say: string;
   /** What the member does with the control. Absent on guides saved before it existed. */
   do?: StepAction;
+  /**
+   * The control is an item of a dropdown menu: the label of the trigger that shows it ("" when
+   * the trigger has no fixed label). Set from the map, never by the model.
+   */
+  menu?: string;
 }
 
 /** click: a button, tab, row or link · enter: type a value · select: choose an option · submit: save the form. */
@@ -145,11 +150,13 @@ export function resolveGuide(a: {
       if (control || !places.has(norm(s.control))) unknown.push(!control ? s.control : near!);
       continue;
     }
+    const menu = screen.menus?.[control];
     steps.push({
       control,
       within: within ?? null,
       say: s.say.trim().slice(0, 160),
       ...(s.do ? { do: s.do } : {}),
+      ...(menu !== undefined ? { menu } : {}),
     });
   }
   if (headings.length)

@@ -31,6 +31,7 @@ import {
   movementCells,
   unitCount,
   resolveCreditConfig,
+  unitExhaustedText,
   unitInfo,
   type CreditConfigInput,
   type CustomerCreditSettings,
@@ -163,6 +164,15 @@ export default async function CustomerCreditsPage({
   // A page of movements in units with no rate has no money to show.
   const showValue = hasMoneyValue((txns?.data ?? []).map((t) => info(t.unit, t.currency)));
 
+  // A unit with no rate has its own outcome: the gate's, not the money policy (#445).
+  const outcomeRow = (r: NonNullable<typeof view>["unrated"][number]) =>
+    r.onExhausted
+      ? {
+          label: `When ${r.unit.plural} are used up`,
+          value: unitExhaustedText(r.onExhausted, r.unit),
+        }
+      : null;
+
   const overrideActive = !!settings?.on_exhausted && stillLive(settings.override_expires_at);
 
   return (
@@ -250,8 +260,14 @@ export default async function CustomerCreditsPage({
                       value: fmtUnits(units, unit),
                     })),
                     // Led by units: what the figures above do not count yet.
-                    ...(moneyLead ? [] : view.unrated.flatMap((r) => heldUnsettledRows(r, r.unit))),
-                    {
+                    ...(moneyLead
+                      ? []
+                      : view.unrated.flatMap((r) => [
+                          ...heldUnsettledRows(r, r.unit),
+                          outcomeRow(r),
+                        ])),
+                    // The money policy: it says nothing about credit with no money value.
+                    moneyLead && {
                       label: "When credit is used up",
                       value: [
                         `${POLICY_LABEL[balances.on_exhausted.policy]}.`,
@@ -282,6 +298,7 @@ export default async function CustomerCreditsPage({
                       rows={view.unrated.flatMap((r) => [
                         { label: `Available ${r.unit.plural}`, value: fmtUnits(r.units, r.unit) },
                         ...heldUnsettledRows(r, r.unit),
+                        outcomeRow(r),
                       ])}
                     />
                   </div>

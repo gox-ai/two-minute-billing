@@ -4,6 +4,7 @@
  * with a real dashboard piece. Rendered in UNavigationMenu's content slot (MarketingHeader),
  * whose tokens (`--mm-*`) it uses.
  */
+import BlogCover from "~/components/blog/BlogCover.vue";
 import MkIllustration from "./MkIllustration.vue";
 import { COMPARISONS } from "~/utils/compare";
 import type { HeaderMenu } from "~/utils/site";
@@ -19,6 +20,11 @@ const facts = FACTS.map((label) => ({
 })).filter((f) => f.value);
 
 const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
+
+// Resources: the newest live post, so the panel stays current without an edit here.
+// Not awaited: the panel opens at once and the cover appears when the list arrives.
+const posts = props.menu.value === "resources" ? useBlogPosts().data : ref([]);
+const latest = computed(() => posts.value?.[0] ?? null);
 </script>
 
 <template>
@@ -67,6 +73,16 @@ const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
         :height="320"
         alt="A renewal retried twice and paid on the second retry: $129.00 recovered."
       />
+      <NuxtLink
+        v-else-if="menu.value === 'resources' && latest?.cover"
+        :to="latest.path"
+        class="mm-cover"
+        tabindex="-1"
+        aria-hidden="true"
+        @click="emit('close')"
+      >
+        <BlogCover :cover="latest.cover" :category="latest.category" />
+      </NuxtLink>
       <div v-else-if="menu.value === 'solutions'" class="mm-facts">
         <p class="mk-label mm-facts-hd">Two Minute Billing</p>
         <dl>
@@ -77,17 +93,29 @@ const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
         </dl>
       </div>
       <MkIllustration
-        v-else
+        v-else-if="menu.value === 'developers'"
         name="IllPageHubIntegrations"
         :width="600"
         :height="460"
         alt="Payments come in through your gateway accounts: Stripe, PayPal, Adyen, Square, Authorize.net, Razorpay and five more. The billing engine syncs HubSpot, sends events to FirstPromoter, sends an invoice_paid webhook to your endpoint and sends email."
       />
-      <div>
+      <div v-if="menu.value === 'resources' && latest">
+        <p class="mm-cap-t">{{ latest.title }}</p>
+        <p class="mm-cap-d">{{ latest.description }}</p>
+      </div>
+      <div v-else>
         <p class="mm-cap-t">{{ menu.aside.title }}</p>
         <p v-if="menu.aside.text" class="mm-cap-d">{{ menu.aside.text }}</p>
       </div>
-      <NuxtLink :to="menu.aside.link.to" class="mm-go" @click="emit('close')">
+      <NuxtLink
+        v-if="menu.value === 'resources' && latest"
+        :to="latest.path"
+        class="mm-go"
+        @click="emit('close')"
+      >
+        Read the post<UIcon name="i-lucide-arrow-right" class="size-4" />
+      </NuxtLink>
+      <NuxtLink v-else :to="menu.aside.link.to" class="mm-go" @click="emit('close')">
         {{ menu.aside.link.label }}<UIcon name="i-lucide-arrow-right" class="size-4" />
       </NuxtLink>
     </div>
@@ -105,7 +133,8 @@ const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
   overflow: hidden;
   color: var(--ui-text-highlighted);
 }
-.mm-solutions {
+.mm-solutions,
+.mm-resources {
   width: min(980px, calc(100vw - 32px));
   grid-template-columns: minmax(0, 1fr) 360px;
 }
@@ -133,7 +162,8 @@ const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
   min-width: 0;
   padding: 28px 28px 0;
 }
-.mm-solutions .mm-main {
+.mm-solutions .mm-main,
+.mm-resources .mm-main {
   padding-bottom: 24px;
 }
 .mm-cols {
@@ -142,8 +172,16 @@ const id = (i: number, j: number) => `mm-${props.menu.value}-${i}-${j}`;
   gap: 24px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.mm-solutions .mm-cols {
+.mm-solutions .mm-cols,
+.mm-resources .mm-cols {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* The newest post's cover: it sizes itself in container units. */
+.mm-cover {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--mm-line);
+  border-radius: 12px;
 }
 .mm-group + .mm-group {
   margin-top: 20px;

@@ -54,10 +54,9 @@
  * SR-2026-015 Finding 4 happened. The checkout link is still the session, still good for
  * `CHECKOUT_SESSION_TTL_HOURS` (24h by default). Making it one-time is a product
  * decision (a buyer returning to an abandoned checkout is ordinary and worth money),
- * not just a schema change — see `exchangeTokenForCookie` below.
+ * not just a schema change — see `enterCheckout` in `lib/checkout-entry.ts`.
  */
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 
 /** Portal and checkout hold SEPARATE cookies on separate paths. */
 export const PORTAL_COOKIE = "tmb_portal";
@@ -116,37 +115,11 @@ function cookieAttrs(surface: StorefrontSurface) {
  * For the portal (0193) the caller first spends a single-use entry credential at
  * `POST /portal/v1/session` and passes the session token it minted — so what lands in
  * this cookie was never in a URL. For checkout the URL token is still the session
- * itself; see the note on `exchangeTokenForCookie` below.
+ * itself (`lib/checkout-entry.ts`).
  */
 export async function setStorefrontToken(surface: StorefrontSurface, token: string): Promise<void> {
   const jar = await cookies();
   jar.set(SURFACES[surface].cookie, token, cookieAttrs(surface));
-}
-
-/**
- * Put the URL's token straight into the cookie and redirect — no exchange.
- *
- * ONLY checkout still uses this. The portal moved to a real exchange in 0193: a
- * one-hour single-use entry credential traded for a session. Checkout has not, and the
- * asymmetry is deliberate rather than an oversight — a buyer abandoning a checkout
- * part-way and returning to the same link is ordinary behaviour worth money, so making
- * that link one-time needs a product decision
- * about what "come back later" does, not just a schema change. Until then the checkout
- * link remains a reusable credential for its 72 hours, and W1's win here is narrower:
- * the token is out of the page URL, so it no longer reaches the gateway SDK as a
- * `Referer`, browser history, or a proxy log.
- *
- * The token is NOT validated here, deliberately: validating would make this route a free
- * oracle telling an attacker whether a guessed token is live. Handing a bad one to the
- * destination page costs one failed API call and renders the "invalid or expired" card
- * the page already has — the same answer a real expired link gets, by the same path.
- */
-export async function exchangeTokenForCookie(
-  surface: StorefrontSurface,
-  token: string,
-): Promise<never> {
-  await setStorefrontToken(surface, token);
-  redirect(SURFACES[surface].path);
 }
 
 /**
@@ -161,6 +134,59 @@ export async function readStorefrontToken(surface: StorefrontSurface): Promise<s
   const jar = await cookies();
   return jar.get(SURFACES[surface].cookie)?.value ?? null;
 }
+
+/**
+ * ── ONE COOKIE PER SESSION, TOO ─────────────────────────────────────────────────
+ * `tmb_checkout` / `tmb_portal` hold the LAST link opened, so two tabs in one browser share
+ * it: the older tab's actions used to act on the newer tab's session (a buyer was charged
+ * twice this way on checkout). The entry routes therefore bind each token to its own
+ * session (`<cookie>_<session>`), the page names that session in `?s=`, and every call reads
+ * the binding first. The API refuses a token for another session (`X-Checkout-Session`,
+ * `X-Portal-Session`), so a tab without a binding fails closed instead of acting elsewhere.
+ */
+const SESSION_ID: Record<StorefrontSurface, RegExp> = {
+  checkout: /^cosess_[A-Za-z0-9]{1,64}$/,
+  portal: /^psess_[A-Za-z0-9]{1,64}$/,
+};
+const boundCookie = (surface: StorefrontSurface, session: string) =>
+  `${SURFACES[surface].cookie}_${session}`;
+
+/** The token for one session: its own binding, else the latest link opened. */
+export async function readSessionToken(
+  surface: StorefrontSurface,
+  session: string | null | undefined,
+): Promise<string | null> {
+  const jar = await cookies();
+  const bound =
+    session && SESSION_ID[surface].test(session)
+      ? jar.get(boundCookie(surface, session))?.value
+      : null;
+  return bound || (jar.get(SURFACES[surface].cookie)?.value ?? null);
+}
+
+/** Keep `token` for `session`. The caller has checked with the API that it opens that session. */
+export async function bindSessionToken(
+  surface: StorefrontSurface,
+  session: string,
+  token: string,
+): Promise<void> {
+  if (!SESSION_ID[surface].test(session)) return;
+  const jar = await cookies();
+  if (jar.get(boundCookie(surface, session))?.value === token) return;
+  jar.set(boundCookie(surface, session), token, cookieAttrs(surface));
+}
+
+/** Drop one session's binding (sign-out). */
+export async function clearSessionToken(surface: StorefrontSurface, session: string) {
+  if (!SESSION_ID[surface].test(session)) return;
+  const jar = await cookies();
+  jar.set(boundCookie(surface, session), "", { ...cookieAttrs(surface), maxAge: 0 });
+}
+
+export const readCheckoutToken = (session: string | null | undefined) =>
+  readSessionToken("checkout", session);
+export const bindCheckoutToken = (session: string, token: string) =>
+  bindSessionToken("checkout", session, token);
 
 /** Drop the cookie — used when the server has told us the session is no longer valid. */
 export async function clearStorefrontToken(surface: StorefrontSurface): Promise<void> {

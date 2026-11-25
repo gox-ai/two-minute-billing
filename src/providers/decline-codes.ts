@@ -3451,6 +3451,8 @@ export const BRAINTREE_CODES_OUR_CALLS_NEVER_RAISE: Readonly<Record<string, stri
  * behaviour exactly — no regression — and the asymmetry is now WRITTEN DOWN in one place
  * instead of being an accident of two code paths.
  */
+const STRIPE_REQUEST_CATCH_ALL = "stripe.category.invalid_request_error";
+
 const STRIPE_OUR_SIDE =
   "We could not complete this payment because of a problem on our side. Nothing is wrong with the customer's payment method.";
 
@@ -3509,6 +3511,21 @@ const POSTAL_CODE_WRONG =
   "The postal code does not match the one your bank has. Check the billing address, then try again.";
 
 export const STRIPE_RULES: readonly DeclineRule[] = [
+  // A card mandate debits only in its own currency. Not the card's fault, so never
+  // `mandate_expired` (that marks the card invalid); collection moves on to a backup.
+  // Above the code rules: the same code (`payment_intent_mandate_invalid`) also means a
+  // dead mandate.
+  {
+    id: "stripe.message.mandate_currency",
+    field: "message",
+    op: "matches",
+    value: "mandate can only be used for a payment in",
+    code: "mandate_currency_mismatch",
+    retriable: false,
+    message:
+      "The customer authorized this payment method for payments in one currency only. This charge is in another currency. Add a payment method for this currency.",
+    exposedToPayer: true,
+  },
   /**
    * A DEAD MANDATE IS NOT A SOFT FAILURE, and the table alone could not say so.
    *
@@ -4164,7 +4181,7 @@ export const STRIPE_RULES: readonly DeclineRule[] = [
   // Anything specific above wins by position; what falls through here is an API-level
   // rejection, which is ours to fix and never the payer's.
   {
-    id: "stripe.category.invalid_request_error",
+    id: STRIPE_REQUEST_CATCH_ALL,
     field: "category",
     op: "eq",
     value: "invalid_request_error",
@@ -7947,7 +7964,15 @@ export function normalizeStripeDecline(
     sig.cardBrand?.toLowerCase() === "mastercard"
       ? MASTERCARD_ADVICE_WAIT_MS[(sig.recommendationCode ?? "").trim()]
       : undefined;
-  return withWait(networkHardDecline(sig, evaluate(sig, STRIPE_RULES, STRIPE_CODE_TABLE)), mac);
+  let n = evaluate(sig, STRIPE_RULES, STRIPE_CODE_TABLE);
+  // The category catch-all means "unrecognised, so ours". A code the table classifies is
+  // recognised: Stripe sends `setup_intent_authentication_failure` (failed 3DS) and the
+  // other intent-level codes as `invalid_request_error`, and the catch-all was booking
+  // them as our own request fault.
+  if (n.ruleId === STRIPE_REQUEST_CATCH_ALL && sig.code && STRIPE_CODE_TABLE[sig.code]) {
+    n = build(sig.code, STRIPE_CODE_TABLE);
+  }
+  return withWait(networkHardDecline(sig, n), mac);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { exchangeTokenForCookie } from "@/lib/storefront-session";
+import { enterCheckout } from "@/lib/checkout-entry";
 import { recordCheckoutEntry } from "@/lib/storefront-visit";
 
 /**
@@ -14,5 +14,5 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   recordCheckoutEntry(req, token);
-  await exchangeTokenForCookie("checkout", token);
+  await enterCheckout(token);
 }

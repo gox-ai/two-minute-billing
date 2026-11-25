@@ -12,10 +12,8 @@ import MkMenuPanel from "~/components/marketing/MkMenuPanel.vue";
 const { signIn, signUp } = useAppLinks();
 const repo = useRepoUrl();
 const menus = headerMenus(repo);
-const LINKS = [
-  { label: "Pricing", to: "/pricing" },
-  { label: "Docs", to: "/help" },
-];
+// Docs (the knowledge base) and the blog live in the Resources menu.
+const LINKS = [{ label: "Pricing", to: "/pricing" }];
 
 const items = computed<NavigationMenuItem[]>(() => [
   ...menus.map((m) => ({ label: m.label, value: m.value, slot: "menu" as const })),

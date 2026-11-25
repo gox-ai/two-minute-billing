@@ -18,7 +18,7 @@ import { methodTypeOf } from "@/modules/payments/method-type";
 import { paceGatewayCharge } from "@/modules/gateway/charge-pace";
 import { TERMINATE } from "@/modules/subscriptions/decline-policy";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, or } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
 import { publicId } from "@/platform/ids";
 import { getProvider, resolveAdapter } from "@/providers/registry";
@@ -1183,6 +1183,10 @@ export async function chargeWithMethod(input: {
    * rail and ceiling stay as they are so a later backfill or re-authorisation can fill
    * them in. Idempotent, and deliberately not fatal: failing a charge because we could not
    * annotate a row would be worse than forgetting.
+   *
+   * The transition also emits `payment_source_updated` with `mandate_missing`, which mails
+   * the customer the renew-authorization email. Only the customer can clear this, and the
+   * failed-payment email alone does not ask them to. Once per instrument: the WHERE guard.
    */
   if (
     result.status === "failed" &&
@@ -1190,12 +1194,41 @@ export async function chargeWithMethod(input: {
     mandateChargeability(pm) !== "missing"
   ) {
     try {
-      await withTenant(input.organizationId, (tx) =>
-        tx
+      await withTenant(input.organizationId, async (tx) => {
+        const [learned] = await tx
           .update(paymentMethods)
           .set({ mandateStatus: MANDATE_MISSING_STATUS })
-          .where(eq(paymentMethods.id, pm.id)),
-      );
+          .where(
+            and(
+              eq(paymentMethods.id, pm.id),
+              or(
+                isNull(paymentMethods.mandateStatus),
+                ne(paymentMethods.mandateStatus, MANDATE_MISSING_STATUS),
+              ),
+            ),
+          )
+          .returning({ id: paymentMethods.id });
+        if (!learned) return;
+        await emitEvent(tx, {
+          organizationId: input.organizationId,
+          businessId: pm.businessId,
+          type: "payment_source_updated",
+          data: buildEventData(
+            "payment_source_updated",
+            {
+              id: pm.publicId,
+              brand: pm.brand,
+              last4: pm.last4,
+              exp_month: pm.expMonth,
+              exp_year: pm.expYear,
+              status: pm.status,
+            },
+            undefined,
+            // Top-level: the nested resource is replaced on enrichment.
+            { mandate_missing: true },
+          ),
+        });
+      });
       log.warn("the gateway reports no mandate for this instrument — remembered", {
         event: "mandate_missing_learned",
         gateway: adapter.key,

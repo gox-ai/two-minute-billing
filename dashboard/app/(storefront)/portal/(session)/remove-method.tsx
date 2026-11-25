@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalRemoveAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { RadioGroup, RadioOption } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -47,6 +48,7 @@ export function RemovePaymentMethod({
   /** The buyer's last method and the business asks why (Settings → Customer portal). */
   askReason?: boolean;
 }) {
+  const session = usePortalSession();
   const [open, setOpen] = React.useState(false);
   const [reason, setReason] = React.useState("");
   const [reasonText, setReasonText] = React.useState("");
@@ -60,7 +62,7 @@ export function RemovePaymentMethod({
       data.set("reason", reason);
       if (reasonText.trim()) data.set("reason_text", reasonText.trim());
     }
-    const res = await portalRemoveAction(null, data);
+    const res = await portalRemoveAction(session, null, data);
     if (!res.ok) return void toast.error(res.message ?? "We could not delete the payment method.");
     toast.success(res.message ?? "Payment method deleted.");
     // The action revalidates the route; refresh so the list re-renders without it.

@@ -53,6 +53,7 @@ import { emailPortalLink, portalEntryUrl } from "./portal-link";
 import { isPayableOfflineInvoice } from "./payable";
 import { invoiceOutstanding } from "@/modules/invoicing/service";
 import { createLogger } from "@/platform/logger";
+import { resolveStorefrontConfig } from "@/modules/checkout/storefront-config";
 
 const log = createLogger("emails.adhoc");
 
@@ -78,6 +79,8 @@ export interface AdhocEmailInput {
   to?: string | null;
   /** The operator's covering message, rendered as `{{note}}`. Optional. */
   note?: string | null;
+  /** How long the button's link works, in days (1–14). Default: the business setting. */
+  linkValidDays?: number | null;
 }
 
 export interface AdhocEmailResult {
@@ -195,9 +198,11 @@ async function composeAdhocEmail(
   // ── Resolve the record, the recipient and every merge variable, in one snapshot ──
   // For the zero-value attachment rule, read once while the invoice is loaded.
   let invoiceTotalMinor: bigint | null = null;
+  let emailLinkDays = null as number | null;
   const loaded = await withTenant(organizationId, async (tx) => {
     const [biz] = await tx.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
     if (!biz) throw new AdhocEmailError("Business not found");
+    emailLinkDays = resolveStorefrontConfig(biz).portalEmailLinkDays;
     const tz = biz.timezone || "UTC";
 
     const vars: RenderVars = {
@@ -430,6 +435,9 @@ async function composeAdhocEmail(
       businessId,
       subscription: restartSub,
       price: input.restartPrice === "keep" ? "keep" : "current",
+      ...((input.linkValidDays ?? emailLinkDays) != null
+        ? { ttlMs: (input.linkValidDays ?? emailLinkDays)! * 86_400_000 }
+        : {}),
     });
     blocks.action.url = session.url;
   } else if (opts.mintLink && blocks.action && !merchantUrl) {
@@ -439,6 +447,7 @@ async function composeAdhocEmail(
         tx,
         { organizationId, businessId, customerId: customerRowId },
         { kind: blocks.action!.kind, invoiceId: input.invoiceId ?? null },
+        input.linkValidDays ? input.linkValidDays * 86_400_000 : undefined,
       ),
     );
     if (link) blocks.action.url = link;

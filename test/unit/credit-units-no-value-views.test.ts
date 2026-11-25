@@ -4,6 +4,7 @@ import {
   hasMoneyValue,
   unitCount,
   unitInfo,
+  unitExhaustedText,
   unitOptionLabel,
   type CreditUnit,
 } from "../../dashboard/lib/credits";
@@ -201,5 +202,54 @@ describe("portal credit history amount", () => {
     expect(
       historyAmount({ ...base, face_minor: 900, units: 150, unit: "token", unit_rated: true }),
     ).toBe("$9.00");
+  });
+});
+
+describe("when credit with no money value is used up (#445)", () => {
+  const exp = info("export"); // decimals 1: 50 steps = 5 exports
+  const o = (p: Partial<Parameters<typeof unitExhaustedText>[0]>) => ({
+    policy: "bill" as const,
+    source: "business_blocking_off",
+    billed: "none" as const,
+    overdraft_units: 0,
+    ...p,
+  });
+
+  it("states refuse, not bill, when the unit has no money price", () => {
+    expect(unitExhaustedText(o({}), exp)).toBe("Refuse usage. This unit has no overage price.");
+  });
+
+  it("states refuse for a customer with no subscription", () => {
+    expect(unitExhaustedText(o({ policy: "block", source: "no_subscription" }), exp)).toBe(
+      "Refuse usage. The customer has no subscription.",
+    );
+  });
+
+  it("states the overdraft floor in the unit", () => {
+    expect(
+      unitExhaustedText(o({ policy: "block", source: "grant", overdraft_units: 50 }), exp),
+    ).toBe("Use up to 5 exports below zero, then refuse usage. A credit grant sets this.");
+  });
+
+  it("states bill when a money price bills every meter, and a split when only some", () => {
+    expect(unitExhaustedText(o({ billed: "all" }), exp)).toBe(
+      "Bill usage. Blocking is off for the business.",
+    );
+    expect(unitExhaustedText(o({ billed: "some" }), exp)).toBe(
+      "Bill usage on meters with a usage price. On other meters: refuse usage.",
+    );
+  });
+
+  it("carries the outcome onto the unit rows of the balance card", () => {
+    const v = balanceView(
+      {
+        currency: "USD",
+        available_minor: 0,
+        grants_minor: 0,
+        available_units: [{ unit: "export", units: 40, on_exhausted: o({}) }],
+      },
+      info,
+    );
+    expect(v.unrated[0]?.onExhausted?.billed).toBe("none");
   });
 });

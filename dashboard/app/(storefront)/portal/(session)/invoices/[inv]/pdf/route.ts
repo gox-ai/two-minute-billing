@@ -1,5 +1,5 @@
 import { portalInvoicePdfResponse } from "@/lib/portal-api";
-import { readStorefrontToken } from "@/lib/storefront-session";
+import { portalAuthFor } from "@/lib/portal-entry";
 
 /**
  * Server-side PDF passthrough (#10c). The buyer's browser hits this route; we
@@ -15,9 +15,10 @@ import { readStorefrontToken } from "@/lib/storefront-session";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ inv: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ inv: string }> }) {
   const { inv } = await params;
-  const token = await readStorefrontToken("portal");
+  // `?s=`: the session of the page the link was on (see `lib/storefront-session.ts`).
+  const token = await portalAuthFor(new URL(req.url).searchParams.get("s") ?? "");
   if (!token) return new Response("Invoice not available", { status: 401 });
   const upstream = await portalInvoicePdfResponse(token, inv);
   if (!upstream.ok || !upstream.body) {

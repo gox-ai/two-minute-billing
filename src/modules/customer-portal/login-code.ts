@@ -157,7 +157,7 @@ export async function sendQueuedSignInCode(job: SignInCodeJob): Promise<"sent" |
 }
 
 export type PortalLoginResult =
-  | { kind: "session"; token: string; expiresAt: Date }
+  | { kind: "session"; token: string; expiresAt: Date; sessionPublicId: string }
   | { kind: "choose"; customers: Array<{ id: string; name: string }> };
 
 /**
@@ -243,5 +243,10 @@ export async function verifyPortalLoginCode(input: {
   });
   const session = await exchangePortalAccessToken(ticket.accessToken, input.ip ?? null);
   if (!session) throw new PortalLoginError(BAD_CODE);
-  return { kind: "session", token: session.token, expiresAt: session.expiresAt };
+  return {
+    kind: "session",
+    token: session.token,
+    expiresAt: session.expiresAt,
+    sessionPublicId: session.sessionPublicId,
+  };
 }

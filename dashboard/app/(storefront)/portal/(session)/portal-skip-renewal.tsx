@@ -15,6 +15,7 @@ import { Alert } from "@/components/ui/alert";
 import { RadioField } from "@/components/ui/radio-group";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalSkipRenewalAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { buyerChangeError, skipChoices } from "./portal-change-view";
 
 export interface PortalRenewalRow {
@@ -41,6 +42,7 @@ export function PortalSkipRenewal({
   limitPerYear: number;
   renewals: PortalRenewalRow[];
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const skipped = renewals.filter((r) => r.skipped);
   const first = renewals.find((r) => r.changeable && !r.skipped)?.renewal_at ?? "";
@@ -65,7 +67,7 @@ export function PortalSkipRenewal({
     if (!selected || busy) return;
     setError(null);
     setBusy(true);
-    const res = await portalSkipRenewalAction(subscription, selected, false);
+    const res = await portalSkipRenewalAction(session, subscription, selected, false);
     setBusy(false);
     // The server's own words: the limit, the 48-hour cut-off.
     if (!res.ok)
@@ -82,7 +84,7 @@ export function PortalSkipRenewal({
 
   async function undo(row: PortalRenewalRow) {
     setUndoError(null);
-    const res = await portalSkipRenewalAction(subscription, row.renewal_at, true);
+    const res = await portalSkipRenewalAction(session, subscription, row.renewal_at, true);
     if (!res.ok)
       return setUndoError(
         buyerChangeError(res.error, "We could not undo the skip.", "Contact us to undo it."),

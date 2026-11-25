@@ -37,6 +37,33 @@ describe("thrown invalid_request_error → the rules decide", () => {
     expect("payment_intent_mandate_invalid" in STRIPE_CODE_TABLE).toBe(true);
   });
 
+  it("a table-classified code beats the invalid_request_error catch-all", () => {
+    // Real shape of a failed 3DS on `setup_intent.setup_failed`: Stripe files it under
+    // `invalid_request_error`, which the catch-all used to book as our own request fault.
+    const n = normalizeStripeDecline({
+      code: "setup_intent_authentication_failure",
+      category: "invalid_request_error",
+      message:
+        "The latest attempt to set up the payment method has failed because authentication failed.",
+    });
+    expect(n.code).toBe("authentication_required");
+    expect(n.ruleId).toBeUndefined();
+
+    const mandate = normalizeStripeDecline({
+      code: "payment_intent_mandate_invalid",
+      category: "invalid_request_error",
+    });
+    expect(mandate.code).toBe("mandate_expired");
+  });
+
+  it("an unrecognised invalid_request_error is still ours", () => {
+    const n = normalizeStripeDecline({
+      code: "some_code_we_never_saw",
+      category: "invalid_request_error",
+    });
+    expect(n.code).toBe("gateway_request_rejected");
+  });
+
   it("does not resurrect the phantom code that was invented for it", () => {
     // `payment_intent_mandate_inactive` had a rule until 2026-09-10 and exists nowhere in
     // the Stripe SDK. It claimed `gateway_request_rejected` — the opposite remedy to the

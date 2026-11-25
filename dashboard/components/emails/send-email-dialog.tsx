@@ -61,6 +61,10 @@ export interface SendEmailDialogProps {
   recordLabel?: string;
   /** Server action that performs the send. Receives the chosen type, recipient and note. */
   onSend: (input: { type: AdhocEmailType; to: string; note: string }) => Promise<SendEmailResult>;
+  /** Extra fields under the note, owned by the caller (it reads their values in `onSend`). */
+  extra?: React.ReactNode;
+  /** False while `extra` holds a value that cannot be sent. */
+  extraValid?: boolean;
   /** Renders a trigger and manages its own open state. Omit and pass `open`/`onOpenChange` to drive it from a menu. */
   trigger?: React.ReactNode;
   open?: boolean;
@@ -73,6 +77,8 @@ export function SendEmailDialog({
   defaultTo,
   recordLabel,
   onSend,
+  extra,
+  extraValid = true,
   trigger,
   open: controlledOpen,
   onOpenChange,
@@ -118,7 +124,7 @@ export function SendEmailDialog({
     }
   }
 
-  const canSend = !!to.trim() && !pending;
+  const canSend = !!to.trim() && extraValid && !pending;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -198,6 +204,8 @@ export function SendEmailDialog({
                   placeholder="Add a covering message…"
                 />
               </Field>
+
+              {extra}
             </div>
 
             <DialogFooter>

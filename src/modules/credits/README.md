@@ -262,7 +262,10 @@ edit 0.5". Its usage is paid in credits, with no money rating step and no invoic
   the floor.
 - **Balance shape.** `available_units[]` of the access check (the balance API) carries
   `held_units` and `unsettled_units` for a unit with no rate; the portal `held_amount` and
-  `unsettled_amount`. Available stays what the gate allows now.
+  `unsettled_amount`. Available stays what the gate allows now. Each such entry also carries
+  `on_exhausted` (`unitShortOutcome`: the gate's rules with no meter): `policy`, `source`,
+  `billed` (`all` / `some` / `none` of the meters with a cost in the unit) and
+  `overdraft_units`. The top-level `on_exhausted` is the money policy only.
 - **Create.** `quantity` or `units` on a meter with a credit cost (`amount_minor` is 400).
   Under the customer lock: the row is made exact, then `in_flight_limit` (`block` only; the
   share and `in_flight_applies` on units), then `insufficient_credit`, then `held_steps +=
@@ -611,3 +614,8 @@ Gotchas:
 - **2026-11-16** — Team alerts removed: a grant above the alert amount queues the "Large free
   credit grant" notification (`modules/notifications`); `verify:grant-limits` checks the queue row
   and the bell row.
+- **2026-11-24** — The balance API states, per unit with no rate, what happens to usage past
+  its credits (`available_units[].on_exhausted`, `unitShortOutcome`, sharing `unitTerms` with
+  `shortTerms`). The customer Credits page showed the money policy for every unit, so it read
+  "Bill usage" for a unit the gate refuses (#445). `verify:credit-overage` checks it agrees
+  with the gate.

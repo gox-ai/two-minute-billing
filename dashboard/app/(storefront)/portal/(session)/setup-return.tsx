@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { reportBuyerError } from "@/lib/buyer-error-report";
 import { Loader2 } from "lucide-react";
 import { portalCompleteVaultAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
+import { withPortalSession } from "@/lib/portal-path";
 import { AddMethodResult } from "./add-method-result";
 import type { AddMethodOutcome } from "./portal-state";
 import type { PortalMe } from "@/lib/portal-api";
@@ -28,6 +30,7 @@ import {
  * sessionStorage isn't available.
  */
 export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [outcome, setOutcome] = React.useState<AddMethodOutcome | null>(null);
@@ -37,7 +40,7 @@ export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
 
   React.useEffect(() => {
     if (ran.current) return;
-    const ret = consumeSetupReturn("/portal");
+    const ret = consumeSetupReturn(withPortalSession("/portal", session));
     if (!ret) return;
     ran.current = true;
 
@@ -65,6 +68,7 @@ export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
       // intent's atomic claim is what makes whichever arrives second a no-op instead of
       // a second payment method. The approved token stays as the fallback.
       const res = await portalCompleteVaultAction(
+        session,
         {
           ...(pending?.paymentIntent ? { paymentIntent: pending.paymentIntent } : {}),
           providerToken: setupToken,
@@ -86,7 +90,7 @@ export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
       // The action revalidates this path, and that re-render restores the URL the
       // router still thinks we're on (query and all). Strip it through the router
       // so a later reload can't replay a spent setup token.
-      router.replace("/portal", { scroll: false });
+      router.replace(withPortalSession("/portal", session), { scroll: false });
       /**
        * REFRESH EITHER WAY, and that is the fix for "it only worked after I refreshed".
        *

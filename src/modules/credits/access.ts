@@ -57,6 +57,8 @@ export interface AccessResult {
     /** A unit with no money rate, in the unit's smallest step. */
     held_units?: number;
     unsettled_units?: number;
+    /** A unit with no money rate: what happens to usage past its credits. */
+    on_exhausted?: UnitOnExhausted;
   }>;
   balance: {
     grants_minor: number;
@@ -88,6 +90,13 @@ export interface AccessResult {
     remaining: string;
   } | null;
   as_of: string;
+}
+
+/** `billed`: usage past the credits is billed in money on every meter of the unit, some, or none. */
+export interface UnitOnExhausted extends EffectivePolicy {
+  billed: "all" | "some" | "none";
+  /** Where not billed: units below zero the balance may reach before usage is refused (smallest step). */
+  overdraft_units: number;
 }
 
 function planCreditsRenewAt(bal: LiveBalance, now: Date): string | null {
@@ -459,6 +468,27 @@ export async function checkAccess(input: {
       else if (policy.policy === "block" && (input.estimateMinor ?? 1n) > bal.availableMinor)
         code = "insufficient_credit";
 
+      // A unit with no rate: the gate's own outcome, per unit.
+      const unitIds = new Map<string, string>();
+      for (const g of snap.grants) if (g.unitKey && g.unitId) unitIds.set(g.unitKey, g.unitId);
+      const unitOutcomes = new Map<string, UnitOnExhausted>();
+      for (const u of bal.availableUnits) {
+        const unitId = unitIds.get(u.unit);
+        if (u.heldUnits === undefined || !unitId) continue;
+        const { unitShortOutcome } = await import("./usage-gate");
+        const o = await unitShortOutcome(tx, {
+          businessId: input.businessId,
+          customerId,
+          unitId,
+          now,
+        });
+        unitOutcomes.set(u.unit, {
+          ...o.policy,
+          billed: o.billed,
+          overdraft_units: Number(o.floor),
+        });
+      }
+
       return {
         allowed: code === "ok",
         code,
@@ -467,7 +497,10 @@ export async function checkAccess(input: {
         meter: meter?.key ?? null,
         currency,
         available_minor: Number(bal.availableMinor),
-        available_units: bal.availableUnits.map(serializeAvailableUnits),
+        available_units: bal.availableUnits.map((u) => {
+          const o = unitOutcomes.get(u.unit);
+          return { ...serializeAvailableUnits(u), ...(o ? { on_exhausted: o } : {}) };
+        }),
         balance: {
           grants_minor: Number(bal.grantsMinor),
           unbilled_usage_minor: Number(bal.unbilledUsageMinor),

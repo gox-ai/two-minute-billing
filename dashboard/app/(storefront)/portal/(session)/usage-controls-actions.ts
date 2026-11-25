@@ -1,5 +1,7 @@
 "use server";
 
+import { portalAuthFor } from "@/lib/portal-entry";
+
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
@@ -7,7 +9,6 @@ import {
   portalDeleteSpendLimit,
   portalUpdateSpendLimit,
 } from "@/lib/portal-api";
-import { readStorefrontToken } from "@/lib/storefront-session";
 import { actionError, actionOk, parseForm, type ActionResult } from "@/lib/action-result";
 import { toMinor } from "@/lib/money";
 
@@ -35,10 +36,12 @@ const createSchema = z
 
 /** The buyer adds its own hard limit; the API refuses one above the provider's. */
 export async function portalCreateLimitAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError(SESSION_ENDED);
   const parsed = parseForm(createSchema, fd);
   if (parsed.error) return parsed.error;
@@ -67,10 +70,12 @@ const editSchema = z.object({
 });
 
 export async function portalUpdateLimitAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError(SESSION_ENDED);
   const parsed = parseForm(editSchema, fd);
   if (parsed.error) return parsed.error;
@@ -87,10 +92,12 @@ export async function portalUpdateLimitAction(
 const deleteSchema = z.object({ id: z.string().min(1, "The limit is missing. Reload the page.") });
 
 export async function portalDeleteLimitAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError(SESSION_ENDED);
   const parsed = parseForm(deleteSchema, fd);
   if (parsed.error) return parsed.error;

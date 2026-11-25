@@ -48,6 +48,11 @@ or a log event (see `deploy/README.md` § What to alert on).
   job counters on the heartbeat row stay 0.
 
 ## Changelog
+- **2026-11-25** — The leak check knows the checkout's second-completion refusal
+  (`PAYMENT_ALREADY_IN_PROGRESS`) and its "not yet approved" texts (`NOT_YET_APPROVED_TEXT`): one
+  copy each in `providers/payer-wording.ts`, read by the engine, the storefront and the check. Both
+  were reported as leaks in production. `refusalMessage` no longer adds a second next step after
+  "Then refresh the page."
 - **2026-11-17** — `buyer-client-errors.ts` + `buyer_client_errors` (0539, RLS, no app-role grant) and
   `buyer-error-leak.ts`: the browser reports each payment error a buyer reads
   (`POST /checkout/v1/client_errors`, `/portal/v1/client_errors`, `api/buyer-client-error-routes.ts`,

@@ -43,6 +43,7 @@ import { listPaymentRequests } from "@/lib/api/payment-requests";
 import { ReceiptsCard } from "@/components/receipts/receipts-card";
 import { PaymentRequestsCard } from "@/components/payment-requests/payment-requests-card";
 import { RequestPaymentRailButton } from "@/components/payment-requests/request-payment-dialog";
+import { emailLinkDays } from "@/components/form/link-days-field";
 import { listEmails } from "@/lib/api/emails";
 import { listCustomFieldDefinitions } from "@/lib/api/custom-fields";
 import { getCountries } from "@/lib/api/geo";
@@ -1049,6 +1050,7 @@ export default async function CustomerDetail({
                     invoices={invoices.data}
                     pms={pms.data}
                     customerEmail={customer.email ?? null}
+                    linkDays={emailLinkDays(business)}
                   />
                   {/* Add charge picks a catalog charge; Create quick charge takes an ad-hoc
                       amount. Two different flows. */}
@@ -1125,6 +1127,7 @@ export default async function CustomerDetail({
               biz={biz}
               cus={cus}
               tz={tz}
+              linkDays={emailLinkDays(business)}
               newMethodGateway={newMethodGatewayRow}
             />
           </Row>

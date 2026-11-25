@@ -1830,6 +1830,8 @@ export async function sendPaymentRequestEmail(input: {
   paymentRequestPublicId: string;
   to?: string | null;
   note?: string | null;
+  /** How long the email's link works, in days (1–14). Default: the business setting. */
+  linkValidDays?: number | null;
 }) {
   const view = await getPaymentRequest(
     input.organizationId,
@@ -1852,6 +1854,7 @@ export async function sendPaymentRequestEmail(input: {
     paymentRequestId: input.paymentRequestPublicId,
     to: input.to ?? view.request.email ?? null,
     note: input.note ?? null,
+    linkValidDays: input.linkValidDays ?? null,
   });
 }
 

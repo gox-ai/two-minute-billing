@@ -10,6 +10,7 @@ export const BLOG_CATEGORIES = [
   { label: "Revenue metrics", slug: "revenue-metrics", tone: "growth" },
   { label: "Engineering", slug: "engineering", tone: "neutral" },
   { label: "Product news", slug: "product-news", tone: "neutral" },
+  { label: "Switching platforms", slug: "switching-platforms", tone: "billing" },
 ] as const;
 
 export type BlogCategory = (typeof BLOG_CATEGORIES)[number]["label"];

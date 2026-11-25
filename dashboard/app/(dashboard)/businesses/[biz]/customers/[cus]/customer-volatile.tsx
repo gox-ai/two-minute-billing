@@ -574,11 +574,14 @@ export function CustomerPaymentMethodsCard({
   biz,
   cus,
   tz,
+  linkDays,
   newMethodGateway,
 }: {
   biz: string;
   cus: string;
   tz: string | null;
+  /** The business's email link lifetime, preset in the portal link dialog. */
+  linkDays: number;
   /** Where the customer's next new payment method goes (a form), under the list. */
   newMethodGateway?: React.ReactNode;
 }) {
@@ -594,7 +597,12 @@ export function CustomerPaymentMethodsCard({
       title="Payment methods"
       actions={
         <>
-          <SecretLinkButton variant="link" mint={() => createPortalLinkAction(biz, cus)}>
+          <SecretLinkButton
+            variant="link"
+            linkDays={linkDays}
+            title="Create a portal link"
+            mint={(days) => createPortalLinkAction(biz, cus, days)}
+          >
             Portal link
           </SecretLinkButton>
           <RequestUpdateButton biz={biz} customer={cus} email={customer.email} variant="link" />

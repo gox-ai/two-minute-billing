@@ -28,6 +28,7 @@ import {
   portalSubscriptionLifecycleAction,
   portalTakeRetentionOfferAction,
 } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { pauseCopy } from "./portal-change-view";
 
 type Actions = NonNullable<PortalSubscription["actions"]>;
@@ -72,6 +73,7 @@ export function PortalKeepSubscription({
   /** A saved payment method we can charge. Without one, the dialog cannot promise a charge. */
   canCharge: boolean;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -103,7 +105,11 @@ export function PortalKeepSubscription({
           confirmLabel="Keep subscription"
           cancelLabel="Go back"
           onConfirm={async () => {
-            const res = await portalSubscriptionLifecycleAction(subscription, "reactivate");
+            const res = await portalSubscriptionLifecycleAction(
+              session,
+              subscription,
+              "reactivate",
+            );
             if (!res.ok) setError(res.error ?? null);
             else {
               toast.success("Subscription kept.");
@@ -135,6 +141,7 @@ export function PortalLifecycle({
   /** The paid period ended during the pause, so a resume bills a new one. */
   resumeStartsNewPeriod: boolean;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [confirming, setConfirming] = React.useState<Exclude<
     PortalLifecycleAction,
@@ -153,7 +160,7 @@ export function PortalLifecycle({
 
   async function run(action: PortalLifecycleAction, reasonCode?: string) {
     setError(null);
-    const res = await portalSubscriptionLifecycleAction(subscription, action, reasonCode);
+    const res = await portalSubscriptionLifecycleAction(session, subscription, action, reasonCode);
     if (!res.ok) {
       setError(res.error ?? null);
       return false;
@@ -272,6 +279,7 @@ function CancelFlowDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const session = usePortalSession();
   const [flow, setFlow] = React.useState<PortalCancelFlow | null>(null);
   const [step, setStep] = React.useState<Step | null>(null);
   const [reason, setReason] = React.useState("");
@@ -282,7 +290,7 @@ function CancelFlowDialog({
   const [sawOffers, setSawOffers] = React.useState(false);
 
   React.useEffect(() => {
-    void portalCancelFlowAction(subscription).then((res) => {
+    void portalCancelFlowAction(session, subscription).then((res) => {
       if (!res.ok || !res.data) {
         setError(res.error ?? "We could not load the cancel options.");
         setStep("confirm");
@@ -331,6 +339,7 @@ function CancelFlowDialog({
     // Opened inside the click, so a popup blocker allows it.
     if (offer.offer === "contact") window.open(offer.url, "_blank", "noopener");
     const res = await portalTakeRetentionOfferAction(
+      session,
       subscription,
       offer.offer,
       offer.offer === "pause" && offer.customer_chooses && months ? Number(months) : undefined,
@@ -350,6 +359,7 @@ function CancelFlowDialog({
     setBusy(true);
     setError(null);
     const res = await portalSubscriptionLifecycleAction(
+      session,
       subscription,
       "cancel",
       reason || undefined,

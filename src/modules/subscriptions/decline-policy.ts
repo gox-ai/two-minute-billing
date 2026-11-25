@@ -25,6 +25,7 @@
  *   mandate_cycle_limit_exceeded → park       the CYCLE's debits are spent — only TIME recovers it
  *   mandate_expired             → park        the mandate lapsed — only a new one recovers it
  *   mandate_spent               → park        a used one-shot mandate — only a new one recovers it
+ *   mandate_currency_mismatch   → park        the mandate takes one currency — a method for this one
  *   gateway_limit_exceeded      → park        a GATEWAY/ACCOUNT limit — a human must raise it
  *   recurring_not_enabled       → park        MERCHANT config — a human must fix it
  *   gateway_request_rejected    → retry       OUR request was refused; the ops alert
@@ -100,6 +101,9 @@ export const PARK = new Set<string>([
   // for the same reason `mandate_ceiling_exceeded` does rather than burning a schedule
   // on a debit our own pre-flight refuses every time.
   "mandate_spent",
+  // The mandate debits only in its own currency (Stripe's refusal, or our pre-check). A
+  // retry in the same currency cannot work; a payment method for this currency does.
+  "mandate_currency_mismatch",
   // No mandate on file at all (`mandateMissingRefusal`, invoicing/collection.ts).
   // Recoverable only by the CUSTOMER authorising — there is nothing for a retry to
   // present — so it parks for exactly the reason `mandate_expired` does.

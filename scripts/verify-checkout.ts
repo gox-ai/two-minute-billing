@@ -2594,6 +2594,41 @@ ok(
     (await call("/checkout/v1/session", zOrg.secret)).statusCode === 401,
   );
 
+  // ── Two tabs, one cookie: a token for another session is refused ──────────
+  // The storefront names the session its page shows. Without this check, an older tab
+  // completed the newer tab's session and the buyer paid twice.
+  {
+    const other = await mintLink({ price: zPrice.publicId, quantity: 1 });
+    const named = (session: string) =>
+      app.inject({
+        method: "GET",
+        url: "/checkout/v1/session",
+        headers: { authorization: `Bearer ${isoLink.token}`, "x-checkout-session": session },
+      });
+    ok(
+      "two tabs: the token's own session in X-Checkout-Session is accepted (200)",
+      (await named(isoLink.id)).statusCode === 200,
+    );
+    const wrong = await named(other.id);
+    ok(
+      "two tabs: another session in X-Checkout-Session is refused (409, our wording)",
+      wrong.statusCode === 409 &&
+        body(wrong)?.error?.code === "checkout_session_mismatch" &&
+        /^We could not continue/.test(body(wrong)?.error?.message ?? ""),
+    );
+    const done = await app.inject({
+      method: "POST",
+      url: "/checkout/v1/complete",
+      headers: {
+        authorization: `Bearer ${isoLink.token}`,
+        "x-checkout-session": other.id,
+        "idempotency-key": crypto.randomUUID(),
+      },
+      payload: {},
+    });
+    ok("two tabs: complete is refused before it runs (409)", done.statusCode === 409);
+  }
+
   // ── Mint prefill: details-step defaults, replaced by the buyer's own submit ───
   {
     const plainView = body(await call("/checkout/v1/session", isoLink.token));

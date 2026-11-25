@@ -85,6 +85,14 @@ export interface Comparison {
   /** The closing recommendation, one or two sentences. */
   verdict: string;
   faq: FaqItem[];
+  /** A product event the reader must know first (a shutdown, a takeover). Shown under the hero. */
+  notice?: { title: string; body: string };
+  /** Heading of the "better fit" list when the real alternative is another product. */
+  themFitTitle?: string;
+  /** Set when this page was re-checked on its own, after COMPARE_CHECKED. */
+  checked?: { iso: string; label: string };
+  /** Set when this page's copy changed on its own, after COMPARE_UPDATED. */
+  updated?: { iso: string; label: string };
   /** The trademark note, one sentence. */
   trademark: string;
 }
@@ -119,6 +127,11 @@ const SRC = {
   lsPricing: "https://www.lemonsqueezy.com/pricing",
   lsFees: "https://docs.lemonsqueezy.com/help/getting-started/fees",
   lsUpdate: "https://www.lemonsqueezy.com/blog/2026-update",
+  lsGoodbye: "https://www.lemonsqueezy.com/blog/saying-goodbye-to-lemon-squeezy",
+  lsMigration: "https://docs.lemonsqueezy.com/migration",
+  lsMigrationFaq: "https://docs.lemonsqueezy.com/migration/faq",
+  lsMigrationCompare: "https://docs.lemonsqueezy.com/migration/comparison",
+  smpEligibility: "https://docs.stripe.com/payments/managed-payments/eligibility",
 };
 
 // Our side of every matrix, said once. Checked against the code: COMPARISON_SOURCES.md.
@@ -949,32 +962,45 @@ export const COMPARISONS: Comparison[] = [
     slug: "lemon-squeezy-alternative",
     name: "Lemon Squeezy",
     keyword: "lemon squeezy alternative",
-    title: "Lemon Squeezy alternative: own gateway",
-    h1: "A Lemon Squeezy alternative on your own payment gateway",
+    title: "Lemon Squeezy alternative: it's closing",
+    h1: "Lemon Squeezy is closing. Move to your own payment gateway.",
     eyebrow: "Lemon Squeezy alternative",
     description:
-      "Lemon Squeezy charges 5% + 50¢ plus surcharges per sale. Two Minute Billing keeps you the seller on your own gateway, for a flat price and 0% of revenue.",
+      "Lemon Squeezy stops taking payments on March 31, 2027. Compare its suggested move with billing on your own gateway, for a flat price and 0% of revenue.",
     intro:
-      "Lemon Squeezy is a merchant of record. It charges 5% + 50¢ per transaction, plus surcharges for subscriptions, PayPal and sales outside the US. Two Minute Billing keeps you the seller on your own payment gateway, for a flat monthly price with 0% of revenue. Lemon Squeezy is the better fit if you want it to take on sales tax and VAT.",
-    summary: "Your own gateway and a flat price, instead of a fee on every sale.",
+      "Lemon Squeezy closed new sign-ups on November 16, 2026 and stops processing payments, subscription renewals included, on March 31, 2027. It suggests Stripe Managed Payments, another merchant of record. The other path is to become the seller on your own payment gateway: Two Minute Billing runs your subscriptions there for a flat monthly price, with 0% of revenue to us.",
+    summary: "Lemon Squeezy is closing. Your own gateway and a flat price instead.",
     difference:
-      "Lemon Squeezy is the merchant of record and charges 5% + 50¢ plus surcharges per sale. With us you are the seller, on your own gateway.",
+      "Lemon Squeezy stops payments on March 31, 2027. With us you are the seller on your own gateway, for a flat price.",
     og: {
       headline: "Lemon Squeezy alternative",
-      title: "Your gateway. Your customers.",
-      description: "A flat monthly price. No fee per sale to us.",
+      title: "Lemon Squeezy is closing.",
+      description: "Move to your own payment gateway before March 31, 2027.",
     },
+    notice: {
+      title: "Lemon Squeezy stops processing payments on March 31, 2027",
+      body: "It closed new sign-ups on November 16, 2026. Renewals stop on the same date, and Lemon Squeezy says it cannot extend it. It suggests starting a move by mid-January 2027.",
+    },
+    themFitTitle: "When Stripe Managed Payments is the better fit",
+    checked: { iso: "2026-11-24", label: "November 24, 2026" },
+    updated: { iso: "2026-11-24", label: "November 24, 2026" },
     glance: [
+      { label: "Status", us: "Open to new businesses", them: "Stops payments March 31, 2027" },
       { label: "Price", us: "Flat monthly plan", them: "5% + 50¢, plus surcharges" },
       { label: "Seller", us: "You", them: "Lemon Squeezy" },
-      { label: "Self-hosting", us: "Free, every feature", them: "Hosted service" },
     ],
     rows: [
       {
+        label: "Status",
+        us: "Open to new businesses, on our Cloud or self-hosted.",
+        them: "Closed to new stores since November 16, 2026. Stops processing payments, subscription renewals included, on March 31, 2027.",
+        sources: [SRC.lsGoodbye, SRC.lsMigration],
+      },
+      {
         label: "Price",
         us: US.price,
-        them: "5% + 50¢ per transaction. No monthly fee for its ecommerce features.",
-        sources: [SRC.lsPricing],
+        them: "5% + 50¢ per transaction until it closes. Its suggested move, Stripe Managed Payments, is 3.5% per transaction plus Stripe's processing fees, or 1.5% for merchants who move from Lemon Squeezy, until December 1, 2027.",
+        sources: [SRC.lsPricing, SRC.lsMigration, SRC.lsMigrationFaq],
       },
       {
         label: "Fee on your revenue",
@@ -983,16 +1009,22 @@ export const COMPARISONS: Comparison[] = [
         sources: [SRC.lsFees],
       },
       {
-        label: "Other costs",
-        us: US.other,
-        them: "5% on payments recovered by abandoned-cart emails. 1% per payout to a bank account outside the US.",
-        sources: [SRC.lsFees],
-      },
-      {
         label: "Who is the seller",
         us: US.seller,
-        them: "Lemon Squeezy, as merchant of record.",
-        sources: [SRC.lsPricing],
+        them: "Lemon Squeezy, as merchant of record. Stripe Managed Payments is also a merchant of record.",
+        sources: [SRC.lsPricing, SRC.lsMigration],
+      },
+      {
+        label: "Where your business can be",
+        us: "Wherever your own payment gateway accepts your business. In India, through Razorpay, Cashfree or PayU.",
+        them: "Stripe Managed Payments takes businesses in a list of supported locations: the US, Canada, much of Europe, Australia, Hong Kong, Japan and Singapore. India is not on the list. Lemon Squeezy cannot move an account it does not support.",
+        sources: [SRC.smpEligibility, SRC.lsMigrationFaq],
+      },
+      {
+        label: "PayPal",
+        us: "PayPal is one of the 12 gateways, on your own PayPal account.",
+        them: "Lemon Squeezy takes PayPal until it closes. Stripe Managed Payments does not support PayPal, so PayPal subscriptions cannot move there.",
+        sources: [SRC.lsMigrationFaq],
       },
       {
         label: "Payment gateways",
@@ -1007,10 +1039,10 @@ export const COMPARISONS: Comparison[] = [
         sources: [SRC.lsPricing],
       },
       {
-        label: "India GST",
-        us: US.gst,
-        them: "As merchant of record, it takes on tax calculation and collection liability in all jurisdictions.",
-        sources: [SRC.lsPricing],
+        label: "License keys and file delivery",
+        us: "Not built. Connect your own license or download service.",
+        them: "Lemon Squeezy has them until it closes. Stripe Managed Payments does not offer license keys or file hosting.",
+        sources: [SRC.lsMigrationFaq],
       },
       {
         label: "Self-hosting and open source",
@@ -1026,7 +1058,10 @@ export const COMPARISONS: Comparison[] = [
       },
     ],
     costs: [
-      { text: "5% + 50¢ per transaction.", source: SRC.lsPricing },
+      {
+        text: "5% + 50¢ per transaction, until payments stop on March 31, 2027.",
+        source: SRC.lsPricing,
+      },
       { text: "Plus 0.5% on subscription payments.", source: SRC.lsFees },
       {
         text: "Plus 1.5% on transactions outside the US, and 1.5% on PayPal transactions.",
@@ -1037,32 +1072,56 @@ export const COMPARISONS: Comparison[] = [
         text: "Payouts are free to US bank accounts and 1% each to bank accounts outside the US.",
         source: SRC.lsFees,
       },
+      {
+        text: "After the move, Stripe Managed Payments: 3.5% per transaction plus Stripe's processing fees (1.5% for moved merchants until December 1, 2027).",
+        source: SRC.lsMigrationFaq,
+      },
     ],
     fit: {
       us: [
-        "You want to be the seller, on your own payment gateway account.",
-        "You want 0% of each sale to go to your billing tool.",
+        "Your business is not in a location Stripe Managed Payments supports, India included.",
+        "Your subscribers pay with PayPal.",
+        "You want to be the seller on your own gateway, with 0% of each sale going to your billing tool.",
         FIT_OPEN,
       ],
       them: [
-        "You want a merchant of record to take on tax calculation and collection.",
-        "You do not want a payment gateway account of your own.",
-        "You plan to follow its path to Stripe Managed Payments.",
+        "You want a merchant of record to take on sales tax and VAT for you.",
+        "Your business is in a supported location and you sell eligible digital products.",
+        "You want Lemon Squeezy's own tooling to move your card subscriptions, without customers entering their cards again.",
       ],
     },
-    cons: [CON_MOR_TAX, CON_MOR_GATEWAY],
+    cons: [
+      CON_MOR_TAX,
+      CON_MOR_GATEWAY,
+      "No license keys, file delivery or affiliate program. Connect your own tools for those.",
+    ],
     moving:
-      "We have no self-serve import from Lemon Squeezy. You open your own payment gateway account first, and your past orders stay in Lemon Squeezy. Talk to us before you plan a move.",
+      "Lemon Squeezy says subscriptions paid by card can move to another provider: ask through the migration form in its dashboard well before March 31, 2027, and check what your new gateway needs. PayPal subscriptions cannot move. We have no self-serve import from Lemon Squeezy: you open your own payment gateway account and set up your plans with us. Talk to us before you plan the move.",
     hub: {
-      price: "5% + 50¢, plus surcharges",
+      price: "5% + 50¢, plus surcharges; closing",
       fee: "Yes, 5% + 50¢ and more",
-      seller: "Lemon Squeezy",
+      seller: "Lemon Squeezy, until March 31, 2027",
       gateways: "Through Lemon Squeezy",
-      source: SRC.lsFees,
+      source: SRC.lsGoodbye,
     },
     verdict:
-      "Select Two Minute Billing to be the seller on your own gateway, for a flat price. Stay with Lemon Squeezy if you want a merchant of record to handle tax for you.",
+      "Lemon Squeezy is closing, so the choice is another merchant of record or your own gateway. Select Two Minute Billing to be the seller on your own gateway, for a flat price.",
     faq: [
+      {
+        label: "When does Lemon Squeezy shut down?",
+        content:
+          "Lemon Squeezy closed new store sign-ups on November 16, 2026. It stops processing payments, subscription renewals included, on March 31, 2027, and says it cannot extend that date. It suggests starting a move by mid-January 2027, and its migration tooling opens on December 2, 2026.",
+      },
+      {
+        label: "Can my subscribers keep their saved cards?",
+        content:
+          "Lemon Squeezy says card subscriptions can move to Stripe Managed Payments without customers entering their card again, except cards issued in India, which must be authorized again. Only subscriptions paid by card can move to another provider, through its migration form. PayPal subscriptions cannot move to Managed Payments.",
+      },
+      {
+        label: "Is Stripe Managed Payments available in India?",
+        content:
+          "Not for businesses based in India: India is not on Stripe's list of supported business locations for Managed Payments. With Two Minute Billing, a business in India bills on its own Razorpay, Cashfree or PayU account, with GST invoices by place of supply.",
+      },
       {
         label: "How is a merchant of record different from Two Minute Billing?",
         content:
@@ -1072,11 +1131,6 @@ export const COMPARISONS: Comparison[] = [
         label: "Who files my sales tax and VAT?",
         content:
           "You do, as the seller. We work out US sales tax, VAT and GST on every invoice line and report what you charged, so your filing starts from the right figures.",
-      },
-      {
-        label: "What is Lemon Squeezy's plan with Stripe?",
-        content:
-          "Stripe acquired Lemon Squeezy in 2024. In January 2026 Lemon Squeezy wrote that its goal is an easy way for its users to move to Stripe Managed Payments, Stripe's merchant of record product. The post gives no date.",
       },
     ],
     trademark:

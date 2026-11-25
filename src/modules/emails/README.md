@@ -372,6 +372,12 @@ Beyond the log (`GET /emails`, `GET /emails/:id`, `POST /emails/:id/resend`):
   path. It is what caught the unescaped-template-body hole.
 
 ## Changelog
+- **2026-11-24** — `payment_source_updated` with `mandate_missing: true` sends `mandate_expired`: a debit that found no mandate asks the customer to authorize again.
+- **2026-11-24** — `new_link`, the second SYSTEM email type: the fresh link a customer asked for
+  from an expired one (`new-link.ts`). Only to the customer's own address, through the business's
+  transport; respects suppression and test mode (team members only); the logged copy masks the
+  link. The button label follows the task (Pay now, Change payment method, Return to your order,
+  Reactivate subscription); `{{linkWindow}}` says how long it works.
 - **2026-11-17** — The branded CTA label is `emailButtonLabel(brand, buttonTextColor)` (`button-label.ts`),
   not fixed white: the business's `button_text_color` when set, else white, near-black or black, whichever
   reaches 4.5:1. Same rule as the hosted pages' `buttonLabel`; a unit test holds them equal.

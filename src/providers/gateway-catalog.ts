@@ -388,6 +388,10 @@ export const GATEWAYS: Record<ProviderKey, GatewayDefinition> = {
       // No webhook_secret: we register the endpoint and store the whsec_ Stripe mints.
     ],
     advertisedMethods: ["card", "us_bank_account", "sepa_debit", "bank_transfer"],
+    // The stored currency is the Mandate's own (`multi_use.currency`), and Stripe refuses a
+    // debit in another. A card with no mandate stores none, so it is never refused.
+    // Prod 2026-11-25: 62 cards store one (all INR), none with a live sub in another currency.
+    mandateCurrencyAuthoritative: ["card"],
     methodOptions: [
       { value: "card", label: "Cards" },
       {

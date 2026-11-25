@@ -111,6 +111,12 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
 - Changing to the price the plan is *already* on is a no-op success (a double-submit is harmless).
 
 ## Changelog
+- **2026-11-25** — `/checkout/v1/complete` answers 400 `no_chargeable_payment_method` with a buyer
+  next step when the engine finds no usable payment method (was a 500).
+- **2026-11-25** — `authenticateCheckout` refuses a token whose session differs from an
+  `X-Checkout-Session` header (409 `checkout_session_mismatch`). The storefront sends it on every
+  call and keeps a cookie per session, so two checkout tabs in one browser stop completing each
+  other's session (a buyer paid twice).
 - **2026-11-19** — Hosted checkout (dashboard): the gateway picker is "Pay with" and names what
   each gateway accepts, never the provider (same set = one row); a decline on a step that also
   charges leads "We could not take your payment."; the processing card no longer names the bank.

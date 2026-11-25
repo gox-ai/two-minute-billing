@@ -14,8 +14,9 @@
  * motion.
  *
  * The story buttons and the pause button sit above the board, outside MkIll's role="img", so
- * they stay focusable. Hover on the board, or keyboard focus on a button, holds the loop;
- * reduced motion starts paused on the AI pricing still.
+ * they stay focusable. Keyboard focus on a button holds the loop, and the pause button stops
+ * it; reduced motion starts paused on the AI pricing still. Hover does not hold it: a pointer
+ * resting on the board made the demo look frozen.
  *
  * The loop opens on the AI margin beat (credit paid, money in the bank), never on an empty
  * "Nothing yet" frame, and holds it a little longer before the subscription story.
@@ -133,11 +134,10 @@ let i = OPEN; // the frame to play from
 let stale = true; // the screen shows a still, not FRAMES[i]
 let timer: ReturnType<typeof setTimeout> | undefined;
 let visible = false;
-let hovered = false;
 let focused = false;
 let io: IntersectionObserver | undefined;
 
-const running = () => visible && !paused.value && !hovered && !focused;
+const running = () => visible && !paused.value && !focused;
 
 function show(k: number) {
   i = FRAMES[k]![1] === null ? 0 : k;
@@ -179,10 +179,6 @@ function pick(n: number) {
 
 function toggle() {
   paused.value = !paused.value;
-  schedule();
-}
-function onHover(on: boolean) {
-  hovered = on;
   schedule();
 }
 /** Hold for keyboard focus only: a mouse click on a story button must not freeze it. */
@@ -279,8 +275,6 @@ const fee = computed(() => {
       class="hx-hc"
       :class="cls"
       label="Three ways to bill, in turn. AI pricing: in MuseLane AI's app, Jonah generates text at $3.00 per 1M tokens and an image at $0.06 each; each generation lowers his credit balance, and an automatic top-up adds $50.00. Two Minute Billing prices each call at the model's list price plus 20%, checks credit before each call, and records the model cost: a 40% margin. A subscription: the customer subscribes at checkout, the portal shows a renewal invoice paid, then an upgrade with a prorated charge. A one-time order: two mugs paid at checkout. Beside them, Two Minute Billing asks the merchant's own gateway (Stripe, Adyen or PayPal) to charge, the payment is paid out to their bank, and our fee stays a flat monthly price."
-      @mouseenter="onHover(true)"
-      @mouseleave="onHover(false)"
     >
       <div class="hx-scene">
         <div class="hx-abs hx-win">

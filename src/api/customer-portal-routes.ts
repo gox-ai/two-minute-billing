@@ -69,6 +69,7 @@ import {
   exchangePortalAccessToken,
   peekPortalAccessToken,
   businessOfDeadPortalLink,
+  resumeSpentPortalLink,
   businessHasPricingPage,
   getPortalLinkNotice,
   logoutPortalSession,
@@ -623,6 +624,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     /** Phase 4b: open the portal on one task. `object` is its invoice or subscription id. */
     action: z.enum(PORTAL_ACTIONS).optional(),
     object: z.string().min(1).max(LIMITS.id).optional(),
+    /** `email` links only: this link's lifetime in days, overriding the business setting. */
+    link_valid_days: z.number().int().min(1).max(14).optional(),
   });
 
   const portalCancelBody = z.object({
@@ -674,6 +677,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       if (!parsedBody.success) return badRequest(reply, parsedBody.error);
       if (parsedBody.data.action && parsedBody.data.forward_url)
         return badRequest(reply, "Send action or forward_url, not both.");
+      if (parsedBody.data.link_valid_days && parsedBody.data.link_kind !== "email")
+        return badRequest(reply, 'link_valid_days needs link_kind "email".');
       let forwardUrl: string | null = parsedBody.data.forward_url ?? null;
       if (parsedBody.data.action) {
         try {
@@ -700,6 +705,9 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         ...(parsedBody.data.link_kind ? { kind: parsedBody.data.link_kind } : {}),
         redirectUrl: parsedBody.data.redirect_url ?? null,
         forwardUrl,
+        ...(parsedBody.data.link_valid_days
+          ? { accessTtlMs: parsedBody.data.link_valid_days * 86_400_000 }
+          : {}),
       });
       return reply.code(201).send({
         object: "portal_session",
@@ -877,6 +885,35 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     };
   });
 
+  // A spent link clicked again in the same browser: Bearer = the session cookie's token,
+  // body = the link's token. 200 only when the session was minted from that link.
+  app.post("/portal/v1/session/resume", async (req, reply) => {
+    reply.header("cache-control", "no-store");
+    const header = req.headers["authorization"];
+    const sessionToken =
+      typeof header === "string" && header.startsWith("Bearer ")
+        ? header.slice("Bearer ".length).trim()
+        : "";
+    const body = (req.body ?? {}) as { link?: unknown };
+    const accessToken = typeof body.link === "string" ? body.link : "";
+    if (
+      await refusedByRateLimit(req, reply, {
+        scope: "portal_exchange",
+        keys: [{ kind: "ip", value: req.ip, limit: config.RATE_LIMIT_AUTH_PER_IP }],
+        windowMs: AUTH_WINDOW_MS,
+        failClosed: true,
+      })
+    )
+      return;
+    const resumed =
+      sessionToken && accessToken ? await resumeSpentPortalLink(accessToken, sessionToken) : null;
+    if (!resumed)
+      return reply.code(401).send({
+        error: { type: "authentication_error", message: "This link is not valid or is expired" },
+      });
+    return { object: "portal_link_resume", forward_url: resumed.forwardUrl };
+  });
+
   app.post("/portal/v1/session", async (req, reply) => {
     const header = req.headers["authorization"];
     const accessToken =
@@ -1013,7 +1050,12 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         ip: req.ip,
       });
       return r.kind === "session"
-        ? { object: "portal_login", token: r.token, expires_at: r.expiresAt }
+        ? {
+            object: "portal_login",
+            id: r.sessionPublicId,
+            token: r.token,
+            expires_at: r.expiresAt,
+          }
         : { object: "portal_login_choice", customers: r.customers };
     } catch (e) {
       if (e instanceof PortalLoginError)
@@ -1195,6 +1237,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     const me = serializePortalMe(customer, business, await portalLocks(business));
     return {
       ...me,
+      // The storefront names this session in its URL so a second portal tab cannot take it.
+      session: ctx.sessionPublicId,
       business: { ...me.business, has_pricing_page: await businessHasPricingPage(business.id) },
       return_url: sessionRow?.redirectUrl ?? sf.portalReturnUrl ?? sf.defaultReturnUrl,
     };

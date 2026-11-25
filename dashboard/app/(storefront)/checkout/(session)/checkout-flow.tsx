@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { NO_SESSION } from "@/lib/checkout-strings";
 import { CouponBox, CouponRefusals } from "./coupon-box";
+import { CheckoutSessionContext, useCheckoutSession } from "./session-context";
 import { RollingNumber } from "@/components/ui/rolling-number";
 import { BusyLabel } from "../../storefront-motion";
 import { Input } from "@/components/ui/input";
@@ -78,7 +79,7 @@ import {
   refusalMessage,
 } from "../../payment-dialog";
 import { TruncatedText } from "../../truncated-text";
-import { contactBusiness } from "@/lib/gateway-errors";
+import { contactBusiness, NOT_YET_APPROVED_TEXT } from "@/lib/gateway-errors";
 import { clearActiveIntent, reportBuyerError, setActiveIntent } from "@/lib/buyer-error-report";
 import type {
   CheckoutView,
@@ -436,6 +437,9 @@ function clearPendingPaymentChallenge(scope: string): void {
  * things. `consumeSetupReturn` ignores `?pay=…` and this ignores `?setup=…`, so whichever
  * one is in the URL is the only one that fires.
  */
+/** This tab's own page: `?s=` keeps it on its session after another link opens. */
+const checkoutPath = (scope: string) => `/checkout?s=${encodeURIComponent(scope)}`;
+
 function consumePaymentReturn(cleanPath: string): "return" | "cancel" | null {
   const pay = new URLSearchParams(window.location.search).get("pay");
   if (pay !== "return" && pay !== "cancel") return null;
@@ -930,6 +934,7 @@ function usePaymentChallenge({
     }
     const canReturn = canResumeAcrossRedirect();
     const res = await checkoutCompleteAction(
+      scope,
       completion,
       gatewayAccount,
       canReturn ? window.location.origin : undefined,
@@ -1184,7 +1189,7 @@ function usePaymentChallenge({
         : "We could not start your subscription";
   const dialogRefusal = (error: string) =>
     NOT_YET_APPROVED.test(error)
-      ? `${failed} yet. Your bank may still be sending us the approval. Wait a moment. Then select Confirm payment again. We will not charge you twice.`
+      ? `${failed} yet. ${NOT_YET_APPROVED_TEXT.reason} ${NOT_YET_APPROVED_TEXT.retryDialog}`
       : refusalMessage(`${failed}.`, error, "Select Confirm payment to try again.");
 
   /**
@@ -1239,7 +1244,7 @@ function usePaymentChallenge({
           brandColor={brandColor}
           confirmLabel="Confirm payment"
           busyLabel="Confirming…"
-          returnUrl={`${window.location.origin}/checkout?pay=return`}
+          returnUrl={`${window.location.origin}${checkoutPath(scope)}&pay=return`}
           // A method that redirects leaves this tab; the pay return leg re-posts from this.
           onBeforeConfirm={() => {
             const held = repeat.current;
@@ -1379,7 +1384,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   const [detailsSavedHere, setDetailsSaved] = React.useState(false);
   const detailsSaved = view.customer != null || detailsSavedHere;
   React.useEffect(() => {
-    void checkoutRecordViewAction(onePage ? "one_page" : "steps", deviceClassOf(window));
+    // The view call binds this tab's token to its session (`?s=`, set by the page).
+    void checkoutRecordViewAction(scope, onePage ? "one_page" : "steps", deviceClassOf(window));
     // Recorded once, for the layout of the first view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1497,7 +1503,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     const timer = setInterval(() => {
       attempts += 1;
       void (async () => {
-        const res = await checkoutInvoiceStateAction(invoice);
+        const res = await checkoutInvoiceStateAction(scope, invoice);
         if (cancelled) return;
         // A poll that FAILS is not an outcome — the invoice is unchanged and the
         // interval simply tries again until it runs out of attempts.
@@ -1619,7 +1625,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
         // reason, and the buyer must read it.
         setReturnError(
           NOT_YET_APPROVED.test(error)
-            ? "We could not confirm your payment yet. Your bank may still be sending us the approval. If you try again, we will not charge you twice."
+            ? `We could not confirm your payment yet. ${NOT_YET_APPROVED_TEXT.reason} ${NOT_YET_APPROVED_TEXT.retryReturn}`
             : refusalMessage(
                 "We could not confirm your payment.",
                 error,
@@ -1639,7 +1645,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   const handledReturn = React.useRef(false);
   React.useEffect(() => {
     if (handledReturn.current) return;
-    const ret = consumeSetupReturn("/checkout");
+    const ret = consumeSetupReturn(checkoutPath(scope));
     if (!ret) return;
     handledReturn.current = true;
 
@@ -1726,7 +1732,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     if (handledPayReturn.current) return;
     // An sdk gateway that left for its own 3DS page names the result. Read before the strip.
     const clientResult = readSdkReturnResult(window.location.search);
-    const ret = consumePaymentReturn("/checkout");
+    const ret = consumePaymentReturn(checkoutPath(scope));
     if (!ret) return;
     handledPayReturn.current = true;
 
@@ -1892,210 +1898,213 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
 
   return (
     <BrandTheme brand={view.business}>
-      <PoNumberContext.Provider value={po}>
-        <ConsentContext.Provider value={consent}>
-          <div
-            className="flex w-full flex-col gap-4 pb-20 sm:gap-5 sm:pb-0"
-            data-checkout-step={step}
-          >
-            <StorefrontHeader
-              brand={view.business}
-              subtitle={
-                isPurchase
-                  ? "Complete your purchase."
-                  : reactivate
-                    ? "Reactivate your subscription."
-                    : isChange
-                      ? changeBlocked
-                        ? "Review your plan change."
-                        : "Review and confirm your plan change."
-                      : trialInfo?.trialPeriod
-                        ? `Start your ${trialInfo.trialPeriod.count}-${trialInfo.trialPeriod.unit} free trial${name ? ` of ${name}` : ""}.`
-                        : name
-                          ? `Subscribe to ${name}.`
-                          : "Subscribe."
-              }
-              aside={
-                cancelUrl && step !== "done" && !sessionEnded ? (
-                  <a
-                    data-document-link
-                    href={cancelUrl}
-                    className="text-sm text-muted-foreground hover:underline"
-                  >
-                    {/* On a change or reactivation, "Cancel" reads as "cancel my subscription". */}
-                    {isChange ? "Go back" : "Cancel"}
-                  </a>
-                ) : undefined
-              }
-            />
+      <CheckoutSessionContext.Provider value={scope}>
+        <PoNumberContext.Provider value={po}>
+          <ConsentContext.Provider value={consent}>
+            <div
+              className="flex w-full flex-col gap-4 pb-20 sm:gap-5 sm:pb-0"
+              data-checkout-step={step}
+            >
+              <StorefrontHeader
+                brand={view.business}
+                subtitle={
+                  isPurchase
+                    ? "Complete your purchase."
+                    : reactivate
+                      ? "Reactivate your subscription."
+                      : isChange
+                        ? changeBlocked
+                          ? "Review your plan change."
+                          : "Review and confirm your plan change."
+                        : trialInfo?.trialPeriod
+                          ? `Start your ${trialInfo.trialPeriod.count}-${trialInfo.trialPeriod.unit} free trial${name ? ` of ${name}` : ""}.`
+                          : name
+                            ? `Subscribe to ${name}.`
+                            : "Subscribe."
+                }
+                aside={
+                  cancelUrl && step !== "done" && !sessionEnded ? (
+                    <a
+                      data-document-link
+                      href={cancelUrl}
+                      className="text-sm text-muted-foreground hover:underline"
+                    >
+                      {/* On a change or reactivation, "Cancel" reads as "cancel my subscription". */}
+                      {isChange ? "Go back" : "Cancel"}
+                    </a>
+                  ) : undefined
+                }
+              />
 
-            {/* Only with two or more real steps: a review that is one press needs no map
+              {/* Only with two or more real steps: a review that is one press needs no map
                 (decided 2026-11-17). "Confirmation" is a result, not a step. */}
-            {onePage || steps.filter((st) => st.key !== "done").length < 2 ? null : (
-              <Steps steps={steps} current={stepperAt} />
-            )}
+              {onePage || steps.filter((st) => st.key !== "done").length < 2 ? null : (
+                <Steps steps={steps} current={stepperAt} />
+              )}
 
-            {/*
+              {/*
           Two columns above 1000px: what the buyer ACTS on down the left, what they are
           buying down the right, sticky while they fill in a card. Below that the order
           comes first, then the step. Layout lives in `globals.css` under `.checkout-panes`.
         */}
-            <div className="checkout-panes sf-enter">
-              <div className="checkout-rail">
-                {previewInRail ? (
-                  changePreview
-                ) : (
-                  <OrderCard
-                    view={view}
-                    locked={step === "done" || sessionEnded}
-                    sessionEnded={sessionEnded}
-                    title={
-                      isPurchase
-                        ? "Your order"
-                        : reactivate
-                          ? "Your subscription"
-                          : isChange
-                            ? "Your plan change"
-                            : "Your order"
-                    }
-                  />
-                )}
-              </div>
+              <div className="checkout-panes sf-enter">
+                <div className="checkout-rail">
+                  {previewInRail ? (
+                    changePreview
+                  ) : (
+                    <OrderCard
+                      view={view}
+                      locked={step === "done" || sessionEnded}
+                      sessionEnded={sessionEnded}
+                      title={
+                        isPurchase
+                          ? "Your order"
+                          : reactivate
+                            ? "Your subscription"
+                            : isChange
+                              ? "Your plan change"
+                              : "Your order"
+                      }
+                    />
+                  )}
+                </div>
 
-              <div className="checkout-main">
-                {/* TERMINAL, and checked first: once the session is gone nothing below can succeed, so
+                <div className="checkout-main">
+                  {/* TERMINAL, and checked first: once the session is gone nothing below can succeed, so
             drawing the steps would just invite clicks that all fail the same way. Same wording
             as the entry path's expired card — the two must not drift. */}
-                {sessionEnded ? (
-                  <NoticeCard
-                    icon={<Clock />}
-                    title="This checkout link is not valid or is expired"
-                  >
-                    Checkout links are valid for a limited time. Ask for a new link.
-                  </NoticeCard>
-                ) : returnChallenge.panel ? (
-                  /* An authentication challenge raised by the RETURN leg — the vault approval came
+                  {sessionEnded ? (
+                    <NoticeCard
+                      icon={<Clock />}
+                      title="This checkout link is not valid or is expired"
+                    >
+                      Checkout links are valid for a limited time. Ask for a new link.
+                    </NoticeCard>
+                  ) : returnChallenge.panel ? (
+                    /* An authentication challenge raised by the RETURN leg — the vault approval came
              back and the first charge then asked for one. It replaces the step it
              interrupted, the way the e-mandate panel does, because the buyer has exactly
              one thing to do and it is not on this page. */
-                  <StorefrontSection title="Payment">{returnChallenge.panel}</StorefrontSection>
-                ) : payReturnOrphan ? (
-                  /* They approved, but in a tab that is not the one holding the checkout — see the
+                    <StorefrontSection title="Payment">{returnChallenge.panel}</StorefrontSection>
+                  ) : payReturnOrphan ? (
+                    /* They approved, but in a tab that is not the one holding the checkout — see the
              charge-return effect. `info`, not an error: nothing is wrong, and the one tab
              that can finish this is still open. Deliberately offers no "start again": doing
              so from here is how the same payment gets approved twice. */
-                  <NoticeCard icon={<CheckCircle2 />} title="Payment approved">
-                    Return to the tab where you started this checkout. Select{" "}
-                    <span className="font-medium">Continue after approval</span> to finish. You can
-                    close this tab.
-                  </NoticeCard>
-                ) : returnError ? (
-                  /* The buyer has ALREADY approved at the provider, so this offers a real retry of the
+                    <NoticeCard icon={<CheckCircle2 />} title="Payment approved">
+                      Return to the tab where you started this checkout. Select{" "}
+                      <span className="font-medium">Continue after approval</span> to finish. You
+                      can close this tab.
+                    </NoticeCard>
+                  ) : returnError ? (
+                    /* The buyer has ALREADY approved at the provider, so this offers a real retry of the
              same completion rather than sending them back to start — restarting risks a second
              payment method for a mandate they have already authorised, or a second charge for
              an authentication they have already passed. */
-                  <NoticeCard
-                    icon={<AlertCircle />}
-                    title={
-                      returnKind === "payment"
-                        ? "We could not finish your payment"
-                        : "We could not finish the setup"
-                    }
-                  >
-                    <p>{returnError}</p>
-                    <Button
-                      className="mt-3"
-                      onClick={() => retryReturn.current?.()}
-                      disabled={returning}
+                    <NoticeCard
+                      icon={<AlertCircle />}
+                      title={
+                        returnKind === "payment"
+                          ? "We could not finish your payment"
+                          : "We could not finish the setup"
+                      }
                     >
-                      {returning ? "Trying again…" : "Try again"}
-                    </Button>
-                  </NoticeCard>
-                ) : returning || retryingReturn ? (
-                  <NoticeCard
-                    icon={<Loader2 className="animate-spin" />}
-                    title={returnKind === "payment" ? "Finishing your payment" : "Finishing setup"}
-                  >
-                    {returnKind === "payment"
-                      ? "We are confirming the payment that you approved. This takes a few seconds."
-                      : "We are confirming your payment method with the provider. This takes a few seconds."}
-                  </NoticeCard>
-                ) : step === "done" && isPurchase ? (
-                  unpaid?.state === "processing" ? (
+                      <p>{returnError}</p>
+                      <Button
+                        className="mt-3"
+                        onClick={() => retryReturn.current?.()}
+                        disabled={returning}
+                      >
+                        {returning ? "Trying again…" : "Try again"}
+                      </Button>
+                    </NoticeCard>
+                  ) : returning || retryingReturn ? (
                     <NoticeCard
                       icon={<Loader2 className="animate-spin" />}
-                      title="Payment in progress"
+                      title={
+                        returnKind === "payment" ? "Finishing your payment" : "Finishing setup"
+                      }
                     >
-                      <p>
-                        We are waiting for confirmation of the{" "}
-                        <span className="font-medium tabular-nums">
-                          {money(unpaid.amount_due_minor, unpaid.currency)}
-                        </span>{" "}
-                        payment.{" "}
-                        {settleTimedOut
-                          ? "This takes longer than usual. You do not have to do anything. We will email your receipt when the payment completes."
-                          : "You do not have to do anything. This usually takes a few seconds."}
-                      </p>
+                      {returnKind === "payment"
+                        ? "We are confirming the payment that you approved. This takes a few seconds."
+                        : "We are confirming your payment method with the provider. This takes a few seconds."}
                     </NoticeCard>
-                  ) : unpaid ? (
-                    // The order went through but its invoice is still open: never "received".
-                    <NoticeCard icon={<AlertCircle />} title="Payment not received">
-                      <p>
-                        {unpaid.failure ? "We could not collect" : "Amount due:"}{" "}
-                        <span className="font-medium tabular-nums">
-                          {money(unpaid.amount_due_minor, unpaid.currency)}
-                        </span>
-                        {unpaid.failure ? `. Reason: ${unpaid.failure.message}` : "."}
-                      </p>
-                      {/* The completion carries the invoice id only, never its number: no raw id here. */}
-                      <p className="mt-2">
-                        The invoice stays open on your account. The billing email for this invoice
-                        has its number and a secure link. Use the link to pay the invoice.
-                      </p>
-                    </NoticeCard>
-                  ) : (
-                    <DoneCard
-                      title="Payment received"
-                      body="We will email your receipt."
-                      backUrl={successUrl}
-                      businessName={view.business.name}
-                    />
-                  )
-                ) : step === "done" && unpaid?.state === "processing" ? (
-                  /* NOT a failure, and the distinction is the whole point: the gateway has the
+                  ) : step === "done" && isPurchase ? (
+                    unpaid?.state === "processing" ? (
+                      <NoticeCard
+                        icon={<Loader2 className="animate-spin" />}
+                        title="Payment in progress"
+                      >
+                        <p>
+                          We are waiting for confirmation of the{" "}
+                          <span className="font-medium tabular-nums">
+                            {money(unpaid.amount_due_minor, unpaid.currency)}
+                          </span>{" "}
+                          payment.{" "}
+                          {settleTimedOut
+                            ? "This takes longer than usual. You do not have to do anything. We will email your receipt when the payment completes."
+                            : "You do not have to do anything. This usually takes a few seconds."}
+                        </p>
+                      </NoticeCard>
+                    ) : unpaid ? (
+                      // The order went through but its invoice is still open: never "received".
+                      <NoticeCard icon={<AlertCircle />} title="Payment not received">
+                        <p>
+                          {unpaid.failure ? "We could not collect" : "Amount due:"}{" "}
+                          <span className="font-medium tabular-nums">
+                            {money(unpaid.amount_due_minor, unpaid.currency)}
+                          </span>
+                          {unpaid.failure ? `. Reason: ${unpaid.failure.message}` : "."}
+                        </p>
+                        {/* The completion carries the invoice id only, never its number: no raw id here. */}
+                        <p className="mt-2">
+                          The invoice stays open on your account. The billing email for this invoice
+                          has its number and a secure link. Use the link to pay the invoice.
+                        </p>
+                      </NoticeCard>
+                    ) : (
+                      <DoneCard
+                        title="Payment received"
+                        body="We will email your receipt."
+                        backUrl={successUrl}
+                        businessName={view.business.name}
+                      />
+                    )
+                  ) : step === "done" && unpaid?.state === "processing" ? (
+                    /* NOT a failure, and the distinction is the whole point: the gateway has the
              debit and has not answered yet. An Indian mandate presentation can take
              seconds (usual) or days (a bank holiday) — either way nobody was refused,
              the buyer has nothing to do, and the poll above is still watching. */
-                  <NoticeCard
-                    icon={<Loader2 className="animate-spin" />}
-                    title={
-                      reactivate
-                        ? "Your subscription is reactivated. Payment in progress"
-                        : isChange
-                          ? "Your plan changed. Payment in progress"
-                          : "You are subscribed. Payment in progress"
-                    }
-                  >
-                    <p>
-                      {reactivate
-                        ? "Your subscription is active again."
-                        : isChange
-                          ? "Your plan is changed."
-                          : "Your subscription is active."}{" "}
-                      We are confirming the{" "}
-                      <span className="font-medium tabular-nums">
-                        {money(unpaid.amount_due_minor, unpaid.currency)}
-                      </span>{" "}
-                      payment with the payment provider.
-                    </p>
-                    <p className="mt-2">
-                      {settleTimedOut
-                        ? "This takes longer than usual. Do not pay again. We will email you when we know the result. If the payment did not go through, the email tells you how to pay."
-                        : "Do not pay again. This usually takes a few seconds."}
-                    </p>
-                  </NoticeCard>
-                ) : step === "done" && unpaid ? (
-                  /* Two true things at once, and both have to be said: the plan DID change (the
+                    <NoticeCard
+                      icon={<Loader2 className="animate-spin" />}
+                      title={
+                        reactivate
+                          ? "Your subscription is reactivated. Payment in progress"
+                          : isChange
+                            ? "Your plan changed. Payment in progress"
+                            : "You are subscribed. Payment in progress"
+                      }
+                    >
+                      <p>
+                        {reactivate
+                          ? "Your subscription is active again."
+                          : isChange
+                            ? "Your plan is changed."
+                            : "Your subscription is active."}{" "}
+                        We are confirming the{" "}
+                        <span className="font-medium tabular-nums">
+                          {money(unpaid.amount_due_minor, unpaid.currency)}
+                        </span>{" "}
+                        payment with the payment provider.
+                      </p>
+                      <p className="mt-2">
+                        {settleTimedOut
+                          ? "This takes longer than usual. Do not pay again. We will email you when we know the result. If the payment did not go through, the email tells you how to pay."
+                          : "Do not pay again. This usually takes a few seconds."}
+                      </p>
+                    </NoticeCard>
+                  ) : step === "done" && unpaid ? (
+                    /* Two true things at once, and both have to be said: the plan DID change (the
              items moved, the buyer is being served) and the payment for it did not go
              through. `warning`, not `error` — nothing here needs undoing, one thing needs
              paying — and not `success`, which is what this screen used to claim while the
@@ -2106,121 +2115,200 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
              collection off, or no instrument on file) — "we could not collect" claims a
              refusal that never happened, and it is what a buyer saw for an amount their
              bank had not been asked for. */
-                  <NoticeCard
-                    icon={<AlertCircle />}
-                    title={`${reactivate ? "Your subscription is reactivated" : "Your plan changed"}. Payment ${unpaid.failure ? "not received" : "is due"}`}
-                  >
-                    <p>
-                      {reactivate
-                        ? "Your subscription is active again."
-                        : isChange
-                          ? "Your plan is changed."
-                          : "Your subscription is active."}{" "}
-                      {unpaid.failure ? "We could not collect" : "Amount due:"}{" "}
-                      <span className="font-medium tabular-nums">
-                        {money(unpaid.amount_due_minor, unpaid.currency)}
-                      </span>
-                      {unpaid.failure ? `. Reason: ${unpaid.failure.message}` : "."}
-                    </p>
-                    {/* ⚠️ This used to say the invoice "is waiting in your billing portal" and render
+                    <NoticeCard
+                      icon={<AlertCircle />}
+                      title={`${reactivate ? "Your subscription is reactivated" : "Your plan changed"}. Payment ${unpaid.failure ? "not received" : "is due"}`}
+                    >
+                      <p>
+                        {reactivate
+                          ? "Your subscription is active again."
+                          : isChange
+                            ? "Your plan is changed."
+                            : "Your subscription is active."}{" "}
+                        {unpaid.failure ? "We could not collect" : "Amount due:"}{" "}
+                        <span className="font-medium tabular-nums">
+                          {money(unpaid.amount_due_minor, unpaid.currency)}
+                        </span>
+                        {unpaid.failure ? `. Reason: ${unpaid.failure.message}` : "."}
+                      </p>
+                      {/* ⚠️ This used to say the invoice "is waiting in your billing portal" and render
                 NO link — and the buyer holds none: a checkout link is public and mints no
                 portal session, so they were pointed at a destination they could not reach.
                 The invoice email is the route they actually have (`invoice_generated` →
                 `invoice_issued`, whose CTA is a pre-authenticated portal entry), so that is
                 what this names. Give them a real link here only when the engine can mint
                 one on the completion. */}
-                    <p className="mt-2">
-                      The invoice stays open on your account. The billing email for this invoice has
-                      its number and a secure link. Use the link to pay the invoice or to change
-                      your payment method.
-                    </p>
-                  </NoticeCard>
-                ) : step === "done" && paymentError ? (
-                  /* The subscription EXISTS and its first charge was refused — the engine's
+                      <p className="mt-2">
+                        The invoice stays open on your account. The billing email for this invoice
+                        has its number and a secure link. Use the link to pay the invoice or to
+                        change your payment method.
+                      </p>
+                    </NoticeCard>
+                  ) : step === "done" && paymentError ? (
+                    /* The subscription EXISTS and its first charge was refused — the engine's
              `payment_error`, which reaches the page only on the intent path (a completion
              that consumed an authorization whose capture the gateway then declined). It was
              returned by the action and read by nobody, so this screen said "You're all set"
              over a refusal. `warning`, not `error`: the signup stands, one thing needs
              paying. */
-                  <NoticeCard
-                    icon={<AlertCircle />}
-                    title={
-                      reactivate
-                        ? "Your subscription is reactivated. Your bank refused the payment"
-                        : isChange
-                          ? "Your plan changed. Your bank refused the payment"
-                          : "You are subscribed. Your bank refused the first payment"
-                    }
-                  >
-                    <p>
-                      {reactivate
-                        ? "Your subscription is active again."
-                        : isChange
-                          ? "Your plan is changed."
-                          : "Your subscription is active."}{" "}
-                      Your bank refused the payment. Reason: {paymentError.message}
-                    </p>
-                    <p className="mt-2">
-                      The invoice stays open on your account. The billing email for this invoice has
-                      a secure link. Use it to pay the invoice or to change your payment method.
-                    </p>
-                  </NoticeCard>
-                ) : step === "done" ? (
-                  /* The result in plain words, with the next payment when the engine knows
+                    <NoticeCard
+                      icon={<AlertCircle />}
+                      title={
+                        reactivate
+                          ? "Your subscription is reactivated. Your bank refused the payment"
+                          : isChange
+                            ? "Your plan changed. Your bank refused the payment"
+                            : "You are subscribed. Your bank refused the first payment"
+                      }
+                    >
+                      <p>
+                        {reactivate
+                          ? "Your subscription is active again."
+                          : isChange
+                            ? "Your plan is changed."
+                            : "Your subscription is active."}{" "}
+                        Your bank refused the payment. Reason: {paymentError.message}
+                      </p>
+                      <p className="mt-2">
+                        The invoice stays open on your account. The billing email for this invoice
+                        has a secure link. Use it to pay the invoice or to change your payment
+                        method.
+                      </p>
+                    </NoticeCard>
+                  ) : step === "done" ? (
+                    /* The result in plain words, with the next payment when the engine knows
                      it, and a real way back to the business (decided 2026-11-17). No badge,
                      no "Thank you!": a statement, as a bank would write it. */
-                  <DoneCard
-                    title={
-                      reactivate
-                        ? "Subscription reactivated"
-                        : isChange
-                          ? view.change?.itemsUnchanged
-                            ? "Discount applied"
-                            : "Plan changed"
-                          : "Subscription started"
-                    }
-                    body={`${
-                      reactivate
-                        ? "Your subscription is active again."
-                        : isChange
-                          ? view.change?.itemsUnchanged
-                            ? "Your subscription is updated."
-                            : "Your new plan is active."
-                          : "Your subscription is active."
-                    }${doneNextPayment(view)}`}
-                    backUrl={successUrl}
-                    businessName={view.business.name}
-                  />
-                ) : onePage && (step === "details" || step === "card" || step === "pay") ? (
-                  <div className="flex flex-col gap-4">
+                    <DoneCard
+                      title={
+                        reactivate
+                          ? "Subscription reactivated"
+                          : isChange
+                            ? view.change?.itemsUnchanged
+                              ? "Discount applied"
+                              : "Plan changed"
+                            : "Subscription started"
+                      }
+                      body={`${
+                        reactivate
+                          ? "Your subscription is active again."
+                          : isChange
+                            ? view.change?.itemsUnchanged
+                              ? "Your subscription is updated."
+                              : "Your new plan is active."
+                            : "Your subscription is active."
+                      }${doneNextPayment(view)}`}
+                      backUrl={successUrl}
+                      businessName={view.business.name}
+                    />
+                  ) : onePage && (step === "details" || step === "card" || step === "pay") ? (
+                    <div className="flex flex-col gap-4">
+                      <DetailsStep
+                        autoSave
+                        customer={details}
+                        onValidity={setDetailsValid}
+                        onDone={(prefill, saved) => {
+                          setBuyer(prefill);
+                          setDetails(saved);
+                          // The totals and tax are priced from this address, so read them again.
+                          router.refresh();
+                          setDetailsSaved(true);
+                        }}
+                        lockEmail={view.customer_pinned ?? purchase?.customer_pinned ?? false}
+                        onSessionEnded={() => setSessionEnded(true)}
+                        countries={countries}
+                        fieldConfig={view.field_config ?? {}}
+                      />
+                      {!detailsSaved ? (
+                        <StorefrontSection title="Payment">
+                          <p className="text-sm text-muted-foreground">
+                            Enter your email and billing address to see the payment methods.
+                          </p>
+                        </StorefrontSection>
+                      ) : purchase && purchasePayStep === "pay" && step !== "card" ? (
+                        <PurchasePayStep
+                          scope={scope}
+                          purchase={purchase}
+                          commit={commit}
+                          blocked={blockedByDetails}
+                          businessName={view.business.name}
+                          brandColor={view.business.brand_color}
+                          {...(buyer ? { prefill: buyer } : {})}
+                          onDone={done}
+                          onSaveMethod={() => setStep("card")}
+                          onSessionEnded={() => setSessionEnded(true)}
+                        />
+                      ) : (
+                        <CardStep
+                          scope={scope}
+                          businessName={view.business.name}
+                          brandColor={view.business.brand_color}
+                          isChange={isChange}
+                          purchase={isPurchase}
+                          commit={commit}
+                          blocked={blockedByDetails}
+                          moneyDueToday={(dueNow?.minor ?? 0) > 0}
+                          currency={
+                            dueNow?.currency ??
+                            view.items[0]?.currency ??
+                            purchase?.currency ??
+                            null
+                          }
+                          {...(reactivate
+                            ? { reactivateLabel: reactivateLabel(view.change?.preview) }
+                            : {})}
+                          preferNew={mustReauthorize}
+                          {...(buyer ? { prefill: buyer } : {})}
+                          onDone={done}
+                          onSessionEnded={() => setSessionEnded(true)}
+                          {...(cardReturnTo
+                            ? {
+                                onBack: () => {
+                                  setCardReturnTo(null);
+                                  setStep(cardReturnTo);
+                                },
+                              }
+                            : {})}
+                        />
+                      )}
+                    </div>
+                  ) : step === "details" ? (
                     <DetailsStep
-                      autoSave
                       customer={details}
-                      onValidity={setDetailsValid}
                       onDone={(prefill, saved) => {
+                        // Held for the gateway's own sheet — see `buyer`.
                         setBuyer(prefill);
+                        // …and for the next visit to this step, which must show what the buyer just
+                        // typed rather than what the server rendered on page load.
                         setDetails(saved);
-                        // The totals and tax are priced from this address, so read them again.
+                        // Totals, tax and the consent sentence are priced from this address.
                         router.refresh();
-                        setDetailsSaved(true);
+                        const back = detailsReturnTo;
+                        setDetailsReturnTo(null);
+                        setStep(back ?? (isPurchase ? purchasePayStep : "card"));
                       }}
+                      onCancel={
+                        detailsReturnTo
+                          ? () => {
+                              const back = detailsReturnTo;
+                              setDetailsReturnTo(null);
+                              setStep(back);
+                            }
+                          : undefined
+                      }
+                      isChange={isChange}
                       lockEmail={view.customer_pinned ?? purchase?.customer_pinned ?? false}
                       onSessionEnded={() => setSessionEnded(true)}
                       countries={countries}
                       fieldConfig={view.field_config ?? {}}
                     />
-                    {!detailsSaved ? (
-                      <StorefrontSection title="Payment">
-                        <p className="text-sm text-muted-foreground">
-                          Enter your email and billing address to see the payment methods.
-                        </p>
-                      </StorefrontSection>
-                    ) : purchase && purchasePayStep === "pay" && step !== "card" ? (
+                  ) : step === "pay" && purchase ? (
+                    <div key="step-pay" className="sf-step flex flex-col gap-4">
+                      {detailsSummary}
                       <PurchasePayStep
                         scope={scope}
                         purchase={purchase}
                         commit={commit}
-                        blocked={blockedByDetails}
                         businessName={view.business.name}
                         brandColor={view.business.brand_color}
                         {...(buyer ? { prefill: buyer } : {})}
@@ -2228,7 +2316,35 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         onSaveMethod={() => setStep("card")}
                         onSessionEnded={() => setSessionEnded(true)}
                       />
-                    ) : (
+                    </div>
+                  ) : step === "confirm" ? (
+                    <div key="step-confirm" className="sf-step flex flex-col gap-4">
+                      {previewInRail ? null : changePreview}
+                      <ConfirmChangeStep
+                        scope={scope}
+                        commit={commit}
+                        itemsUnchanged={view.change?.itemsUnchanged === true}
+                        {...(reactivation ? { reactivation } : {})}
+                        preview={view.change?.preview}
+                        tz={view.business.timezone}
+                        businessName={view.business.name}
+                        brandColor={view.business.brand_color}
+                        hasPaymentMethod={view.change?.hasPaymentMethod ?? false}
+                        paymentMethod={view.change?.paymentMethod}
+                        mandate={mandate}
+                        blocked={changeBlocked != null}
+                        onDone={done}
+                        onNeedCard={() => {
+                          setCardReturnTo("confirm");
+                          setStep("card");
+                        }}
+                        onEditDetails={() => editDetails("confirm")}
+                        onSessionEnded={() => setSessionEnded(true)}
+                      />
+                    </div>
+                  ) : (
+                    <div key="step-card" className="sf-step flex flex-col gap-4">
+                      {isChange ? (previewInRail ? null : changePreview) : detailsSummary}
                       <CardStep
                         scope={scope}
                         businessName={view.business.name}
@@ -2236,11 +2352,11 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         isChange={isChange}
                         purchase={isPurchase}
                         commit={commit}
-                        blocked={blockedByDetails}
                         moneyDueToday={(dueNow?.minor ?? 0) > 0}
                         currency={
                           dueNow?.currency ?? view.items[0]?.currency ?? purchase?.currency ?? null
                         }
+                        {...(isChange ? { onEditDetails: () => editDetails("card") } : {})}
                         {...(reactivate
                           ? { reactivateLabel: reactivateLabel(view.change?.preview) }
                           : {})}
@@ -2257,135 +2373,33 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                             }
                           : {})}
                       />
-                    )}
-                  </div>
-                ) : step === "details" ? (
-                  <DetailsStep
-                    customer={details}
-                    onDone={(prefill, saved) => {
-                      // Held for the gateway's own sheet — see `buyer`.
-                      setBuyer(prefill);
-                      // …and for the next visit to this step, which must show what the buyer just
-                      // typed rather than what the server rendered on page load.
-                      setDetails(saved);
-                      // Totals, tax and the consent sentence are priced from this address.
-                      router.refresh();
-                      const back = detailsReturnTo;
-                      setDetailsReturnTo(null);
-                      setStep(back ?? (isPurchase ? purchasePayStep : "card"));
-                    }}
-                    onCancel={
-                      detailsReturnTo
-                        ? () => {
-                            const back = detailsReturnTo;
-                            setDetailsReturnTo(null);
-                            setStep(back);
-                          }
-                        : undefined
-                    }
-                    isChange={isChange}
-                    lockEmail={view.customer_pinned ?? purchase?.customer_pinned ?? false}
-                    onSessionEnded={() => setSessionEnded(true)}
-                    countries={countries}
-                    fieldConfig={view.field_config ?? {}}
-                  />
-                ) : step === "pay" && purchase ? (
-                  <div key="step-pay" className="sf-step flex flex-col gap-4">
-                    {detailsSummary}
-                    <PurchasePayStep
-                      scope={scope}
-                      purchase={purchase}
-                      commit={commit}
-                      businessName={view.business.name}
-                      brandColor={view.business.brand_color}
-                      {...(buyer ? { prefill: buyer } : {})}
-                      onDone={done}
-                      onSaveMethod={() => setStep("card")}
-                      onSessionEnded={() => setSessionEnded(true)}
-                    />
-                  </div>
-                ) : step === "confirm" ? (
-                  <div key="step-confirm" className="sf-step flex flex-col gap-4">
-                    {previewInRail ? null : changePreview}
-                    <ConfirmChangeStep
-                      scope={scope}
-                      commit={commit}
-                      itemsUnchanged={view.change?.itemsUnchanged === true}
-                      {...(reactivation ? { reactivation } : {})}
-                      preview={view.change?.preview}
-                      tz={view.business.timezone}
-                      businessName={view.business.name}
-                      brandColor={view.business.brand_color}
-                      hasPaymentMethod={view.change?.hasPaymentMethod ?? false}
-                      paymentMethod={view.change?.paymentMethod}
-                      mandate={mandate}
-                      blocked={changeBlocked != null}
-                      onDone={done}
-                      onNeedCard={() => {
-                        setCardReturnTo("confirm");
-                        setStep("card");
-                      }}
-                      onEditDetails={() => editDetails("confirm")}
-                      onSessionEnded={() => setSessionEnded(true)}
-                    />
-                  </div>
-                ) : (
-                  <div key="step-card" className="sf-step flex flex-col gap-4">
-                    {isChange ? (previewInRail ? null : changePreview) : detailsSummary}
-                    <CardStep
-                      scope={scope}
-                      businessName={view.business.name}
-                      brandColor={view.business.brand_color}
-                      isChange={isChange}
-                      purchase={isPurchase}
-                      commit={commit}
-                      moneyDueToday={(dueNow?.minor ?? 0) > 0}
-                      currency={
-                        dueNow?.currency ?? view.items[0]?.currency ?? purchase?.currency ?? null
-                      }
-                      {...(isChange ? { onEditDetails: () => editDetails("card") } : {})}
-                      {...(reactivate
-                        ? { reactivateLabel: reactivateLabel(view.change?.preview) }
-                        : {})}
-                      preferNew={mustReauthorize}
-                      {...(buyer ? { prefill: buyer } : {})}
-                      onDone={done}
-                      onSessionEnded={() => setSessionEnded(true)}
-                      {...(cardReturnTo
-                        ? {
-                            onBack: () => {
-                              setCardReturnTo(null);
-                              setStep(cardReturnTo);
-                            },
-                          }
-                        : {})}
-                    />
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <BotCheck />
+              <BotCheck />
 
-            {/* Always mounted, opened only while the return leg is being challenged. */}
-            {returnChallenge.dialog}
+              {/* Always mounted, opened only while the return leg is being challenged. */}
+              {returnChallenge.dialog}
 
-            {live && dueNow ? (
-              <PhonePayBar
-                name={name}
-                isChange={isChange}
-                amount={money(dueNow.minor, dueNow.currency)}
+              {live && dueNow ? (
+                <PhonePayBar
+                  name={name}
+                  isChange={isChange}
+                  amount={money(dueNow.minor, dueNow.currency)}
+                />
+              ) : null}
+
+              <StorefrontFooter
+                business={view.business.name}
+                supportEmail={view.business.support_email ?? null}
+                website={view.business.website ?? null}
               />
-            ) : null}
-
-            <StorefrontFooter
-              business={view.business.name}
-              supportEmail={view.business.support_email ?? null}
-              website={view.business.website ?? null}
-            />
-          </div>
-        </ConsentContext.Provider>
-      </PoNumberContext.Provider>
+            </div>
+          </ConsentContext.Provider>
+        </PoNumberContext.Provider>
+      </CheckoutSessionContext.Provider>
     </BrandTheme>
   );
 }
@@ -2948,10 +2962,11 @@ function OfferLine({
   locked: boolean;
 }) {
   const router = useRouter();
+  const session = useCheckoutSession();
   const [busy, setBusy] = React.useState(false);
   const set = async (quantity: number) => {
     setBusy(true);
-    const res = await checkoutSetItemAction(l.price, quantity);
+    const res = await checkoutSetItemAction(session, l.price, quantity);
     setBusy(false);
     if (!res.ok) return void toast.error(res.error ?? "We could not change your order.");
     router.refresh();
@@ -4025,6 +4040,7 @@ function DetailsStep({
   /** The business's field matrix. Fields listed in lib/checkout-field-rules.ts ignore Hidden. */
   fieldConfig: NonNullable<CheckoutView["field_config"]>;
 }) {
+  const session = useCheckoutSession();
   const state = (k: string) => fieldConfig[k];
   // First name is not here: `requireContactName` always asks for it (checkout-field-rules).
   const fieldStates = {
@@ -4213,7 +4229,7 @@ function DetailsStep({
     const shippingAddress = wantsShipping ? addressFrom(shipToBilling ? "" : "ship_") : undefined;
     lastSent.current = JSON.stringify([...fd.entries()]);
     setBusy(true);
-    const res = await checkoutSetCustomerAction({
+    const res = await checkoutSetCustomerAction(session, {
       // Omitted entirely in change mode: an empty string is not a valid email and would be
       // rejected by the schema even though the engine ignores it there.
       ...(emailLocked ? {} : { email }),
@@ -4591,7 +4607,7 @@ function CardStep({
   React.useEffect(() => {
     let live = true;
     void (async () => {
-      const res = await checkoutPaymentMethodsAction();
+      const res = await checkoutPaymentMethodsAction(scope);
       if (!live) return;
       // A failure here is not fatal: the add-a-method half of this step still works, which
       // is what it did before saved methods were offered at all.
@@ -4611,7 +4627,7 @@ function CardStep({
   React.useEffect(() => {
     let live = true;
     void (async () => {
-      const res = await checkoutGatewaysAction();
+      const res = await checkoutGatewaysAction(scope);
       if (!live) return;
       if (!res.ok) {
         // Not a toast: the button below is still usable — omitting `gateway_account`
@@ -4868,6 +4884,7 @@ function CardStep({
     challenge.showRefusal(null);
     setStarting(true);
     const res = await checkoutBeginSetupAction(
+      scope,
       window.location.origin,
       selectedGateway || undefined,
       /**
@@ -5426,7 +5443,7 @@ function CardStep({
             brandColor={brandColor}
             confirmLabel={cta}
             busyLabel={busyCta}
-            returnUrl={`${window.location.origin}/checkout?setup=return`}
+            returnUrl={`${window.location.origin}${checkoutPath(scope)}&setup=return`}
             failureLead={failLead}
             // A method that redirects leaves this tab; the setup return leg completes it.
             onBeforeConfirm={() =>

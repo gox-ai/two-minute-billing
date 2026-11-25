@@ -3,6 +3,7 @@
  * that mirrors what billing/proration WOULD do, so a UI can show "you'll be
  * charged $X now" before committing.
  */
+import { changeCurrency, reactivationCurrency } from "./currency-switch";
 import { loadEffectiveDunningConfig } from "@/modules/dunning-policies/effective";
 import { closingCommitment } from "./commitment";
 import { randomUUID } from "node:crypto";
@@ -1472,17 +1473,22 @@ export async function estimateChange(input: {
    */
   const creditedOpenInvoices: Array<{ id: string; label: string }> = [];
   const estimate = await withTenant(organizationId, async (tx): Promise<Estimate> => {
-    const [sub] = await tx
+    const [loadedSub] = await tx
       .select()
       .from(subscriptions)
       .where(eq(subscriptions.id, input.subscriptionId))
       .limit(1);
-    if (!sub) throw new ProrationError("Subscription not found");
+    if (!loadedSub) throw new ProrationError("Subscription not found");
     // Cancelled subs have no live term — editing them is a reactivation, not a change.
-    if (sub.status === "cancelled")
+    if (loadedSub.status === "cancelled")
       throw new ProrationError(
         "You cannot estimate a change on a cancelled subscription. Reactivate it instead.",
       );
+    // Same currency rule as the booking: at the term end an edit may move currency.
+    const sub = {
+      ...loadedSub,
+      currency: await changeCurrency(tx, loadedSub, input, now, (m) => new ProrationError(m)),
+    };
     // Mirror changeSubscription's term anchoring EXACTLY so the preview matches the
     // actual booking — resetStart from the anchor axis, prorationNow from the
     // proration axis (see billing-mode.ts). Any divergence here shows the customer a
@@ -4595,9 +4601,6 @@ export async function estimateReactivate(input: {
         .where(and(eq(prices.businessId, businessId), eq(prices.publicId, it.price)))
         .limit(1);
       if (!price) throw new ProrationError(`We could not find the price ${it.price}.`);
-      if (price.currency !== sub.currency) {
-        throw new ProrationError("You cannot reactivate with a price in a different currency");
-      }
       if (it.unitPriceMinor != null) {
         if (!isOverridable(price.model)) {
           throw new ProrationError(
@@ -4614,6 +4617,13 @@ export async function estimateReactivate(input: {
         billingCycles: it.billingCycles ?? null,
       });
     }
+    // A fresh term may move currency; same rule as the booking.
+    const currency = await reactivationCurrency(
+      tx,
+      sub,
+      resolved.map((i) => i.price.currency),
+      (m) => new ProrationError(m),
+    );
     // CAT-7, exactly as the booking applies it.
     const productIds = [...new Set(resolved.map((i) => i.price.productId))];
     const kinds = await tx
@@ -4621,7 +4631,7 @@ export async function estimateReactivate(input: {
       .from(products)
       .where(and(eq(products.businessId, businessId), inArray(products.id, productIds)));
     resolved = await applyExplicitDifferentials(tx, {
-      currency: sub.currency,
+      currency,
       planProductIds: kinds.filter((k) => k.kind === "plan").map((k) => k.id),
       addonProductIds: new Set(kinds.filter((k) => k.kind === "addon").map((k) => k.id)),
       items: resolved,
@@ -4690,7 +4700,7 @@ export async function estimateReactivate(input: {
           productPublicId: product?.publicId ?? "",
         };
       });
-      return { kind: "plan", sub, term, rows, inTermAvailable };
+      return { kind: "plan", sub: { ...sub, currency }, term, rows, inTermAvailable };
     }
 
     // The trial end the BOOKING will store, not the one the caller typed: reactivation
@@ -4706,7 +4716,7 @@ export async function estimateReactivate(input: {
       // maxima tighten the business's slot, and `planSubscriptionPeriodInvoice` applies
       // them to the very invoice this previews.
       subscriptionId: sub.id,
-      currency: sub.currency,
+      currency,
       items: resolved.map((i) => ({
         price: i.price,
         quantity: i.quantity,

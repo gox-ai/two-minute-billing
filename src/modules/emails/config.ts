@@ -135,7 +135,9 @@ export type EmailType =
   | "subscription_restart"
   // ── system: sent only by the engine, on the customer's own request ──
   // The portal sign-in code (storefront Phase 4). Never an automatic toggle, never ad hoc.
-  | "portal_sign_in_code";
+  | "portal_sign_in_code"
+  // A fresh link the customer asked for from an expired one (portal or checkout).
+  | "new_link";
 
 /**
  * ⚠️ This array is `readonly EmailType[]`, so a MISSING entry is not a type error —
@@ -191,10 +193,11 @@ export const EMAIL_TYPES: readonly EmailType[] = [
   "credit_note_sent",
   "subscription_restart",
   "portal_sign_in_code",
+  "new_link",
 ];
 
 /** Sent by the engine because the customer asked for it; no toggle, operators cannot send it. */
-export const SYSTEM_EMAIL_TYPES: readonly EmailType[] = ["portal_sign_in_code"];
+export const SYSTEM_EMAIL_TYPES: readonly EmailType[] = ["portal_sign_in_code", "new_link"];
 
 /**
  * Types an operator sends by hand; the engine never fires them. Kept separate so the
@@ -308,6 +311,7 @@ export const EMAIL_AUDIENCE: Record<EmailType, "billing" | "account"> = {
   mandate_expired: "billing",
   subscription_canceled_nonpayment: "account",
   portal_sign_in_code: "account",
+  new_link: "account",
   subscription_activated: "account",
   subscription_reactivated: "account",
   subscription_changed: "account",

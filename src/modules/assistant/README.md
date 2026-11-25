@@ -129,6 +129,11 @@ Self-hosted, every support route is 404, `status.support` is null and the model 
   paths and camelCase identifiers found in that source. API examples from the docs stay.
 
 ## Changelog
+- **2026-11-24** — "Show me" opens a closed menu first. The map records, per screen, the
+  menu each control is reached through (`menus`: a `DropdownMenu` trigger or a `MoreMenu` label);
+  `resolveGuide` puts it on the step as `menu`. The runner points at the trigger ("First, select
+  “More” to show this action.") until the member opens it, then at the item; a `MoreMenu` item
+  is found through its hidden panel's `aria-controls` even without the map.
 - **2026-11-18 (fix/excess-credit-and-billy, part 2)** — Answer links for imported ids:
   `recordRoutes` maps each record a turn read to its folder by the API `object` it came in (and
   the page record and mentions by type); `recordPaths` uses it, and the `figures` event carries

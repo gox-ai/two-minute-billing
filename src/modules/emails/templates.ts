@@ -28,6 +28,8 @@ export interface RenderVars {
   customerName: string;
   /** portal_sign_in_code: the 6-digit code. Never stored; the logged copy is masked. */
   code?: string;
+  /** new_link: how long the new link works, e.g. "5 days". */
+  linkWindow?: string;
   /** checkout_reminder: what the buyer left, e.g. "Credit pack × 2". */
   orderSummary?: string;
   /**
@@ -530,6 +532,12 @@ export const DEFAULT_TEMPLATES: Record<EmailType, TemplateDef> = {
     body: "Use this code to sign in to your billing account:\n\n{{code}}\n\nThe code works for 10 minutes. If you did not ask for this code, you can ignore this email.",
     showFacts: false,
   },
+  new_link: {
+    subject: "Your new link from {{businessName}}",
+    heading: "Your new link",
+    body: "Hi {{customerName}},\n\nYou asked for a new link. Use the button below. The link works for {{linkWindow}}.\n\nIf you did not ask for a new link, you can ignore this email.",
+    showFacts: false,
+  },
 };
 
 export interface RenderedEmail {
@@ -882,6 +890,7 @@ export const TEMPLATE_VARS: Record<EmailType, TemplateVar[]> = {
     { key: "note", always: false },
   ],
   portal_sign_in_code: [...COMMON_TEMPLATE_VARS, { key: "code", always: true }],
+  new_link: [...COMMON_TEMPLATE_VARS, { key: "linkWindow", always: true }],
   credit_note_sent: [
     ...COMMON_TEMPLATE_VARS,
     { key: "creditNoteNumber", always: true },
@@ -905,6 +914,7 @@ export const SAMPLE_RENDER_VARS: Omit<RenderVars, "businessName"> = {
   customerName: "Sample Customer",
   // Preview only; a sent sign-in email always carries the engine's code.
   code: "123456",
+  linkWindow: "5 days",
   invoiceNumber: "INV-0001",
   amount: formatMoney(499900, "USD"),
   currency: "USD",
@@ -963,6 +973,7 @@ export function sampleVarsFor(type: EmailType): Omit<RenderVars, "businessName">
 
 /** What the editor calls each variable. Keys without an entry fall back to the key. */
 export const VAR_LABELS: Partial<Record<keyof RenderVars, string>> = {
+  linkWindow: "How long the link works",
   businessName: "Business name",
   customerName: "Customer name",
   portalUrl: "Billing portal link",

@@ -61,6 +61,7 @@ import { effectiveMethodTypes } from "@/modules/gateway/service";
 import { getCustomerById } from "@/modules/customers/service";
 import { hasBillingName, holderName } from "@/modules/customers/names";
 import {
+  NoChargeablePaymentMethodError,
   PaymentMethodConfigError,
   PaymentMethodVaultError,
   VaultSetupUnsupportedError,
@@ -1489,6 +1490,20 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           return reply
             .code(400)
             .send({ error: { type: "invalid_request_error", message: e.message } });
+        }
+        // The engine's text is for API callers; the buyer gets a next step.
+        if (e instanceof NoChargeablePaymentMethodError) {
+          log.warn("checkout found no chargeable payment method", {
+            event: "checkout_no_chargeable_payment_method",
+          });
+          return reply.code(400).send({
+            error: {
+              type: "payment_error",
+              code: "no_chargeable_payment_method",
+              message:
+                "We could not use a saved payment method for this subscription. Add a payment method, then try again.",
+            },
+          });
         }
         throw e;
       }

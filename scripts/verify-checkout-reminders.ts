@@ -215,6 +215,95 @@ ok(
 const rev = await resolveReport(orgId, on.biz.id, "checkout_recovered_revenue", { range: "12m" });
 ok("report: the recovered revenue is the purchase's paid total", rev.headline === 4900);
 
+// The business's email link lifetime replaces the built-in 48 hours.
+const week = await newBiz("Six-day links", true);
+await withTenant(orgId, (tx) =>
+  tx
+    .update(businesses)
+    .set({ storefrontConfig: { portal_email_link_days: 6 } })
+    .where(eq(businesses.id, week.biz.id)),
+);
+const weekly = await abandoned(week, "six@example.com", 2 * HOUR);
+await sendCheckoutReminders(new Date());
+const weekLeft = (await row(weekly.publicId)).expiresAt.getTime() - Date.now();
+ok(
+  "setting: an email link lifetime of 6 days keeps the reminded checkout open 6 days",
+  weekLeft > 6 * 24 * HOUR - HOUR && weekLeft <= 6 * 24 * HOUR,
+);
+
+// Email me a new link: an expired, unfinished order reopens under a new link.
+{
+  const { checkoutNewLinkJob, sendQueuedNewLink } =
+    await import("@/modules/customer-portal/new-link");
+  const { prices } = await import("@db/schema");
+  const { setMailer } = await import("@/providers/mailer");
+  setMailer({
+    kind: "console",
+    target: null,
+    async send() {
+      return { providerMessageId: "fake-new-link", status: "sent" };
+    },
+  });
+  // Live: in test mode the email goes only to team members (sign-in code rule).
+  const liveBiz = await createBusiness({
+    organizationId: orgId,
+    name: "Order links",
+    defaultCurrency: "USD",
+    livemode: "live",
+    timezone: "UTC",
+  });
+  const liveProduct = await createProduct({
+    organizationId: orgId,
+    businessId: liveBiz.id,
+    name: "Report pack",
+    kind: "charge",
+  });
+  const livePrice = await createPrice({
+    organizationId: orgId,
+    businessId: liveBiz.id,
+    productId: liveProduct.id,
+    type: "one_time",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 4900,
+  });
+  const orders = { biz: liveBiz, price: livePrice };
+  const expire = (publicId: string) =>
+    withTenant(orgId, (tx) =>
+      tx
+        .update(checkoutSessions)
+        .set({ expiresAt: new Date(Date.now() - HOUR) })
+        .where(eq(checkoutSessions.publicId, publicId)),
+    );
+  const lapsed = await abandoned(orders, "order@example.com", 2 * HOUR);
+  await expire(lapsed.publicId);
+  const job = await checkoutNewLinkJob(lapsed.token);
+  ok("new link: an expired order with a customer qualifies", job?.kind === "order");
+  const r = job ? await sendQueuedNewLink(job) : null;
+  const mails = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(emailMessages)
+      .where(
+        and(eq(emailMessages.toAddress, "order@example.com"), eq(emailMessages.type, "new_link")),
+      ),
+  );
+  const reopened = await row(lapsed.publicId);
+  ok(
+    "new link: the order is emailed and open again",
+    r === "sent" && mails.length === 1 && reopened.expiresAt.getTime() > Date.now() + 47 * HOUR,
+  );
+  const nobody = await abandoned(orders, null, 2 * HOUR);
+  await expire(nobody.publicId);
+  ok("new link: no customer email → none", (await checkoutNewLinkJob(nobody.token)) === null);
+  const gone = await abandoned(orders, "gone@example.com", 2 * HOUR);
+  await expire(gone.publicId);
+  await withTenant(orgId, (tx) =>
+    tx.update(prices).set({ active: false }).where(eq(prices.id, orders.price.id)),
+  );
+  ok("new link: a price no longer sold → none", (await checkoutNewLinkJob(gone.token)) === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 await closeDb();
 process.exit(fail ? 1 : 0);

@@ -185,7 +185,7 @@ export function SubscriptionChangeForm({
   changeRules,
   sub,
   businessName,
-  currency,
+  currency: subscriptionCurrency,
   items,
   prices,
   products,
@@ -279,6 +279,8 @@ export function SubscriptionChangeForm({
 }) {
   const productById = React.useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const priceById = React.useMemo(() => new Map(prices.map((p) => [p.id, p])), [prices]);
+  // The currency the new line set bills in. Only a reactivation can change it (below).
+  const [currency, setCurrency] = React.useState(subscriptionCurrency);
   const productOfPrice = (priceId: string) =>
     productById.get(priceById.get(priceId)?.product ?? "");
   const kindOf = (priceId: string) => productOfPrice(priceId)?.kind ?? null;
@@ -643,6 +645,48 @@ export function SubscriptionChangeForm({
 
   // ── Reactivation mode: editing a CANCELLED sub = fresh term from today ───────
   const reactivating = status === "cancelled";
+
+  // A reactivation (a fresh term) and a change at the next renewal have nothing to
+  // prorate, so the engine lets them move to another currency. Each line moves to its own
+  // product's price in that currency with the same cadence; a currency is offered only
+  // when every line has one.
+  const equivalentPrice = (priceId: string, cur: string): Price | undefined => {
+    const p = priceById.get(priceId);
+    if (!p || p.currency === cur) return p;
+    return prices.find(
+      (q) =>
+        q.product === p.product &&
+        q.currency === cur &&
+        q.active !== false &&
+        q.type === p.type &&
+        q.interval === p.interval &&
+        (q.interval_count ?? 1) === (p.interval_count ?? 1),
+    );
+  };
+  const liveLines = lines.filter((l) => !("removed" in l && l.removed) && l.price);
+  const canSwitchCurrency = reactivating || applyWhen === "end_of_term";
+  const currencyOptions = canSwitchCurrency
+    ? [...new Set(prices.filter((p) => p.active !== false).map((p) => p.currency))]
+        .filter(
+          (cur) => liveLines.length > 0 && liveLines.every((l) => equivalentPrice(l.price, cur)),
+        )
+        .sort()
+    : [];
+  const switchCurrency = (cur: string) => {
+    setCurrency(cur);
+    setLines((ls) =>
+      ls.map((l) => {
+        const q = equivalentPrice(l.price, cur);
+        return q && q.id !== l.price ? ({ ...l, price: q.id, unit_price_minor: "" } as Line) : l;
+      }),
+    );
+  };
+  // Back to "immediately": a mid-term change keeps the subscription's currency.
+  const leftSwitchable = !canSwitchCurrency && currency !== subscriptionCurrency;
+  React.useEffect(() => {
+    if (leftSwitchable) switchCurrency(subscriptionCurrency);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftSwitchable, subscriptionCurrency]);
   const [billingCyclesMode, setBillingCyclesMode] = React.useState<"forever" | "limited">(
     "forever",
   );
@@ -2550,7 +2594,8 @@ export function SubscriptionChangeForm({
         title={reactivating ? "Reactivate subscription" : "Change subscription"}
         description={
           <>
-            <span className="font-mono">{sub}</span> · {currency}
+            {/* The subscription's own currency: a switch picked below applies only later. */}
+            <span className="font-mono">{sub}</span> · {subscriptionCurrency}
             {reactivating
               ? reactInTerm
                 ? ". Cancelled. The current term continues."
@@ -3669,6 +3714,21 @@ export function SubscriptionChangeForm({
                 <span className="text-xs text-muted-foreground">
                   Limits every picker below. Change it to move this subscription to the plan of
                   another group. The subscription&rsquo;s group follows its plan.
+                </span>
+              </div>
+            ) : null}
+            {currencyOptions.length > 1 ? (
+              <div className="flex max-w-sm flex-col gap-1.5">
+                <span className="text-sm font-medium">Currency</span>
+                <SelectField
+                  value={currency}
+                  onValueChange={switchCurrency}
+                  ariaLabel="Currency"
+                  options={currencyOptions.map((c) => ({ value: c, label: c }))}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {reactivating ? "The new term" : "The term after the next renewal"} bills in this
+                  currency. Each item moves to its price in this currency.
                 </span>
               </div>
             ) : null}

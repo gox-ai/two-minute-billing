@@ -8074,6 +8074,8 @@ export interface paths {
                         action?: "pay_invoice" | "update_card" | "change_plan" | "cancel_subscription";
                         /** @description The task's invoice (pay_invoice) or subscription (change_plan, cancel_subscription). It must belong to this customer. */
                         object?: string;
+                        /** @description How long this link works, in days. Needs link_kind email. Default: the business's email link setting (portal_email_link_days, else 5 days). */
+                        link_valid_days?: number;
                     };
                 };
             };
@@ -8087,7 +8089,7 @@ export interface paths {
                         "application/json": components["schemas"]["PortalSessionCreated"];
                     };
                 };
-                /** @description Invalid link_kind, redirect_url or forward_url */
+                /** @description Invalid link_kind, redirect_url, forward_url or link_valid_days */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -17650,6 +17652,8 @@ export interface paths {
                          * @description Send the link here instead of the customer's billing email.
                          */
                         email?: string;
+                        /** @description mode=link: how long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days). */
+                        link_valid_days?: number;
                     };
                 };
             };
@@ -18074,6 +18078,8 @@ export interface paths {
                         to?: string;
                         /** @description A covering note in the email. */
                         note?: string;
+                        /** @description How long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days). */
+                        link_valid_days?: number;
                     };
                 };
             };
@@ -30055,7 +30061,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code" | "new_link";
                 };
                 cookie?: never;
             };
@@ -30099,7 +30105,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code" | "new_link";
                 };
                 cookie?: never;
             };
@@ -30157,7 +30163,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code" | "new_link";
                 };
                 cookie?: never;
             };
@@ -30224,7 +30230,7 @@ export interface paths {
                      * @description Billing email type
                      * @enum {string}
                      */
-                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code";
+                    type: "invoice_issued" | "invoice_to_pay" | "invoice_overdue" | "payment_receipt" | "payment_failed" | "payment_authentication_required" | "dunning_action_required" | "refund_initiated" | "refund_issued" | "credit_note_issued" | "credit_note_applied" | "subscription_activated" | "subscription_reactivated" | "subscription_changed" | "subscription_renewed" | "subscription_paused" | "subscription_resumed" | "subscription_canceled" | "subscription_canceled_nonpayment" | "trial_started" | "trial_expired" | "trial_extended" | "card_expiring" | "card_expired" | "payment_method_invalid" | "mandate_expired" | "trial_ending" | "renewal_reminder" | "cancellation_reminder" | "payment_due_reminder" | "pause_reminder" | "resume_reminder" | "pre_debit_notification" | "ach_authorization_copy" | "checkout_reminder" | "usage_alert" | "spend_limit_reached" | "credit_auto_topup_failed" | "credit_topup_debit_notice" | "invoice_sent" | "payment_request" | "payment_method_request" | "credit_note_sent" | "subscription_restart" | "portal_sign_in_code" | "new_link";
                 };
                 cookie?: never;
             };
@@ -30978,6 +30984,8 @@ export interface paths {
                         invoice?: string;
                         /** @description Credit note id (cn_…). Required for `credit_note_sent`. */
                         credit_note?: string;
+                        /** @description How long the email's button link works, in days. Default: the business's email link setting (portal_email_link_days). */
+                        link_valid_days?: number;
                         /** @description Subscription id (sub_…). Required for `subscription_restart`, and the subscription must have ended. The email carries a restart checkout: the customer pays for a new term, and the subscription starts again only when that payment succeeds. */
                         subscription?: string;
                         /**
@@ -38832,7 +38840,7 @@ export interface paths {
                             portal_email_code?: boolean;
                             /** @description How long a portal link minted through the API can be opened, in hours. Null = 1 hour. */
                             portal_link_hours?: number | null;
-                            /** @description How long a portal link in an email can be opened, in days. Null = 5 days. */
+                            /** @description How long a link in an email can be opened, in days: Pay now, Change payment method, payment request, checkout reminder and restart links. Null = 5 days for portal links, 48 hours for a checkout reminder, the checkout lifetime (24 hours by default) for a restart link. */
                             portal_email_link_days?: number | null;
                             /** @description How long a customer stays signed in to the portal, in hours. Null = 72 hours. */
                             portal_session_hours?: number | null;
@@ -41377,7 +41385,7 @@ export interface components {
             /** @description Balance plus the overdraft limit. Can be negative. */
             available_minor: number;
             /** @description The access check's available units. */
-            available_units?: {
+            available_units?: ({
                 /** @description The credit unit's id. */
                 unit?: string;
                 /** @description In the unit's smallest step. For a unit with no money rate: what a usage event can spend now. A credit grant counts only while its window contains this time, and usage that is not settled yet and open holds are taken off. */
@@ -41386,7 +41394,27 @@ export interface components {
                 held_units?: number;
                 /** @description Only for a unit with no money rate: taken by usage events and not drawn from a credit grant yet. */
                 unsettled_units?: number;
-            }[];
+                /** @description Only for a unit with no money rate: what a usage event that needs more than the balance gets, as the gate decides it for this unit. */
+                on_exhausted?: {
+                    /**
+                     * @description The on exhausted's policy.
+                     * @enum {string}
+                     */
+                    policy?: "block" | "bill";
+                    /**
+                     * @description Where the on exhausted comes from.
+                     * @enum {string}
+                     */
+                    source?: "business_blocking_off" | "customer_override" | "grant" | "plan_price" | "business_default" | "no_subscription" | "trial";
+                    /**
+                     * @description The rest is billed in money (the meter's usage price, else the unit's overage price) on every meter with a cost in this unit, on some of them, or on none. Never under `block`.
+                     * @enum {string}
+                     */
+                    billed?: "all" | "some" | "none";
+                    /** @description Where the rest is not billed: how far below zero the balance can go before the event is refused, in the unit's smallest step. 0 = refused at once. */
+                    overdraft_units?: number;
+                };
+            })[];
             /** @description The access check's balance. */
             balance: {
                 /** @description Credit left on the customer's grants. */

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ActionForm } from "@/components/form/action-form";
+import { LinkDaysField } from "@/components/form/link-days-field";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import { CheckboxField } from "@/components/ui/checkbox";
@@ -44,12 +45,15 @@ export function RequestPaymentRailButton({
   invoices,
   pms,
   customerEmail,
+  linkDays,
 }: {
   biz: string;
   cus: string;
   invoices: Invoice[];
   pms: PaymentMethod[];
   customerEmail: string | null;
+  /** The business's email link lifetime, preset for a link request. */
+  linkDays: number;
 }) {
   const [open, setOpen] = React.useState(false);
   const unpaid = invoices.filter((i) => OPEN.has(i.status) && dueOf(i) > 0);
@@ -80,6 +84,7 @@ export function RequestPaymentRailButton({
               unpaid={unpaid}
               pms={pms}
               customerEmail={customerEmail}
+              linkDays={linkDays}
               onDone={() => setOpen(false)}
             />
           ) : null}
@@ -95,6 +100,7 @@ function RequestPaymentForm({
   unpaid,
   pms,
   customerEmail,
+  linkDays,
   onDone,
 }: {
   biz: string;
@@ -102,6 +108,7 @@ function RequestPaymentForm({
   unpaid: Invoice[];
   pms: PaymentMethod[];
   customerEmail: string | null;
+  linkDays: number;
   onDone: () => void;
 }) {
   const router = useRouter();
@@ -237,6 +244,7 @@ function RequestPaymentForm({
             />
           </Field>
         ) : null}
+        {mode === "link" ? <LinkDaysField defaultDays={linkDays} /> : null}
       </div>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onDone}>

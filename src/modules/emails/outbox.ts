@@ -207,11 +207,13 @@ async function invoiceOrCreditNoteAttachment(
  */
 export function emailTypeForEvent(ev: EventRow): EmailType | null {
   switch (ev.type) {
+    // A debit found no mandate behind the card: ask for a new authorization.
     // An ACH authorization we took: the payer gets a copy (Reg E 1005.10(b)).
-    case "payment_source_updated":
-      return str((ev.data as Record<string, unknown> | null)?.ach_authorization)
-        ? "ach_authorization_copy"
-        : null;
+    case "payment_source_updated": {
+      const d = ev.data as Record<string, unknown> | null;
+      if (d?.mandate_missing === true) return "mandate_expired";
+      return str(d?.ach_authorization) ? "ach_authorization_copy" : null;
+    }
     // ── invoicing & payments ──
     case "invoice_generated":
       return "invoice_issued";

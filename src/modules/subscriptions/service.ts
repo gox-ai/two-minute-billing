@@ -1,3 +1,4 @@
+import { reactivationCurrency } from "./currency-switch";
 import { syncMeterBilling } from "./meter-billing";
 import { and, asc, desc, eq, gt, inArray, sql, type Column, type SQL } from "drizzle-orm";
 import { notDeleted } from "./deleted-sql";
@@ -4361,6 +4362,7 @@ export async function reactivateSubscriptionWithOptions(input: {
 
     // Resolve the desired item set (when provided) into concrete prices + snapshots.
     let resolved: SubscriptionItemInput[] | null = null;
+    let currency = sub.currency;
     if (input.items && input.items.length > 0) {
       resolved = [];
       for (const it of input.items) {
@@ -4370,9 +4372,6 @@ export async function reactivateSubscriptionWithOptions(input: {
           .where(and(eq(prices.businessId, businessId), eq(prices.publicId, it.price)))
           .limit(1);
         if (!price) throw new SubscriptionError(`We could not find the price ${it.price}.`);
-        if (price.currency !== sub.currency) {
-          throw new SubscriptionError("You cannot reactivate with a price in a different currency");
-        }
         if (it.unitPriceMinor != null) {
           if (!isOverridable(price.model)) {
             throw new SubscriptionError(
@@ -4392,13 +4391,19 @@ export async function reactivateSubscriptionWithOptions(input: {
       }
       // CAT-7, as in create: an add-on line with no custom price takes its plan-scoped
       // differential. Without it a catalog-0 add-on froze at 0 and billed 0 at every renewal.
+      currency = await reactivationCurrency(
+        tx,
+        sub,
+        resolved.map((i) => i.price.currency),
+        (m) => new SubscriptionError(m),
+      );
       const productIds = [...new Set(resolved.map((i) => i.price.productId))];
       const kinds = await tx
         .select({ id: products.id, kind: products.kind })
         .from(products)
         .where(and(eq(products.businessId, businessId), inArray(products.id, productIds)));
       resolved = await applyExplicitDifferentials(tx, {
-        currency: sub.currency,
+        currency,
         planProductIds: kinds.filter((k) => k.kind === "plan").map((k) => k.id),
         addonProductIds: new Set(kinds.filter((k) => k.kind === "addon").map((k) => k.id)),
         items: resolved,
@@ -4538,6 +4543,7 @@ export async function reactivateSubscriptionWithOptions(input: {
         cancelReason: null,
         cancelReasonCode: null,
         startDate: termStart,
+        ...(currency !== sub.currency ? { currency } : {}),
       })
       .where(eq(subscriptions.id, sub.id))
       .returning();

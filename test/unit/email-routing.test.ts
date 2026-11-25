@@ -211,6 +211,18 @@ describe("emailTypeForEvent — invalidated payment method", () => {
     });
     expect(emailTypeForEvent(ev("payment_source_invalidated", data))).toBe("mandate_expired");
   });
+
+  it("a debit that finds NO mandate asks for a new authorization", () => {
+    const data = buildEventData("payment_source_updated", pm, undefined, {
+      mandate_missing: true,
+    });
+    expect(emailTypeForEvent(ev("payment_source_updated", data))).toBe("mandate_expired");
+  });
+
+  it("a plain payment-method update sends no email", () => {
+    const data = buildEventData("payment_source_updated", pm);
+    expect(emailTypeForEvent(ev("payment_source_updated", data))).toBeNull();
+  });
 });
 
 describe("emailTypeForEvent — payment requests (0388)", () => {

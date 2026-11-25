@@ -13,6 +13,7 @@ import {
 import type { Country } from "@/lib/api/geo";
 import type { PortalMe } from "@/lib/portal-api";
 import { portalUpdateMeAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { portalFieldStates, prefilled, taxIdHelp } from "./billing-details";
 
 /** Fields the buyer always sees here: country and postal code decide the tax; city and state fill in from the postal code. */
@@ -33,6 +34,7 @@ const ALWAYS: readonly AddressFieldKey[] = [
  * When the save succeeds the page refreshes, and the add-card row continues into the gateway form.
  */
 export function InlineBillingDetails({ me, countries }: { me: PortalMe; countries: Country[] }) {
+  const session = usePortalSession();
   const missing = new Set(me.customer.billing_details_missing ?? []);
   const base = portalFieldStates(me.field_config) ?? {};
   const fieldStates: Partial<Record<AddressFieldKey, AddressFieldState>> = {};
@@ -72,7 +74,7 @@ export function InlineBillingDetails({ me, countries }: { me: PortalMe; countrie
         We need a few details before you can save a payment method. They also set the tax on your
         invoices.
       </p>
-      <ActionForm action={portalUpdateMeAction} className="flex flex-col gap-4">
+      <ActionForm action={portalUpdateMeAction.bind(null, session)} className="flex flex-col gap-4">
         <AddressFields
           countries={countries}
           value={prefilled(me)}

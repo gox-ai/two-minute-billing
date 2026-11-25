@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buyerTextLeaks, foreignSentences, sentencesOf } from "@/modules/ops/buyer-error-leak";
-import { BUYER_GENERIC_REFUSAL, PAYER_LEAD, RETRY_IN_FORM } from "@/providers/payer-wording";
+import {
+  BUYER_GENERIC_REFUSAL,
+  NOT_YET_APPROVED_TEXT,
+  PAYER_LEAD,
+  PAYMENT_ALREADY_IN_PROGRESS,
+  RETRY_IN_FORM,
+} from "@/providers/payer-wording";
 import { PAYER_REASON_WITHHELD, PAYER_SAFE_INTERNAL_FAILURE } from "@/providers/decline-codes";
 // Relative: the root `@/` alias points at src/.
 import {
@@ -77,6 +83,22 @@ describe("buyerTextLeaks", () => {
       refusalMessage(PAYER_LEAD.payment, PAYER_REASON_WITHHELD, "Select Pay $12.00 to try again."),
       refusalMessage(PAYER_LEAD.payment, PAYER_SAFE_INTERNAL_FAILURE, "Try again."),
       BUYER_GENERIC_REFUSAL,
+    ];
+    for (const t of texts) expect([t, buyerTextLeaks(t)]).toEqual([t, false]);
+  });
+
+  it("the checkout's second-completion and not-yet-approved texts are ours", () => {
+    const inProgress = refusalMessage(
+      "We could not complete your purchase.",
+      PAYMENT_ALREADY_IN_PROGRESS,
+      "Select Confirm payment to try again.",
+    );
+    // The engine's sentence already gives the next step: never a second one.
+    expect(inProgress).toBe(`We could not complete your purchase. ${PAYMENT_ALREADY_IN_PROGRESS}`);
+    const texts = [
+      inProgress,
+      `We could not complete your purchase yet. ${NOT_YET_APPROVED_TEXT.reason} ${NOT_YET_APPROVED_TEXT.retryDialog}`,
+      `We could not confirm your payment yet. ${NOT_YET_APPROVED_TEXT.reason} ${NOT_YET_APPROVED_TEXT.retryReturn}`,
     ];
     for (const t of texts) expect([t, buyerTextLeaks(t)]).toEqual([t, false]);
   });

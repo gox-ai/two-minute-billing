@@ -116,11 +116,11 @@ describe("mandateCurrencyAuthoritative: the catalogue matches every adapter", ()
       );
     });
   }
-  it("RazorPay cards are not held to their stored currency; UPI and Cashfree cards are", () => {
+  it("RazorPay cards are not held to their stored currency; UPI, Cashfree and Stripe cards are", () => {
     expect(mandateCurrencyIsAuthoritative("razorpay", "card")).toBe(false);
     expect(mandateCurrencyIsAuthoritative("razorpay", "upi")).toBe(true);
     expect(mandateCurrencyIsAuthoritative("cashfree", "card")).toBe(true);
-    expect(mandateCurrencyIsAuthoritative("stripe", "card")).toBe(false);
+    expect(mandateCurrencyIsAuthoritative("stripe", "card")).toBe(true);
   });
 });
 

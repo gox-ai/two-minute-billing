@@ -17,6 +17,8 @@ export interface MapScreen {
   headings?: string[];
   /** Labels the screen lists from a catalogue (a provider directory). Each is also a control. */
   options?: string[];
+  /** A control inside a dropdown menu → its trigger's label ("" when not static). */
+  menus?: Record<string, string>;
 }
 
 const MAP = fileURLToPath(new URL("./dashboard-map.generated.json", import.meta.url));

@@ -367,7 +367,10 @@ export function PlanCard({
   shippingAddresses,
   /** A saved payment method we can charge: decides what Keep's dialog promises. */
   canCharge = true,
+  /** `psess_…`: the session the page shows, for the usage reads. */
+  session,
 }: {
+  session?: string;
   subs: PortalSubscription[];
   tz?: string | null;
   allowCoupons?: boolean;
@@ -460,7 +463,7 @@ export function PlanCard({
 
           {sub.has_metered_items || sub.has_credit_usage ? (
             <React.Suspense fallback={<PortalUsageSkeleton />}>
-              <PortalUsage subscription={sub.id} tz={tz} />
+              <PortalUsage subscription={sub.id} tz={tz} session={session} />
             </React.Suspense>
           ) : null}
 

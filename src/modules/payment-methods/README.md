@@ -64,6 +64,14 @@ sweep. Collection falls back primary → backup on hard decline.
   `serializePaymentMethodWithGateway` so `gateway_account*` is populated too.
 
 ## Changelog
+- **2026-11-25** — Stripe's refusal of a debit outside the mandate's currency ("mandate can only be
+  used for a payment in …") books `mandate_currency_mismatch`, not `mandate_expired`: the card is
+  never marked `invalid` for it and dunning parks. Stripe `card` is now
+  `mandateCurrencyAuthoritative`, so the pre-check refuses such a debit before Stripe is asked.
+- **2026-11-25** — Re-adding a card re-judges its status (`readdedStatus`): an `expired` row whose
+  refreshed expiry and mandate are good becomes `valid` again, by the sweep's own rule. Before, the
+  fingerprint match refreshed the token and expiry but left `expired`, and auto-collection refused
+  the card the buyer had just added.
 - **2026-11-19** — `on-file-consent.ts`: the consent to keep a method for later charges
   (version `on-file-2026-11-19`), stored in `payment_method_authorizations` through
   `persistVaultedPaymentMethod({ onFileConsent })`.

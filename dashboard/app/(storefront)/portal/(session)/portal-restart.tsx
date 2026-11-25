@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { money } from "@/lib/format";
 import type { PortalSubscription } from "@/lib/portal-api";
 import { portalRestartAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { termName } from "./portal-change-view";
 
 type Restart = NonNullable<PortalSubscription["restart"]>;
@@ -24,6 +25,7 @@ export function PortalRestart({
   /** `closes_at` in the business timezone, or null when there is no limit. */
   closesLabel: string | null;
 }) {
+  const session = usePortalSession();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -35,7 +37,7 @@ export function PortalRestart({
   async function go() {
     setBusy(true);
     setError(null);
-    const res = await portalRestartAction(window.location.origin, subscription);
+    const res = await portalRestartAction(session, window.location.origin, subscription);
     if (!res.ok) {
       setError(res.error);
       setBusy(false);

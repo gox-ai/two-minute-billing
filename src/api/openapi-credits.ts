@@ -847,6 +847,35 @@ export const CREDIT_SCHEMAS = {
             unsettled_units: int(
               "Only for a unit with no money rate: taken by usage events and not drawn from a credit grant yet.",
             ),
+            on_exhausted: {
+              type: "object",
+              description:
+                "Only for a unit with no money rate: what a usage event that needs more than the balance gets, as the gate decides it for this unit.",
+              properties: {
+                policy: { type: "string", enum: ["block", "bill"] },
+                source: {
+                  type: "string",
+                  enum: [
+                    "business_blocking_off",
+                    "customer_override",
+                    "grant",
+                    "plan_price",
+                    "business_default",
+                    "no_subscription",
+                    "trial",
+                  ],
+                },
+                billed: {
+                  type: "string",
+                  enum: ["all", "some", "none"],
+                  description:
+                    "The rest is billed in money (the meter's usage price, else the unit's overage price) on every meter with a cost in this unit, on some of them, or on none. Never under `block`.",
+                },
+                overdraft_units: int(
+                  "Where the rest is not billed: how far below zero the balance can go before the event is refused, in the unit's smallest step. 0 = refused at once.",
+                ),
+              },
+            },
           },
         },
       },

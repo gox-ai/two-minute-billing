@@ -198,6 +198,50 @@ function findControl(
   return all.length ? pick(all) : null;
 }
 
+type Step = AssistantGuide["steps"][number];
+
+/** A menu trigger's name for the card: its label, or "" for a bare icon. */
+function openerLabel(el: HTMLElement): string {
+  const l = (el.getAttribute("aria-label") ?? el.innerText ?? "").replace(/\s+/g, " ").trim();
+  return l.length <= 40 ? l : "";
+}
+const CLOSED_MENU = '[aria-haspopup="menu"]:not([aria-expanded="true"])';
+const usableTrigger = (el: HTMLElement | null | undefined): el is HTMLElement =>
+  !!el && visible(el) && !el.closest(SKIP) && el.getAttribute("aria-expanded") !== "true";
+
+/**
+ * When the step's control is in a closed menu: the trigger that shows it. A `MoreMenu` keeps its
+ * items in the page, hidden, and its panel names the trigger that controls it. A Radix menu has
+ * no items until it opens, so the map names its trigger (`step.menu`; "" when the trigger has no
+ * fixed label: then the one closed menu near the step's card, or the only one on the page).
+ */
+function menuOpener(step: Step): HTMLElement | null {
+  const want = norm(step.control);
+  for (const panel of document.querySelectorAll<HTMLElement>("[role=menu][hidden][id]")) {
+    const has = [...panel.querySelectorAll<HTMLElement>("*")].some((el) => {
+      const l = labelOf(el);
+      return !!l && norm(l) === want;
+    });
+    if (!has) continue;
+    const t = document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(panel.id)}"]`);
+    if (usableTrigger(t)) return t;
+  }
+  if (step.menu === undefined) return null;
+  if (step.menu) {
+    const t = findControl(step.menu, step.within, step.say);
+    return usableTrigger(t) ? t : null;
+  }
+  const closed = (root: ParentNode) =>
+    [...root.querySelectorAll<HTMLElement>(CLOSED_MENU)].filter(usableTrigger);
+  let box: HTMLElement | null = step.within ? findControl(step.within, null, step.say) : null;
+  for (let up = 0; box && up < 6; up++, box = box.parentElement) {
+    const near = closed(box);
+    if (near.length) return near[0]!;
+  }
+  const all = closed(document);
+  return all.length === 1 ? all[0]! : null;
+}
+
 /**
  * A visible row label the instruction names ("Under Excess payments, select …"), inside the
  * `within` card when there is one: where to look when the control itself is not on screen yet.
@@ -322,10 +366,12 @@ export function GuideRunner() {
   const [i, setI] = React.useState(0);
   // What the current step found, keyed by step so a new step starts empty.
   // `seen`: something matched but it is no control (a heading): the step shows unanchored.
+  // `opener`: the control is in a closed menu and `el` is the trigger that shows it.
   const [found, setFound] = React.useState<{
     key: string;
     el: HTMLElement | null;
     seen: boolean;
+    opener?: boolean;
   } | null>(null);
   const arrived = React.useRef(false);
   // The row of the last control found: where a menu option or Save appears after a click.
@@ -370,6 +416,14 @@ export function GuideRunner() {
       const close = exact
         ? null
         : findControl(step.control, step.within, step.say, closeMatches, step.do);
+      // In a closed menu: point at its trigger and keep looking until the member opens it.
+      const opener = exact || close ? null : menuOpener(step);
+      if (opener) {
+        setFound((f) =>
+          f?.key === key && f.el === opener ? f : { key, el: opener, seen: false, opener: true },
+        );
+        return;
+      }
       const { el, via } = chooseTarget(
         {
           exact,
@@ -473,6 +527,13 @@ export function GuideRunner() {
             <X className="size-4" aria-hidden />
           </button>
         </div>
+        {current?.opener && target ? (
+          <p className="m-0 text-sm font-medium">
+            {openerLabel(target)
+              ? `First, select “${openerLabel(target)}” to show this action.`
+              : "First, select the highlighted button to show this action."}
+          </p>
+        ) : null}
         <p id="guide-say" className="m-0 text-sm">
           {step.say}
         </p>

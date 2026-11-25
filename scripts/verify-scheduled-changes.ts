@@ -589,8 +589,11 @@ const schRow = (id: string) =>
       await refuses({ ...base, adds: [{ priceId: "price_nope" }] }, /We could not find the price/),
     ],
     [
-      "preflight: wrong-currency add refused",
-      await refuses({ ...base, adds: [{ priceId: eurAddon.publicId }] }, /currency must match/),
+      "preflight: wrong-currency add refused inside the term",
+      await refuses(
+        { ...base, adds: [{ priceId: eurAddon.publicId }] },
+        /only at the end of the term/,
+      ),
     ],
     [
       "preflight: same item changed AND removed refused",
@@ -981,6 +984,93 @@ const schRow = (id: string) =>
     "the renewal estimate writes no audit row",
     !!auEst?.scheduled_change && (await skippedRows()).length === auditBefore,
   ]);
+}
+
+// A change at the term end may move the subscription to another currency: nothing is
+// prorated there, and the renewal bills the new term wholly in it. Mid-term it is refused.
+{
+  const fb = await createBusiness({
+    organizationId: orgId,
+    name: "FX Biz",
+    defaultCurrency: "USD",
+    livemode: "test",
+  });
+  const fctx = { organizationId: orgId, businessId: fb.id };
+  const lite = await createProduct({ ...fctx, name: "Lite", kind: "plan" });
+  const usd = await createPrice({
+    ...fctx,
+    productId: lite.id,
+    type: "recurring",
+    model: "flat",
+    currency: "USD",
+    amountMinor: 1000,
+    interval: "month",
+  });
+  const inr = await createPrice({
+    ...fctx,
+    productId: lite.id,
+    type: "recurring",
+    model: "flat",
+    currency: "INR",
+    amountMinor: 75000,
+    interval: "month",
+  });
+  const mkSub = async (email: string, startedAt: Date) => {
+    const customer = await createCustomer({ ...fctx, email });
+    await vaultPaymentMethod({ ...fctx, customer, token: "tok_4242" });
+    return createSubscription({
+      ...fctx,
+      customerId: customer.id,
+      now: startedAt,
+      items: [{ price: usd, quantity: 1 }],
+    });
+  };
+
+  const fresh = await mkSub("fx-midterm@example.com", new Date());
+  let midTerm = "";
+  try {
+    await scheduleChange({
+      ...fctx,
+      subscriptionId: fresh.subscription.id,
+      type: "change",
+      effectiveAt: new Date(Date.now() + 86_400_000),
+      changes: [{ itemId: fresh.items[0]!.publicId, newPriceId: inr.publicId }],
+    });
+  } catch (e) {
+    midTerm = (e as Error).message;
+  }
+
+  const old = await mkSub("fx-term-end@example.com", new Date(Date.now() - 40 * 86_400_000));
+  const boundary = old.subscription.currentPeriodEnd!;
+  await scheduleChange({
+    ...fctx,
+    subscriptionId: old.subscription.id,
+    type: "change",
+    effectiveAt: boundary,
+    changes: [{ itemId: old.items[0]!.publicId, newPriceId: inr.publicId }],
+  });
+  const tickAt = new Date(boundary.getTime() + 1_000);
+  await runWithClockScope({ onlyBusinessId: fb.id }, () => applyDueScheduledChanges(tickAt));
+  await renewSubscription(orgId, old.subscription.id, tickAt);
+  const [row] = await withTenant(orgId, (tx) =>
+    tx.select().from(subscriptions).where(eq(subscriptions.id, old.subscription.id)).limit(1),
+  );
+  const renewal = (
+    await withTenant(orgId, (tx) =>
+      tx.select().from(invoices).where(eq(invoices.subscriptionId, old.subscription.id)),
+    )
+  ).find((i) => i.currency === "INR");
+  checks.push(
+    [
+      "a currency change inside the term is refused",
+      midTerm.includes("only at the end of the term"),
+    ],
+    ["a change at the term end moves the subscription to INR", row?.currency === "INR"],
+    [
+      "…and the renewal bills the new term in INR at the INR price",
+      renewal != null && Number(renewal.subtotalMinor) === 75000,
+    ],
+  );
 }
 
 let pass = true;

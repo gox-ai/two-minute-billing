@@ -129,7 +129,31 @@ carries the same argument from the browser side.
   attached to a DIFFERENT provider customer.
 
 ## Changelog
+- **2026-11-25** — `authenticatePortal` refuses a token whose session differs from an
+  `X-Portal-Session` header (409 `portal_session_mismatch`); `/portal/v1/me` returns `session`
+  and email-code sign-in returns `id`. The storefront binds each tab to its own session, so two
+  portal tabs in one browser stop acting on each other's customer (add card, billing details,
+  credits, limits, sign-out).
 
+- **2026-11-24 (email me a new link)** — An expired or used link's card offers "Email me a new
+  link" (`new-link.ts`, routes in `src/api/new-link-routes.ts`: `GET|POST /portal/v1/new_link`
+  and `/checkout/v1/new_link`, Bearer = the dead link's token). Portal email links get a new
+  portal link on the same task; a restart link gets a new restart checkout while the
+  subscription is still cancelled (same price choice); an unfinished create/purchase order with
+  a customer email and only active prices reopens under a new resume token. The new link goes
+  only to the customer's address on file, by the `new_link_send` job; POST always answers 202;
+  3 requests per link and the auth limit per IP per 15 minutes. API portal links get no button.
+- **2026-11-24 (re-click)** — A spent link clicked again in the browser that spent it reopens its
+  page instead of the expired card: `resumeSpentPortalLink` + `POST /portal/v1/session/resume`
+  (Bearer = the session cookie's token, body `{link}`), 200 only when that session was minted from
+  that link's row. Wired into the continue page, its button and the `/portal/s/` exchange. Another
+  browser still gets the expired card. `verify:portal-access` covers it.
+  Same day: `portal_email_link_days` now sets EVERY emailed link (portal links, checkout
+  reminders, restart links; unset keeps 5 days / 48 h / the checkout TTL), and an operator can
+  override one link with `link_valid_days` (1–14) on `POST …/portal_sessions` (email kind only),
+  payment request create (`link` mode) and send. Dashboard: "Days the link works" in the portal
+  link, payment link, Request payment, Send again and Request update dialogs, preset to the
+  business setting (`/emails/send` takes `link_valid_days` too).
 - **2026-11-19 (inline Add)** — Add a payment method draws a card form we host (Stripe, TM Test,
   Braintree, Adyen, Checkout.com, Square, CyberSource) inside the open row: no second dialog,
   no Add card button for that row, Try again in the row. The popup closes after a save. The

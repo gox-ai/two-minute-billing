@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { portalAbandonAuthenticationAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { canCancelAtGateway } from "./gateway-cancel";
 
 /**
@@ -124,6 +125,7 @@ function ReleaseHoldButton({
   copy: keyof typeof COPY;
   gateway?: string | null;
 }) {
+  const session = usePortalSession();
   const { label, filled, title, lead, warning, released, cancelLabel, confirmLabel, busyLabel } =
     COPY[copy];
   const canCancel = canCancelAtGateway(gateway);
@@ -134,7 +136,7 @@ function ReleaseHoldButton({
   const confirm = async () => {
     setBusy(true);
     try {
-      const res = await portalAbandonAuthenticationAction(invoice);
+      const res = await portalAbandonAuthenticationAction(session, invoice);
       if (!res.ok) {
         reportBuyerError(res.error, { step: "pay_now_instead" });
         return void toast.error(res.error);

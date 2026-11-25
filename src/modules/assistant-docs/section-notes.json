@@ -3137,6 +3137,19 @@
     ],
     "hash": "75e5270c659b"
   },
+  "developers/getting-started/self-host-docker#by-hand": {
+    "context": "Lists the manual Docker commands for an upgrade without the script, plus how to roll back and how to build images from source.",
+    "asks": [
+      "upgrade docker install without the script",
+      "manual upgrade steps docker compose",
+      "how do I back up before upgrading by hand",
+      "how do I roll back a bad upgrade",
+      "build images from source instead of pulling",
+      "git checkout release tag compose file",
+      "docker compose pull and up commands"
+    ],
+    "hash": "be3fcb9a21be"
+  },
   "developers/getting-started/self-host-docker#install": {
     "context": "On the self-hosting page: the install heading that opens the steps for settings, DNS and start.",
     "asks": [],
@@ -3215,22 +3228,44 @@
     "hash": "e63d8fa22ae5"
   },
   "developers/getting-started/self-host-docker#upgrade": {
-    "context": "On the self-hosting page: how to back up and upgrade by version tag, with migrations applied before the API restarts.",
+    "context": "Shows how to upgrade a self-hosted Docker install with upgrade.sh: dry run, backup, release checkout, migration and restart, plus its safety refusals and options.",
     "asks": [
-      "update to a new version",
-      "upgrade without downtime",
-      "migrations during update",
-      "back up before upgrading",
-      "pull new images",
-      "how to roll out a new release",
-      "where do I find the upgrade steps",
-      "how do I upgrade a self-hosted install",
-      "can I go back to an older version",
-      "my upgrade broke the install",
-      "upgrade",
-      "version tag"
+      "how do I update my self-hosted install",
+      "upgrade.sh command",
+      "preview an upgrade without changing anything",
+      "does the upgrade back up my database",
+      "skip the confirmation prompt when upgrading",
+      "upgrade to a specific version tag",
+      "which version am I running",
+      "upgrade failed new release will not start"
     ],
-    "hash": "7517c1c19dca"
+    "hash": "b632f083f1de"
+  },
+  "developers/getting-started/self-host-docker#upgrade~2": {
+    "context": "Warns self-hosters to read the notes of every release they skip and explains the error shown when the database is too old for a release.",
+    "asks": [
+      "can I skip versions when upgrading",
+      "where are the release notes",
+      "Upgrade to an earlier release first error",
+      "database too old for this release",
+      "do I need to upgrade one version at a time",
+      "manual steps for skipped releases",
+      "where do I see upgrade steps before running"
+    ],
+    "hash": "35bd8ae0d892"
+  },
+  "developers/getting-started/self-host-docker#version-notes": {
+    "context": "Gives version-specific upgrade notes for self-hosters, such as the v0.2.3 fix for the schema_behind error after upgrading to v0.2.2.",
+    "asks": [
+      "schema_behind error in API log",
+      "API will not start after upgrading to v0.2.2",
+      "missing database changes after update",
+      "init-env.sh permission denied",
+      "what changed in v0.2.3",
+      "release that needs extra upgrade steps",
+      "fix self-host install stuck after update"
+    ],
+    "hash": "c611f44dddd5"
   },
   "developers/getting-started/self-host-docker#what-runs": {
     "context": "On the self-hosting page: the services and images in the stack, such as Postgres, init, API, worker and dashboard.",
@@ -12108,23 +12143,6 @@
     "asks": [],
     "hash": "f08b2b2037a2"
   },
-  "guides/handle-disputes#responding": {
-    "context": "On the disputes guide: you respond in your payment provider's dashboard, with context from Two Minute Billing and a link to the disputed payment.",
-    "asks": [
-      "where do I submit evidence",
-      "fight a chargeback",
-      "deadline to respond to dispute",
-      "what did the customer buy",
-      "open the disputed payment at my provider",
-      "respond in the gateway dashboard",
-      "where do I respond to a chargeback",
-      "how do I open the payment at the provider",
-      "can I respond inside Two Minute Billing",
-      "chargeback evidence",
-      "dispute deadline"
-    ],
-    "hash": "c21c3fa7f423"
-  },
   "guides/handle-disputes#what-happens-to-your-records": {
     "context": "On the disputes guide: how a dispute shows in your records and keeps the audit trail for reconciliation.",
     "asks": [
@@ -12157,6 +12175,20 @@
       "dispute lifecycle"
     ],
     "hash": "7bec85c9fd19"
+  },
+  "guides/handle-disputes#when-a-customer-files-a-chargeback": {
+    "context": "Explains how to answer a card chargeback: you respond in your payment provider's dashboard, and Two Minute Billing shows the purchase context and links to the provider charge.",
+    "asks": [
+      "customer disputed a charge, what do I do",
+      "how do I fight a chargeback",
+      "where do I respond to a card dispute",
+      "what info do I need to answer a chargeback",
+      "bank reversed a payment on my customer's card",
+      "can I answer a dispute inside Two Minute Billing",
+      "how to open the disputed payment at my payment provider",
+      "chargeback deadline who handles it"
+    ],
+    "hash": "cbe2b5955ad0"
   },
   "guides/hosted-checkout-and-portal": {
     "context": "On the hosted checkout and portal page: letting customers subscribe and manage billing on branded pages without card data touching your systems.",
@@ -15953,39 +15985,36 @@
     "hash": "98c2acbaf7f8"
   },
   "screen:/": {
-    "context": "See organization totals across all businesses: recurring revenue, paying customers, churn, trial conversion and 30 day revenue, pick a reporting currency, and create a business.",
+    "context": "Home screen of the organization: setup tour, create a business, switch reporting currency and see portfolio totals across businesses such as MRR, ARR, churn and revenue.",
     "asks": [
-      "Where can I see how all my businesses are doing together?",
-      "How much money came in over the last month across everything?",
-      "Take me to the total yearly recurring revenue.",
-      "How do I show all totals in one currency?",
-      "How do I add another business?",
-      "Which of my businesses are losing customers?",
-      "How many of my free trials turned into paying customers?",
-      "Where do I connect a payment gateway to start charging?",
-      "Where is the guided tour of the dashboard?",
-      "The page says I cannot connect to the billing service",
-      "portfolio totals",
-      "how many paying customers do I have"
+      "where is the home page",
+      "take me to my organization totals",
+      "how do I add a new business",
+      "show all my businesses in one currency",
+      "what is my total monthly recurring revenue",
+      "how many paying customers do I have across businesses",
+      "getting started checklist",
+      "where do I connect my payment gateway first",
+      "how is churn doing this month",
+      "can I see yearly recurring revenue for everything"
     ],
-    "hash": "75c695438842"
+    "hash": "b00db897af21"
   },
   "screen:/~2": {
-    "context": "Spot businesses that need attention, such as missing prices or no default gateway, create a business, and review account security warnings.",
+    "context": "Lower part of Home: revenue split, items needing attention such as missing gateway, price or two-factor sign-in, test businesses, reporting settings and creating a business.",
     "asks": [
-      "Why does my business say it is not ready to bill?",
-      "Which of my businesses have a problem I should fix?",
-      "A product is missing a price, where do I add it?",
-      "How do I create a new business with its own currency?",
-      "How do I turn on two-step sign-in for my account?",
-      "Where do I set the default payment gateway?",
-      "Take me to the security settings",
-      "warning on the home page",
-      "no price",
-      "enable two-factor",
-      "What does the Needs attention list mean?"
+      "what needs my attention",
+      "where do I turn on two-factor sign-in",
+      "my business is not ready to bill, why",
+      "no default gateway warning",
+      "how do I see unpaid invoices from home",
+      "add a payment gateway from the home page",
+      "create a new business",
+      "where is revenue by type",
+      "why are test businesses listed separately",
+      "take me to security settings"
     ],
-    "hash": "601eca22ef17"
+    "hash": "b8d114b73241"
   },
   "screen:/account": {
     "context": "Manage how you sign in: second sign-in method, recovery codes, active sessions and trusted browsers, and jump to the other account sections.",
@@ -16194,30 +16223,35 @@
     "hash": "c33043980377"
   },
   "screen:/businesses/{business}/catalog/addons/new~2": {
-    "context": "Configure an add-on’s price, billing and usage rules, trial behavior, billing duration, and accounting details.",
+    "context": "Set the first price of a new add-on: currency, how often it bills, pricing model, usage rules, trial and how many cycles it runs.",
     "asks": [
-      "How do I set the amount and currency for an add-on?",
-      "Can I charge by usage, by unit, or by package?",
-      "Where do I choose how often this extra renews?",
-      "How can I include some units for free before charging?",
-      "Where do I set a minimum charge or choose what usage gets billed?",
-      "How do I decide what happens when an add-on trial ends?",
-      "Can I make the charge continue indefinitely or stop after a set number of cycles?",
-      "Where do I enter the accounting category and code?"
+      "how do I set the price when creating a add-on",
+      "can I charge by usage",
+      "how do I add a free trial",
+      "how do I bill every month or every year",
+      "set a price per package of units",
+      "can I give some units free",
+      "how many times will it bill before stopping",
+      "bill until cancelled forever",
+      "what happens when the trial ends",
+      "minimum monthly spend for usage"
     ],
-    "hash": "51113d57a06e"
+    "hash": "3a704ca603b9"
   },
   "screen:/businesses/{business}/catalog/addons/new~3": {
-    "context": "Set an add-on’s tax code and tax treatment, then create it or cancel setup.",
+    "context": "Finish creating a add-on: accounting code and category, tax code, whether it is taxable and tax exclusive or inclusive, then create or cancel.",
     "asks": [
-      "Where do I enter the tax classification for a new extra?",
-      "How can I mark an add-on as taxable?",
-      "Can I choose whether tax is included in the displayed price?",
-      "Where do I finish creating this add-on?",
-      "I started setting up an extra by mistake; how do I back out?",
-      "tax settings for a new add-on"
+      "how do I make a add-on taxable",
+      "where do I put the accounting code",
+      "tax included in the price or added on top",
+      "HSN or SAC code for a product",
+      "can I set an accounting category",
+      "where do I save the new add-on",
+      "cancel creating this add-on",
+      "add tax to a catalog item",
+      "exclusive versus inclusive tax"
     ],
-    "hash": "87445d5e5357"
+    "hash": "6bc329cb6209"
   },
   "screen:/businesses/{business}/catalog/charges": {
     "context": "Browse and filter one-time products, review their catalog details and modification dates, and open products to edit or inspect associated subscriptions.",
@@ -16247,31 +16281,34 @@
     "hash": "408a036ceba5"
   },
   "screen:/businesses/{business}/catalog/charges/new~2": {
-    "context": "Configure a one-time product’s price, billing and usage rules, trial behavior, billing duration, and accounting details.",
+    "context": "Set the first price of a new one-time charge: currency, how often it bills, pricing model, usage rules, trial and how many cycles it runs.",
     "asks": [
-      "How do I set the amount and currency for a product customers buy once?",
-      "Can I charge by usage, by unit, or by package?",
-      "Where do I choose the billing interval for this price?",
-      "How can I include some units for free before charging?",
-      "Where do I set a minimum charge or choose what usage gets billed?",
-      "How do I decide what happens when a product trial ends?",
-      "Can I make billing continue indefinitely or stop after a set number of cycles?",
-      "Where do I enter the accounting category and code?"
+      "how do I set the price when creating a one-time product",
+      "one-time charge versus recurring",
+      "can I charge by usage",
+      "set price per package of units",
+      "can I give some units free",
+      "minimum spend for usage",
+      "how often should a charge repeat",
+      "can I add the price later",
+      "pricing model options"
     ],
-    "hash": "06b8376277a6"
+    "hash": "1c632f59dbaa"
   },
   "screen:/businesses/{business}/catalog/charges/new~3": {
-    "context": "Set tax details for a one-time product before creating it.",
+    "context": "Finish creating a one-time charge: accounting code and category, tax code, whether it is taxable and tax exclusive or inclusive, then create or cancel.",
     "asks": [
-      "Where do I enter the product’s HSN or SAC tax code?",
-      "How can I mark a one-off charge as taxable?",
-      "Can I choose whether tax is added on top of the price or included in it?",
-      "Customers need to see tax included in the listed price—where do I set that?",
-      "How do I make a single-purchase item and set its tax treatment?",
-      "Where can I create a product that isn’t billed on a recurring schedule?",
-      "Take me to the tax settings for a new one-time item."
+      "how do I make a one-time charge taxable",
+      "where do I put the accounting code",
+      "tax included in the price or added on top",
+      "HSN or SAC code for a product",
+      "can I set an accounting category",
+      "where do I save the new one-time charge",
+      "cancel creating this one-time charge",
+      "add tax to a catalog item",
+      "exclusive versus inclusive tax"
     ],
-    "hash": "e68ffee37949"
+    "hash": "980f66e42d3b"
   },
   "screen:/businesses/{business}/catalog/coupon_sets": {
     "context": "Generate and review groups of coupon codes, including how many have been redeemed or remain available.",
@@ -16369,16 +16406,18 @@
     "hash": "0ec294b50042"
   },
   "screen:/businesses/{business}/catalog/coupons/{cpn}/edit~2": {
-    "context": "Choose whether an existing coupon discounts a percentage or a fixed amount, and set its value and currency.",
+    "context": "Edit how a coupon discounts: percentage off or a fixed amount off, with its amount and currency.",
     "asks": [
-      "How do I change this offer from a percent discount to a set amount off?",
-      "Where do I edit how much the coupon takes off?",
-      "Can I make this a 15% discount instead of a fixed reduction?",
-      "How do I set a specific amount off in the right currency?",
-      "Take me to the coupon’s discount value.",
-      "Where can I see whether this promo is percentage-based or money off?"
+      "change coupon amount",
+      "switch a coupon from percent to fixed amount",
+      "how do I change what a coupon takes off",
+      "edit discount percentage",
+      "set the currency of a fixed discount",
+      "can I make a coupon take 20% off",
+      "where do I change the discount type",
+      "fix wrong coupon value"
     ],
-    "hash": "a5b62cdb479e"
+    "hash": "6701ff291f89"
   },
   "screen:/businesses/{business}/catalog/coupons/{cpn}/edit~3": {
     "context": "Choose what charges or products the coupon applies to and how long its discount lasts.",
@@ -16447,16 +16486,18 @@
     "hash": "6ab96cd56566"
   },
   "screen:/businesses/{business}/catalog/coupons/new~2": {
-    "context": "Set a new coupon’s discount type, value, and currency.",
+    "context": "Choose the discount for a new coupon: percentage or fixed amount, the amount, and the currency for a fixed amount.",
     "asks": [
-      "How do I make a percentage-off promo?",
-      "Where do I enter the amount customers save?",
-      "Can this coupon take a fixed amount off instead of a percentage?",
-      "How do I choose the currency for a money-off discount?",
-      "Take me to the settings for how much a new coupon reduces the price.",
-      "Where do I choose between a percent discount and a set amount off?"
+      "create a discount code",
+      "how do I give 10% off",
+      "can I give a flat amount off",
+      "set coupon value",
+      "what currency does a fixed coupon use",
+      "percentage or fixed coupon",
+      "new promo code discount",
+      "where do I set how much the coupon is worth"
     ],
-    "hash": "cddc3c968e26"
+    "hash": "f2fdc5ae5152"
   },
   "screen:/businesses/{business}/catalog/coupons/new~3": {
     "context": "Choose what a coupon discounts and whether the discount applies once, forever, or for a set number of billing periods.",
@@ -16724,32 +16765,35 @@
     "hash": "57c24bca225c"
   },
   "screen:/businesses/{business}/catalog/plans/new~2": {
-    "context": "Configure a plan’s price, billing schedule, usage charges, trial, billing duration, and accounting details.",
+    "context": "Set the first price of a new plan: currency, how often it bills, pricing model, usage rules, trial and how many cycles it runs.",
     "asks": [
-      "How do I set the amount and currency customers are charged?",
-      "Where can I choose monthly, yearly, or another billing schedule?",
-      "Can I charge a different rate for each unit or package?",
-      "How do I set up charges based on tracked usage?",
-      "Where do I set a minimum bill or free usage allowance?",
-      "How can I decide what happens to unused usage levels at period end?",
-      "How long can a customer try the plan before charges start?",
-      "How do I choose what happens when the trial ends?",
-      "Can I make this plan stop after a set number of billing periods?",
-      "Where do I add accounting codes or tax category details?"
+      "how do I set the price when creating a plan",
+      "can I charge by usage",
+      "how do I add a free trial",
+      "how do I bill every month or every year",
+      "set a price per package of units",
+      "can I give some units free",
+      "how many times will it bill before stopping",
+      "bill until cancelled forever",
+      "what happens when the trial ends",
+      "minimum monthly spend for usage"
     ],
-    "hash": "e7b65dd76cd9"
+    "hash": "f91556df6ab2"
   },
   "screen:/businesses/{business}/catalog/plans/new~3": {
-    "context": "Add a tax classification, choose whether the price includes tax, and create or cancel the plan.",
+    "context": "Finish creating a plan: accounting code and category, tax code, whether it is taxable and tax exclusive or inclusive, then create or cancel.",
     "asks": [
-      "Where do I enter the product’s HSN or SAC classification?",
-      "How can I mark this plan as taxable?",
-      "Can I make the displayed price already include tax?",
-      "How do I set tax to be added on top of the listed price?",
-      "Where do I finish creating this plan?",
-      "How do I leave without saving the new plan?"
+      "how do I make a plan taxable",
+      "where do I put the accounting code",
+      "tax included in the price or added on top",
+      "HSN or SAC code for a product",
+      "can I set an accounting category",
+      "where do I save the new plan",
+      "cancel creating this plan",
+      "add tax to a catalog item",
+      "exclusive versus inclusive tax"
     ],
-    "hash": "24e3482368d3"
+    "hash": "1ea352ddd8a2"
   },
   "screen:/businesses/{business}/catalog/product_groups": {
     "context": "Import, browse, and manage product groups, see their plans and other products, and create products within a group.",
@@ -16833,32 +16877,36 @@
     "hash": "2343fc109c6c"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/edit~2": {
-    "context": "Set a product’s price, usage measurement, tier rates, and how usage is grouped for billing.",
+    "context": "Edit a catalog item's price details: currency, billing frequency, pricing model including usage from a meter, markup, package pricing, free units and minimum spend.",
     "asks": [
-      "Where do I start adding the product’s first charge?",
-      "How can I charge based on what customers use?",
-      "Can I base the amount on our cost and add a margin?",
-      "Set different rates for different amounts of usage",
-      "How do I give customers some usage at no charge?",
-      "Where can I choose whether usage is measured by seats or recorded activity?",
-      "Can unused usage levels carry into the next billing period?",
-      "hourly or daily usage grouping"
+      "change how often a plan bills",
+      "bill based on a meter",
+      "add markup on my cost",
+      "charge a markup on usage",
+      "set a different rate per tier",
+      "set price per package",
+      "give free units each period",
+      "change plan price",
+      "minimum spend for usage",
+      "fixed rate or markup percentage"
     ],
-    "hash": "336c383d4594"
+    "hash": "c8d75dd5186b"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/edit~3": {
-    "context": "Set product details, trial behavior, subscription length, and accounting and tax information.",
+    "context": "Finish editing a catalog item: SKU, unit of measure, trial and what happens when it ends, number of billing cycles, accounting and tax settings, then save.",
     "asks": [
-      "Where do I set the product’s stock-keeping code and unit?",
-      "How long can a customer try this before paying?",
-      "What happens to a subscription when the free period ends?",
-      "How can I stop a subscription after a set number of charges?",
-      "Where do I enter the account and category for bookkeeping?",
-      "Add the product’s tax classification code",
-      "Is this item taxed, and is tax included in its price?",
-      "Where do I save or discard these product changes?"
+      "change trial length",
+      "what happens when the trial ends",
+      "make a plan bill only a few times",
+      "stop billing after N cycles",
+      "change tax setting of a product",
+      "update accounting code",
+      "where is the SKU",
+      "save changes to my plan",
+      "charge automatically or cancel after trial",
+      "tax inclusive or exclusive for an existing item"
     ],
-    "hash": "2695e7fcebaa"
+    "hash": "d4c143e93de3"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/prices/{price}": {
     "context": "Review a price’s package and usage-rate settings, minimums, subscription impact, and pricing history.",
@@ -16892,16 +16940,18 @@
     "hash": "b06f66a2471b"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/prices/{price}/edit~2": {
-    "context": "Review or choose a price’s currency and whether it is charged once or on a recurring schedule.",
+    "context": "Edit one price of a catalog item: currency, recurring or once, how often it repeats and its price ID.",
     "asks": [
-      "Where can I see which currency this charge uses?",
-      "Is this a one-time payment or an ongoing charge?",
-      "How often does the recurring amount come due?",
-      "Where do I check the number of billing intervals?",
-      "What is the billing schedule for this price?",
-      "Find the price’s reference ID"
+      "change a price's billing interval",
+      "edit price currency",
+      "switch a price from recurring to one-time",
+      "change billing frequency",
+      "where is the price ID",
+      "edit one price of a plan",
+      "make a price yearly instead of monthly",
+      "how often does this price charge"
     ],
-    "hash": "b3e5cd3fb3da"
+    "hash": "58bb31feda07"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/prices/{price}/edit~3": {
     "context": "Configure a price’s charging model, usage rates and grouping, and how many subscription cycles it lasts.",
@@ -16993,17 +17043,18 @@
     "hash": "0b282ccf743f"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/prices/new~2": {
-    "context": "Choose the currency and whether a product charge happens once or repeats on a set billing interval.",
+    "context": "Add another price to a catalog item: currency, recurring or once, frequency and billing interval, with an optional price ID.",
     "asks": [
-      "Where do I set the currency for this charge?",
-      "How do I make a customer pay just once?",
-      "Can I set this up as a repeating charge?",
-      "Where do I choose how often customers are billed?",
-      "How do I bill every few weeks or months instead of each interval?",
-      "Where can I find the price identifier?",
-      "How do I set the period between recurring payments?"
+      "add a price in another currency",
+      "add a yearly price to my plan",
+      "give a plan a second price",
+      "new billing interval for existing plan",
+      "can I sell the same plan in two currencies",
+      "add annual option",
+      "create one-time price",
+      "set a custom price ID"
     ],
-    "hash": "b7f9d9338a4d"
+    "hash": "0a33b6d4913f"
   },
   "screen:/businesses/{business}/catalog/products/{prod}/prices/new~3": {
     "context": "Set usage-based pricing, including rates, packages, markups, minimum spend, usage calculation, and billing-cycle terms.",
@@ -17198,20 +17249,20 @@
     "hash": "225f95412e11"
   },
   "screen:/businesses/{business}/credit_notes/{cn}": {
-    "context": "Review a credit note, issue a refund or account credit, and manage its status and details.",
+    "context": "Act on a credit note: refund it to the customer, return it as credit, mark a refund paid, void it, and read its record of events.",
     "asks": [
-      "How do I refund a customer for this credit note?",
-      "Where can I return this amount as credit instead of sending money back?",
-      "How do I mark a refund as already paid?",
-      "Where can I see the reason and amount for this adjustment?",
-      "Can I void this credit note?",
-      "Take me to the options for paying back or crediting a customer.",
-      "Where do I view the records and details for this credit note?",
-      "A customer asked for their money back",
-      "issue refund",
-      "void credit note"
+      "refund a credit note",
+      "how do I give money back from a credit note",
+      "turn a credit note into account credit",
+      "void a credit note",
+      "mark refund as already paid",
+      "I issued a refund twice, why the warning",
+      "reason for refund",
+      "who refunded this and when",
+      "can I cancel a credit note",
+      "what happened to this credit note"
     ],
-    "hash": "678acb10ab0a"
+    "hash": "43730e1b1e64"
   },
   "screen:/businesses/{business}/credit_notes/{cn}~2": {
     "context": "Enter refund details and record a credit note refund.",
@@ -17245,22 +17296,20 @@
     "hash": "c45d7d44d247"
   },
   "screen:/businesses/{business}/credit_notes/{cn}~4": {
-    "context": "Review a credit note’s status and activity, and add or manage team comments.",
+    "context": "Read a credit note's details, linked refunds and allocations, activity log, and team comments.",
     "asks": [
-      "Where can I see whether this credit note was voided and when?",
-      "How do I check which customer and invoice this adjustment belongs to?",
-      "Where can I read the reason and note saved with the credit note?",
-      "How do I review older activity on this credit note?",
-      "Can I leave a comment for my team about this adjustment?",
-      "Where do I see the comments already added by my team?",
-      "How can I remove a comment from this credit note?",
-      "Where can I see the whole activity history for this record?",
-      "Open the full activity log on its own page.",
-      "I need to see who changed this credit note",
-      "credit note history",
-      "credit note status"
+      "what is this credit note for",
+      "which invoice does this credit note belong to",
+      "see the refund for a credit note",
+      "when was this credit note created",
+      "is the credit note voided",
+      "leave a note for my team on a credit note",
+      "who created this credit note",
+      "find the transaction for the refund",
+      "credit note status and type",
+      "delete a comment"
     ],
-    "hash": "f6a54fad9be0"
+    "hash": "850586005fc2"
   },
   "screen:/businesses/{business}/credit_notes/new": {
     "context": "Create a customer credit from an invoice, choose its treatment, and record why it is being issued.",
@@ -17312,70 +17361,66 @@
     "hash": "742d3223e14a"
   },
   "screen:/businesses/{business}/customers/{cus}": {
-    "context": "A customer's profile: contact details, billing settings, payment methods (including which gateway their next payment method goes to), contacts and activity.",
+    "context": "Customer profile top section: contact details, billing settings, dates, MRR, payment methods, tax IDs, extra contacts and the gateway used for new payment methods.",
     "asks": [
-      "Can I move one customer to a different payment gateway?",
-      "How do I make this customer's next card go to Stripe instead of Razorpay?",
-      "Where do I change the gateway for a customer's new payment methods?",
-      "Where can I see when this customer was added and what currency they use?",
-      "How do I change how many days they have to pay?",
-      "Can I move this customer’s regular billing date?",
-      "Customers keep getting billing emails; where can I check their email preferences?",
-      "Where do I change how overdue invoices are handled?",
-      "How can I see this customer’s tax exemption and tax ID details?",
-      "Where can I check their monthly recurring revenue and saved ways to pay?",
-      "How do I add another person for billing or account emails?",
-      "customer profile",
-      "customer overview"
+      "where do I change a customer's email",
+      "find a customer's phone number",
+      "which gateway is used for this customer's new cards",
+      "how much does this customer pay per month",
+      "when is their next billing date",
+      "add another contact for billing emails",
+      "does the customer have a tax ID or VAT number",
+      "is this customer exempt from tax",
+      "how many days to pay for this customer",
+      "customer profile details"
     ],
-    "hash": "288464240faf"
+    "hash": "28947168aefd"
   },
   "screen:/businesses/{business}/customers/{cus}/add_charge": {
-    "context": "Set up a one-time charge for a customer, including its amount, dates, description, and collection details.",
+    "context": "Create a quick one-off charge for a customer: amount, dates, description, currency and how to collect it, or pick one from the catalog.",
     "asks": [
-      "How do I bill a customer for a one-off fee?",
-      "Take me to the form for charging someone outside their regular plan.",
-      "Where can I enter a custom amount and describe the work?",
-      "Can I charge for something over a specific date range?",
-      "I need to add an extra service charge to this customer’s bill.",
-      "How do I choose the currency for a standalone charge?",
-      "Add an ad hoc customer charge",
-      "Where can I choose how and when to collect this payment?",
-      "I forgot to bill a customer for extra work",
-      "quick charge"
+      "bill a customer for something extra",
+      "add a one-time fee to a customer",
+      "charge a customer without a plan",
+      "one-off charge for a service",
+      "invoice a customer for custom work",
+      "create a quick charge",
+      "charge with a description and dates",
+      "add a charge in a specific currency",
+      "collect payment now or later for a charge",
+      "can I pick a charge from my catalog"
     ],
-    "hash": "fc56f1f561ce"
+    "hash": "1e2c1727bb1b"
   },
   "screen:/businesses/{business}/customers/{cus}/add_charge_price": {
-    "context": "Add a charge for a customer by setting its amount, dates, description, and collection details.",
+    "context": "Add a catalog charge to a customer: amount, date range, description, currency and collection choice.",
     "asks": [
-      "How do I add a one-time fee to a customer’s account?",
-      "Take me to the screen for billing an extra service.",
-      "Where can I enter the price and explain what the charge is for?",
-      "Can I set the period this charge covers?",
-      "I need to bill a customer for work that isn’t part of their regular plan.",
-      "How do I pick the currency for this charge?",
-      "Add a custom customer charge",
-      "Where do I set up payment collection for an additional charge?",
-      "A customer owes me for extra work"
+      "add a catalog charge to a customer",
+      "bill an existing charge to a customer",
+      "charge a customer from my product list",
+      "change the amount of a catalog charge for one customer",
+      "add a fee for specific dates",
+      "how do I add several charges at once",
+      "one-time product for one customer",
+      "charge customer a different amount"
     ],
-    "hash": "87a0887976e8"
+    "hash": "cb1066790b93"
   },
   "screen:/businesses/{business}/customers/{cus}/credits": {
-    "context": "Give a customer paid or promotional credit, review its balance and usage, and view the related invoice.",
+    "context": "Give a customer credit and read their balance: promotional or paid, money or units, tax treatment, priority, expiry, overdraft limit, held amounts and what happens when credit runs out.",
     "asks": [
-      "How do I add money or promotional credit to a customer’s account?",
-      "Where can I see how much credit the customer has left?",
-      "How do I tell whether the customer’s credit is paid or promotional?",
-      "Where do I check what currency and value the credit uses?",
-      "How can I see whether taxes apply when credit is bought or spent?",
-      "How do I mark the credit’s invoice as paid?",
-      "Where can I see the payment method and payment reference?",
-      "How do I set the credit’s priority or expiration date?",
-      "What happens when this customer runs out of credit?",
-      "Where can I check usage covered by credit, holds, or the overdraft limit?"
+      "give a customer free credit",
+      "sell prepaid credit to a customer",
+      "how much credit does a customer have left",
+      "set when credit expires",
+      "what happens when credit runs out",
+      "let a customer go negative",
+      "block usage when credit is used up",
+      "bill usage after credit ends",
+      "mark a credit purchase as paid",
+      "tax on prepaid credit"
     ],
-    "hash": "0891db9cd2c5"
+    "hash": "9825b31f875d"
   },
   "screen:/businesses/{business}/customers/{cus}/credits/grants/{grant}": {
     "context": "Review a customer’s credit grant, including how much was added, used, expired, voided, and remains.",
@@ -17489,19 +17534,20 @@
     "hash": "83dac4938564"
   },
   "screen:/businesses/{business}/customers/{cus}/edit~3": {
-    "context": "Set a customer's currency, locale, collection behavior, email notifications, dunning options, payment terms, and invoice note.",
+    "context": "Edit a customer's billing preferences: currency, language, automatic charging or invoice, email and dunning exclusions, dunning policy, payment terms and invoice note.",
     "asks": [
-      "How do I choose the currency this customer is billed in?",
-      "Where can I set the customer's language for billing?",
-      "Can I make invoices charge this customer automatically?",
-      "How do I stop automatic charges and send an invoice instead?",
-      "Customers keep getting billing emails—where can I change their notification setting?",
-      "How do I keep this customer out of payment reminders?",
-      "Where can I set the customer's payment deadline in days?",
-      "How do I change the reminder policy or invoice note for this customer?",
-      "net 30"
+      "stop emailing this customer",
+      "exclude a customer from payment retries",
+      "change customer currency",
+      "send invoices instead of charging the card",
+      "set days to pay for one customer",
+      "change a customer's language",
+      "leave a customer out of reports",
+      "put a note on every invoice for this customer",
+      "different overdue policy for one customer",
+      "turn off automatic charging"
     ],
-    "hash": "6ca51aff03c6"
+    "hash": "f0d5acc59284"
   },
   "screen:/businesses/{business}/customers/{cus}/edit~4": {
     "context": "Update the customer’s postal location by choosing a place, setting the city and country, or adding another address line.",
@@ -17646,49 +17692,69 @@
     ],
     "hash": "eaead5036e5e"
   },
-  "screen:/businesses/{business}/customers/{cus}~2": {
-    "context": "Review and manage a customer’s billing profile, contacts, invoice information, payment collection settings, and gateway details.",
+  "screen:/businesses/{business}/customers/{cus}~10": {
+    "context": "Customer history: invoices, transactions, payment intents, credit notes, email logs and events, plus team comments and clearing personal data.",
     "asks": [
-      "Where can I update this customer’s tax and billing information?",
-      "Take me to the customer’s other contact details.",
-      "How do I leave a note that appears on their invoice?",
-      "Can I see or change extra information saved on this customer?",
-      "Customers keep getting charged automatically—where can I check the collection settings?",
-      "How do I ask this customer to add a card?",
-      "Where can I see the next payment and the amount still owed?",
-      "I need to check why automatic collection is paused or retrying.",
-      "Show me which payment processor account handles this customer."
+      "see all invoices for a customer",
+      "did the customer receive my email",
+      "email delivery failed for a customer",
+      "find a customer's past payments",
+      "why was an email not sent",
+      "leave an internal note about a customer",
+      "view a customer's credit notes",
+      "what happened on this account",
+      "erase a customer's personal data",
+      "see email errors and attempts"
     ],
-    "hash": "66acae31aa1b"
+    "hash": "ff3766126e0b"
+  },
+  "screen:/businesses/{business}/customers/{cus}~2": {
+    "context": "Customer profile lower section: billing date, tax and address, extra contacts, custom fields, invoice note, JSON metadata, payment retry status and request a card with link validity.",
+    "asks": [
+      "change the billing date for a customer",
+      "edit billing address",
+      "country and postal code of a customer",
+      "request a card from a customer by email",
+      "how long does the card link work",
+      "why did the payment retry stop",
+      "payment held for our team",
+      "add custom fields to a customer",
+      "store extra data on a customer",
+      "remove a contact"
+    ],
+    "hash": "91a14de8e79e"
   },
   "screen:/businesses/{business}/customers/{cus}~3": {
-    "context": "Review a customer’s saved payment details and activity, manage primary or backup methods, clear personal data, and set subscription billing timing.",
+    "context": "Customer payment methods and billing dates: card or mandate details, make a method primary or backup, remove it, activity records, account details, clear personal data and create a subscription.",
     "asks": [
-      "Where can I check whether a saved card or bank method is active and when it expires?",
-      "Take me to the customer’s payment method details.",
-      "How do I make a different payment method the main one?",
-      "Can I keep a second payment option or remove an old one?",
-      "I need to see whether this payment method supports recurring charges.",
-      "Where can I review recent activity for this customer?",
-      "How do I clear this customer’s personal information?",
-      "Can I change the day their subscription is billed?",
-      "Start a subscription for this customer"
+      "see the card on file for a customer",
+      "which card is the primary",
+      "set a backup card",
+      "remove a saved card",
+      "is the card expired",
+      "check the direct debit mandate",
+      "what is the maximum per debit",
+      "3D Secure status of a card",
+      "delete a customer's personal data",
+      "privacy erasure request"
     ],
-    "hash": "2648ae1d5ef5"
+    "hash": "bf7f6db6b10e"
   },
   "screen:/businesses/{business}/customers/{cus}~4": {
-    "context": "Collect or request a customer payment, create a charge, and adjust promotional credits or excess-payment balances.",
+    "context": "Collect money from a customer: charge now or send a payment link with a chosen validity, add a quick charge, record an offline payment, manage credits or excess payments.",
     "asks": [
-      "How do I charge a customer now using their saved payment method?",
-      "Where can I send someone a link to pay their balance?",
-      "How do I add a one-time charge to this customer?",
-      "Where can I give a customer promotional credit?",
-      "How do I subtract credit or set their balance to a specific amount?",
-      "Where can I record money received by cash, check, or bank transfer?",
-      "How do I record an overpayment from a customer?",
-      "Can I choose which saved payment method to use for a charge?"
+      "charge this customer now",
+      "send a payment link by email",
+      "how long should the payment link work",
+      "customer paid by cash or bank transfer",
+      "record a check payment",
+      "give a customer bonus credits",
+      "deduct credits from a customer",
+      "set a credit balance to a number",
+      "customer paid too much",
+      "create a quick charge from the customer page"
     ],
-    "hash": "d45126b5629f"
+    "hash": "f8b6d8e27646"
   },
   "screen:/businesses/{business}/customers/{cus}~5": {
     "context": "Record a payment against an invoice, including its amount, method, date, reference number, and note.",
@@ -17716,44 +17782,50 @@
     "hash": "94dc21ca812b"
   },
   "screen:/businesses/{business}/customers/{cus}~7": {
-    "context": "Email a customer, manage subscriptions, credits, refunds, coupons, and usage keys, or review usage.",
+    "context": "Customer subscriptions, payment methods, balances and credits, and sending an email or creating a portal link with a chosen link validity.",
     "asks": [
-      "How do I email a customer with a message to go along with it?",
-      "Where can I start a new subscription for this customer?",
-      "How do I refund a customer who was charged twice?",
-      "Where can I choose the amount and reason for a refund?",
-      "How do I add or remove a discount from this customer?",
-      "Where can I see a customer’s usage by model and day?",
-      "How do I add or remove a usage key on the customer’s account?",
-      "Where can I check their promotional credits and refundable balance?"
+      "send an email to a customer",
+      "give a customer a link to manage their account",
+      "how long does a portal link last",
+      "create a portal login link",
+      "see what credits a customer has",
+      "refund a customer's credit",
+      "does this customer have an excess payment",
+      "add a note to a customer email",
+      "start a subscription for a customer",
+      "list all subscriptions of a customer"
     ],
-    "hash": "9aedaba0d909"
+    "hash": "1735baab7cae"
   },
   "screen:/businesses/{business}/customers/{cus}~8": {
-    "context": "Review a shipping address, change its label or location, make it the customer’s default destination, or archive it.",
+    "context": "Customer extras: refund excess payment, usage this period, credits, usage controls, coupons, usage keys, payment requests and receipts.",
     "asks": [
-      "Where can I change where this customer’s orders are shipped?",
-      "Take me to the customer’s delivery address details.",
-      "How do I make this the usual destination for shipments?",
-      "Can I choose a different default shipping location?",
-      "This delivery address is no longer used—where can I archive it?",
-      "I need to update the city or country for a saved destination.",
-      "Set the customer’s preferred delivery address"
+      "give money back for a duplicate payment",
+      "see how much a customer used this month",
+      "add a coupon to a customer",
+      "remove a discount from a customer",
+      "create a usage key for a customer",
+      "limit a customer's usage",
+      "see credits and usage controls",
+      "view customer payment requests",
+      "find receipts for a customer",
+      "refund an overpayment"
     ],
-    "hash": "09f143dabc18"
+    "hash": "ac084f9e5207"
   },
   "screen:/businesses/{business}/customers/{cus}~9": {
-    "context": "Review a customer’s billing activity and email history, add an internal team comment, or clear personal data.",
+    "context": "Manage a customer's shipping addresses: label, city, postal place, country, extra address line, default, archive and restore.",
     "asks": [
-      "Where can I see the messages sent to a customer and whether they went through?",
-      "How do I check what happened with this customer’s payments or billing events?",
-      "Where can I find the customer’s account identifier?",
-      "Can I leave a private note for my team on this account?",
-      "I need to remove someone’s personal details—where do I go?",
-      "How can I see the full list of customer email activity?",
-      "Where do I review invoices, refunds, or payment records for this customer?"
+      "add a shipping address",
+      "change the default shipping address",
+      "archive an old address",
+      "restore an archived address",
+      "where do I put a delivery address",
+      "customer has two addresses",
+      "edit shipping city and country",
+      "which address is used for shipping"
     ],
-    "hash": "ff3766126e0b"
+    "hash": "09f143dabc18"
   },
   "screen:/businesses/{business}/customers/new": {
     "context": "Start creating a customer and enter billing, shipping, tax, dunning, and invoice-note details.",
@@ -17786,19 +17858,19 @@
     "hash": "d7f1623a5372"
   },
   "screen:/businesses/{business}/customers/new~3": {
-    "context": "Set a new customer's billing preferences, including how they pay, which language and currency to use, and invoice follow-up details.",
+    "context": "Set billing preferences when creating a customer: currency, language, automatic charging or invoice, email and dunning exclusions, policy, payment terms and invoice note.",
     "asks": [
-      "Where can I choose the currency this customer pays in?",
-      "How do I make invoices charge the customer automatically?",
-      "Can I stop sending payment reminder emails to this customer?",
-      "Customers keep getting emails about overdue bills—where do I change that?",
-      "Take me to the setting for how many days customers have to pay.",
-      "How do I add a note that appears on this customer's bills?",
-      "Where can I choose the language used for customer messages?",
-      "Can I use a different overdue-payment policy for this customer?",
-      "auto charge"
+      "create a customer who pays by invoice",
+      "set a customer's currency when adding",
+      "new customer should not get emails",
+      "skip reports for a test customer",
+      "how many days to pay for a new customer",
+      "charge card automatically for new customer",
+      "set language for customer emails",
+      "add an invoice note for a new customer",
+      "choose a payment retry policy for customer"
     ],
-    "hash": "84732892828a"
+    "hash": "4e35720ff85e"
   },
   "screen:/businesses/{business}/customers/new~4": {
     "context": "Enter a new customer’s postal location by choosing a place, setting the city and country, or adding another address line.",
@@ -17923,22 +17995,20 @@
     "hash": "dc2ab08908b6"
   },
   "screen:/businesses/{business}/events": {
-    "context": "Browse system and API activity, identify the source and actor, and open related customer or event details.",
+    "context": "Browse the log of events in your business and filter by where they came from, such as API, dashboard, portal, checkout or gateway, then open an event or its customer.",
     "asks": [
-      "How do I find an API activity record?",
-      "Where can I see what changed in the dashboard or during a migration?",
-      "Can I look up an event by customer or resource ID?",
-      "Who or what triggered this billing activity?",
-      "How do I find an event using its trace ID?",
-      "Show me recent activity from background billing jobs.",
-      "Where can I open the full event details?",
-      "events aren't loading",
-      "Show the events for one customer, including its subscriptions and invoices.",
-      "Filter events by customer ID.",
-      "activity feed",
-      "event log"
+      "see what happened in my account",
+      "audit log of changes",
+      "who changed this",
+      "find an event by ID",
+      "did a gateway notification arrive",
+      "what did my API calls do",
+      "filter events by source",
+      "events from the customer portal",
+      "trace an error to a request",
+      "show recent activity in my business"
     ],
-    "hash": "3f13a33a9217"
+    "hash": "60b159bcc66a"
   },
   "screen:/businesses/{business}/events/{evt}": {
     "context": "Review an event's webhook attempts and request and response details, and resend the event to an enabled endpoint.",
@@ -18234,36 +18304,36 @@
     "hash": "0b839c8213d6"
   },
   "screen:/businesses/{business}/invoices/{inv}~5": {
-    "context": "Create a credit note to reduce the amount owed or provide refundable credit, and record a refund when applicable.",
+    "context": "Fix or reverse an invoice: create a credit note, record an offline refund or issue a gateway refund, with amounts and line items.",
     "asks": [
-      "How do I reduce what the customer owes on this invoice?",
-      "I need to give the customer credit they can get refunded.",
-      "Where can I issue a credit against a bill?",
-      "How do I choose whether a credit lowers the balance or can be refunded?",
-      "I need to refund a customer using a credit note.",
-      "Where do I enter the refund date and payment details?",
-      "Why can’t I add a credit when there are no invoice charges?",
-      "A customer was overcharged on this invoice",
-      "partial refund"
+      "refund an invoice",
+      "customer overcharged, how to correct",
+      "reduce what the customer owes",
+      "give back money for an invoice",
+      "I refunded by bank transfer, record it",
+      "issue a partial refund",
+      "create a credit note for an invoice",
+      "edit invoice line items for a credit",
+      "refund goes to credit balance",
+      "avoid refunding twice"
     ],
-    "hash": "93e5f5d95efc"
+    "hash": "c1d171e7ea61"
   },
   "screen:/businesses/{business}/invoices/{inv}~6": {
-    "context": "Review invoice and customer billing details, including dates, amounts, purchase order, sales channel, tax, and currency conversion information.",
+    "context": "Read an invoice's details: customer, subscription, dates, billing period, amount due, paid or voided times, PO number, channel, tax treatment and exchange rate.",
     "asks": [
-      "Where can I see when this invoice was created and when payment is due?",
-      "How much is still owed on this bill?",
-      "When did the customer pay?",
-      "Where can I find the invoice’s purchase order reference?",
-      "What subscription and billing period does this charge cover?",
-      "Where can I check the next billing date?",
-      "How do I see the tax location and tax handling for this invoice?",
-      "What exchange rate was used?",
-      "A customer disputes the invoice date or amount",
-      "invoice details",
-      "invoice due date"
+      "when is the invoice due",
+      "when was it paid",
+      "which subscription is this invoice for",
+      "what billing period does it cover",
+      "where is the PO number",
+      "what exchange rate was used",
+      "which place of supply applies",
+      "was the invoice voided",
+      "how much is still owed",
+      "how was the invoice created"
     ],
-    "hash": "df8515bc943d"
+    "hash": "f5cbe4b2c849"
   },
   "screen:/businesses/{business}/invoices/{inv}~7": {
     "context": "Update the customer's contact and mailing details, review invoice activity, and add or manage internal team comments.",
@@ -18298,17 +18368,20 @@
     "hash": "278804743741"
   },
   "screen:/businesses/{business}/invoices~3": {
-    "context": "Create an invoice by choosing or adding a customer, setting its currency and description, adding items, and choosing payment timing and tax.",
+    "context": "Create an invoice by hand: pick or create a customer, currency, line items, payment days, collect now and whether to apply tax.",
     "asks": [
-      "How do I bill a customer for a one-time purchase?",
-      "Where can I find the form to send someone a bill?",
-      "I need to add a new customer before charging them.",
-      "Can I give a customer a few days to pay?",
-      "How do I charge them right away instead of waiting?",
-      "Where do I add a product or service and its sales tax?",
-      "Create a bill in a different currency"
+      "make an invoice manually",
+      "bill a customer without a subscription",
+      "how do I create a one-off invoice",
+      "add line items to an invoice",
+      "charge the invoice right away",
+      "give a customer 30 days to pay",
+      "create a customer while invoicing",
+      "add tax to a manual invoice",
+      "invoice in a different currency",
+      "new invoice"
     ],
-    "hash": "3e7cc010420d"
+    "hash": "65c123807728"
   },
   "screen:/businesses/{business}/orders": {
     "context": "See every order for your one-time products as a row. Use the tabs, the filters and the column menu, save views, and open the order, the invoice or the customer from a row.",
@@ -18334,23 +18407,20 @@
     "hash": "fb68988c5e9f"
   },
   "screen:/businesses/{business}/orders/{order}": {
-    "context": "Review one order: the items and totals, the payment, the refunds and the customer. Download the invoice, send an email or refund the order from here.",
+    "context": "Order page actions: issue a refund or record an offline refund, create a credit note, read payment and customer info and documents, and see the activity records.",
     "asks": [
-      "how do I refund this order",
-      "where can I see which card paid for this order",
-      "did the payment fail and why",
-      "how much of this order was refunded",
-      "where is the invoice for this order",
-      "download the invoice PDF",
-      "send the invoice to the customer by email",
-      "who is the customer on this order",
-      "which coupon did this order use",
-      "where do I see the tax on this order",
-      "show the history of this order",
-      "add a note about this order",
-      "issue a credit note for an order"
+      "refund an order",
+      "partial refund for an order",
+      "I refunded outside the system, record it",
+      "give back money for a purchase",
+      "why did it warn about a repeat refund",
+      "create a credit note for an order",
+      "see who paid for this order",
+      "open the invoice for an order",
+      "order refund reason",
+      "track activity on an order"
     ],
-    "hash": "5886a37837e7"
+    "hash": "c7debd1af184"
   },
   "screen:/businesses/{business}/orders/{order}~2": {
     "context": "Create a credit note for the order, and open the order actions such as the receipts for the order.",
@@ -18372,16 +18442,20 @@
     "hash": "f5775a4b3992"
   },
   "screen:/businesses/{business}/orders/{order}~4": {
-    "context": "Read the order details, the customer, the coupon and the documents of the order, its activity log and the comments of your team.",
+    "context": "Order details: status, dates, channel, customer and billing address, discount, credit note, receipts and team comments.",
     "asks": [
-      "when was this order paid",
-      "what is the due date of this order",
-      "which channel created this order",
-      "where do I see the credit notes of an order",
-      "where do I leave a note for my team about an order",
-      "who changed this order"
+      "is the order paid",
+      "when was the order paid",
+      "who is the order billed to",
+      "see discount on an order",
+      "find the receipt for an order",
+      "what channel was this order from",
+      "leave a note on an order",
+      "see the customer's email for an order",
+      "order due date",
+      "which invoice does the order have"
     ],
-    "hash": "6b5218073254"
+    "hash": "525786b7fc92"
   },
   "screen:/businesses/{business}/payment_intents": {
     "context": "Review payment setup statuses and failure trends, compare payment and gateway breakdowns, and check currency-related reporting details.",
@@ -18418,19 +18492,20 @@
     "hash": "6a237f44c9f2"
   },
   "screen:/businesses/{business}/payment_intents/{pi}~2": {
-    "context": "View a payment intent's type, amount, gateway, attempt count, key dates, mandate limit, and next step.",
+    "context": "Summary of one payment attempt flow: status, type, attempts, amount, gateway, source, mandate ceiling, expiry and next action.",
     "asks": [
-      "How many times has this payment been tried?",
-      "Where can I see the amount and processor for this setup?",
-      "When was this payment intent created?",
-      "When does this authorization expire?",
-      "Was this intent canceled, and when?",
-      "What is the maximum amount allowed by the mandate, and what happens next?",
-      "A customer's payment attempt is stuck pending",
-      "payment intent details",
-      "mandate limit"
+      "why is a payment stuck",
+      "how many times did we try to charge",
+      "what is the next step for this payment",
+      "which gateway handled the payment",
+      "when does the payment expire",
+      "what is the mandate ceiling",
+      "payment status pending or failed",
+      "find the transactions of a payment",
+      "was the payment voided",
+      "how was this payment started"
     ],
-    "hash": "c05851c69a41"
+    "hash": "14f160a7e6ec"
   },
   "screen:/businesses/{business}/payment_intents/{pi}~3": {
     "context": "View the customer's name and contact details, and check whether any payment attempts have been recorded.",
@@ -18462,20 +18537,20 @@
     "hash": "946b812f3121"
   },
   "screen:/businesses/{business}/payment_requests/{preq}": {
-    "context": "Review a payment request's latest charge status, send it with a note, record a payment type, or open the customer record.",
+    "context": "Act on a payment request: charge it, send it again with a link validity, record a cash, check or bank transfer payment, and see why the last charge failed.",
     "asks": [
-      "The latest collection failed; where can I review the request?",
-      "How do I send the customer a payment reminder?",
-      "Where can I choose who receives this request and add a note?",
-      "Can I record that someone paid by cash or check?",
-      "How do I note a bank transfer or another offline payment?",
-      "Where do I go to see the customer's account?",
-      "How can I close this payment request?",
-      "A customer's card was declined and I need to ask again",
-      "resend payment request",
-      "charge request"
+      "resend a payment link",
+      "customer lost the payment email",
+      "extend how long the link works",
+      "charge the saved card now",
+      "last charge failed what now",
+      "customer paid in cash",
+      "record a check or bank transfer",
+      "create a payment link",
+      "who gets the payment request email",
+      "add a note to payment request"
     ],
-    "hash": "e32485c10d3c"
+    "hash": "04907792ee22"
   },
   "screen:/businesses/{business}/payment_requests/{preq}~2": {
     "context": "Record an offline payment with its amount, method, date, and reference, or cancel the request with a reason.",
@@ -18495,21 +18570,20 @@
     "hash": "7d852c3a233c"
   },
   "screen:/businesses/{business}/payment_requests/{preq}~3": {
-    "context": "Review a payment request's status, amount, due date, payment method, charge attempts, and cancellation details.",
+    "context": "Details of a payment request: status, type, amount due, payment method, email, charge attempts, expiry, paid and cancel info, sender, source and receipts.",
     "asks": [
-      "What is the current state of this payment request?",
-      "How much is due, and how much was originally requested?",
-      "When does this request expire?",
-      "What payment method and email address are on file for this request?",
-      "How many times has the customer been charged?",
-      "Has the request been paid, and when was it created?",
-      "Where can I find the reason this request was canceled?",
-      "How do I see the full list of payment requests?",
-      "A request expired before the customer paid",
+      "is the payment link paid",
+      "when does the payment link expire",
+      "how many charge attempts were made",
+      "why was the request cancelled",
+      "who sent the payment request",
+      "how much was requested",
+      "which email did it go to",
+      "find the receipt for a payment request",
       "payment request status",
-      "charge attempts"
+      "was the payment request created by API"
     ],
-    "hash": "ca0d63511834"
+    "hash": "6f6b16f3e845"
   },
   "screen:/businesses/{business}/receipts": {
     "context": "Review receipt creation dates and amounts, or open the full receipt list.",
@@ -19596,32 +19670,65 @@
     "hash": "4663c49baad4"
   },
   "screen:/businesses/{business}/settings/credit-units/{unit}": {
-    "context": "View or edit a credit unit’s value, currency, decimal precision, and plan overdraft behavior.",
+    "context": "View a credit unit: its name, plural name, ID, currency, value of one unit and decimal places, and archive it.",
     "asks": [
-      "How do I change the name shown for this usage credit?",
-      "Where can I set what one credit is worth in dollars?",
-      "Can customers use fractional amounts of this credit?",
-      "How do I set the maximum negative balance a plan can reach?",
-      "What happens to a negative credit balance when credits renew?",
-      "Can unused negative balances carry over instead of being cleared?",
-      "Where can I check whether this credit unit has a cash value?",
-      "How do I retire a credit unit we no longer use?"
+      "rename a credit unit",
+      "what is one credit worth",
+      "archive a credit unit",
+      "see decimal places of a unit",
+      "change the unit's name",
+      "stop using a credit unit",
+      "credit unit ID",
+      "plan overdraft limits failed to load",
+      "where do I see my credit unit's currency",
+      "edit points or tokens definition"
     ],
-    "hash": "1c4f82691e0d"
+    "hash": "97a279a03fad"
+  },
+  "screen:/businesses/{business}/settings/credit-units/{unit}~2": {
+    "context": "Edit a credit unit's money value, decimal places, overdraft limit, what happens to a negative balance when plan credits renew, and per-plan limits.",
+    "asks": [
+      "give credits a money value",
+      "let credits go negative",
+      "what happens to overdraft at renewal",
+      "forgive negative balance on renewal",
+      "carry negative balance forward",
+      "set an overdraft limit per plan",
+      "change decimals of a credit unit",
+      "credits with no money value",
+      "set currency for a credit unit",
+      "add a plan limit"
+    ],
+    "hash": "7d1bc78fbdfd"
   },
   "screen:/businesses/{business}/settings/credit-units/new": {
-    "context": "Create a credit unit and define its value, precision, currency, and plan overdraft behavior.",
+    "context": "Start a new credit unit: name, plural name, ID, currency, value of one unit and decimal places.",
     "asks": [
-      "How do I set up a new unit for tracking customer usage credits?",
-      "Where can I choose the name and plural name customers will see?",
-      "Can I give this credit unit a short identifier?",
-      "How do I make each usage credit worth a set amount of money?",
-      "Can customers have partial credits?",
-      "How do I let a plan's credit balance go below zero up to a limit?",
-      "What should happen to a negative balance when plan credits renew?",
-      "Where do I create a credit unit that has no cash value?"
+      "create my own credits or tokens",
+      "make a points currency",
+      "add a custom unit for billing",
+      "how much is one credit worth",
+      "name for my credits",
+      "set the unit ID",
+      "how many decimals can a unit have",
+      "new credit type for usage billing"
     ],
-    "hash": "c5adb4078a41"
+    "hash": "6a63b9cc20d1"
+  },
+  "screen:/businesses/{business}/settings/credit-units/new~2": {
+    "context": "Finish creating a credit unit: money value or none, currency, decimal places, overdraft limit, handling of negative balance at renewal, plan limits.",
+    "asks": [
+      "create credits without a dollar value",
+      "allow overdraft on credits",
+      "what to do with negative balance at renewal",
+      "set credit unit currency",
+      "save new credit unit",
+      "cancel creating a credit unit",
+      "add plan limit for credits",
+      "carry or forgive overdraft",
+      "how to price credits in money"
+    ],
+    "hash": "f23bd6e50eb9"
   },
   "screen:/businesses/{business}/settings/credits": {
     "context": "Manage credit usage rules, top-up behavior, overdrafts, holds, payment handling, and which usage credits can cover.",
@@ -19696,18 +19803,20 @@
     "hash": "29d7ca60e38f"
   },
   "screen:/businesses/{business}/settings/currencies": {
-    "context": "Choose currencies to sell in, manage exchange rates, set price tax treatment, and review rate update issues.",
+    "context": "Manage business currencies: base currency, extra currencies, exchange rates set by hand or automatically, default price type and tax exclusive or inclusive pricing.",
     "asks": [
-      "How do I start charging customers in another currency?",
-      "Where can I choose which currency our prices are based on?",
-      "Can I enter my own conversion rates instead of using automatic ones?",
-      "Our exchange rates did not update—where can I check what happened?",
-      "How do I set whether listed prices include sales tax?",
-      "Where can I change the price format for new items?",
-      "How do I remove a currency we no longer accept?",
-      "Can I see or update the currencies we sell in?"
+      "sell in more than one currency",
+      "add a new currency",
+      "set my base currency",
+      "set exchange rate manually",
+      "automatic exchange rates",
+      "exchange rate did not update",
+      "are prices tax inclusive",
+      "change default price type",
+      "remove a currency",
+      "do existing prices change when the rate changes"
     ],
-    "hash": "54f17d170559"
+    "hash": "0a6ac39c25e2"
   },
   "screen:/businesses/{business}/settings/custom-fields": {
     "context": "Browse custom fields for customers or subscriptions and narrow the list by the kind of information each field stores.",
@@ -20187,9 +20296,10 @@
       "email links",
       "How do I turn on email open and click tracking?",
       "Do you record who opens our emails?",
-      "Where do I stop tracking email clicks?"
+      "Where do I stop tracking email clicks?",
+      "Edit the email a customer gets when they ask for a new link"
     ],
-    "hash": "f6e9cf7ab642"
+    "hash": "818d0bad8f42"
   },
   "screen:/businesses/{business}/settings/gateways": {
     "context": "The business's payment gateway accounts, and where new payment methods go for each currency: which gateway takes each method and the order customers see them in.",
@@ -20408,18 +20518,20 @@
     "hash": "ce0a9c1cde91"
   },
   "screen:/businesses/{business}/settings/portal~4": {
-    "context": "Set how customers access the self-service area and how long sign-in codes, emailed links, API links, and sessions remain valid.",
+    "context": "Set how long portal and checkout links work: email-code sign-in, API portal links, links in emails (Pay now, change payment method, payment request, checkout reminder, restart) and portal sign-in time.",
     "asks": [
-      "Where can I set how long a customer stays logged in?",
-      "How do I let customers get into their account without a password?",
-      "Can I make the sign-in code expire sooner?",
-      "Customers say their emailed account link no longer works; where do I change its lifetime?",
-      "How long should an API-generated customer link stay usable?",
-      "Where do I change the expiration for links sent by email?",
-      "Set the customer login session duration",
-      "Find the access time limits for the self-service portal"
+      "how long does an email link last",
+      "payment link expired too soon",
+      "extend how many days a link works",
+      "customers can sign in with email code",
+      "how long a customer stays logged in",
+      "portal link lifetime for API",
+      "default validity for emailed links",
+      "change expiry of pay now link",
+      "checkout reminder link expiry",
+      "restart link how long valid"
     ],
-    "hash": "4a611de19738"
+    "hash": "158df3b7b990"
   },
   "screen:/businesses/{business}/settings/portal~5": {
     "context": "Choose which account actions customers can take in the portal, what billing records appear, and where the back link sends them.",
@@ -20549,22 +20661,20 @@
     "hash": "0f49de14a761"
   },
   "screen:/businesses/{business}/subscriptions/{sub}": {
-    "context": "Review a subscription’s timeline, discount, tax status, billing details, invoice note, metadata, cancellation reason, and payment outcome.",
+    "context": "Subscription page: coupon, entitlements, timeline dates, tax details, billing address, invoice note, JSON metadata and removing a scheduled cancellation.",
     "asks": [
-      "Where can I see when this customer started their trial and when it ends?",
-      "How do I check the next date they’ll be billed or renewed?",
-      "Where can I see why the customer canceled?",
-      "Customers keep getting charged tax—where can I check whether this subscription is tax-exempt?",
-      "How do I update the billing address used for this subscription?",
-      "Where can I add a note to future invoices for this customer?",
-      "How can I see whether a payment was refunded or credited?",
-      "Take me to the subscription’s extra data or searchable details.",
-      "Customer asked to undo their cancellation",
-      "subscription timeline",
-      "next renewal date",
-      "tax exempt"
+      "when does the subscription renew",
+      "when did the trial start",
+      "remove a coupon from a subscription",
+      "undo a scheduled cancellation",
+      "which features does the subscriber have",
+      "add an invoice note to a subscription",
+      "set tax exempt for a subscription",
+      "change billing address of a subscription",
+      "store extra data on a subscription",
+      "skipped renewals"
     ],
-    "hash": "20b2b9b91083"
+    "hash": "ffef3dacefd4"
   },
   "screen:/businesses/{business}/subscriptions/{sub}/add_charge": {
     "context": "Add a one-time charge to a subscription, choose its service dates, and decide whether to invoice now or later.",
@@ -20730,34 +20840,36 @@
     "hash": "d7bd357069be"
   },
   "screen:/businesses/{business}/subscriptions/{sub}~2": {
-    "context": "Review billing and cancellation details, choose what happens to charges, credits, and access, or manage a pending subscription change.",
+    "context": "Cancel or delete a subscription with choices for credits, unbilled charges, refunds, billing until the end and timing, plus payment retry status.",
     "asks": [
-      "How do I end this customer’s subscription now or on a later date?",
-      "Can I schedule cancellation for the end of the current billing term?",
-      "What happens to unused time when I cancel—can I give a partial or full credit?",
-      "How do I choose whether to bill for the whole term, through cancellation, or not at all?",
-      "How can I decide what happens to unpaid charges when the subscription ends?",
-      "Where can I see how payment collection and retries are handled?",
-      "How do I refund a payment or keep a customer’s credits?",
-      "Take me to the invoice related to this subscription change.",
-      "How do I cancel a pending change that is waiting for payment?",
-      "Where can I check the amount due, monthly recurring revenue, or cancellation date?"
+      "cancel a subscription now",
+      "cancel at the end of the term",
+      "cancel on a certain date",
+      "refund when canceling",
+      "give prorated credit on cancellation",
+      "what happens to unbilled charges",
+      "delete a subscription",
+      "bill nothing after cancel",
+      "collect unpaid invoices on cancel",
+      "payment is stuck on cancel warning"
     ],
-    "hash": "56c16fe2bd3e"
+    "hash": "f4b9d7b44e50"
   },
   "screen:/businesses/{business}/subscriptions/{sub}~3": {
-    "context": "Review a subscription's plan, billing dates, cash collected, charges and activity, or edit its rates.",
+    "context": "Subscription charges and plan: dates, revenue, plan and charge lines, activity records and editing rates with fixed rate or markup.",
     "asks": [
-      "When is this customer billed next, and when does the current term end?",
-      "How much cash has this subscription brought in so far?",
-      "Where can I see which plan the customer is on?",
-      "How do I review the charges and activity on this subscription?",
-      "Why is there no activity showing yet?",
-      "Where can I edit the subscription’s fixed price?",
-      "How do I add a markup or another rate?",
-      "does the amount paid include free credit"
+      "what plan is this subscription on",
+      "how much revenue from this subscription",
+      "edit a subscription's rates",
+      "add a custom rate",
+      "change markup for a subscriber",
+      "when does the term end",
+      "see activity on a subscription",
+      "charges on a subscription",
+      "when was it cancelled",
+      "next billing amount"
     ],
-    "hash": "f615f3095f2b"
+    "hash": "8db825540f62"
   },
   "screen:/businesses/{business}/subscriptions/{sub}~4": {
     "context": "Set when a subscription ends, how its final term is billed, what happens to plan credits, and its cancellation reason.",
@@ -20843,22 +20955,20 @@
     "hash": "1e5205ce83d7"
   },
   "screen:/businesses/{business}/subscriptions/{sub}~9": {
-    "context": "View the subscription’s payment connection, payment method details, and mandate information.",
+    "context": "Subscription payment method: gateway and payment method details, status, expiry, mandate info, a link validity setting, and a jump to manage it on the customer.",
     "asks": [
-      "Where can I see which payment processor handled this charge?",
-      "How do I check the payment method’s expiration date?",
-      "Show me the card or bank account details on file.",
-      "Where can I find the payment method reference number?",
-      "Can I see whether this payment method supports recurring charges?",
-      "Where do I check the bank, country, or cardholder details?",
-      "How can I tell if extra card verification is enabled?",
-      "Where can I see the mandate status and when it expires?",
-      "Customer's card is about to expire",
-      "card expiry",
-      "payment method details",
-      "mandate status"
+      "which card pays for this subscription",
+      "is the card expiring",
+      "change the payment method for a subscription",
+      "check direct debit mandate details",
+      "where do I update a card",
+      "request a new card link and set how long it works",
+      "what is the gateway account",
+      "card funding type or issuing country",
+      "does the card support recurring debits",
+      "manage payment method on the customer"
     ],
-    "hash": "a7b0807004b4"
+    "hash": "19a75e95e7b6"
   },
   "screen:/businesses/{business}/subscriptions/new": {
     "context": "Build a subscription by choosing a customer and pricing, then review its charges, credits, discounts, and amount due.",
@@ -21025,22 +21135,20 @@
     "hash": "45d9f9ffb387"
   },
   "screen:/businesses/{business}/transactions/{txn}~2": {
-    "context": "Inspect a transaction’s related billing records, payment method, gateway information, errors, and fraud signal, or record a dispute outcome.",
+    "context": "Read one transaction: type, status, amounts, links to customer, invoice and payment, fraud signal, gateway ids, request logs and recording a dispute as won or lost.",
     "asks": [
-      "Where can I see which customer and subscription this charge belongs to?",
-      "How do I find the invoice or credit adjustment linked to this payment?",
-      "Can I check the card and processor account used for the transaction?",
-      "Where do I look up the processor’s transaction reference?",
-      "How can I review the request and response details for a payment?",
-      "Where can I see why a transaction failed?",
-      "How do I record that a customer disputed this charge?",
-      "How can I mark a dispute as won or lost?",
-      "Customer disputed a charge",
-      "mark dispute won",
-      "gateway log",
-      "payment error reason"
+      "why did a payment fail",
+      "see the gateway error",
+      "find the gateway transaction ID",
+      "record a chargeback",
+      "mark a dispute as won",
+      "mark a dispute as lost",
+      "what card was used",
+      "was this payment refunded",
+      "view request and response logs",
+      "which invoice was paid by this transaction"
     ],
-    "hash": "1855fc2a4c32"
+    "hash": "5ced53d02653"
   },
   "screen:/businesses/{business}/transactions/{txn}~3": {
     "context": "Record dispute details for a transaction, including the reason, key dates, and processor reference.",

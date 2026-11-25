@@ -1,5 +1,5 @@
 import { portalReceiptPdfResponse } from "@/lib/portal-api";
-import { readStorefrontToken } from "@/lib/storefront-session";
+import { portalAuthFor } from "@/lib/portal-entry";
 
 /**
  * Receipt PDF passthrough, same shape as invoices/[inv]/pdf: the portal token stays in
@@ -8,9 +8,10 @@ import { readStorefrontToken } from "@/lib/storefront-session";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ rcpt: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ rcpt: string }> }) {
   const { rcpt } = await params;
-  const token = await readStorefrontToken("portal");
+  // `?s=`: the session of the page the link was on (see `lib/storefront-session.ts`).
+  const token = await portalAuthFor(new URL(req.url).searchParams.get("s") ?? "");
   if (!token) return new Response("Receipt not available", { status: 401 });
   const upstream = await portalReceiptPdfResponse(token, rcpt);
   if (!upstream.ok || !upstream.body) {

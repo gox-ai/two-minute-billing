@@ -14,6 +14,7 @@ function couponRefusal(error: string | undefined): string {
   return /^We could not/.test(error) ? error : `We could not apply this coupon. ${error}`;
 }
 import { checkoutApplyCouponAction, checkoutRemoveCouponAction } from "./actions";
+import { useCheckoutSession } from "./session-context";
 
 /**
  * The buyer's coupon box on the hosted checkout (0238).
@@ -40,6 +41,7 @@ export function CouponBox({
   refusals: Record<string, string>;
 }) {
   const router = useRouter();
+  const session = useCheckoutSession();
   const [code, setCode] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -50,7 +52,7 @@ export function CouponBox({
     if (!entered || busy) return;
     setError(null);
     setBusy("apply");
-    const res = await checkoutApplyCouponAction(entered);
+    const res = await checkoutApplyCouponAction(session, entered);
     if (!res.ok) {
       setError(couponRefusal(res.error));
       setBusy(null);
@@ -67,7 +69,7 @@ export function CouponBox({
     if (busy) return;
     setError(null);
     setBusy(target);
-    const res = await checkoutRemoveCouponAction(target);
+    const res = await checkoutRemoveCouponAction(session, target);
     setBusy(null);
     if (!res.ok) {
       setError(res.error ?? "We could not remove this coupon. Try again.");

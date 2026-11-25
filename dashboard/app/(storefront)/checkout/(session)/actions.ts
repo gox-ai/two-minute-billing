@@ -22,7 +22,16 @@ import {
   type CheckoutActionRequired,
   type CheckoutInvoiceState,
 } from "@/lib/checkout-api";
-import { readStorefrontToken } from "@/lib/storefront-session";
+import { readCheckoutToken } from "@/lib/storefront-session";
+import type { CheckoutAuth } from "@/lib/checkout-api";
+
+/** The token for the page's own session, sent with that session's id so the API checks it. */
+async function checkoutAuth(
+  session: string,
+): Promise<Extract<CheckoutAuth, { session: string }> | null> {
+  const token = await readCheckoutToken(session);
+  return token ? { token, session } : null;
+}
 
 /**
  * Hosted-checkout server actions (#10d).
@@ -41,18 +50,22 @@ const CHECKOUT_PATH = "/checkout";
 
 /** The page was shown. Best effort: a failure here must never get in the buyer's way. */
 export async function checkoutRecordViewAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   layout: "steps" | "one_page",
   deviceClass: "mobile" | "tablet" | "desktop",
 ): Promise<void> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return;
   await checkoutRecordView(token, { layout, device_class: deviceClass }).catch(() => undefined);
 }
 
 export async function checkoutSetCustomerAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   input: CheckoutCustomerInput,
 ): Promise<{ ok: boolean; billingComplete?: boolean; error?: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutSetCustomer(token, input);
   if (!res.ok || !res.data)
@@ -75,9 +88,11 @@ export async function checkoutSetCustomerAction(
  * for a few seconds instead of publishing the completion's snapshot as a verdict.
  */
 export async function checkoutInvoiceStateAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   invoice: string,
 ): Promise<{ ok: true; invoice: CheckoutInvoiceState } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutInvoiceState(token, invoice);
   if (!res.ok || !res.data)
@@ -86,10 +101,10 @@ export async function checkoutInvoiceStateAction(
 }
 
 /** The instruments the buyer already holds, for the card step's "Manage cards" panel. */
-export async function checkoutPaymentMethodsAction(): Promise<
-  { ok: true; methods: CheckoutPaymentMethod[] } | { ok: false; error: string }
-> {
-  const token = await readStorefrontToken("checkout");
+export async function checkoutPaymentMethodsAction(
+  session: string,
+): Promise<{ ok: true; methods: CheckoutPaymentMethod[] } | { ok: false; error: string }> {
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutListPaymentMethods(token);
   if (!res.ok || !res.data)
@@ -97,10 +112,10 @@ export async function checkoutPaymentMethodsAction(): Promise<
   return { ok: true, methods: res.data.data };
 }
 
-export async function checkoutGatewaysAction(): Promise<
-  { ok: true; gateways: CheckoutGatewayList } | { ok: false; error: string }
-> {
-  const token = await readStorefrontToken("checkout");
+export async function checkoutGatewaysAction(
+  session: string,
+): Promise<{ ok: true; gateways: CheckoutGatewayList } | { ok: false; error: string }> {
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutGateways(token);
   if (!res.ok || !res.data)
@@ -116,18 +131,20 @@ export async function checkoutGatewaysAction(): Promise<
  * UPI Autopay or a netbanking e-mandate at all.
  */
 export async function checkoutBeginSetupAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   origin: string,
   gatewayAccount?: string,
   methodType?: string,
   consent?: CheckoutConsentPost,
 ): Promise<{ ok: true; setup: CheckoutVaultSetup } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
-  const base = `${origin}${CHECKOUT_PATH}`;
+  const base = `${origin}${CHECKOUT_PATH}?s=${encodeURIComponent(session)}`;
   const res = await checkoutBeginSetup(
     token,
-    `${base}?setup=return`,
-    `${base}?setup=cancel`,
+    `${base}&setup=return`,
+    `${base}&setup=cancel`,
     gatewayAccount,
     methodType,
     consent,
@@ -143,6 +160,8 @@ export async function checkoutBeginSetupAction(
  * the card already on file — the API rejects that in create mode.
  */
 export async function checkoutCompleteAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   /**
    * How to complete the card step: the setup intent (preferred — it is the claim the
    * gateway's webhook harvest also contends for, so the instrument is vaulted once) or
@@ -194,14 +213,14 @@ export async function checkoutCompleteAction(
   /** The engine asks for a Turnstile check before it takes this payment. */
   botCheck?: boolean;
 }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
-  const base = origin ? `${origin}${CHECKOUT_PATH}` : null;
+  const base = origin ? `${origin}${CHECKOUT_PATH}?s=${encodeURIComponent(session)}` : null;
   const res = await checkoutComplete(
     token,
     completion,
     gatewayAccount,
-    base ? { returnUrl: `${base}?pay=return`, cancelUrl: `${base}?pay=cancel` } : undefined,
+    base ? { returnUrl: `${base}&pay=return`, cancelUrl: `${base}&pay=cancel` } : undefined,
   );
   if (!res.ok) {
     return {
@@ -232,9 +251,11 @@ export async function checkoutCompleteAction(
  * generic "could not apply" would leave them with nothing to act on.
  */
 export async function checkoutApplyCouponAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   code: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutAddCoupon(token, code);
   if (!res.ok) return { ok: false, error: res.error ?? "We could not apply that code." };
@@ -242,9 +263,11 @@ export async function checkoutApplyCouponAction(
 }
 
 export async function checkoutRemoveCouponAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   code: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutRemoveCoupon(token, code);
   if (!res.ok) return { ok: false, error: res.error ?? "We could not remove that code." };
@@ -253,10 +276,12 @@ export async function checkoutRemoveCouponAction(
 
 /** The buyer changes a line of a payment-link checkout; the page re-reads the total after. */
 export async function checkoutSetItemAction(
+  /** The session the page shows (`view.id`): see `readCheckoutToken`. */
+  session: string,
   price: string,
   quantity: number,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("checkout");
+  const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await checkoutSetItem(token, price, quantity);
   if (!res.ok) return { ok: false, error: res.error ?? "We could not change your order." };

@@ -33,6 +33,7 @@ import {
   portalMakeDefaultShippingAction,
   portalSaveShippingAddressAction,
 } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { Row, RowList } from "../../chrome";
 import { shippingLines } from "./shipping-format";
 
@@ -60,6 +61,7 @@ export function ShippingAddresses({
   /** The billing address with its contact name resolved: the start of a new address. */
   billing: AddressValue;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   /** `null` = closed; `"new"` = add; else the address being edited. */
   const [editing, setEditing] = React.useState<PortalShippingAddress | "new" | null>(null);
@@ -68,7 +70,7 @@ export function ShippingAddresses({
 
   async function makeDefault(a: PortalShippingAddress) {
     setBusy(a.id);
-    const res = await portalMakeDefaultShippingAction(a.id);
+    const res = await portalMakeDefaultShippingAction(session, a.id);
     setBusy(null);
     if (!res.ok) return void toast.error(res.error ?? "We could not change your default address.");
     toast.success("Default address changed.");
@@ -76,7 +78,7 @@ export function ShippingAddresses({
   }
 
   async function remove(a: PortalShippingAddress) {
-    const res = await portalArchiveShippingAction(a.id);
+    const res = await portalArchiveShippingAction(session, a.id);
     // The engine's 409 names the subscription that still ships to it (or to the default).
     if (!res.ok) return void toast.error(res.error ?? "We could not remove the address.");
     toast.success("Address removed.");
@@ -174,7 +176,7 @@ export function ShippingAddresses({
           {editing != null ? (
             <ActionForm
               key={current?.id ?? "new"}
-              action={portalSaveShippingAddressAction}
+              action={portalSaveShippingAddressAction.bind(null, session)}
               onSuccess={() => setEditing(null)}
               className="flex min-h-0 flex-1 flex-col gap-4"
             >

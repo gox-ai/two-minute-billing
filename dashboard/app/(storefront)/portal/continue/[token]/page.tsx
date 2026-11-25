@@ -1,6 +1,8 @@
 import { MousePointerClick } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { portalPeekLink } from "@/lib/portal-api";
+import { redirect } from "next/navigation";
+import { portalPeekLink, portalResume } from "@/lib/portal-api";
+import { readStorefrontToken } from "@/lib/storefront-session";
 import { ExpiredCard } from "../../(session)/portal-dead-ends";
 import { BrandTheme, NoticeCard, StorefrontHeader } from "../../../chrome";
 import { continuePortalLinkAction } from "./actions";
@@ -47,7 +49,12 @@ export default async function ContinuePage({ params }: { params: Promise<{ token
   // button that only leads to it. A rate limit or an error still gets the button: the POST
   // decides. Never spent on this load.
   const result = await portalPeekLink(token);
-  if (result.kind === "dead") return <ExpiredCard business={result.business} reason="link" />;
+  if (result.kind === "dead") {
+    // Spent in THIS browser, whose session is still live: open the link's page again.
+    const again = await portalResume(token, await readStorefrontToken("portal"));
+    if (again) redirect(again);
+    return <ExpiredCard business={result.business} reason="link" linkToken={token} />;
+  }
   const peek = result.kind === "live" ? result.peek : null;
   const task = (peek?.task && TASK[peek.task]) || {
     title: "Open your billing account",

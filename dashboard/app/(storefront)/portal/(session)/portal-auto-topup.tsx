@@ -3,14 +3,16 @@
 import { ActionForm } from "@/components/form/action-form";
 import { SubmitButton } from "@/components/form/submit-button";
 import { portalSetAutoTopupAction } from "./credits-actions";
+import { usePortalSession } from "./portal-session-context";
 
 /**
  * Enable or disable one automatic top-up. The business sets what it buys; the buyer only
  * switches it. Outline: one of several rows, and to disable is a step away from a purchase.
  */
 export function AutoTopupSwitch({ unit, enabled }: { unit: string; enabled: boolean }) {
+  const session = usePortalSession();
   return (
-    <ActionForm action={portalSetAutoTopupAction} className="shrink-0">
+    <ActionForm action={portalSetAutoTopupAction.bind(null, session)} className="shrink-0">
       <input type="hidden" name="unit" value={unit} />
       <input type="hidden" name="enabled" value={enabled ? "false" : "true"} />
       {/* 36px on a phone: a touch target, as the record pages' phone actions. */}

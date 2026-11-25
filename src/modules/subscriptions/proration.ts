@@ -1,3 +1,4 @@
+import { changeCurrency } from "./currency-switch";
 import { syncMeterBilling } from "./meter-billing";
 import { and, asc, eq, gt, lte, ne } from "drizzle-orm";
 import { enforceMetadataRules, type MetadataRuleScope } from "@/modules/metadata-rules/service";
@@ -3291,19 +3292,25 @@ async function applyChange(input: {
 
   // Load sub + items + their prices, resolve any new prices, compute proration.
   const plan = await withTenant(organizationId, async (tx) => {
-    const [sub] = await tx
+    const [loadedSub] = await tx
       .select()
       .from(subscriptions)
       .where(eq(subscriptions.id, subscriptionId))
       .limit(1);
-    if (!sub) throw new ProrationError("Subscription not found");
+    if (!loadedSub) throw new ProrationError("Subscription not found");
     // A cancelled sub has no live term to prorate against — editing it is a
     // reactivation (reactivateSubscriptionWithOptions), not a change.
-    if (sub.status === "cancelled") {
+    if (loadedSub.status === "cancelled") {
       throw new ProrationError(
         "You cannot change a cancelled subscription. Reactivate it instead.",
       );
     }
+    // At the term end an edit may move the subscription to another currency; the claim
+    // below writes it. Every price guard after this compares against the new one.
+    const sub = {
+      ...loadedSub,
+      currency: await changeCurrency(tx, loadedSub, input, now, (m) => new ProrationError(m)),
+    };
 
     // The two independent axes (see billing-mode.ts):
     //  - resetStart:   the reset term's start — floored to the local day start when the
@@ -4038,7 +4045,8 @@ async function applyChange(input: {
     // On the non-reset path both sides are prorated, so the whole money movement goes
     // and only the composition changes; on the reset path the full new-term charge
     // survives and only the unused-time credit is dropped. See the field's doc.
-    const prorate_ = input.prorate !== false;
+    // A currency move lands at the term end: nothing is left to prorate, in either currency.
+    const prorate_ = input.prorate !== false && sub.currency === loadedSub.currency;
 
     if (!resetTerm) {
       // Standard immediate proration: credit the unused old price, charge the
@@ -5184,6 +5192,8 @@ async function applyChange(input: {
         // clear) distinct from omission (leave it alone).
         // A held change writes its metadata when it applies.
         ...(input.metadata !== undefined && !holding ? { metadata: input.metadata } : {}),
+        // A term-end edit onto another currency (`changeCurrency`); unchanged otherwise.
+        ...(!holding ? { currency: plan.sub.currency } : {}),
       })
       .where(
         and(

@@ -14,6 +14,8 @@ const BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
 export interface PortalMe {
   object: "portal_me";
+  /** `psess_…`: this session. The page names it in `?s=`. Absent on older engines. */
+  session?: string;
   /** Phase 4b: where "Back to <business>" goes. Null = no link. Absent on older engines. */
   return_url?: string | null;
   customer: {
@@ -280,8 +282,20 @@ export interface PortalInvoice {
   collection_scheduled_at?: string | null;
 }
 
+/**
+ * A portal token, or a token with the session (`psess_…`) the page shows. With the session
+ * the API refuses a token that opens any other one (two tabs, one cookie).
+ */
+export type PortalAuth = string | { token: string; session: string };
+
+/** `Authorization`, plus `X-Portal-Session` when the caller named its session. */
+export const portalAuthHeaders = (auth: PortalAuth): Record<string, string> =>
+  typeof auth === "string"
+    ? { Authorization: `Bearer ${auth}` }
+    : { Authorization: `Bearer ${auth.token}`, "X-Portal-Session": auth.session };
+
 async function portalFetch<T>(
-  token: string,
+  token: PortalAuth,
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
@@ -298,7 +312,7 @@ async function portalFetch<T>(
       // one. So this dedupes network-level retries of one request, which is what the engine's
       // idempotency is for, and double-submit protection stays a UI concern.
       ...(init?.method && init.method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
-      Authorization: `Bearer ${token}`,
+      ...portalAuthHeaders(token),
       // The buyer's forwarded chain, untouched — see `lib/forwarded-for.ts`.
       ...(await forwardedFor()),
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -319,12 +333,12 @@ async function portalFetch<T>(
   return { ok: false, status: res.status, ...(error ? { error } : {}) };
 }
 
-export const portalMe = (token: string) => portalFetch<PortalMe>(token, "/portal/v1/me");
+export const portalMe = (token: PortalAuth) => portalFetch<PortalMe>(token, "/portal/v1/me");
 
-export const portalUpdateMe = (token: string, body: PortalMeUpdate) =>
+export const portalUpdateMe = (token: PortalAuth, body: PortalMeUpdate) =>
   portalFetch<PortalMe>(token, "/portal/v1/me", { method: "PATCH", body });
 
-export const portalListPaymentMethods = (token: string) =>
+export const portalListPaymentMethods = (token: PortalAuth) =>
   portalFetch<{ object: "list"; data: PortalPaymentMethod[] }>(token, "/portal/v1/payment_methods");
 
 /**
@@ -339,6 +353,8 @@ export type PortalExchangeResult =
   | {
       ok: true;
       token: string;
+      /** `psess_…`: the session this token opens. */
+      session: string | null;
       expiresAt: string;
       forwardUrl: string | null;
       business: string | null;
@@ -393,6 +409,36 @@ export async function portalPeek(accessToken: string): Promise<PortalLinkPeek | 
   }
 }
 
+/**
+ * Where a SPENT link may still go: its own page, when this browser's session was minted
+ * from that link. Null otherwise (another browser, an ended session), and the caller shows
+ * the expired card as before.
+ */
+export async function portalResume(
+  accessToken: string,
+  sessionToken: string | null,
+): Promise<string | null> {
+  if (!sessionToken) return null;
+  try {
+    const res = await fetch(`${BASE}/portal/v1/session/resume`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        "content-type": "application/json",
+        ...(await forwardedFor()),
+      },
+      body: JSON.stringify({ link: accessToken }),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json().catch(() => ({}))) as { forward_url?: string | null };
+    // One of the engine's closed set of `/portal…` paths, never off-site.
+    return json.forward_url?.startsWith("/portal") ? json.forward_url : "/portal";
+  } catch {
+    return null;
+  }
+}
+
 export async function portalExchange(accessToken: string): Promise<PortalExchangeResult> {
   try {
     const res = await fetch(`${BASE}/portal/v1/session`, {
@@ -401,6 +447,7 @@ export async function portalExchange(accessToken: string): Promise<PortalExchang
       cache: "no-store",
     });
     const json = (await res.json().catch(() => ({}))) as {
+      id?: string;
       token?: string;
       expires_at?: string;
       forward_url?: string;
@@ -411,6 +458,7 @@ export async function portalExchange(accessToken: string): Promise<PortalExchang
     return {
       ok: true,
       token: json.token,
+      session: json.id ?? null,
       expiresAt: json.expires_at ?? "",
       forwardUrl: json.forward_url ?? null,
       business,
@@ -479,7 +527,7 @@ export const portalLoginRequest = (body: {
   );
 
 export type PortalLoginVerifyResult =
-  | { object: "portal_login"; token: string; expires_at: string }
+  | { object: "portal_login"; id?: string; token: string; expires_at: string }
   | { object: "portal_login_choice"; customers: Array<{ id: string; name: string }> };
 
 /** Check a sign-in code: a session token, or the accounts to select from. */
@@ -504,7 +552,7 @@ export async function portalLinkNotice(businessId: string): Promise<PortalLinkNo
 }
 
 /** End the buyer's session. */
-export const portalLogout = (token: string) =>
+export const portalLogout = (token: PortalAuth) =>
   portalFetch<{ object: "portal_logout"; ok: true; redirect_url?: string }>(
     token,
     "/portal/v1/logout",
@@ -521,7 +569,7 @@ export const portalLogout = (token: string) =>
  * rows with a clean compile (docs/PROGRESS.md). The caller decides what to do with it;
  * the type makes ignoring it a choice rather than an accident.
  */
-export const portalListInvoices = (token: string, limit?: number) =>
+export const portalListInvoices = (token: PortalAuth, limit?: number) =>
   portalFetch<{ object: "list"; data: PortalInvoice[]; has_more: boolean }>(
     token,
     `/portal/v1/invoices${limit === undefined ? "" : `?limit=${limit}`}`,
@@ -544,7 +592,7 @@ export interface PortalPurchase {
 }
 
 /** The buyer's one-time purchases, newest first, bounded like the invoice list. */
-export const portalListPurchases = (token: string, limit?: number) =>
+export const portalListPurchases = (token: PortalAuth, limit?: number) =>
   portalFetch<{ object: "list"; data: PortalPurchase[]; has_more: boolean }>(
     token,
     `/portal/v1/purchases${limit === undefined ? "" : `?limit=${limit}`}`,
@@ -733,7 +781,7 @@ export interface PortalRenewalSkipResult {
  * on a refusal (limit reached, less than 48 hours to go).
  */
 export const portalSkipRenewal = (
-  token: string,
+  token: PortalAuth,
   sub: string,
   renewalAt: string,
   action: "skip_renewal" | "unskip_renewal",
@@ -746,7 +794,7 @@ export const portalSkipRenewal = (
 
 /** Open a checkout that restarts an ended subscription once the buyer pays the new term. */
 export const portalRestartSubscription = (
-  token: string,
+  token: PortalAuth,
   sub: string,
   returnUrl: string,
   cancelUrl: string,
@@ -765,7 +813,7 @@ export type PortalLifecycleAction = "cancel" | "pause" | "resume" | "reactivate"
 
 /** Cancel, pause, resume or reactivate the buyer's own subscription. */
 export const portalSubscriptionLifecycle = (
-  token: string,
+  token: PortalAuth,
   sub: string,
   action: PortalLifecycleAction,
   body: { reason_code?: string; reason?: string; offers_shown?: boolean } = {},
@@ -807,20 +855,20 @@ export type PortalShippingAddressInput = Partial<
   Omit<PortalShippingAddress, "object" | "id" | "is_default" | "archived">
 > & { is_default?: boolean };
 
-export const portalListShippingAddresses = (token: string) =>
+export const portalListShippingAddresses = (token: PortalAuth) =>
   portalFetch<{ object: "list"; data: PortalShippingAddress[] }>(
     token,
     "/portal/v1/shipping_addresses",
   );
 
-export const portalCreateShippingAddress = (token: string, body: PortalShippingAddressInput) =>
+export const portalCreateShippingAddress = (token: PortalAuth, body: PortalShippingAddressInput) =>
   portalFetch<PortalShippingAddress>(token, "/portal/v1/shipping_addresses", {
     method: "POST",
     body,
   });
 
 export const portalUpdateShippingAddress = (
-  token: string,
+  token: PortalAuth,
   addr: string,
   body: PortalShippingAddressInput,
 ) =>
@@ -831,7 +879,7 @@ export const portalUpdateShippingAddress = (
   );
 
 /** 409 with the engine's message while a live subscription ships to it. */
-export const portalArchiveShippingAddress = (token: string, addr: string) =>
+export const portalArchiveShippingAddress = (token: PortalAuth, addr: string) =>
   portalFetch<PortalShippingAddress>(
     token,
     `/portal/v1/shipping_addresses/${encodeURIComponent(addr)}/archive`,
@@ -839,7 +887,11 @@ export const portalArchiveShippingAddress = (token: string, addr: string) =>
   );
 
 /** `addressId: null` = ship to the customer's default. */
-export const portalSetSubscriptionShipTo = (token: string, sub: string, addressId: string | null) =>
+export const portalSetSubscriptionShipTo = (
+  token: PortalAuth,
+  sub: string,
+  addressId: string | null,
+) =>
   portalFetch<{
     object: "portal_subscription_shipping_address";
     id: string;
@@ -850,15 +902,15 @@ export const portalSetSubscriptionShipTo = (token: string, sub: string, addressI
     body: { address_id: addressId },
   });
 
-export const portalListSubscriptions = (token: string) =>
+export const portalListSubscriptions = (token: PortalAuth) =>
   portalFetch<{ object: "list"; data: PortalSubscription[] }>(token, "/portal/v1/subscriptions");
 
 /** Usage so far on one subscription. 404 when the business hides usage in the portal. */
-export const portalSubscriptionUsage = (token: string, sub: string) =>
+export const portalSubscriptionUsage = (token: PortalAuth, sub: string) =>
   portalFetch<CurrentUsage>(token, `/portal/v1/subscriptions/${encodeURIComponent(sub)}/usage`);
 
 /** Usage by day in the open period, by meter and group (never cost). 404 when hidden. */
-export const portalSubscriptionUsageDaily = (token: string, sub: string) =>
+export const portalSubscriptionUsageDaily = (token: PortalAuth, sub: string) =>
   portalFetch<{
     object: "usage_history";
     time_zone: string;
@@ -877,7 +929,7 @@ export const portalSubscriptionUsageDaily = (token: string, sub: string) =>
  * Answers with the re-estimated next payment, so the portal can state the new figure rather
  * than just saying "applied".
  */
-export const portalApplyCoupon = (token: string, sub: string, code: string) =>
+export const portalApplyCoupon = (token: PortalAuth, sub: string, code: string) =>
   portalFetch<{
     object: "discount";
     subscription: string;
@@ -900,7 +952,7 @@ export type PortalDiscount = {
   removable: boolean;
 };
 
-export const portalRemoveCoupon = (token: string, sub: string, code?: string) =>
+export const portalRemoveCoupon = (token: PortalAuth, sub: string, code?: string) =>
   portalFetch<{
     object: "discount";
     subscription: string;
@@ -914,9 +966,9 @@ export const portalRemoveCoupon = (token: string, sub: string, code?: string) =>
   );
 
 /** Raw PDF passthrough for the storefront proxy route — returns the upstream Response. */
-export const portalInvoicePdfResponse = async (token: string, inv: string) =>
+export const portalInvoicePdfResponse = async (token: PortalAuth, inv: string) =>
   fetch(`${BASE}/portal/v1/invoices/${encodeURIComponent(inv)}/pdf`, {
-    headers: { Authorization: `Bearer ${token}`, ...(await forwardedFor()) },
+    headers: { ...portalAuthHeaders(token), ...(await forwardedFor()) },
     cache: "no-store",
   });
 
@@ -929,7 +981,7 @@ function gatewayQuery(currency?: string, purpose?: "payment" | "setup"): string 
 }
 
 export const portalListGateways = (
-  token: string,
+  token: PortalAuth,
   currency?: string,
   /** `payment` lists only the accounts that take a payment now (the Pay now chooser). */
   purpose?: "payment" | "setup",
@@ -956,7 +1008,7 @@ export const portalListGateways = (
   );
 
 export const portalBeginSetup = (
-  token: string,
+  token: PortalAuth,
   returnUrl: string,
   cancelUrl: string,
   gatewayAccount?: string,
@@ -991,7 +1043,7 @@ export type PortalVaultedMethod = PortalPaymentMethod & {
 };
 
 export const portalCompleteVault = (
-  token: string,
+  token: PortalAuth,
   completion: {
     paymentIntent?: string;
     providerToken?: string;
@@ -1032,7 +1084,7 @@ export const portalCompleteVault = (
  * after which the same call is repeated carrying `payment_intent`.
  */
 export const portalCollectInvoice = (
-  token: string,
+  token: PortalAuth,
   invoice: string,
   body: {
     payment_intent?: string;
@@ -1093,7 +1145,7 @@ export interface PortalPayOptions {
   }>;
 }
 
-export const portalPayOptions = (token: string, invoice: string, avoidGateway?: string) =>
+export const portalPayOptions = (token: PortalAuth, invoice: string, avoidGateway?: string) =>
   portalFetch<PortalPayOptions>(
     token,
     `/portal/v1/invoices/${encodeURIComponent(invoice)}/pay_options${
@@ -1102,7 +1154,7 @@ export const portalPayOptions = (token: string, invoice: string, avoidGateway?: 
   );
 
 /** One invoice, with `payment_in_flight` — what the payment return leg polls. */
-export const portalGetInvoice = (token: string, invoice: string) =>
+export const portalGetInvoice = (token: PortalAuth, invoice: string) =>
   portalFetch<PortalInvoice>(token, `/portal/v1/invoices/${encodeURIComponent(invoice)}`);
 
 /**
@@ -1113,7 +1165,7 @@ export const portalGetInvoice = (token: string, invoice: string) =>
  * asks the gateway before it believes the buyer, so `outcome: 'settled'` is a real
  * possibility here: the debit had already landed and they were about to pay twice.
  */
-export const portalAbandonAuthentication = (token: string, invoice: string) =>
+export const portalAbandonAuthentication = (token: PortalAuth, invoice: string) =>
   portalFetch<PortalAuthenticationAbandoned>(
     token,
     `/portal/v1/invoices/${invoice}/abandon_authentication`,
@@ -1141,7 +1193,7 @@ export interface PortalAuthenticationAbandoned {
   voided_at_gateway?: boolean;
 }
 
-export const portalSetDefault = (token: string, pm: string) =>
+export const portalSetDefault = (token: PortalAuth, pm: string) =>
   portalFetch<PortalPaymentMethod>(token, `/portal/v1/payment_methods/${pm}/default`, {
     method: "POST",
   });
@@ -1151,14 +1203,14 @@ export const portalSetDefault = (token: string, pm: string) =>
  * `backup` adds a card to the fallback list and `none` removes it. The route refuses to
  * demote the primary (409).
  */
-export const portalSetRole = (token: string, pm: string, role: "primary" | "backup" | "none") =>
+export const portalSetRole = (token: PortalAuth, pm: string, role: "primary" | "backup" | "none") =>
   portalFetch<PortalPaymentMethod>(token, `/portal/v1/payment_methods/${pm}/role`, {
     method: "POST",
     body: { role },
   });
 
 export const portalRemove = (
-  token: string,
+  token: PortalAuth,
   pm: string,
   /** Why the buyer deleted their last method, when the business asks. */
   why?: { reason: string; reason_text?: string },
@@ -1190,7 +1242,7 @@ export interface PortalReceipt {
 }
 
 /** The buyer's numbered receipts, newest first. Cursor-paginated. */
-export const portalListReceipts = (token: string, limit?: number) =>
+export const portalListReceipts = (token: PortalAuth, limit?: number) =>
   portalFetch<{
     object: "list";
     data: PortalReceipt[];
@@ -1199,9 +1251,9 @@ export const portalListReceipts = (token: string, limit?: number) =>
   }>(token, `/portal/v1/receipts${limit === undefined ? "" : `?limit=${limit}`}`);
 
 /** Raw PDF passthrough for the storefront proxy route — returns the upstream Response. */
-export const portalReceiptPdfResponse = async (token: string, rcpt: string) =>
+export const portalReceiptPdfResponse = async (token: PortalAuth, rcpt: string) =>
   fetch(`${BASE}/portal/v1/receipts/${encodeURIComponent(rcpt)}/pdf`, {
-    headers: { Authorization: `Bearer ${token}`, ...(await forwardedFor()) },
+    headers: { ...portalAuthHeaders(token), ...(await forwardedFor()) },
     cache: "no-store",
   });
 
@@ -1229,14 +1281,18 @@ export interface PortalPaymentRequest {
 }
 
 /** The buyer's open and processing payment requests. */
-export const portalListRequests = (token: string) =>
+export const portalListRequests = (token: PortalAuth) =>
   portalFetch<{ object: "list"; data: PortalPaymentRequest[]; has_more: boolean }>(
     token,
     "/portal/v1/requests",
   );
 
 /** Pay a request's whole live total with a SAVED payment method, as the buyer. */
-export const portalPayRequest = (token: string, preq: string, body: { payment_method?: string }) =>
+export const portalPayRequest = (
+  token: PortalAuth,
+  preq: string,
+  body: { payment_method?: string },
+) =>
   portalFetch<PortalPaymentRequest>(token, `/portal/v1/requests/${encodeURIComponent(preq)}/pay`, {
     method: "POST",
     body,
@@ -1362,7 +1418,7 @@ export interface PortalCreditPackQuote {
 }
 
 export const portalQuoteCredits = (
-  token: string,
+  token: PortalAuth,
   price: string,
   quantity: number,
   coupon?: string,
@@ -1372,18 +1428,23 @@ export const portalQuoteCredits = (
     body: { price, quantity, ...(coupon ? { coupon } : {}) },
   });
 
-export const portalGetCredits = (token: string) =>
+export const portalGetCredits = (token: PortalAuth) =>
   portalFetch<PortalCredits>(token, "/portal/v1/credits");
 
 /** The buyer enables or disables an automatic top-up of a unit. */
-export const portalSetAutoTopup = (token: string, unit: string, enabled: boolean) =>
+export const portalSetAutoTopup = (token: PortalAuth, unit: string, enabled: boolean) =>
   portalFetch<PortalAutoTopup>(token, "/portal/v1/credits/auto_topup", {
     method: "POST",
     body: { unit, enabled },
   });
 
 /** Opens a purchase checkout for a credit pack, pinned to this customer. */
-export const portalBuyCredits = (token: string, price: string, quantity: number, coupon?: string) =>
+export const portalBuyCredits = (
+  token: PortalAuth,
+  price: string,
+  quantity: number,
+  coupon?: string,
+) =>
   portalFetch<{ url: string }>(token, "/portal/v1/credits/purchase", {
     method: "POST",
     body: { price, quantity, ...(coupon ? { coupon } : {}) },
@@ -1413,13 +1474,13 @@ export interface PortalSpendLimit {
   resets_at?: string | null;
 }
 
-export const portalListSpendLimits = (token: string) =>
+export const portalListSpendLimits = (token: PortalAuth) =>
   portalFetch<{ object: "list"; data: PortalSpendLimit[]; can_add?: boolean }>(
     token,
     "/portal/v1/spend_limits",
   );
 export const portalCreateSpendLimit = (
-  token: string,
+  token: PortalAuth,
   body: {
     scope: "customer" | "property";
     property_key?: string;
@@ -1429,12 +1490,12 @@ export const portalCreateSpendLimit = (
     currency: string;
   },
 ) => portalFetch<PortalSpendLimit>(token, "/portal/v1/spend_limits", { method: "POST", body });
-export const portalUpdateSpendLimit = (token: string, id: string, amountMinor: number) =>
+export const portalUpdateSpendLimit = (token: PortalAuth, id: string, amountMinor: number) =>
   portalFetch<PortalSpendLimit>(token, `/portal/v1/spend_limits/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: { amount_minor: amountMinor },
   });
-export const portalDeleteSpendLimit = (token: string, id: string) =>
+export const portalDeleteSpendLimit = (token: PortalAuth, id: string) =>
   portalFetch<{ deleted: true }>(token, `/portal/v1/spend_limits/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
@@ -1449,7 +1510,7 @@ export interface PortalCreditRunway {
   auto_topup_minor: number;
 }
 
-export const portalGetCreditRunway = (token: string) =>
+export const portalGetCreditRunway = (token: PortalAuth) =>
   portalFetch<PortalCreditRunway>(token, "/portal/v1/credit_runway");
 
 // ——— Plan changes (storefront Phase 2) ——————————————————————————————————————
@@ -1592,22 +1653,22 @@ export interface PortalChangeResult {
 const changePath = (sub: string, rest: string) =>
   `/portal/v1/subscriptions/${encodeURIComponent(sub)}/${rest}`;
 
-export const portalChangeOptions = (token: string, sub: string) =>
+export const portalChangeOptions = (token: PortalAuth, sub: string) =>
   portalFetch<PortalChangeOptions>(token, changePath(sub, "change_options"));
 
-export const portalChangePreview = (token: string, sub: string, body: PortalChangeRequest) =>
+export const portalChangePreview = (token: PortalAuth, sub: string, body: PortalChangeRequest) =>
   portalFetch<PortalChangePreview>(token, changePath(sub, "change/preview"), {
     method: "POST",
     body,
   });
 
 export const portalChangeApply = (
-  token: string,
+  token: PortalAuth,
   sub: string,
   body: PortalChangeRequest & { expected_total_minor: number; priced_at?: string; quote?: string },
 ) => portalFetch<PortalChangeResult>(token, changePath(sub, "change"), { method: "POST", body });
 
-export const portalCancelScheduledChange = (token: string, sub: string) =>
+export const portalCancelScheduledChange = (token: PortalAuth, sub: string) =>
   portalFetch<{ object: string; id: string; canceled: boolean }>(
     token,
     changePath(sub, "scheduled_change"),
@@ -1645,14 +1706,14 @@ export interface PortalCancelFlow {
   can_undo: boolean;
 }
 
-export const portalCancelFlow = (token: string, sub: string) =>
+export const portalCancelFlow = (token: PortalAuth, sub: string) =>
   portalFetch<PortalCancelFlow>(
     token,
     `/portal/v1/subscriptions/${encodeURIComponent(sub)}/cancel_flow`,
   );
 
 export const portalTakeRetentionOffer = (
-  token: string,
+  token: PortalAuth,
   sub: string,
   body: { offer: PortalRetentionOffer["offer"]; months?: number; reason_code?: string },
 ) =>

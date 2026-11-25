@@ -1,8 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { portalExchange } from "@/lib/portal-api";
-import { rememberPortalBusiness, setStorefrontToken } from "@/lib/storefront-session";
+import { portalExchange, portalResume } from "@/lib/portal-api";
+import { enterPortal } from "@/lib/portal-entry";
+import { readStorefrontToken, rememberPortalBusiness } from "@/lib/storefront-session";
 
 /**
  * The button on the click-to-continue page (Phase 4b). A POST, so a scanner that only loads
@@ -12,13 +13,16 @@ import { rememberPortalBusiness, setStorefrontToken } from "@/lib/storefront-ses
 export async function continuePortalLinkAction(token: string): Promise<void> {
   const session = await portalExchange(token);
   if (session.business) await rememberPortalBusiness(session.business);
-  if (session.ok) await setStorefrontToken("portal", session.token);
-  // `link=expired` lets the card say the LINK failed, not that a session ended.
-  redirect(
-    session.ok
-      ? session.forwardUrl?.startsWith("/portal")
-        ? session.forwardUrl
-        : "/portal"
-      : "/portal?link=expired",
-  );
+  if (session.ok)
+    await enterPortal(
+      session.token,
+      session.forwardUrl?.startsWith("/portal") ? session.forwardUrl : "/portal",
+      session.session,
+    );
+  // Spent a moment ago in this browser (a double press, a second tab): reopen its page.
+  // Else back to its continue page: the expired card there can offer a new link.
+  const latest = await readStorefrontToken("portal");
+  const again = await portalResume(token, latest);
+  if (again && latest) await enterPortal(latest, again);
+  redirect(`/portal/continue/${encodeURIComponent(token)}`);
 }

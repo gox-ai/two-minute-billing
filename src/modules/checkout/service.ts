@@ -14,6 +14,7 @@ import { meterBillingConflict } from "@/modules/subscriptions/meter-billing";
 import { publicId } from "@/platform/ids";
 import { config } from "@/platform/config";
 import { formatMoney } from "@/platform/currency";
+import { PAYMENT_ALREADY_IN_PROGRESS } from "@/providers/payer-wording";
 import { payerFailureText, payerRefusal, PAYER_REASON_WITHHELD } from "@/providers/decline-codes";
 import { gatewayDefinition } from "@/providers/gateway-catalog";
 import {
@@ -471,6 +472,8 @@ async function assertPurchaseTopUpLimits(
 export async function createCheckoutSession(input: {
   organizationId: string;
   businessId: string;
+  /** Lifetime of this link, when the caller has its own setting. Default: the checkout TTL. */
+  ttlMs?: number;
   /** Single-item sugar; equivalent to `items: [{price: priceId, quantity}]`. */
   priceId?: string;
   quantity?: number;
@@ -790,7 +793,7 @@ export async function createCheckoutSession(input: {
 
   const token = `cstk_${randomBytes(32).toString("base64url")}`;
   const cosessId = publicId("cosess");
-  const expiresAt = new Date(Date.now() + CHECKOUT_SESSION_TTL_MS);
+  const expiresAt = new Date(Date.now() + (input.ttlMs ?? CHECKOUT_SESSION_TTL_MS));
   await withTenant(input.organizationId, async (tx) => {
     // Checked when the operator mints the link, since the buyer cannot fix it at completion.
     // Types only: the buyer's signup cannot supply required keys, and strict is the API's.
@@ -5852,9 +5855,7 @@ async function completeCheckoutInner(
         resultingCustomerId: s.resultingCustomerId,
       });
     }
-    throw new CheckoutError(
-      "Your payment is already in progress. Wait a moment. Then refresh the page.",
-    );
+    throw new CheckoutError(PAYMENT_ALREADY_IN_PROGRESS);
   }
 
   // Events the auto-collect-ON create path withholds until its first charge lands

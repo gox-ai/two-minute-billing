@@ -1,5 +1,7 @@
-import { listBusinesses } from '@/lib/api'
-import { BusinessTzProvider } from '@/components/business-tz'
+import { listBusinesses } from "@/lib/api";
+import { BusinessTzProvider } from "@/components/business-tz";
+import { LinkDaysProvider } from "@/components/link-days-context";
+import { emailLinkDays } from "@/components/form/link-days-field";
 
 /**
  * Business-scoped layout: publishes the business timezone so client components
@@ -16,17 +18,24 @@ export default async function BusinessLayout({
   children,
   params,
 }: {
-  children: React.ReactNode
-  params: Promise<{ biz: string }>
+  children: React.ReactNode;
+  params: Promise<{ biz: string }>;
 }) {
-  const { biz } = await params
-  let tz: string | null = null
+  const { biz } = await params;
+  let tz: string | null = null;
+  let linkDays = 5;
   try {
-    const businesses = await listBusinesses()
-    tz = businesses.data.find((b) => b.id === biz)?.timezone ?? null
+    const businesses = await listBusinesses();
+    const business = businesses.data.find((b) => b.id === biz);
+    tz = business?.timezone ?? null;
+    linkDays = emailLinkDays(business);
   } catch {
     // If the lookup fails the page itself will surface the error.
   }
 
-  return <BusinessTzProvider tz={tz}>{children}</BusinessTzProvider>
+  return (
+    <BusinessTzProvider tz={tz}>
+      <LinkDaysProvider days={linkDays}>{children}</LinkDaysProvider>
+    </BusinessTzProvider>
+  );
 }

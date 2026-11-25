@@ -43,11 +43,19 @@ export async function emailPortalLink(
    * where the business turned the task off, it opens the portal home, as before.
    */
   action?: { kind?: "pay_invoice" | "update_card"; invoiceId?: string | null } | null,
+  /** The operator's lifetime for this one link; default the business's email link setting. */
+  accessTtlMs?: number,
 ): Promise<string | null> {
   const base = config.PORTAL_BASE_URL?.replace(/\/$/, "");
   if (!base) return null;
   const forwardUrl = await actionForwardFor(tx, input, action ?? null);
-  const session = await createPortalSession({ ...input, kind: "email", tx, forwardUrl });
+  const session = await createPortalSession({
+    ...input,
+    kind: "email",
+    tx,
+    forwardUrl,
+    ...(accessTtlMs ? { accessTtlMs } : {}),
+  });
   return `${base}/portal/s/${session.accessToken}`;
 }
 

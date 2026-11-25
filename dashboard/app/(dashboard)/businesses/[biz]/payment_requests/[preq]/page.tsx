@@ -38,6 +38,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { ErrorState } from "@/components/states";
 import { ReceiptsCard } from "@/components/receipts/receipts-card";
+import { emailLinkDays } from "@/components/form/link-days-field";
 import {
   CancelRequestButton,
   ChargeRequestButton,
@@ -85,6 +86,7 @@ export default async function PaymentRequestPage({
   const business = businesses.data.find((b) => b.id === biz);
   const name = business?.name ?? biz;
   const tz = business?.timezone ?? null;
+  const linkDays = emailLinkDays(business);
 
   // Non-critical reads: each degrades to less detail, never to an error page.
   const [customer, pms, receipts] = await Promise.all([
@@ -149,9 +151,14 @@ export default async function PaymentRequestPage({
                   currency={r.currency}
                 />
               ) : (
-                <SendRequestButton {...ids} trigger="primary" defaultTo={sendTo} />
+                <SendRequestButton
+                  {...ids}
+                  trigger="primary"
+                  defaultTo={sendTo}
+                  linkDays={linkDays}
+                />
               )}
-              <CopyRequestLinkButton biz={biz} cus={r.customer} />
+              <CopyRequestLinkButton biz={biz} cus={r.customer} linkDays={linkDays} />
               <MoreMenu>
                 <MoreSection heading="Payment request">
                   <RecordRequestPaymentButton
@@ -159,7 +166,9 @@ export default async function PaymentRequestPage({
                     totalMinor={r.amount_minor}
                     currency={r.currency}
                   />
-                  {pms.length > 0 ? <SendRequestButton {...ids} defaultTo={sendTo} /> : null}
+                  {pms.length > 0 ? (
+                    <SendRequestButton {...ids} defaultTo={sendTo} linkDays={linkDays} />
+                  ) : null}
                   <RailLink href={`/businesses/${biz}/customers/${r.customer}`}>
                     View customer
                   </RailLink>

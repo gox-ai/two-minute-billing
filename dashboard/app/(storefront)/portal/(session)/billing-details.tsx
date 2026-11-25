@@ -16,6 +16,7 @@ import type { Country } from "@/lib/api/geo";
 import type { PortalMe } from "@/lib/portal-api";
 import { invoiceContactName } from "@/lib/names";
 import { portalUpdateMeAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { MetaField } from "../../chrome";
 
 /**
@@ -78,6 +79,7 @@ export function portalFieldStates(
 }
 
 export function BillingDetails({ me, countries }: { me: PortalMe; countries: Country[] }) {
+  const session = usePortalSession();
   const complete = me.customer.billing_details_complete;
   const fieldStates = portalFieldStates(me.field_config);
   const taxIdState = me.field_config?.["customer.tax_registration_number"] ?? "show";
@@ -95,7 +97,7 @@ export function BillingDetails({ me, countries }: { me: PortalMe; countries: Cou
           </Alert>
         ) : null}
         <ActionForm
-          action={portalUpdateMeAction}
+          action={portalUpdateMeAction.bind(null, session)}
           onSuccess={() => setEditing(false)}
           className="flex flex-col gap-3"
         >

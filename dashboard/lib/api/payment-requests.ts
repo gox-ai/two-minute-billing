@@ -69,6 +69,8 @@ export function createPaymentRequest(
     mode: "charge" | "link";
     payment_method?: string;
     email?: string;
+    /** `link` mode: the emailed link's lifetime in days (1–14). */
+    link_valid_days?: number;
   },
 ) {
   return apiWrite(`/v1/businesses/${biz}/customers/${cus}/payment_requests`, body, "POST");
@@ -99,7 +101,7 @@ export function cancelPaymentRequest(biz: string, preq: string, body: { reason?:
 export function sendPaymentRequest(
   biz: string,
   preq: string,
-  body: { to?: string; note?: string },
+  body: { to?: string; note?: string; link_valid_days?: number },
 ) {
   return apiWrite(`/v1/businesses/${biz}/payment_requests/${preq}/send`, body, "POST");
 }

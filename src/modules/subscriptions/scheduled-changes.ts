@@ -1,3 +1,4 @@
+import { changeCurrency } from "./currency-switch";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { systemDb, withTenant, type Tx } from "@/platform/db";
 import { notDeleted } from "./deleted-sql";
@@ -132,6 +133,7 @@ async function preflightItemWork(
   subscriptionId: string,
   businessId: string,
   work: ScheduledItemWork,
+  effectiveAt: Date,
 ): Promise<void> {
   const changes = work.changes ?? [];
   const adds = work.adds ?? [];
@@ -162,12 +164,16 @@ async function preflightItemWork(
     }
   }
 
-  if (adds.length > 0) {
+  if (changes.length > 0 || adds.length > 0) {
     const [sub] = await tx
-      .select({ currency: subscriptions.currency })
+      .select()
       .from(subscriptions)
       .where(eq(subscriptions.id, subscriptionId))
       .limit(1);
+    // Another currency only at the term end, with every item moving (`changeCurrency`).
+    const currency = sub
+      ? await changeCurrency(tx, sub, work, effectiveAt, (m) => new SubscriptionError(m))
+      : null;
     for (const add of adds) {
       const [p] = await tx
         .select({ currency: prices.currency })
@@ -175,7 +181,7 @@ async function preflightItemWork(
         .where(and(eq(prices.businessId, businessId), eq(prices.publicId, add.priceId)))
         .limit(1);
       if (!p) throw new SubscriptionError(`We could not find the price ${add.priceId}.`);
-      if (sub && p.currency !== sub.currency) {
+      if (currency && p.currency !== currency) {
         throw new SubscriptionError("Item currency must match the subscription currency");
       }
     }
@@ -239,7 +245,13 @@ export async function scheduleChange(input: {
     // approximate by construction — the estimator's header says exactly how.
     let mrrDeltaMinor: bigint | null = null;
     if (input.type === "change") {
-      await preflightItemWork(tx, input.subscriptionId, input.businessId, itemWork);
+      await preflightItemWork(
+        tx,
+        input.subscriptionId,
+        input.businessId,
+        itemWork,
+        input.effectiveAt,
+      );
       mrrDeltaMinor = await estimateScheduledMrrDeltaMinor(tx, {
         subscriptionId: input.subscriptionId,
         businessId: input.businessId,

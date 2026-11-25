@@ -2461,8 +2461,8 @@ const moneyRowCounts = async () =>
   );
   checks.push(
     [
-      "a mixed edit refuses an add in another currency",
-      !!wrongCurrency?.includes("currency must match"),
+      "a mixed edit refuses an add in another currency inside the term",
+      !!wrongCurrency?.includes("only at the end of the term"),
     ],
     [
       "a mixed edit refuses a yearly add on a subscription staying monthly",

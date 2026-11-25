@@ -4,6 +4,7 @@ import { ActionForm } from "@/components/form/action-form";
 import { SubmitButton } from "@/components/form/submit-button";
 import { SelectField } from "@/components/ui/select-field";
 import { portalPayRequestAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 
 /**
  * "Pay <total>" for one payment request: charges a SAVED payment method for the whole
@@ -23,9 +24,10 @@ export function PayRequestForm({
   methods: Array<{ value: string; label: string }>;
   defaultMethod: string;
 }) {
+  const session = usePortalSession();
   return (
     <ActionForm
-      action={portalPayRequestAction}
+      action={portalPayRequestAction.bind(null, session)}
       className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end"
     >
       <input type="hidden" name="preq" value={preq} />

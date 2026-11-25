@@ -1,5 +1,7 @@
 "use server";
 
+import { portalAuthFor } from "@/lib/portal-entry";
+
 import { revalidatePath } from "next/cache";
 import {
   portalBuyCredits,
@@ -7,7 +9,6 @@ import {
   portalSetAutoTopup,
   type PortalCreditPackQuote,
 } from "@/lib/portal-api";
-import { readStorefrontToken } from "@/lib/storefront-session";
 import { actionError, actionOk, type ActionResult } from "@/lib/action-result";
 
 const readCoupon = (fd: FormData) => String(fd.get("coupon") ?? "").trim() || undefined;
@@ -18,10 +19,12 @@ const readCoupon = (fd: FormData) => String(fd.get("coupon") ?? "").trim() || un
  * page then reads the link as not valid). A coupon code goes onto that checkout.
  */
 export async function portalBuyCreditsAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError("Your session ended. Open the portal link again.");
   const price = String(fd.get("price") ?? "");
   const quantity = Number(fd.get("quantity") ?? "1");
@@ -39,12 +42,16 @@ export async function portalBuyCreditsAction(
 }
 
 /** The price of one pack purchase with a coupon code, before the buyer pays. */
-export async function portalQuoteCreditsAction(input: {
-  price: string;
-  quantity: number;
-  coupon: string;
-}): Promise<{ ok: true; quote: PortalCreditPackQuote } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+export async function portalQuoteCreditsAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
+  input: {
+    price: string;
+    quantity: number;
+    coupon: string;
+  },
+): Promise<{ ok: true; quote: PortalCreditPackQuote } | { ok: false; error: string }> {
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: "Your session ended. Open the portal link again." };
   const coupon = input.coupon.trim();
   if (!coupon) return { ok: false, error: "Enter a coupon code." };
@@ -56,10 +63,12 @@ export async function portalQuoteCreditsAction(input: {
 
 /** The buyer enables or disables automatic top-up for one credit unit. */
 export async function portalSetAutoTopupAction(
+  /** The session the page shows (`?s=`). */
+  session: string,
   _prev: ActionResult | null,
   fd: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError("Your session ended. Open the portal link again.");
   const unit = String(fd.get("unit") ?? "");
   const enabled = fd.get("enabled") === "true";

@@ -735,6 +735,18 @@ export async function authenticatePortal(req: FastifyRequest, reply: FastifyRepl
       error: { type: "authentication_error", message: "Invalid or expired portal token" },
     });
   }
+  // Two portal tabs share one cookie, as checkout's do: see `CHECKOUT_SESSION_HEADER`.
+  const expected = req.headers[PORTAL_SESSION_HEADER];
+  if (typeof expected === "string" && expected !== "" && expected !== ctx.sessionPublicId) {
+    logAuthFailure(req, "portal_session_mismatch");
+    return reply.code(409).send({
+      error: {
+        type: "invalid_request_error",
+        code: "portal_session_mismatch",
+        message: PORTAL_SESSION_MISMATCH_MESSAGE,
+      },
+    });
+  }
   req.portalSession = ctx;
   updateEventContext({ actor: ctx.sessionPublicId });
   await pinRequestClockFor(ctx.businessId);
@@ -771,7 +783,31 @@ export async function authenticateCheckout(req: FastifyRequest, reply: FastifyRe
       error: { type: "authentication_error", message: "Invalid or expired checkout token" },
     });
   }
+  // The storefront names the session its page shows. A token for another session means two
+  // checkout tabs share one cookie: acting on it would pay or complete the wrong session.
+  const expected = req.headers[CHECKOUT_SESSION_HEADER];
+  if (typeof expected === "string" && expected !== "" && expected !== ctx.sessionPublicId) {
+    logAuthFailure(req, "checkout_session_mismatch");
+    return reply.code(409).send({
+      error: {
+        type: "invalid_request_error",
+        code: "checkout_session_mismatch",
+        message: CHECKOUT_SESSION_MISMATCH_MESSAGE,
+      },
+    });
+  }
   req.checkoutSession = ctx;
   updateEventContext({ actor: ctx.sessionPublicId });
   await pinRequestClockFor(ctx.businessId);
 }
+
+/** Optional: the portal session (`psess_…`) the caller expects its token to open. */
+export const PORTAL_SESSION_HEADER = "x-portal-session";
+export const PORTAL_SESSION_MISMATCH_MESSAGE =
+  "We could not continue because another account is open in this browser, so reload this page.";
+
+/** Optional: the checkout session (`cosess_…`) the caller expects its token to open. */
+export const CHECKOUT_SESSION_HEADER = "x-checkout-session";
+/** One sentence in our payer shape, so the storefront can show it as is. */
+export const CHECKOUT_SESSION_MISMATCH_MESSAGE =
+  "We could not continue because another checkout is open in this browser, so reload this page.";

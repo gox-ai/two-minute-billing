@@ -206,7 +206,7 @@ export const COMPANY: SiteLink[] = [
    sets the group order and which groups share a column.
 --------------------------------------------------------------------------- */
 
-export type MenuKey = "product" | "solutions" | "developers";
+export type MenuKey = "product" | "solutions" | "developers" | "resources";
 
 export interface MenuGroup {
   label: string;
@@ -231,7 +231,22 @@ export const MENU_COLUMNS: Record<MenuKey, string[][]> = {
   product: [["Bill"], ["Collect"], ["Tax and reports", "Assistant"]],
   solutions: [["By business model"], ["By region", "By team"]],
   developers: [["Get started"], ["Reference"], ["Open source"]],
+  resources: [["Learn"], ["Company"]],
 };
+
+/** The Resources menu: reading and company pages. Header only: the footer has its own lists. */
+const RESOURCES: SiteLink[] = [
+  { label: "Blog", to: "/blog", group: "Learn", blurb: "Billing guides and news." },
+  { label: "Knowledge base", to: "/help", group: "Learn", blurb: "Set up billing, step by step." },
+  {
+    label: "Compare billing tools",
+    to: "/compare",
+    group: "Learn",
+    blurb: "How we differ, point by point.",
+  },
+  { label: "Security", to: "/security", group: "Company", blurb: "How we protect your data." },
+  { label: "Contact", to: "/contact", group: "Company", blurb: "Talk to our team." },
+];
 
 function columns(key: MenuKey, links: SiteLink[]): MenuGroup[][] {
   return MENU_COLUMNS[key].map((col) =>
@@ -246,7 +261,7 @@ const SELF_HOSTED: SiteLink = {
   blurb: "Run it on your own servers.",
 };
 
-/** The three header menus. GitHub is listed only when the repository URL is configured. */
+/** The four header menus. GitHub is listed only when the repository URL is configured. */
 export function headerMenus(repo?: string): HeaderMenu[] {
   const github: SiteLink[] = repo
     ? [
@@ -289,12 +304,28 @@ export function headerMenus(repo?: string): HeaderMenu[] {
     {
       value: "developers",
       label: "Developers",
-      columns: columns("developers", [...DEVELOPERS, SELF_HOSTED, ...github]),
+      // The knowledge base (/help) is under Resources; the footer still lists it with Developers.
+      columns: columns("developers", [
+        ...DEVELOPERS.filter((l) => l.to !== "/help"),
+        SELF_HOSTED,
+        ...github,
+      ]),
       footer: { label: "All developer docs", to: "/help/developers" },
       aside: {
         label: "Your stack",
         title: "Payments in through your gateways, events out to your tools.",
         link: { label: "View integrations", to: "/integrations" },
+      },
+    },
+    {
+      value: "resources",
+      label: "Resources",
+      columns: columns("resources", RESOURCES),
+      // The panel shows the newest post's cover and title; these words are the fallback.
+      aside: {
+        label: "From the blog",
+        title: "Guides on subscription billing, tax and failed payments.",
+        link: { label: "Read the blog", to: "/blog" },
       },
     },
   ];

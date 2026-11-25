@@ -21,6 +21,32 @@ const screens: MapScreen[] = [
 const base = { businessId: "biz_A1", screens, id: "call_1" };
 
 describe("resolveGuide", () => {
+  it("names the menu a control sits in, from the map, so the runner can open it first", () => {
+    const invoice: MapScreen = {
+      route: "/businesses/{business}/invoices/{inv}",
+      scope: "biz",
+      label: "Invoice",
+      section: "Billing",
+      controls: ["Download PDF", "Issue a refund", "Delete"],
+      menus: { "Issue a refund": "More", Delete: "" },
+    };
+    const r = resolveGuide({
+      ...base,
+      screens: [invoice],
+      known: new Set(["inv_7"]),
+      input: {
+        screen: "/businesses/biz_A1/invoices/inv_7",
+        steps: [
+          { control: "Download PDF", say: "Select Download PDF." },
+          { control: "issue a refund", say: "Select Issue a refund." },
+          { control: "Delete", say: "Select Delete." },
+        ],
+      },
+    });
+    const steps = "guide" in r ? r.guide.steps : [];
+    expect(steps.map((s) => s.menu)).toEqual([undefined, "More", ""]);
+    expect("menu" in steps[0]!).toBe(false);
+  });
   it("fills the record id and keeps labels as the screen writes them", () => {
     const r = resolveGuide({
       ...base,

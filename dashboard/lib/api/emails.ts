@@ -391,6 +391,8 @@ export interface AdhocEmailBody {
   to?: string;
   /** The operator's covering message, rendered as {{note}}. */
   note?: string;
+  /** How long the email's link works, in days (1–14). Default: the business setting. */
+  link_valid_days?: number;
 }
 
 export interface AdhocEmailResult {

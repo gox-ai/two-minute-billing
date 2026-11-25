@@ -427,6 +427,10 @@ ok(
   "right code → a session token",
   good.statusCode === 200 && goodBody.object === "portal_login" && !!goodBody.token,
 );
+ok(
+  "right code → names its session, so the storefront can bind the tab to it",
+  typeof goodBody.id === "string" && goodBody.id.startsWith("psess_"),
+);
 const me = await app.inject({
   method: "GET",
   url: "/portal/v1/me",
@@ -537,6 +541,22 @@ const payLink = await mintFor(done.customer_id, {
   object: zero.invoice.publicId,
 });
 const payBody = body(payLink);
+
+// The operator's lifetime for one link overrides the business setting.
+const tenDay = await mintFor(done.customer_id, { link_kind: "email", link_valid_days: 10 });
+const tenLeft = Date.parse(body(tenDay).access_expires_at) - Date.now();
+ok(
+  "override: link_valid_days 10 → the link works 10 days",
+  tenDay.statusCode === 201 && tenLeft > 10 * 86_400_000 - 60_000 && tenLeft <= 10 * 86_400_000,
+);
+ok(
+  "override: link_valid_days on an API link → 400",
+  (await mintFor(done.customer_id, { link_valid_days: 3 })).statusCode === 400,
+);
+ok(
+  "override: 15 days → 400",
+  (await mintFor(done.customer_id, { link_kind: "email", link_valid_days: 15 })).statusCode === 400,
+);
 ok(
   "4b: a pay_invoice link opens on that invoice",
   payLink.statusCode === 201 &&
@@ -592,6 +612,43 @@ ok(
   ex2.statusCode === 401,
 );
 ok("4b: a peek of a spent link → 401", (await peek(payBody.token)).statusCode === 401);
+
+// A spent link clicked again in the browser that spent it reopens its page.
+const resume = (link: string, session: string) =>
+  app.inject({
+    method: "POST",
+    url: "/portal/v1/session/resume",
+    headers: { authorization: `Bearer ${session}` },
+    payload: { link },
+  });
+const ex1Token = body(ex1).token as string;
+const rs1 = await resume(payBody.token, ex1Token);
+ok(
+  "re-click: the session minted from the link reopens its page",
+  rs1.statusCode === 200 && body(rs1).forward_url === payBody.forward_url,
+);
+const other = body(
+  await mintFor(done.customer_id, { action: "pay_invoice", object: zero.invoice.publicId }),
+);
+const otherSession = body(
+  await app.inject({
+    method: "POST",
+    url: "/portal/v1/session",
+    headers: { authorization: `Bearer ${other.token}` },
+  }),
+).token as string;
+ok(
+  "re-click: a session from ANOTHER link → 401",
+  (await resume(payBody.token, otherSession)).statusCode === 401,
+);
+ok("re-click: no session → 401", (await resume(payBody.token, "")).statusCode === 401);
+await systemDb
+  .update(portalSessions)
+  .set({ revokedAt: new Date() })
+  .where(
+    eq(portalSessions.accessTokenHash, createHash("sha256").update(payBody.token).digest("hex")),
+  );
+ok("re-click: a revoked session → 401", (await resume(payBody.token, ex1Token)).statusCode === 401);
 
 await setConfig(biz.id, { portal_actions: { pay_invoice: false } });
 const offLink = body(
@@ -667,6 +724,103 @@ ok(
   (await meOf({ redirect_url: "https://example.com/app" })).return_url ===
     "https://example.com/app",
 );
+
+// ── Email me a new link ────────────────────────────────────────────────────
+{
+  const { portalNewLinkJob, sendQueuedNewLink } =
+    await import("@/modules/customer-portal/new-link");
+  await clearPublicRateLimits();
+  const old = await createPortalSession({
+    organizationId: orgId,
+    businessId: live.id,
+    customerId: a1.id,
+    kind: "email",
+    forwardUrl: "/portal?tab=invoices",
+  });
+  await app.inject({
+    method: "POST",
+    url: "/portal/v1/session",
+    headers: { authorization: `Bearer ${old.accessToken}` },
+  });
+  const check = (token: string) =>
+    app.inject({
+      method: "GET",
+      url: "/portal/v1/new_link",
+      headers: { authorization: `Bearer ${token}` },
+    });
+  const ask = (token: string) =>
+    app.inject({
+      method: "POST",
+      url: "/portal/v1/new_link",
+      headers: { authorization: `Bearer ${token}` },
+    });
+  ok(
+    "new link: a spent email link can get one",
+    body(await check(old.accessToken)).available === true,
+  );
+  const apiLink = await createPortalSession({
+    organizationId: orgId,
+    businessId: live.id,
+    customerId: a1.id,
+  });
+  ok("new link: an API link cannot", body(await check(apiLink.accessToken)).available === false);
+  ok("new link: an unknown token cannot", body(await check("pstk_nope")).available === false);
+  const asked = await ask("pstk_nope");
+  ok(
+    "new link: a request answers 202 whether or not it sends",
+    asked.statusCode === 202 && body(asked).accepted === true,
+  );
+
+  const before = sentMail.length;
+  const job = await portalNewLinkJob(old.accessToken);
+  ok("new link: the job is for the portal row", job?.kind === "portal");
+  const result = job ? await sendQueuedNewLink(job) : null;
+  const mail = sentMail.at(-1);
+  const fresh = mail?.html.match(/\/portal\/s\/(pstk_[A-Za-z0-9_-]+)/)?.[1];
+  ok(
+    "new link: emailed to the customer on file, with a new link",
+    result === "sent" &&
+      sentMail.length === before + 1 &&
+      mail?.to === "pat@example.com" &&
+      !!fresh &&
+      fresh !== old.accessToken,
+  );
+  const freshEx = fresh
+    ? await app.inject({
+        method: "POST",
+        url: "/portal/v1/session",
+        headers: { authorization: `Bearer ${fresh}` },
+      })
+    : null;
+  ok(
+    "new link: it opens the same task",
+    freshEx?.statusCode === 201 && body(freshEx).forward_url === "/portal?tab=invoices",
+  );
+  const [logged] = await withTenant(orgId, (tx) =>
+    tx
+      .select()
+      .from(emailMessages)
+      .where(and(eq(emailMessages.businessId, live.id), eq(emailMessages.type, "new_link"))),
+  );
+  ok("new link: the logged copy hides the link", !!logged && !logged.bodyHtml.includes("pstk_"));
+
+  // Three requests per link per window.
+  await clearPublicRateLimits();
+  const codes: number[] = [];
+  for (let i = 0; i < 4; i++) codes.push((await ask(old.accessToken)).statusCode);
+  ok("new link: the fourth request in 15 minutes → 429", codes.join() === "202,202,202,429");
+
+  await systemDb
+    .update(portalSessions)
+    .set({ revokedAt: new Date() })
+    .where(
+      eq(
+        portalSessions.accessTokenHash,
+        createHash("sha256").update(old.accessToken).digest("hex"),
+      ),
+    );
+  ok("new link: a revoked link cannot", body(await check(old.accessToken)).available === false);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 await app.close();

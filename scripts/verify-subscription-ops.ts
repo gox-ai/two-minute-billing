@@ -31,7 +31,7 @@ import {
 } from "@/modules/subscriptions/service";
 import { billSubscriptionPeriod } from "@/modules/invoicing/service";
 import { createCoupon, applyCouponToSubscription, removeDiscount } from "@/modules/coupons/service";
-import { subscriptions } from "@db/schema";
+import { subscriptions, unbilledCharges } from "@db/schema";
 
 const org = await createOrganization({ name: "SubOps Org" });
 const orgId = org.organization.id;
@@ -290,6 +290,87 @@ async function rebill(subId: string): Promise<number> {
     [
       "reactivate-with-options (new items) rates the custom price too",
       newItems.mrr === BigInt(CUSTOM),
+    ],
+  );
+}
+
+// 4a) A cancelled subscription may reactivate into another currency: the fresh term has no
+//     proration, so its first invoice is wholly in the new prices' currency. Refused while
+//     anything is still owed or pending in the old currency.
+{
+  const inr = await createPrice({
+    ...ctx,
+    productId: product.id,
+    type: "recurring",
+    model: "flat",
+    currency: "INR",
+    amountMinor: 75000,
+    interval: "month",
+  });
+  const cancelledUsd = async (label: string) => {
+    const customer = await createCustomer({
+      ...ctx,
+      email: `fx-${label}-${Date.now()}@x.test`,
+    });
+    const { subscription } = await createSubscription({
+      ...ctx,
+      customerId: customer.id,
+      now: new Date(),
+      items: [{ price, quantity: 1 }],
+    });
+    await cancelSubscription({
+      ...ctx,
+      subscriptionId: subscription.id,
+      atPeriodEnd: false,
+      now: new Date(),
+    });
+    return subscription.id;
+  };
+
+  const moved = await cancelledUsd("move");
+  const { subscription: inInr } = await reactivateSubscriptionWithOptions({
+    ...ctx,
+    subscriptionId: moved,
+    now: new Date(),
+    items: [{ price: inr.publicId, quantity: 1 }],
+  });
+
+  const held = await cancelledUsd("held");
+  await withTenant(orgId, (tx) =>
+    tx.insert(unbilledCharges).values({
+      ...ctx,
+      subscriptionId: held,
+      publicId: `uch_fx_${Date.now()}`,
+      description: "Pending USD charge",
+      amountMinor: 500n,
+      currency: "USD",
+    }),
+  );
+  let refusal = "";
+  try {
+    await reactivateSubscriptionWithOptions({
+      ...ctx,
+      subscriptionId: held,
+      now: new Date(),
+      items: [{ price: inr.publicId, quantity: 1 }],
+    });
+  } catch (e) {
+    refusal = (e as Error).message;
+  }
+  const heldRow = await withTenant(
+    orgId,
+    async (tx) =>
+      (await tx.select().from(subscriptions).where(eq(subscriptions.id, held)).limit(1))[0]!,
+  );
+
+  checks.push(
+    ["reactivate into another currency: the subscription bills in INR", inInr.currency === "INR"],
+    ["reactivate into another currency: active", inInr.status === "active"],
+    [
+      "a pending USD charge refuses the currency move",
+      refusal.includes("unbilled charges") &&
+        heldRow.status === "cancelled" &&
+        heldRow.currency === "USD",
     ],
   );
 }

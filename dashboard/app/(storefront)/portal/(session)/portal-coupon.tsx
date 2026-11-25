@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Alert } from "@/components/ui/alert";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { portalApplyCouponAction, portalRemoveCouponAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { buyerCouponError } from "./portal-change-view";
 
 type Discount = { id: string; coupon: string | null; source: string; removable: boolean };
@@ -28,6 +29,7 @@ export function PortalCouponRemove({
   subscription: string;
   coupon: string;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [confirming, setConfirming] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -37,7 +39,7 @@ export function PortalCouponRemove({
     if (busy) return;
     setError(null);
     setBusy(true);
-    const res = await portalRemoveCouponAction(subscription, coupon);
+    const res = await portalRemoveCouponAction(session, subscription, coupon);
     setBusy(false);
     if (!res.ok) return setError(res.error ?? "We could not remove that discount.");
     router.refresh();
@@ -113,6 +115,7 @@ export function PortalCouponBox({
   /** Codes the buyer can still enter (0495). Above 0 the box shows beside a live discount. */
   codesLeft?: number;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [open, setOpen] = React.useState(false);
@@ -136,7 +139,7 @@ export function PortalCouponBox({
     if (!entered || busy) return;
     setError(null);
     setBusy("apply");
-    const res = await portalApplyCouponAction(subscription, entered);
+    const res = await portalApplyCouponAction(session, subscription, entered);
     setBusy(null);
     if (!res.ok) {
       // Left in the field on failure, so a typo can be corrected rather than retyped.

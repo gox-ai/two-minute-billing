@@ -20,6 +20,7 @@ import { blocksFor, renderEmail, type RenderVars } from "@/modules/emails/templa
 import { loadTemplateOverride } from "@/modules/emails/template-service";
 import { packAwareLineAmount } from "@/modules/catalog/pricing";
 import { tokenHash } from "./service";
+import { resolveStorefrontConfig } from "./storefront-config";
 import type { TickError } from "@/modules/subscriptions/renewal";
 
 const log = createLogger("checkout-reminders");
@@ -27,7 +28,8 @@ const log = createLogger("checkout-reminders");
 /** First reminder an hour after the buyer leaves, the second a day after the first. */
 export const FIRST_REMINDER_AFTER_MS = 60 * 60_000;
 export const SECOND_REMINDER_AFTER_MS = 24 * 60 * 60_000;
-/** A reminded checkout stays open this long, so its link still works when it is read. */
+/** A reminded checkout stays open this long, so its link still works when it is read.
+ *  The business's email link lifetime (`portal_email_link_days`) replaces it. */
 export const REMINDED_CHECKOUT_TTL_MS = 48 * 60 * 60_000;
 const BATCH = 100;
 
@@ -50,7 +52,11 @@ export async function sendCheckoutReminders(
   const firstDue = new Date(now.getTime() - FIRST_REMINDER_AFTER_MS);
   const secondDue = new Date(now.getTime() - SECOND_REMINDER_AFTER_MS);
   const candidates = await systemDb
-    .select({ s: checkoutSessions, email: customers.email })
+    .select({
+      s: checkoutSessions,
+      email: customers.email,
+      storefrontConfig: businesses.storefrontConfig,
+    })
     .from(checkoutSessions)
     .innerJoin(businesses, eq(businesses.id, checkoutSessions.businessId))
     .innerJoin(customers, eq(customers.id, checkoutSessions.resultingCustomerId))
@@ -79,9 +85,11 @@ export async function sendCheckoutReminders(
 
   let reminded = 0;
   const errors: TickError[] = [];
-  for (const { s, email } of candidates) {
+  for (const { s, email, storefrontConfig } of candidates) {
     try {
-      if (await remindOne(s, email!, base, now)) reminded += 1;
+      const days = resolveStorefrontConfig({ storefrontConfig }).portalEmailLinkDays;
+      const ttlMs = days != null ? days * 86_400_000 : REMINDED_CHECKOUT_TTL_MS;
+      if (await remindOne(s, email!, base, now, ttlMs)) reminded += 1;
     } catch (e) {
       log.error(e, { event: "checkout_reminder_failed", session: s.publicId });
       errors.push({
@@ -100,6 +108,7 @@ async function remindOne(
   to: string,
   base: string,
   now: Date,
+  ttlMs: number,
 ): Promise<boolean> {
   const token = `cstk_${randomBytes(32).toString("base64url")}`;
   return withTenant(s.organizationId, async (tx) => {
@@ -111,9 +120,7 @@ async function remindOne(
         reminderCount: s.reminderCount + 1,
         lastRemindedAt: now,
         resumeTokenHash: tokenHash(token),
-        expiresAt: new Date(
-          Math.max(s.expiresAt.getTime(), now.getTime() + REMINDED_CHECKOUT_TTL_MS),
-        ),
+        expiresAt: new Date(Math.max(s.expiresAt.getTime(), now.getTime() + ttlMs)),
         updatedAt: now,
       })
       .where(

@@ -36,6 +36,8 @@ const createBody = z.object({
   mode: z.enum(["charge", "link"]),
   payment_method: z.string().min(1).max(64).optional(),
   email: z.string().email().max(320).optional(),
+  // `link` mode: how long the emailed link works. Default: the business's email link setting.
+  link_valid_days: z.number().int().min(1).max(14).optional(),
 });
 const chargeBody = z.object({ payment_method: z.string().min(1).max(64).optional() });
 const recordBody = z.object({
@@ -49,6 +51,7 @@ const cancelBody = z.object({ reason: z.string().max(200).optional() });
 const sendBody = z.object({
   to: z.string().email().max(320).optional(),
   note: z.string().max(2000).optional(),
+  link_valid_days: z.number().int().min(1).max(14).optional(),
 });
 
 function mapError(reply: FastifyReply, e: unknown) {
@@ -115,6 +118,7 @@ export async function registerPaymentRequestRoutes(app: FastifyInstance) {
             organizationId: orgId,
             businessId: business.id,
             paymentRequestPublicId: pid,
+            linkValidDays: parsed.data.link_valid_days ?? null,
           }).catch((e) =>
             log.warn("payment request email not sent at create", {
               request: pid,
@@ -278,6 +282,7 @@ export async function registerPaymentRequestRoutes(app: FastifyInstance) {
           paymentRequestPublicId: preq,
           to: parsed.data.to,
           note: parsed.data.note,
+          linkValidDays: parsed.data.link_valid_days ?? null,
         });
         return { object: "payment_request_email", ...res };
       } catch (e) {

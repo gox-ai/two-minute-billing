@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { openPaymentLink } from "@/lib/checkout-api";
-import { exchangeTokenForCookie } from "@/lib/storefront-session";
+import { enterCheckout } from "@/lib/checkout-entry";
 import { recordCheckoutEntry } from "@/lib/storefront-visit";
 
 /**
@@ -22,5 +22,5 @@ export async function GET(req: Request, { params }: { params: Promise<{ link: st
     redirect(`/buy/unavailable${qs ? `?${qs}` : ""}`);
   }
   recordCheckoutEntry(req, res.token);
-  await exchangeTokenForCookie("checkout", res.token);
+  await enterCheckout(res.token);
 }

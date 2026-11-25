@@ -192,6 +192,44 @@ ok(
 // no BusinessTzProvider to read: the zone must travel in this payload or the buyer sees
 // UTC while the invoice PDF says something else. Gated here because the field went
 // missing unnoticed for exactly as long as nothing asserted it.
+// Two tabs, one cookie: the storefront names its session; a token for another is refused.
+ok("me: names its own session (psess_)", me.json.session === mint.id);
+{
+  const mintB = await tmb.paymentMethods.createPortalSession(biz.id, cusB.id);
+  const tokenB = (await exchange(mintB.token)).token;
+  const named = (token: string, session: string, method = "GET", body?: unknown) =>
+    fetch(`${base}/portal/v1/me`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Portal-Session": session,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  ok(
+    "two tabs: the token's own session in X-Portal-Session → 200",
+    (await named(ptoken, mint.id)).status === 200,
+  );
+  const wrong = await named(tokenB, mint.id);
+  const wrongBody = (await wrong.json().catch(() => ({}))) as {
+    error?: { code?: string; message?: string };
+  };
+  ok(
+    "two tabs: another session in X-Portal-Session → 409, our wording",
+    wrong.status === 409 &&
+      wrongBody.error?.code === "portal_session_mismatch" &&
+      /^We could not continue/.test(wrongBody.error?.message ?? ""),
+  );
+  const write = await named(tokenB, mint.id, "PATCH", { name: "Wrong tab" });
+  ok("two tabs: a write for another session is refused before it runs (409)", write.status === 409);
+  const meB = await http("/portal/v1/me", { token: tokenB });
+  ok(
+    "two tabs: the other customer was not changed",
+    (meB.json.customer as { name?: string })?.name !== "Wrong tab",
+  );
+}
 ok(
   "me: business carries the timezone for buyer-facing dates",
   (me.json.business as { timezone?: string | null })?.timezone === "Asia/Kolkata",

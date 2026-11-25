@@ -17,6 +17,10 @@ if (!found) throw createError({ statusCode: 404, statusMessage: "Page not found"
 const freeBand = await useFreeBand();
 const c = fillFreeBand(found, freeBand.value);
 
+// A page re-checked or edited on its own carries its own dates; the rest share the global ones.
+const checkedLabel = c.checked?.label ?? COMPARE_CHECKED_LABEL;
+const updatedLabel = c.updated?.label ?? COMPARE_UPDATED_LABEL;
+
 const { signUp } = useAppLinks();
 const { data: plans } = await useFetch("/api/plans", { key: "plans" });
 
@@ -88,7 +92,7 @@ useMarketingSeo({
       :title="c.h1"
       :description="c.intro"
       :secondary="{ label: 'See pricing', to: '/pricing' }"
-      :note="`We make Two Minute Billing. Last updated ${COMPARE_UPDATED_LABEL}.`"
+      :note="`We make Two Minute Billing. Last updated ${updatedLabel}.`"
     >
       <div class="rounded-lg border border-default bg-default p-6">
         <p class="mk-label">At a glance</p>
@@ -111,10 +115,26 @@ useMarketingSeo({
           </tbody>
         </table>
         <p class="mt-4 text-xs text-muted">
-          {{ c.name }} facts from its public pages, as of {{ COMPARE_CHECKED_LABEL }}.
+          {{ c.name }} facts from its public pages, as of {{ checkedLabel }}.
         </p>
       </div>
     </MkPageHero>
+
+    <!-- A product event the reader must know before comparing (a shutdown, a takeover). -->
+    <section v-if="c.notice" class="pb-4">
+      <UContainer>
+        <div
+          role="note"
+          class="flex gap-3 rounded-lg border border-warning/40 bg-warning/10 p-5 sm:p-6"
+        >
+          <UIcon name="i-lucide-calendar-clock" class="mt-0.5 size-5 shrink-0 text-warning" />
+          <div>
+            <p class="font-semibold text-highlighted">{{ c.notice.title }}</p>
+            <p class="mt-1 text-sm leading-relaxed text-toned">{{ c.notice.body }}</p>
+          </div>
+        </div>
+      </UContainer>
+    </section>
 
     <!-- Feature and pricing matrix: a real table so extractors keep it; it stacks below sm. -->
     <section class="py-16 lg:py-24">
@@ -123,7 +143,7 @@ useMarketingSeo({
           <h2 class="mk-h2 text-highlighted">Two Minute Billing vs {{ c.name }}</h2>
           <p class="mt-4 text-[1.0625rem] leading-relaxed text-pretty text-muted">
             Price, fees and features, side by side. {{ c.name }} facts come from its own pricing
-            pages and docs, as of {{ COMPARE_CHECKED_LABEL }}.
+            pages and docs, as of {{ checkedLabel }}.
           </p>
         </div>
         <table class="mt-10 block w-full overflow-hidden rounded-lg border border-default">
@@ -133,7 +153,7 @@ useMarketingSeo({
               c.name
             }}, as of
             {{
-              COMPARE_CHECKED_LABEL
+              checkedLabel
             }}
           </caption>
           <thead class="hidden sm:block">
@@ -226,7 +246,7 @@ useMarketingSeo({
               </li>
             </ul>
             <p class="mt-6 text-xs text-muted">
-              From {{ c.name }}'s public pages, as of {{ COMPARE_CHECKED_LABEL }}.
+              From {{ c.name }}'s public pages, as of {{ checkedLabel }}.
             </p>
           </div>
         </div>
@@ -246,7 +266,9 @@ useMarketingSeo({
           </ul>
         </div>
         <div>
-          <h2 class="mk-h2 text-highlighted">When {{ c.name }} is the better fit</h2>
+          <h2 class="mk-h2 text-highlighted">
+            {{ c.themFitTitle ?? `When ${c.name} is the better fit` }}
+          </h2>
           <ul class="mt-6 space-y-3">
             <li v-for="s in c.fit.them" :key="s" class="flex gap-2 text-toned">
               <UIcon name="i-lucide-arrow-right" class="mt-1 size-4 shrink-0 text-(--mk-plain)" />
@@ -322,10 +344,7 @@ useMarketingSeo({
           </ul>
         </nav>
         <div class="mt-10 max-w-3xl space-y-2 text-xs leading-relaxed text-muted">
-          <p>
-            Last updated {{ COMPARE_UPDATED_LABEL }}. {{ c.name }} facts checked on
-            {{ COMPARE_CHECKED_LABEL }}.
-          </p>
+          <p>Last updated {{ updatedLabel }}. {{ c.name }} facts checked on {{ checkedLabel }}.</p>
           <p>How we compare: {{ COMPARE_METHOD }}</p>
           <p>
             We make Two Minute Billing, so we are not neutral. {{ c.trademark }} Something changed?

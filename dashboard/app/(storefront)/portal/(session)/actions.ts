@@ -51,11 +51,13 @@ import {
   portalLoginVerify,
 } from "@/lib/portal-api";
 import {
-  readStorefrontToken,
+  clearSessionToken,
   clearStorefrontToken,
+  readStorefrontToken,
   rememberPortalBusiness,
-  setStorefrontToken,
 } from "@/lib/storefront-session";
+import { keepPortalSession, portalAuthFor } from "@/lib/portal-entry";
+
 import { actionOk, actionError } from "@/lib/action-result";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -77,10 +79,12 @@ const PORTAL_PATH = "/portal";
 const NO_SESSION = "Your billing session is expired. Ask for a new link.";
 
 export async function portalSetDefaultAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   const pm = String(formData.get("pm") ?? "");
   if (!token) return actionError(NO_SESSION);
   if (!pm) return actionError("The payment method ID is missing. Reload the page.");
@@ -103,10 +107,12 @@ export async function portalSetDefaultAction(
  * that lets the person who owns the cards fill the slot in the first place.
  */
 export async function portalSetBackupAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   const pm = String(formData.get("pm") ?? "");
   if (!token) return actionError(NO_SESSION);
   if (!pm) return actionError("The payment method ID is missing. Reload the page.");
@@ -118,10 +124,12 @@ export async function portalSetBackupAction(
 }
 
 export async function portalRemoveAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   const pm = String(formData.get("pm") ?? "");
   if (!token) return actionError(NO_SESSION);
   if (!pm) return actionError("The payment method ID is missing. Reload the page.");
@@ -151,10 +159,13 @@ export async function portalRemoveAction(
  * (see `ExpiredCard` / `SignedOutCard` in page.tsx) — same empty state underneath,
  * different word for why it's empty.
  */
-export async function portalLogoutAction(): Promise<void> {
-  const token = await readStorefrontToken("portal");
+export async function portalLogoutAction(session: string): Promise<void> {
+  const token = await portalAuthFor(session);
   const res = token ? await portalLogout(token).catch(() => null) : null;
-  await clearStorefrontToken("portal");
+  await clearSessionToken("portal", session);
+  // The latest-opened cookie goes too only when it is this session's.
+  if (token && (await readStorefrontToken("portal")) === token.token)
+    await clearStorefrontToken("portal");
   // The operator's `redirect_url` from mint, when the link carried one.
   const back = res?.ok ? res.data?.redirect_url : undefined;
   redirect(back && /^https?:\/\//i.test(back) ? back : `${PORTAL_PATH}?signed_out=1`);
@@ -162,17 +173,19 @@ export async function portalLogoutAction(): Promise<void> {
 
 /** Begin an add-card flow. Returns the provider setup descriptor to the client component. */
 export async function portalBeginSetupAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   origin: string,
   gatewayAccount?: string,
   methodType?: string,
 ): Promise<{ ok: true; setup: PortalVaultSetup } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
-  const base = `${origin}${PORTAL_PATH}`;
+  const base = `${origin}${PORTAL_PATH}?s=${encodeURIComponent(session)}`;
   const res = await portalBeginSetup(
     token,
-    `${base}?setup=return`,
-    `${base}?setup=cancel`,
+    `${base}&setup=return`,
+    `${base}&setup=cancel`,
     gatewayAccount,
     methodType,
   );
@@ -183,6 +196,8 @@ export async function portalBeginSetupAction(
 
 /** Complete an add-card flow with the provider token (pm_… / approved setup token / test token). */
 export async function portalCompleteVaultAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   /**
    * How to complete: the setup intent (preferred — it is the claim the gateway's webhook
    * harvest also contends for, so the instrument is vaulted once) or, for a provider
@@ -201,7 +216,7 @@ export async function portalCompleteVaultAction(
   /** What adding it did to the open invoices; null when there is nothing to report. */
   outcome?: AddMethodOutcome | null;
 }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   if (!(completion.paymentIntent ?? completion.providerToken)) {
     return { ok: false, error: "We could not save your payment method. Try again." };
@@ -226,6 +241,8 @@ export async function portalCompleteVaultAction(
  * the same code the add-card flow uses, so this only carries the two legs.
  */
 export async function portalPayInvoiceAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   invoice: string,
   origin: string,
   paymentIntent?: string,
@@ -242,10 +259,10 @@ export async function portalPayInvoiceAction(
   /** The rail of the new-method row the buyer selected: the gateway's form is pinned to it. */
   methodType?: string,
 ): Promise<{ ok: true; result: PortalInvoiceCollection } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   if (!invoice) return { ok: false, error: "The invoice ID is missing. Reload the page." };
-  const base = `${origin}${PORTAL_PATH}`;
+  const base = `${origin}${PORTAL_PATH}?s=${encodeURIComponent(session)}`;
   const res = await portalCollectInvoice(token, invoice, {
     ...(paymentIntent ? { payment_intent: paymentIntent } : {}),
     ...(paymentIntent && clientResult ? { client_result: clientResult } : {}),
@@ -259,8 +276,8 @@ export async function portalPayInvoiceAction(
         }
       : {}),
     ...(methodType && !paymentIntent && !paymentMethod ? { method_type: methodType } : {}),
-    return_url: `${base}?pay=return`,
-    cancel_url: `${base}?pay=cancel`,
+    return_url: `${base}&pay=return`,
+    cancel_url: `${base}&pay=cancel`,
   });
   if (!res.ok || !res.data)
     return { ok: false, error: res.error ?? "We could not take the payment." };
@@ -270,11 +287,13 @@ export async function portalPayInvoiceAction(
 
 /** Pay now's step 1 for one invoice. Read-only, so no revalidate. */
 export async function portalPayOptionsAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   invoice: string,
   /** Try again after a gateway-side failure: gwa_… to route the rails around. */
   avoidGateway?: string,
 ): Promise<{ ok: true; options: PortalPayOptions } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalPayOptions(token, invoice, avoidGateway);
   if (!res.ok || !res.data)
@@ -284,9 +303,11 @@ export async function portalPayOptionsAction(
 
 /** Where a just-approved payment stands. Read-only, so no revalidate. */
 export async function portalInvoiceStateAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   invoice: string,
 ): Promise<{ ok: true; invoice: PortalInvoice } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalGetInvoice(token, invoice);
   if (!res.ok || !res.data)
@@ -301,9 +322,11 @@ export async function portalInvoiceStateAction(
  * most buyers never need it, because one matching provider is not a choice.
  */
 export async function portalPayGatewaysAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   currency: string,
 ): Promise<{ ok: true; gateways: PortalGateway[] } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalListGateways(token, currency, "payment");
   if (!res.ok || !res.data)
@@ -320,9 +343,11 @@ export async function portalPayGatewaysAction(
  * the invoice so they can pay another way — which the copy at the call site says.
  */
 export async function portalAbandonAuthenticationAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   invoice: string,
 ): Promise<{ ok: true; result: PortalAuthenticationAbandoned } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   if (!invoice) return { ok: false, error: "The invoice ID is missing. Reload the page." };
   const res = await portalAbandonAuthentication(token, invoice);
@@ -343,10 +368,12 @@ export async function portalAbandonAuthenticationAction(
  * addressed to the entity has a perfectly good billing name.
  */
 export async function portalUpdateMeAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   const firstName = String(formData.get("first_name") ?? "").trim();
   const company = String(formData.get("company") ?? "").trim();
   const line1 = String(formData.get("line1") ?? "").trim();
@@ -417,10 +444,12 @@ export async function portalUpdateMeAction(
  * the session's own customer, so a `sub` id from the client cannot reach anyone else's.
  */
 export async function portalApplyCouponAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   code: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: "This link is expired. Ask for a new link." };
   const res = await portalApplyCoupon(token, sub, code);
   if (!res.ok) return { ok: false, error: res.error ?? "We could not apply that code." };
@@ -429,10 +458,12 @@ export async function portalApplyCouponAction(
 
 /** Take the applied coupon back off. Coupon-sourced discounts only — the route refuses the rest. */
 export async function portalRemoveCouponAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   code?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: "This link is expired. Ask for a new link." };
   const res = await portalRemoveCoupon(token, sub, code);
   if (!res.ok) return { ok: false, error: res.error ?? "We could not remove that discount." };
@@ -441,11 +472,13 @@ export async function portalRemoveCouponAction(
 
 /** Skip one upcoming renewal, or undo that skip. */
 export async function portalSkipRenewalAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   renewalAt: string,
   undo: boolean,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: "This link is expired. Ask for a new link." };
   const res = await portalSkipRenewal(
     token,
@@ -467,10 +500,12 @@ export async function portalSkipRenewalAction(
  * one when none is posted). A decline is a 2xx with the error on the request.
  */
 export async function portalPayRequestAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError(NO_SESSION);
   const preq = String(formData.get("preq") ?? "").trim();
   if (!preq) return actionError("The payment request ID is missing. Reload the page.");
@@ -510,10 +545,12 @@ const SHIPPING_FIELDS = [
  * blank one clears its column; an add leaves blanks out.
  */
 export async function portalSaveShippingAddressAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return actionError(NO_SESSION);
   const addr = String(formData.get("addr") ?? "").trim();
   const body: PortalShippingAddressInput = {};
@@ -540,9 +577,11 @@ export async function portalSaveShippingAddressAction(
 }
 
 export async function portalMakeDefaultShippingAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   addr: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalUpdateShippingAddress(token, addr, { is_default: true });
   revalidatePath(PORTAL_PATH);
@@ -553,9 +592,11 @@ export async function portalMakeDefaultShippingAction(
 
 /** "Remove" in the portal = the engine's archive. 409 (with the engine's message) while a live subscription ships to it. */
 export async function portalArchiveShippingAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   addr: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalArchiveShippingAddress(token, addr);
   revalidatePath(PORTAL_PATH);
@@ -566,10 +607,12 @@ export async function portalArchiveShippingAction(
 
 /** `addressId: null` = ship to the customer's default. */
 export async function portalSetShipToAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   addressId: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const res = await portalSetSubscriptionShipTo(token, sub, addressId);
   revalidatePath(PORTAL_PATH);
@@ -586,9 +629,11 @@ export async function portalSetShipToAction(
 const EXPIRED = "This link is expired. Ask for a new link.";
 
 export async function portalChangeOptionsAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
 ): Promise<{ ok: boolean; data?: PortalChangeOptions; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalChangeOptions(token, sub);
   return res.ok && res.data
@@ -597,10 +642,12 @@ export async function portalChangeOptionsAction(
 }
 
 export async function portalChangePreviewAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   request: PortalChangeRequest,
 ): Promise<{ ok: boolean; data?: PortalChangePreview; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalChangePreview(token, sub, request);
   return res.ok && res.data
@@ -609,12 +656,14 @@ export async function portalChangePreviewAction(
 }
 
 export async function portalChangeApplyAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   request: PortalChangeRequest,
   expectedTotalMinor: number,
   quoted?: { pricedAt: string; quote: string },
 ): Promise<{ ok: boolean; data?: PortalChangeResult; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalChangeApply(token, sub, {
     ...request,
@@ -628,9 +677,11 @@ export async function portalChangeApplyAction(
 }
 
 export async function portalCancelScheduledChangeAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalCancelScheduledChange(token, sub);
   revalidatePath(PORTAL_PATH);
@@ -648,12 +699,14 @@ const LIFECYCLE_FAILED: Record<PortalLifecycleAction, string> = {
 
 /** Cancel, pause, resume or reactivate. The engine checks the business's switch again. */
 export async function portalSubscriptionLifecycleAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   action: PortalLifecycleAction,
   reasonCode?: string,
   offersShown?: boolean,
 ): Promise<{ ok: boolean; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: "This link is expired. Ask for a new link." };
   const res = await portalSubscriptionLifecycle(
     token,
@@ -673,16 +726,18 @@ export async function portalSubscriptionLifecycleAction(
 
 /** Restart an ended subscription: returns the checkout URL where the buyer pays the new term. */
 export async function portalRestartAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   origin: string,
   sub: string,
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
-  const back = `${origin}${PORTAL_PATH}`;
+  const back = `${origin}${PORTAL_PATH}?s=${encodeURIComponent(session)}`;
   const res = await portalRestartSubscription(
     token,
     sub,
-    `${back}?restarted=${encodeURIComponent(sub)}`,
+    `${back}&restarted=${encodeURIComponent(sub)}`,
     back,
   );
   return res.ok && res.data?.url
@@ -691,9 +746,11 @@ export async function portalRestartAction(
 }
 
 export async function portalCancelFlowAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
 ): Promise<{ ok: boolean; data?: PortalCancelFlow; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalCancelFlow(token, sub);
   return res.ok && res.data
@@ -702,12 +759,14 @@ export async function portalCancelFlowAction(
 }
 
 export async function portalTakeRetentionOfferAction(
+  /** The session the page shows (`?s=`): see `readSessionToken`. */
+  session: string,
   sub: string,
   offer: PortalRetentionOffer["offer"],
   months?: number,
   reasonCode?: string,
 ): Promise<{ ok: boolean; url?: string; starts?: string; error?: string }> {
-  const token = await readStorefrontToken("portal");
+  const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: EXPIRED };
   const res = await portalTakeRetentionOffer(token, sub, {
     offer,
@@ -761,7 +820,7 @@ export async function portalLoginVerifyAction(
   if (!res.ok) return { ok: false, error: res.error };
   if (res.data.object === "portal_login_choice") return { ok: true, choose: res.data.customers };
   await rememberPortalBusiness(business);
-  await setStorefrontToken("portal", res.data.token);
+  await keepPortalSession(res.data.token, res.data.id ?? null);
   revalidatePath(PORTAL_PATH);
   return { ok: true };
 }

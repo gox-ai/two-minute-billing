@@ -1502,7 +1502,16 @@ console.log("");
   //    reports a payment error it showed, by `sendBeacon`, which cannot set an
   //    Idempotency-Key. A repeat is deduped in the handler (same session and text within
   //    5 seconds is one row), and booking on an attempt never replaces a named reason.
+  //  - /portal/v1/new_link and /checkout/v1/new_link: "email me a new link" on a dead link.
+  //    Unauthenticated (Bearer = the dead link's token, no tenant, so the pair would no-op).
+  //    Always 202; one pending job per link (`jobKey` new_link:<row>) replaces the last, and
+  //    3 requests per link per window, so a replay sends nothing extra.
+  //  - /portal/v1/session/resume: reopens a spent link's page in its own browser. A read
+  //    sent as POST (the link token goes in the body); it writes nothing.
   const exempt = new Set([
+    "POST /portal/v1/new_link",
+    "POST /checkout/v1/new_link",
+    "POST /portal/v1/session/resume",
     // Billy (the assistant), dashboard session routes: a repeat is safe without the pair.
     // confirm claims the action in a conditional UPDATE (proposed → running; a repeat is a 409)
     // and runs it through the API with the action's own stored Idempotency-Key. edit, cancel,

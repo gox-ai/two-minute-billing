@@ -840,6 +840,40 @@ export function mergedAvsFields(
 }
 
 /**
+ * The status a re-vaulted row takes, or null to keep it. The buyer just authorised this
+ * instrument, so an `expired` / `expiring` row is re-judged on its refreshed expiry and
+ * mandate by the sweep's own rule; without this a card re-added with a new expiry stayed
+ * `expired` and auto-collection refused it. `invalid` (detached at the gateway) clears
+ * only on a NEW token: the same token arriving again says nothing about the detach.
+ */
+export function readdedStatus(
+  existing: {
+    status: string;
+    expMonth: number | null;
+    expYear: number | null;
+    mandateExpiresAt: Date | null;
+  },
+  vaulted: Pick<ProviderPaymentMethodRef, "display" | "mandate">,
+  newToken: boolean,
+  now: Date,
+): "valid" | "expiring" | "expired" | null {
+  const rejudge =
+    existing.status === "expired" ||
+    existing.status === "expiring" ||
+    (existing.status === "invalid" && newToken);
+  if (!rejudge) return null;
+  const next = decidePaymentSourceExpiry(
+    {
+      expMonth: vaulted.display.expMonth ?? existing.expMonth,
+      expYear: vaulted.display.expYear ?? existing.expYear,
+      mandateExpiresAt: vaulted.mandate?.expiresAt ?? existing.mandateExpiresAt,
+    },
+    now,
+  ).next;
+  return next === existing.status ? null : next;
+}
+
+/**
  * Persist an ALREADY-VAULTED instrument: the `payment_methods` row, the stale-
  * provider-customer adoption, `payment_source_added` + `customer_updated`, and the
  * audit entry.
@@ -1049,6 +1083,7 @@ export async function persistVaultedPaymentMethod(input: {
         : undefined);
     if (existingOrSameCard) {
       const existing = existingOrSameCard;
+      const status = readdedStatus(existing, vaulted, Boolean(sameCard), stampNow());
       // Not a plain no-op: whoever arrives second carries the FRESHER readback of the
       // same instrument — a mandate the gateway confirmed in between, a ceiling the
       // buyer's bank clamped. Take those, but only where the new ref actually says
@@ -1056,6 +1091,7 @@ export async function persistVaultedPaymentMethod(input: {
       const [refreshed] = await tx
         .update(paymentMethods)
         .set({
+          ...(status ? { status } : {}),
           type: vaulted.display.type,
           brand: vaulted.display.brand ?? existing.brand,
           last4: vaulted.display.last4 ?? existing.last4,

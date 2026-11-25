@@ -1,3 +1,4 @@
+import { registerNewLinkRoutes } from "./new-link-routes";
 import {
   initialEmailConfig,
   MAX_FOOTER_NOTE_CHARS,
@@ -3348,6 +3349,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerEntitlementRoutes(app);
   await registerPortalRoutes(app);
   await registerCustomerPortalRoutes(app);
+  await registerNewLinkRoutes(app);
   await registerPortalCreditRoutes(app);
   await registerCheckoutRoutes(app);
   await registerBuyerClientErrorRoutes(app);

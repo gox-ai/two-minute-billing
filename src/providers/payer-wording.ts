@@ -74,6 +74,17 @@ export const CODE_MATCHED: readonly RegExp[] = [
   /did not tell us yet that this payment is complete/,
 ];
 
+/** The engine's refusal of a second completion while the first one still runs. */
+export const PAYMENT_ALREADY_IN_PROGRESS =
+  "Your payment is already in progress. Wait a moment. Then refresh the page.";
+
+/** The storefront's "not yet": the gateway's approval has not reached us yet. */
+export const NOT_YET_APPROVED_TEXT = {
+  reason: "Your bank may still be sending us the approval.",
+  retryDialog: "Wait a moment. Then select Confirm payment again. We will not charge you twice.",
+  retryReturn: "If you try again, we will not charge you twice.",
+} as const;
+
 /**
  * Sentences the storefront writes inline at a payment call site. A new sentence there that
  * is not a "We could not …" lead goes here too, or ops is told it leaked.
@@ -96,5 +107,7 @@ export const PAYER_CLIENT_TEXTS: readonly string[] = [
   CARD_NOT_ACCEPTED,
   BUYER_GENERIC_REFUSAL,
   BUYER_GENERIC_FIELD_REASON,
+  PAYMENT_ALREADY_IN_PROGRESS,
+  ...Object.values(NOT_YET_APPROVED_TEXT),
   ...PAYER_INLINE_TEXTS,
 ];

@@ -32,6 +32,7 @@ import {
   portalChangeOptionsAction,
   portalChangePreviewAction,
 } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import {
   addonOffered,
   buyerChangeError,
@@ -69,6 +70,7 @@ export function PortalChangePlan({
   scheduled: { id: string; effective_at: string; can_cancel: boolean } | null;
   tz?: string | null;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const params = useSearchParams();
   const [open, setOpen] = React.useState(false);
@@ -127,7 +129,7 @@ export function PortalChangePlan({
         confirmLabel="Withdraw change"
         cancelLabel="Keep the change"
         onConfirm={async () => {
-          const res = await portalCancelScheduledChangeAction(subscription);
+          const res = await portalCancelScheduledChangeAction(session, subscription);
           if (!res.ok)
             return void toast.error(
               buyerChangeError(res.error, "We could not withdraw the change."),
@@ -151,6 +153,7 @@ function ChangePlanDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const session = usePortalSession();
   const [options, setOptions] = React.useState<PortalChangeOptions | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [plan, setPlan] = React.useState<string>("");
@@ -164,7 +167,7 @@ function ChangePlanDialog({
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
-    void portalChangeOptionsAction(subscription).then(
+    void portalChangeOptionsAction(session, subscription).then(
       (res) => {
         if (!res.ok || !res.data)
           return setLoadError(buyerChangeError(res.error, "We could not load the plans."));
@@ -230,7 +233,7 @@ function ChangePlanDialog({
     let stale = false;
     setPricing(true);
     const t = setTimeout(() => {
-      void portalChangePreviewAction(subscription, request).then(
+      void portalChangePreviewAction(session, subscription, request).then(
         (res) => {
           if (stale) return;
           setPricing(false);
@@ -260,6 +263,7 @@ function ChangePlanDialog({
     if (!request || !preview || busy) return;
     setBusy(true);
     const res = await portalChangeApplyAction(
+      session,
       subscription,
       { ...request, timing: preview.timing },
       preview.total_minor,
@@ -270,7 +274,7 @@ function ChangePlanDialog({
       // The price may have moved: say why, then show the current price, so neither the
       // breakdown nor the button quotes the old amount.
       toast.error(buyerChangeError(res.error, APPLY_LEAD));
-      const fresh = await portalChangePreviewAction(subscription, request);
+      const fresh = await portalChangePreviewAction(session, subscription, request);
       if (fresh.ok && fresh.data) {
         setPreviewError(null);
         setPreview(fresh.data);

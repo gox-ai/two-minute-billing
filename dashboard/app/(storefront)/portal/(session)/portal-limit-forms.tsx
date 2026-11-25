@@ -24,6 +24,7 @@ import {
   portalDeleteLimitAction,
   portalUpdateLimitAction,
 } from "./usage-controls-actions";
+import { usePortalSession } from "./portal-session-context";
 
 /**
  * The edit drawer's shape with the merchant's brand: Radix portals a dialog outside the
@@ -68,6 +69,7 @@ const INTERVALS = [
 
 /** The buyer adds its own hard limit. It cannot be more than a limit the business set. */
 export function AddLimitButton({ currency }: { currency: string }) {
+  const session = usePortalSession();
   const [open, setOpen] = React.useState(false);
   // Preselected so the first option shows as selected, not only focused.
   const [scope, setScope] = React.useState("customer");
@@ -83,7 +85,7 @@ export function AddLimitButton({ currency }: { currency: string }) {
         description="When your usage reaches the limit, we stop it until the limit resets. We bill the usage that we recorded before then."
       >
         <ActionForm
-          action={portalCreateLimitAction}
+          action={portalCreateLimitAction.bind(null, session)}
           onSuccess={() => setOpen(false)}
           className="flex flex-col gap-4 py-2"
         >
@@ -144,6 +146,7 @@ export function OwnLimitActions({
   amountMinor: number;
   currency: string;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [edit, setEdit] = React.useState(false);
   const [del, setDel] = React.useState(false);
@@ -168,7 +171,7 @@ export function OwnLimitActions({
         description="Your limit cannot be more than a limit that the business set for the same usage and interval."
       >
         <ActionForm
-          action={portalUpdateLimitAction}
+          action={portalUpdateLimitAction.bind(null, session)}
           onSuccess={() => setEdit(false)}
           className="flex flex-col gap-4 py-2"
         >
@@ -201,7 +204,7 @@ export function OwnLimitActions({
         onConfirm={async () => {
           const fd = new FormData();
           fd.set("id", id);
-          const res = await portalDeleteLimitAction(null, fd);
+          const res = await portalDeleteLimitAction(session, null, fd);
           if (!res.ok) return void toast.error(res.message ?? "We could not delete the limit.");
           toast.success(res.message ?? "Limit deleted.");
           router.refresh();

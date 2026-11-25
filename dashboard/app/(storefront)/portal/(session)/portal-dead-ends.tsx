@@ -5,6 +5,9 @@ import { readPortalBusiness } from "@/lib/storefront-session";
 import { SafeHtml } from "@/components/safe-html";
 import { BrandTheme, NoticeCard, StorefrontHeader } from "../../chrome";
 import { EmailCodeSignIn } from "./email-code-sign-in";
+import { newLinkAvailable } from "@/lib/new-link-api";
+import { NewLinkButton } from "../../new-link/new-link-button";
+import { emailNewPortalLinkAction } from "../../new-link/actions";
 
 const NOTICE_HTML =
   "[&_a]:text-primary [&_a]:underline [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground [&_ol]:list-inside [&_ol]:list-decimal [&_p]:my-2 [&_ul]:list-inside [&_ul]:list-disc";
@@ -82,12 +85,18 @@ function branded(notice: PortalLinkNotice | null, card: ReactNode) {
 export async function ExpiredCard({
   business,
   reason = "session",
+  linkToken,
 }: {
   business?: string | null;
   reason?: "link" | "session";
+  /** The expired link's token: offers "Email me a new link" when the engine allows it. */
+  linkToken?: string | null;
 }) {
   const biz = business ?? (await readPortalBusiness());
-  const notice = biz ? await portalLinkNotice(biz) : null;
+  const [notice, canResend] = await Promise.all([
+    biz ? portalLinkNotice(biz) : null,
+    newLinkAvailable("portal", linkToken ?? null),
+  ]);
   const name = notice?.business.name ?? null;
   const codeOn = !!biz && !!notice?.email_code;
   const title = codeOn
@@ -101,9 +110,11 @@ export async function ExpiredCard({
     ? reason === "link"
       ? "This link is not valid or is expired. Sign in with your email to continue."
       : "Sign in with your email to continue."
-    : name
-      ? `To open your billing account, ask ${name} for a new link.`
-      : "To manage your billing, open the link in the latest email from the business that bills you. If the link does not work, ask the business for a new link.";
+    : canResend
+      ? "We can send a new link to your email address."
+      : name
+        ? `To open your billing account, ask ${name} for a new link.`
+        : "To manage your billing, open the link in the latest email from the business that bills you. If the link does not work, ask the business for a new link.";
   return branded(
     notice,
     <NoticeCard icon={codeOn ? <LifeBuoy /> : <Clock />} title={title}>
@@ -112,6 +123,9 @@ export async function ExpiredCard({
       ) : (
         <p className="m-0">{text}</p>
       )}
+      {canResend && linkToken ? (
+        <NewLinkButton request={emailNewPortalLinkAction.bind(null, linkToken)} />
+      ) : null}
       {codeOn ? <EmailCodeSignIn business={biz!} heading={false} /> : null}
       {name ? (
         <PortalContact

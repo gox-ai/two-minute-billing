@@ -8,6 +8,8 @@ import { money } from "@/lib/format";
 import type { PortalInvoice, PortalMe } from "@/lib/portal-api";
 import { NoticeCard } from "../../chrome";
 import { portalInvoiceStateAction, portalPayInvoiceAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
+import { withPortalSession } from "@/lib/portal-path";
 import { PayInvoiceButton } from "./pay-invoice";
 import { RefusalAlert } from "../../payment-dialog";
 import { payableNow } from "./portal-state";
@@ -76,6 +78,7 @@ export function PaymentReturn({
   /** The page's invoice list: refreshed with the page, so it shows a later payment too. */
   invoices: PortalInvoice[];
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [watch, setWatch] = React.useState<Watch | null>(null);
   // Exactly once per return, even under StrictMode's double-invoked effects in dev.
@@ -87,14 +90,14 @@ export function PaymentReturn({
     const clientResult = readSdkReturnResult(window.location.search) ?? undefined;
     // Stripe appends its verdict for a method that redirected. Read before the strip.
     const redirectStatus = new URLSearchParams(window.location.search).get("redirect_status");
-    const ret = consumePaymentReturn("/portal");
+    const ret = consumePaymentReturn(withPortalSession("/portal", session));
     if (!ret) return;
     ran.current = true;
 
     const pending = readPendingPayment(scope);
     /** A failed payment names the invoice by its number and offers Pay on the card. */
     const readInvoice = async (invoice: string) => {
-      const read = await portalInvoiceStateAction(invoice);
+      const read = await portalInvoiceStateAction(session, invoice);
       if (!read.ok) return;
       setWatch((w) =>
         w && w.invoice === invoice
@@ -157,7 +160,7 @@ export function PaymentReturn({
       setWatch((w) => (w ? { ...w, state: "processing" } : w));
       for (let i = 0; i < POLLS; i++) {
         await new Promise((r) => setTimeout(r, POLL_MS));
-        const read = await portalInvoiceStateAction(invoice);
+        const read = await portalInvoiceStateAction(session, invoice);
         if (!read.ok) continue;
         const inv = read.invoice;
         setWatch((w) =>
@@ -189,6 +192,7 @@ export function PaymentReturn({
       // The approval webhook can land ~15 s after the buyer is back: retry before saying so.
       const leg2 = () =>
         portalPayInvoiceAction(
+          session,
           invoice,
           window.location.origin,
           pending.paymentIntent,

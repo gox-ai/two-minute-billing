@@ -105,6 +105,8 @@ export interface CreditBalance {
     /** A unit with no money rate: reserved by open holds, and used but not settled yet. */
     held_units?: number;
     unsettled_units?: number;
+    /** A unit with no money rate: what happens to usage past its credits. Absent on an older API. */
+    on_exhausted?: UnitOnExhausted;
   }>;
   balance: {
     grants_minor: number;
@@ -113,6 +115,14 @@ export interface CreditBalance {
     overdraft_limit_minor: number;
   };
   on_exhausted: { policy: CreditOnExhausted; source: string };
+}
+
+/** `billed`: on every meter of the unit, some, or none. `overdraft_units`: smallest step. */
+export interface UnitOnExhausted {
+  policy: CreditOnExhausted;
+  source: string;
+  billed: "all" | "some" | "none";
+  overdraft_units: number;
 }
 
 const b = (biz: string) => `/v1/businesses/${biz}`;

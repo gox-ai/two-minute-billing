@@ -519,6 +519,10 @@ const FIELDS: Record<string, FieldText> = {
   invoices: { label: "Invoices", format: namesList },
   invoice_ids: { label: "Invoices", format: namesList },
   mode: { label: "Collect by", options: { charge: "Charge now", link: "Send a payment link" } },
+  link_valid_days: {
+    label: "Days the link works",
+    format: (v) => (typeof v === "number" ? `${v} ${v === 1 ? "day" : "days"}` : null),
+  },
   payment_method: { label: "Payment method" },
   payment_method_id: { label: "Payment method" },
 

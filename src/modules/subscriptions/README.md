@@ -121,6 +121,12 @@ scheduled_cancellation_removed/trial_ending/renewal_skipped/skip_scheduled/sched
   removal candidate under either (a subscription with no plan bills nothing).
 
 ## Changelog
+- **2026-11-25** — A subscription may change currency where nothing is netted across the two
+  (`currency-switch.ts`): reactivating a cancelled subscription onto prices in another currency,
+  and an item edit that lands at the term end (end-of-term scheduled change, its estimate and
+  preflight; `changeCurrency`), which must move every item and prorates nothing. Refused while
+  pending unbilled charges, an unpaid invoice, an active fixed-amount coupon or (term end) metered
+  items remain in the old currency. Mid-term changes keep one currency.
 - **2026-11-22** — Detail route returns `created_through`.
 - **2026-11-20 (feat/detail-revenue-metrics)** — Subscription detail adds
   `revenue_billed_minor`: lifetime net billed revenue before tax and less credit notes, from

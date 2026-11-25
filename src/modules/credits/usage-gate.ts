@@ -144,10 +144,11 @@ async function overdraftFloor(
   return ok ? limit : 0n;
 }
 
-export async function shortTerms(
+/** The terms of a unit that do not depend on the meter. `priced`: a money price may bill the rest. */
+async function unitTerms(
   tx: Tx,
-  input: { businessId: string; customerId: string; unitId: string; meterId: string; now: Date },
-): Promise<ShortTerms> {
+  input: { businessId: string; customerId: string; unitId: string; now: Date },
+) {
   const { policy, sub, rules } = await resolveUnitPolicy(tx, input);
   const packOnly = !sub;
   const trial = sub?.status === "in_trial";
@@ -155,12 +156,52 @@ export async function shortTerms(
   const priced = trial
     ? rules.trialUsage === "as_paid"
     : !packOnly || rules.noSubscriptionUsage === "as_subscriber";
-  const price = priced ? await overagePriceFor(tx, input) : null;
   const floor =
     trial && rules.trialUsage === "refuse"
       ? 0n
       : await overdraftFloor(tx, { ...input, packOnly, trial, rules });
+  return { policy, packOnly, priced, floor };
+}
+
+export async function shortTerms(
+  tx: Tx,
+  input: { businessId: string; customerId: string; unitId: string; meterId: string; now: Date },
+): Promise<ShortTerms> {
+  const { policy, packOnly, priced, floor } = await unitTerms(tx, input);
+  const price = priced ? await overagePriceFor(tx, input) : null;
   return { policy, packOnly, price, floor };
+}
+
+/**
+ * What the gate does with usage past a unit's credits, for the unit as a whole (no meter).
+ * `billed`: a money price bills the rest on every meter of the unit, on some, or on none.
+ * Where it is not billed, usage may take the balance down to `floor`, then it is refused.
+ */
+export interface UnitShortOutcome {
+  policy: EffectivePolicy;
+  billed: "all" | "some" | "none";
+  floor: bigint;
+}
+
+export async function unitShortOutcome(
+  tx: Tx,
+  input: { businessId: string; customerId: string; unitId: string; now: Date },
+): Promise<UnitShortOutcome> {
+  const { policy, priced, floor } = await unitTerms(tx, input);
+  if (policy.policy !== "bill" || !priced) return { policy, billed: "none", floor };
+  const meters = rowsOf<{ meter_id: string }>(
+    await tx.execute(sql`
+      select distinct meter_id from meter_credit_costs
+      where unit_id = ${input.unitId} and active`),
+  );
+  if (!meters.length) {
+    const unitPrice = (await unitPoliciesFor(tx, [input.unitId])).get(input.unitId);
+    return { policy, billed: unitPrice?.overageMinorPerUnitE12 != null ? "all" : "none", floor };
+  }
+  let n = 0;
+  for (const m of meters) if (await overagePriceFor(tx, { ...input, meterId: m.meter_id })) n++;
+  const billed = n === meters.length ? "all" : n > 0 ? "some" : "none";
+  return { policy, billed, floor };
 }
 
 export interface GateRefusal {

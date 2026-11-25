@@ -10946,6 +10946,12 @@
                   "object": {
                     "type": "string",
                     "description": "The task's invoice (pay_invoice) or subscription (change_plan, cancel_subscription). It must belong to this customer."
+                  },
+                  "link_valid_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 14,
+                    "description": "How long this link works, in days. Needs link_kind email. Default: the business's email link setting (portal_email_link_days, else 5 days)."
                   }
                 }
               }
@@ -10964,7 +10970,7 @@
             }
           },
           "400": {
-            "description": "Invalid link_kind, redirect_url or forward_url",
+            "description": "Invalid link_kind, redirect_url, forward_url or link_valid_days",
             "content": {
               "application/json": {
                 "schema": {
@@ -27296,6 +27302,12 @@
                     "type": "string",
                     "format": "email",
                     "description": "Send the link here instead of the customer's billing email."
+                  },
+                  "link_valid_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 14,
+                    "description": "mode=link: how long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days)."
                   }
                 }
               }
@@ -27818,6 +27830,12 @@
                     "type": "string",
                     "maxLength": 2000,
                     "description": "A covering note in the email."
+                  },
+                  "link_valid_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 14,
+                    "description": "How long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days)."
                   }
                 }
               }
@@ -43989,7 +44007,8 @@
                 "payment_method_request",
                 "credit_note_sent",
                 "subscription_restart",
-                "portal_sign_in_code"
+                "portal_sign_in_code",
+                "new_link"
               ]
             },
             "description": "Billing email type"
@@ -44085,7 +44104,8 @@
                 "payment_method_request",
                 "credit_note_sent",
                 "subscription_restart",
-                "portal_sign_in_code"
+                "portal_sign_in_code",
+                "new_link"
               ]
             },
             "description": "Billing email type"
@@ -44210,7 +44230,8 @@
                 "payment_method_request",
                 "credit_note_sent",
                 "subscription_restart",
-                "portal_sign_in_code"
+                "portal_sign_in_code",
+                "new_link"
               ]
             },
             "description": "Billing email type"
@@ -44327,7 +44348,8 @@
                 "payment_method_request",
                 "credit_note_sent",
                 "subscription_restart",
-                "portal_sign_in_code"
+                "portal_sign_in_code",
+                "new_link"
               ]
             },
             "description": "Billing email type"
@@ -45262,6 +45284,12 @@
                   "credit_note": {
                     "type": "string",
                     "description": "Credit note id (cn_…). Required for `credit_note_sent`."
+                  },
+                  "link_valid_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 14,
+                    "description": "How long the email's button link works, in days. Default: the business's email link setting (portal_email_link_days)."
                   },
                   "subscription": {
                     "type": "string",
@@ -55931,7 +55959,7 @@
                         "minimum": 1,
                         "maximum": 14,
                         "nullable": true,
-                        "description": "How long a portal link in an email can be opened, in days. Null = 5 days."
+                        "description": "How long a link in an email can be opened, in days: Pay now, Change payment method, payment request, checkout reminder and restart links. Null = 5 days for portal links, 48 hours for a checkout reminder, the checkout lifetime (24 hours by default) for a restart link."
                       },
                       "portal_session_hours": {
                         "type": "integer",
@@ -60575,6 +60603,46 @@
                 "unsettled_units": {
                   "type": "integer",
                   "description": "Only for a unit with no money rate: taken by usage events and not drawn from a credit grant yet."
+                },
+                "on_exhausted": {
+                  "type": "object",
+                  "description": "Only for a unit with no money rate: what a usage event that needs more than the balance gets, as the gate decides it for this unit.",
+                  "properties": {
+                    "policy": {
+                      "type": "string",
+                      "enum": [
+                        "block",
+                        "bill"
+                      ],
+                      "description": "The on exhausted's policy."
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "business_blocking_off",
+                        "customer_override",
+                        "grant",
+                        "plan_price",
+                        "business_default",
+                        "no_subscription",
+                        "trial"
+                      ],
+                      "description": "Where the on exhausted comes from."
+                    },
+                    "billed": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "some",
+                        "none"
+                      ],
+                      "description": "The rest is billed in money (the meter's usage price, else the unit's overage price) on every meter with a cost in this unit, on some of them, or on none. Never under `block`."
+                    },
+                    "overdraft_units": {
+                      "type": "integer",
+                      "description": "Where the rest is not billed: how far below zero the balance can go before the event is refused, in the unit's smallest step. 0 = refused at once."
+                    }
+                  }
                 }
               }
             },

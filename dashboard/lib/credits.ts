@@ -160,6 +160,7 @@ export function balanceView(
       units: number;
       held_units?: number;
       unsettled_units?: number;
+      on_exhausted?: UnitExhaustedOutcome;
     }>;
   },
   info: (key: string | null) => UnitInfo,
@@ -168,13 +169,20 @@ export function balanceView(
   /** Rows of the money block: units with a rate. */
   rated: Array<{ unit: UnitInfo; units: number }>;
   /** With what open holds reserve and what is used but not settled yet. */
-  unrated: Array<{ unit: UnitInfo; units: number; held?: number; unsettled?: number }>;
+  unrated: Array<{
+    unit: UnitInfo;
+    units: number;
+    held?: number;
+    unsettled?: number;
+    onExhausted?: UnitExhaustedOutcome;
+  }>;
 } {
   const rows = balance.available_units.map((u) => ({
     unit: info(u.unit === balance.currency ? null : u.unit),
     units: u.units,
     held: u.held_units,
     unsettled: u.unsettled_units,
+    onExhausted: u.on_exhausted,
   }));
   const unrated = rows.filter((r) => r.unit.rated === false);
   const noMoney = balance.grants_minor === 0 && balance.available_minor === 0;
@@ -187,6 +195,30 @@ export function balanceView(
       .map(({ unit, units }) => ({ unit, units })),
     unrated,
   };
+}
+
+/** A unit with no rate: what the usage gate does with usage past its credits (balance API). */
+export interface UnitExhaustedOutcome {
+  policy: CreditOnExhausted;
+  source: string;
+  billed: "all" | "some" | "none";
+  overdraft_units: number;
+}
+
+/** In-app text (ASD-STE100): the outcome of one unit, with what sets it. */
+export function unitExhaustedText(o: UnitExhaustedOutcome, info: UnitInfo): string {
+  const rest =
+    o.overdraft_units > 0
+      ? `Use up to ${fmtUnits(o.overdraft_units, info)} below zero, then refuse usage.`
+      : "Refuse usage.";
+  if (o.billed === "all")
+    return ["Bill usage.", POLICY_SOURCE_LABEL[o.source]].filter(Boolean).join(" ");
+  if (o.billed === "some")
+    return `Bill usage on meters with a usage price. On other meters: ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+  // Under `bill`, only a missing money price refuses.
+  const why =
+    o.policy === "bill" ? "This unit has no overage price." : POLICY_SOURCE_LABEL[o.source];
+  return [rest, why].filter(Boolean).join(" ");
 }
 
 /** The Value column says something only when a row has a money value. */
@@ -353,6 +385,8 @@ export const POLICY_SOURCE_LABEL: Record<string, string> = {
   grant: "A credit grant sets this.",
   plan_price: "The plan price sets this.",
   business_default: "The business default sets this.",
+  no_subscription: "The customer has no subscription.",
+  trial: "The subscription is in a free trial.",
 };
 
 export const IN_FLIGHT_APPLIES = ["always", "other_holds_open"] as const;

@@ -34,6 +34,14 @@ function revalidate(biz: string, preq?: string, cus?: string) {
 const declineText = (r: PaymentRequest) =>
   r.last_payment_error?.message ?? r.last_payment_error?.code ?? "The gateway declined the charge.";
 
+/** `link_valid_days`: a whole number 1–14, nothing (the business setting), or "bad". */
+function linkDays(fd: FormData): number | null | "bad" {
+  const raw = String(fd.get("link_valid_days") ?? "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 14 ? n : "bad";
+}
+
 export async function createPaymentRequestAction(
   _prev: ActionResult | null,
   fd: FormData,
@@ -57,11 +65,17 @@ export async function createPaymentRequestAction(
       errors: { email: "Enter a valid email address." },
     });
 
+  const days = linkDays(fd);
+  if (mode === "link" && days === "bad")
+    return actionError("Correct the highlighted fields.", {
+      errors: { link_valid_days: "Enter a number of days from 1 to 14." },
+    });
   const res = await createPaymentRequest(biz, cus, {
     invoices,
     mode,
     ...(mode === "charge" && pm ? { payment_method: pm } : {}),
     ...(mode === "link" && email ? { email } : {}),
+    ...(mode === "link" && typeof days === "number" ? { link_valid_days: days } : {}),
   });
   revalidate(biz, undefined, cus);
   if (!res.ok) return actionError(res.error ?? "We could not create the payment request.");
@@ -182,6 +196,7 @@ export async function cancelPaymentRequestAction(
 export async function createPaymentRequestLinkAction(
   biz: string,
   cus: string,
+  days?: number,
 ): Promise<SecretLinkResult> {
   // The portal link route needs customers:manage: the link opens the whole portal, not one request.
   await requirePermission(["payments:collect", "customers:manage"], "ops");
@@ -190,6 +205,7 @@ export async function createPaymentRequestLinkAction(
   const res = await apiPost(`/v1/businesses/${biz}/customers/${cus}/portal_sessions`, {
     link_kind: "email",
     forward_url: "/portal?tab=invoices",
+    ...(days && days >= 1 && days <= 14 ? { link_valid_days: days } : {}),
   });
   if (!res.ok) return { ok: false, error: res.error ?? "We could not create the payment link." };
   const data = res.data as { token: string; url?: string; access_expires_at: string };
@@ -220,9 +236,15 @@ export async function sendPaymentRequestAction(
     return actionError("Correct the highlighted fields.", {
       errors: { note: "Use 2,000 characters or fewer." },
     });
+  const days = linkDays(fd);
+  if (days === "bad")
+    return actionError("Correct the highlighted fields.", {
+      errors: { link_valid_days: "Enter a number of days from 1 to 14." },
+    });
   const res = await sendPaymentRequest(biz, preq, {
     ...(to ? { to } : {}),
     ...(note ? { note } : {}),
+    ...(typeof days === "number" ? { link_valid_days: days } : {}),
   });
   revalidate(biz, preq);
   if (!res.ok) return actionError(res.error ?? "We could not send the payment request.");

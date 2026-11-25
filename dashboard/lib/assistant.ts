@@ -293,7 +293,14 @@ export interface AssistantGuide {
   id: string;
   path: string;
   screen: string;
-  steps: Array<{ control: string; within: string | null; say: string; do?: StepAction }>;
+  steps: Array<{
+    control: string;
+    within: string | null;
+    say: string;
+    do?: StepAction;
+    /** An item of a dropdown menu: the trigger that shows it ("" when it has no fixed label). */
+    menu?: string;
+  }>;
 }
 
 /** What the member does with a step's control; absent on guides saved before it existed. */

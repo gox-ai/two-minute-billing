@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { money } from "@/lib/format";
 import type { PortalCreditPackQuote } from "@/lib/portal-api";
 import { portalBuyCreditsAction, portalQuoteCreditsAction } from "./credits-actions";
+import { usePortalSession } from "./portal-session-context";
 
 /**
  * "Buy" for one credit pack: opens the purchase checkout for the quantity selected. The
@@ -27,6 +28,7 @@ export function BuyCreditsForm({
   currency: string;
   allowCoupon?: boolean;
 }) {
+  const session = usePortalSession();
   const [qty, setQty] = React.useState(1);
   const [couponOpen, setCouponOpen] = React.useState(false);
   const [coupon, setCoupon] = React.useState("");
@@ -37,14 +39,14 @@ export function BuyCreditsForm({
 
   const check = () =>
     startCheck(async () => {
-      const r = await portalQuoteCreditsAction({ price, quantity: qty, coupon });
+      const r = await portalQuoteCreditsAction(session, { price, quantity: qty, coupon });
       setQuote(r.ok ? r.quote : null);
       setQuoteError(r.ok ? null : r.error);
     });
 
   return (
     <ActionForm
-      action={portalBuyCreditsAction}
+      action={portalBuyCreditsAction.bind(null, session)}
       onSuccess={(r) => {
         if (r.redirectTo) window.location.assign(r.redirectTo);
       }}

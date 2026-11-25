@@ -29,12 +29,27 @@ import {
 } from "@/app/(dashboard)/businesses/[biz]/payment_requests/actions";
 import type { PaymentMethod } from "@/lib/api";
 import { SecretLinkButton } from "@/components/patterns/secret-link-button";
+import { LinkDaysField } from "@/components/form/link-days-field";
 import { pmLabel } from "./request-payment-dialog";
 
 /** Mint a one-time link to the buyer's portal, for the operator to send themselves. */
-export function CopyRequestLinkButton({ biz, cus }: { biz: string; cus: string }) {
+export function CopyRequestLinkButton({
+  biz,
+  cus,
+  linkDays,
+}: {
+  biz: string;
+  cus: string;
+  /** The business's email link lifetime, preset in the dialog. */
+  linkDays: number;
+}) {
   return (
-    <SecretLinkButton size="default" mint={() => createPaymentRequestLinkAction(biz, cus)}>
+    <SecretLinkButton
+      size="default"
+      linkDays={linkDays}
+      title="Create a payment link"
+      mint={(days) => createPaymentRequestLinkAction(biz, cus, days)}
+    >
       Copy payment link
     </SecretLinkButton>
   );
@@ -236,9 +251,10 @@ export function RecordRequestPaymentButton({
 
 export function SendRequestButton({
   defaultTo,
+  linkDays,
   trigger = "rail",
   ...ids
-}: Common & { defaultTo: string | null }) {
+}: Common & { defaultTo: string | null; linkDays: number }) {
   const [open, setOpen] = React.useState(false);
   return (
     <>
@@ -275,6 +291,7 @@ export function SendRequestButton({
             <Field name="note" label="Note" help="Optional. We add it to the email.">
               <Textarea name="note" rows={3} maxLength={2000} />
             </Field>
+            <LinkDaysField defaultDays={linkDays} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancel

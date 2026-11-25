@@ -151,6 +151,8 @@ const adhocEmailSchema = z.object({
   restart_price: z.enum(["current", "keep"]).optional(),
   to: z.string().email().max(320).optional(),
   note: z.string().max(2000).optional(),
+  // How long the email's button link works. Default: the business's email link setting.
+  link_valid_days: z.number().int().min(1).max(14).optional(),
 });
 
 /**
@@ -699,6 +701,7 @@ export async function registerEmailRoutes(app: FastifyInstance) {
           restartPrice: parsed.data.restart_price,
           to: parsed.data.to,
           note: parsed.data.note,
+          linkValidDays: parsed.data.link_valid_days ?? null,
         });
         return { object: "email_send", ...result };
       } catch (e) {

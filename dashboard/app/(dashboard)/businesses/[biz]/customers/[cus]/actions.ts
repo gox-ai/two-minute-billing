@@ -514,12 +514,17 @@ export async function clearPersonalDataAction(
  * can arrive already burned. That hazard is real and tracked; widening the window does
  * not fix it, and it is not made worse here.
  */
-export async function createPortalLinkAction(biz: string, cus: string): Promise<SecretLinkResult> {
+export async function createPortalLinkAction(
+  biz: string,
+  cus: string,
+  days?: number,
+): Promise<SecretLinkResult> {
   await requirePermission("customers:manage", "ops");
   if (!biz || !cus)
     return { ok: false, error: "The business or customer ID is missing. Reload the page." };
   const res = await apiPost(`/v1/businesses/${biz}/customers/${cus}/portal_sessions`, {
     link_kind: "email",
+    ...(days && days >= 1 && days <= 14 ? { link_valid_days: days } : {}),
   });
   if (!res.ok) return { ok: false, error: res.error ?? "We could not create the portal link." };
   // `access_expires_at` is when the LINK stops opening; `expires_at` is the ceiling on

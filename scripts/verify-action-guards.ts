@@ -115,6 +115,10 @@ const EXEMPT_ACTIONS = new Map<string, string>([
     "authorizes on the emailed portal link, which the API exchange spends once",
   ],
   [
+    "(storefront)/new-link/actions.ts::emailNewPortalLinkAction",
+    "authorizes on the dead link's own token; rate-limited, uniform 202, mails only the address on file",
+  ],
+  [
     "(auth)/notifications/confirm/actions.ts::confirmDestinationAction",
     "authorizes on the emailed single-use destination token; the reader is often not a member",
   ],

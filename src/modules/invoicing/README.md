@@ -78,6 +78,7 @@ date; `attemptCount`/`nextAttemptAt`) + invoice line items (`recurring|proration
 - Money = integer minor units; ledger append-only.
 
 ## Changelog
+- **2026-11-24** — `chargeWithMethod`: learning `mandate_missing` emits `payment_source_updated` (`mandate_missing: true`) once per instrument, so the customer gets the renew-authorization email.
 - **2026-11-22** — `dunning-journey.ts`: `attributeTransactions` (one audit query per page), `attributePayingTransaction`, `attributeIntents` feed `initiated_by` on lists and detail routes. Invoice and order detail return `created_through`.
 - **2026-11-19** — `scheduledDebitsForInvoices` (`pre-debit.ts`): invoices with an unused, live
   invoice notice, and when the debit is taken. Read by the portal invoice list.

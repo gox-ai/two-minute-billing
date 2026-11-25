@@ -16,6 +16,7 @@ import { Alert } from "@/components/ui/alert";
 import { RadioField } from "@/components/ui/radio-group";
 import type { PortalShippingAddress } from "@/lib/portal-api";
 import { portalSetShipToAction } from "./actions";
+import { usePortalSession } from "./portal-session-context";
 import { shippingSummary } from "./shipping-format";
 
 /** Radio value for "ship to my default address" (posts `address_id: null`). */
@@ -41,6 +42,7 @@ export function PortalShipTo({
   /** False for a cancelled subscription: the engine refuses the change. */
   changeable: boolean;
 }) {
+  const session = usePortalSession();
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = useDefaultState<string>(shipToId ?? DEFAULT);
@@ -58,7 +60,11 @@ export function PortalShipTo({
     if (busy) return;
     setBusy(true);
     setError(null);
-    const res = await portalSetShipToAction(subscription, selected === DEFAULT ? null : selected);
+    const res = await portalSetShipToAction(
+      session,
+      subscription,
+      selected === DEFAULT ? null : selected,
+    );
     setBusy(false);
     if (!res.ok) return setError(res.error ?? "We could not change the shipping address.");
     setOpen(false);

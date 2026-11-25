@@ -494,6 +494,7 @@ const emailTypeParam = {
       "credit_note_sent",
       "subscription_restart",
       "portal_sign_in_code",
+      "new_link",
     ],
   },
   description: "Billing email type",
@@ -2088,6 +2089,13 @@ const openapiSpec = {
                     description:
                       "The task's invoice (pay_invoice) or subscription (change_plan, cancel_subscription). It must belong to this customer.",
                   },
+                  link_valid_days: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    description:
+                      "How long this link works, in days. Needs link_kind email. Default: the business's email link setting (portal_email_link_days, else 5 days).",
+                  },
                 },
               },
             },
@@ -2097,7 +2105,7 @@ const openapiSpec = {
           "201": {
             description: "Portal session (id, status, token, url?, access_expires_at, expires_at)",
           },
-          "400": errResp("Invalid link_kind, redirect_url or forward_url"),
+          "400": errResp("Invalid link_kind, redirect_url, forward_url or link_valid_days"),
           "404": errResp("No such customer"),
         },
       },
@@ -6200,6 +6208,13 @@ const openapiSpec = {
                     format: "email",
                     description: "Send the link here instead of the customer's billing email.",
                   },
+                  link_valid_days: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    description:
+                      "mode=link: how long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days).",
+                  },
                 },
               },
             },
@@ -6415,6 +6430,13 @@ const openapiSpec = {
                     type: "string",
                     maxLength: 2000,
                     description: "A covering note in the email.",
+                  },
+                  link_valid_days: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    description:
+                      "How long the emailed link works, in days. Default: the business's email link setting (portal_email_link_days, else 5 days).",
                   },
                 },
               },
@@ -11611,6 +11633,13 @@ const openapiSpec = {
                     type: "string",
                     description: "Credit note id (cn_…). Required for `credit_note_sent`.",
                   },
+                  link_valid_days: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    description:
+                      "How long the email's button link works, in days. Default: the business's email link setting (portal_email_link_days).",
+                  },
                   subscription: {
                     type: "string",
                     description:
@@ -16039,7 +16068,7 @@ const openapiSpec = {
                         maximum: 14,
                         nullable: true,
                         description:
-                          "How long a portal link in an email can be opened, in days. Null = 5 days.",
+                          "How long a link in an email can be opened, in days: Pay now, Change payment method, payment request, checkout reminder and restart links. Null = 5 days for portal links, 48 hours for a checkout reminder, the checkout lifetime (24 hours by default) for a restart link.",
                       },
                       portal_session_hours: {
                         type: "integer",
