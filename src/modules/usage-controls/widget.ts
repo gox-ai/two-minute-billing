@@ -3,7 +3,7 @@
  * one customer, the per-business origin allowlist, and the one read the widget makes.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray } from "drizzle-orm";
 import { systemDb, withTenant } from "@/platform/db";
 import { businessWallClock } from "@/platform/clock";
 import {
@@ -14,6 +14,13 @@ import {
   usageWidgetTokens,
 } from "@db/schema";
 import { liveBalance } from "@/modules/credits/balance";
+import {
+  MAX_EMBED_ORIGINS,
+  getEmbedOrigins,
+  isAnyEmbedOrigin,
+  normaliseEmbedOrigin,
+  setEmbedOrigins,
+} from "@/modules/embedding/service";
 import { measureRunway } from "./measure";
 import {
   currentUsageForCustomer,
@@ -22,7 +29,7 @@ import {
 
 /** 15 minutes, on the real clock: Time Travel never extends a credential. */
 export const USAGE_WIDGET_TOKEN_TTL_MS = 15 * 60_000;
-export const MAX_WIDGET_ORIGINS = 20;
+export const MAX_WIDGET_ORIGINS = MAX_EMBED_ORIGINS;
 const PREFIX = "uwt_";
 
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -84,60 +91,13 @@ export async function resolveUsageWidgetToken(
 }
 
 /**
- * An allowed origin is scheme + host + port, compared exactly (as `platform/cors.ts`). https
- * only, except http on localhost for development. Returns the normalised origin or an error.
+ * The widget shares the business's one list of allowed websites with the embedded checkout and
+ * portal (`embedding` module). These names stay for the widget's own routes.
  */
-export function normaliseWidgetOrigin(raw: string): { origin: string } | { error: string } {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    return { error: `${raw} is not a URL. Enter an origin like https://app.example.com.` };
-  }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
-    return { error: `${raw} must use https.` };
-  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash)
-    return { error: `${raw} must be an origin only, with no path.` };
-  return { origin: url.origin };
-}
-
-export async function getUsageWidgetOrigins(
-  organizationId: string,
-  businessId: string,
-): Promise<string[]> {
-  return withTenant(organizationId, async (tx) => {
-    const [b] = await tx
-      .select({ origins: businesses.usageWidgetOrigins })
-      .from(businesses)
-      .where(eq(businesses.id, businessId))
-      .limit(1);
-    return b?.origins ?? [];
-  });
-}
-
-export async function setUsageWidgetOrigins(
-  organizationId: string,
-  businessId: string,
-  origins: string[],
-): Promise<string[]> {
-  const unique = [...new Set(origins)];
-  await withTenant(organizationId, (tx) =>
-    tx
-      .update(businesses)
-      .set({ usageWidgetOrigins: unique, updatedAt: new Date() })
-      .where(eq(businesses.id, businessId)),
-  );
-  return unique;
-}
-
-/** Preflight carries no token: answer it for an origin some business lists. */
-export async function isAnyWidgetOrigin(origin: string): Promise<boolean> {
-  const r = await systemDb.execute(
-    sql`select 1 from businesses where ${origin} = any(usage_widget_origins) limit 1`,
-  );
-  return (r as unknown as unknown[]).length > 0;
-}
+export const normaliseWidgetOrigin = normaliseEmbedOrigin;
+export const getUsageWidgetOrigins = getEmbedOrigins;
+export const setUsageWidgetOrigins = setEmbedOrigins;
+export const isAnyWidgetOrigin = isAnyEmbedOrigin;
 
 /** Everything the widget shows, for the token's customer only. */
 export async function usageWidgetView(ctx: UsageWidgetContext) {

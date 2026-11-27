@@ -475,6 +475,12 @@ export function AddressFields({
       <input type="hidden" name={n("postal_code")} value="" />
     );
 
+  // A hidden country hides what depends on it: without one, the postal code, city and region
+  // cannot be labelled or checked. Their stored values still post (a save replaces the address).
+  const countryHidden = st("country") === "hide";
+  const addressAllHidden =
+    countryHidden && (["line1", "line2", "line3"] as const).every((k) => st(k) === "hide");
+
   return (
     <FieldLayout value={rows ? "row" : "stack"}>
       <div className={rows ? "divide-y divide-border" : "@container flex flex-col gap-6"}>
@@ -524,13 +530,21 @@ export function AddressFields({
           </section>
         ) : null}
 
-        <section className={rows ? "divide-y divide-border" : GRID}>
+        <section
+          className={cn(rows ? "divide-y divide-border" : GRID, addressAllHidden && "hidden")}
+        >
           {rows ? null : <h3 className={cn("text-sm font-semibold", SPAN)}>Address</h3>}
 
           {/* Country leads: it decides the region control, the postal label and its
             format, so asking for it first means the rest of the form is already
             correct by the time it is filled in. */}
-          {st("country") === "read_only" ? (
+          {countryHidden ? (
+            <>
+              {(["country", "postal_code", "city", "state_code", "state"] as const).map((k) => (
+                <React.Fragment key={k}>{keep(k)}</React.Fragment>
+              ))}
+            </>
+          ) : st("country") === "read_only" ? (
             readOnly("country", "Country", country?.name ?? a.country ?? "", ["country"])
           ) : (
             <Field
@@ -567,11 +581,11 @@ export function AddressFields({
 
           {/* Country, postal code, then city and state (which the postal code fills), then
             the street lines: the order a buyer can answer without thinking. */}
-          {postalField}
+          {countryHidden ? null : postalField}
 
-          {cityField}
+          {countryHidden ? null : cityField}
 
-          {!countryCode ? (
+          {countryHidden ? null : !countryCode ? (
             /* No country chosen: no region control — a "State" box above an unknown
                country cannot be validated or labelled correctly. The
                stored values still ride along, because a save REPLACES the address and the

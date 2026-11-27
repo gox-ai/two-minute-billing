@@ -154,7 +154,6 @@ describe("every valid state round-trips for every key", () => {
   const states = ["show", "hide", "mandatory"] as const;
   for (const key of Object.keys(EXPECTED_DEFAULTS) as CheckoutFieldKey[]) {
     for (const state of states) {
-      if (key === "billing.country" && state === "hide") continue;
       it(`${key} → ${state}`, () => {
         const cfg = resolveCheckoutFieldConfig({ checkoutFieldConfig: { [key]: state } });
         expect(cfg[key]).toBe(state);
@@ -187,10 +186,10 @@ describe("isRequired / isHidden", () => {
   });
 });
 
-describe("billing.country is never hidden (0334)", () => {
-  it("a stored hide resolves to the default", () => {
+describe("billing.country may be hidden (email-only checkout)", () => {
+  it("a stored hide is kept; tax and gateway locks bring it back at runtime", () => {
     const cfg = resolveCheckoutFieldConfig({ checkoutFieldConfig: { "billing.country": "hide" } });
-    expect(cfg["billing.country"]).toBe("mandatory");
+    expect(cfg["billing.country"]).toBe("hide");
   });
   it("show is kept", () => {
     const cfg = resolveCheckoutFieldConfig({ checkoutFieldConfig: { "billing.country": "show" } });

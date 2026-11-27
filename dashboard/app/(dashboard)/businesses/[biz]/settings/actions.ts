@@ -1,5 +1,6 @@
 "use server";
 
+import { getEmbeddingSettings, saveEmbeddingOrigins } from "@/lib/api/embedding";
 import {
   DEFAULT_HEADROOM_BPS as DEFAULT_MANDATE_HEADROOM_BPS,
   DEFAULT_RAIL_CAP_MINOR as DEFAULT_MANDATE_RAIL_CAP_MINOR,
@@ -1733,6 +1734,38 @@ export async function saveCheckoutSettingsAction(
     return actionError("Correct the highlighted fields.", {
       errors: { terms_url: "Enter the URL of your terms." },
     });
+  // Allowed websites (embedding): sent only when the card loaded, so a failed load never clears them.
+  if (fd.has("embed_origins")) {
+    // One input per website; blank rows are dropped.
+    const origins = fd
+      .getAll("embed_origins")
+      .map((o) => String(o).trim())
+      .filter(Boolean);
+    if (origins.length > 20)
+      return actionError("Correct the highlighted fields.", {
+        errors: { embed_origins: "Enter 20 websites or fewer." },
+      });
+    // The list lives on the business row, so writing it bumps resource_version. Write only a
+    // changed list, only when the page is current, and then expect exactly our own bump: a
+    // write by someone else in between still gets the conflict.
+    let now: { version?: number; origins: string[] };
+    try {
+      const [b, e] = await Promise.all([getBusiness(biz), getEmbeddingSettings(biz)]);
+      now = { version: b?.resource_version, origins: e.origins };
+    } catch {
+      return actionError("We could not read the current settings. We saved nothing.");
+    }
+    const ev = num(fd, "expected_version");
+    const current = ev == null || ev <= 0 || now.version === ev;
+    if (current && origins.join("\n") !== now.origins.join("\n")) {
+      const saved = await saveEmbeddingOrigins(biz, origins);
+      if (!saved.ok)
+        return actionError("Correct the highlighted fields.", {
+          errors: { embed_origins: saved.error ?? "We could not save the allowed websites." },
+        });
+      if (ev != null && ev > 0) fd.set("expected_version", String(ev + 1));
+    }
+  }
   const cur = await readStorefrontConfig(biz);
   if (cur.error) return cur.error;
   return patch(
@@ -1744,6 +1777,9 @@ export async function saveCheckoutSettingsAction(
         ...cur.sc,
         hide_zero_value_lines: bool(fd, "hide_zero_value_lines"),
         collect_po_number: bool(fd, "collect_po_number"),
+        ...(fd.has("fill_export_street_present")
+          ? { fill_export_street: bool(fd, "fill_export_street") }
+          : {}),
         default_return_url: strOrNull(fd, "default_return_url"),
         default_cancel_url: strOrNull(fd, "default_cancel_url"),
         one_time_save_payment_method: ((v) => (v === "never" || v === "always" ? v : "ask"))(

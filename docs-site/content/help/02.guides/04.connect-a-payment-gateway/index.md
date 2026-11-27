@@ -76,7 +76,7 @@ your customers, see [Payment methods your customers can use](/help/guides/paymen
 | --- | --- | --- |
 | [Stripe](/help/guides/connect-a-payment-gateway/stripe) | Where Stripe serves your business. ACH in the US, SEPA in the EU | [132 currencies](/help/guides/connect-a-payment-gateway/stripe#currencies). Direct Debit (ACH): USD. Direct Debit (SEPA): EUR |
 | [PayPal](/help/guides/connect-a-payment-gateway/paypal) | Where PayPal serves your business | [25 currencies](/help/guides/connect-a-payment-gateway/paypal#currencies) |
-| [Razorpay](/help/guides/connect-a-payment-gateway/razorpay) | India | [124 currencies](/help/guides/connect-a-payment-gateway/razorpay#currencies) |
+| [Razorpay](/help/guides/connect-a-payment-gateway/razorpay) | India | [124 currencies](/help/guides/connect-a-payment-gateway/razorpay#currencies). UPI Autopay: INR. Netbanking (eMandate): INR |
 | [Square](/help/guides/connect-a-payment-gateway/square) | The country of each Square location | [AUD, CAD, EUR, GBP, JPY, USD](/help/guides/connect-a-payment-gateway/square#currencies) |
 | [Braintree](/help/guides/connect-a-payment-gateway/braintree) | Where Braintree serves your business. Venmo in the US | [126 currencies](/help/guides/connect-a-payment-gateway/braintree#currencies). Venmo: USD |
 | [Checkout.com](/help/guides/connect-a-payment-gateway/checkoutcom) | Where Checkout.com serves your business | [141 currencies](/help/guides/connect-a-payment-gateway/checkoutcom#currencies) |

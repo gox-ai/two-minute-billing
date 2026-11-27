@@ -1,6 +1,6 @@
 ---
 name: two-minute-billing-integrate
-description: Wire Two Minute Billing into an application's code — map app accounts or orders to billing customers, add hosted checkout for subscriptions and one-time purchases, customer-portal routes, a signed and deduplicated webhook handler tested locally with tmb listen, feature gating with entitlement checks, and the subscription lifecycle from the app (cancel, pause, resume, reactivate, seat changes, one-off charges, refunds). Framework guides for Next.js, Express, Fastify, Hono, NestJS, FastAPI, Django, Rails, Laravel and Go. Use when connecting an app's sign-up, upgrade, buy button, billing page, cancel or seat flows, webhooks or plan-based feature access to Two Minute Billing.
+description: Wire Two Minute Billing into an application's code — map app accounts or orders to billing customers, add hosted checkout for subscriptions and one-time purchases, customer-portal routes, checkout and the portal inside the app (popup or inline, embed.js), a signed and deduplicated webhook handler tested locally with tmb listen, feature gating with entitlement checks, and the subscription lifecycle from the app (cancel, pause, resume, reactivate, seat changes, one-off charges, refunds). Framework guides for Next.js, Express, Fastify, Hono, NestJS, FastAPI, Django, Rails, Laravel and Go. Use when connecting an app's sign-up, upgrade, buy button, billing page, cancel or seat flows, webhooks or plan-based feature access to Two Minute Billing.
 license: MIT
 metadata:
   homepage: https://twominutebilling.com
@@ -26,6 +26,7 @@ Shared code and the reasons behind it: `references/patterns.md`. For another sta
 | Subscribe | `POST /billing/subscribe` → checkout session → 303 | Test card `4242 4242 4242 4242` subscribes |
 | Buy once (one-time sales) | `POST /billing/buy` → checkout session, `mode: "purchase"` → 303 | The test card pays; the order is marked paid |
 | Manage billing | `POST /billing/manage` → portal session → 303 | The portal opens for the signed-in account |
+| In-app checkout or portal (optional) | allowed website + `embed_origin` + `embed.js` | The popup opens on the app's page; `success` refreshes the page; access still comes from the webhook |
 | Webhooks | `POST /webhooks/billing` | Every line of `tmb listen` shows a 2xx for the events `tmb trigger` causes, and `webhook-check.mjs` passes (verify skill) |
 | Feature gate | `entitled(sub, key, required?)` | A Starter account is refused a Pro feature |
 | Cancel, pause, resume (if the app offers them) | the portal, or the app's own routes | A cancel at term end shows "Ends on …"; undoing it removes the notice |
@@ -73,6 +74,35 @@ A store with guest checkout (no accounts) links **orders**, not accounts: see "O
   `POST /v1/businesses/{biz}/subscriptions/{sub}/estimate` (a dry run; it changes nothing) so the
   user sees the charge. The estimate takes `changes`, `adds` and `removes` (each item's id and new
   price), not the whole `items` list that checkout and `update_for_items` take.
+
+### Inside the app: popup or inline
+
+Use this when the app wants checkout to open over its own page (a popup) or inside its layout
+(inline), or the portal as a popup, instead of a redirect. The sessions are the same; three things
+change. Full guide: https://twominutebilling.com/help/developers/recipes/embed-checkout-and-portal
+
+1. **Allow the app's website once**: `tmb.businesses.embedding.setOrigins(BIZ, ["https://app.example.com"])`
+   (`PUT /v1/businesses/{biz}/settings/embedding`). Origins only (scheme, host, port), https; a
+   test business also takes `http://localhost:<port>`. The operator can do it under
+   **Settings → Checkout → Embed on your website**. It replaces the whole list (at most 20).
+2. **Name the website on each session**: `embed_origin: "https://app.example.com"` on the checkout
+   session, or as an option of `createPortalSession` (API links only, not `link_kind: "email"`).
+   The server returns `{ url }` as JSON; the page opens it, so no 303 here.
+3. **Load `embed.js` once and open the URL** on the page. Read `script_url` and
+   `script_integrity` from `tmb.businesses.embedding.get(BIZ)` and put them in the tag
+   (`integrity` + `crossorigin="anonymous"`); never hard-code the host. Then
+   `TMB.checkout.open({ url })` (popup), `TMB.checkout.mount("#checkout", { url })` (inline) or
+   `TMB.portal.open({ url })`. Each returns a handle with `.on(event, fn)`.
+
+Browser events (these are `embed.js` events on the handle, not webhooks): `on("loaded")`,
+`on("step")` (`details` | `payment` | `done`), `on("success")` (`{ session, subscription, paid }`),
+and from the portal `on("subscription_changed")`, `on("payment_method_changed")`,
+`on("invoice_paid")`; both send `on("close")` and `on("error")` (`cookies_blocked` |
+`frame_blocked`). They carry ids only. Use them to refresh the page; grant
+access from the webhook, never from a browser event. `success` with `paid: false` means the
+provider still holds the payment: keep showing "processing". Provider pages (PayPal approval,
+bank pages) open in a new tab. On `cookies_blocked` the popup offers to open the same session in a
+new tab.
 
 ## One-time purchases
 

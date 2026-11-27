@@ -20,7 +20,7 @@ This skill gets a safe connection. The work after it lives in focused skills:
 | Step | Skill | Ends when |
 |---|---|---|
 | Decide what to charge | `two-minute-billing-pricing` | `tmb push --apply` (or the catalog script) runs twice and the second run changes nothing |
-| Wire the app | `two-minute-billing-integrate` | Checkout and portal work in the app's framework, and a real test event reaches the signed webhook route through `tmb listen` |
+| Wire the app | `two-minute-billing-integrate` | Checkout and portal (hosted, or a popup or inline in the app) work in the app's framework, and a real test event reaches the signed webhook route through `tmb listen` |
 | Meter usage or AI tokens | `two-minute-billing-usage` | Events arrive `matched` and price on an invoice |
 | Prove it | `two-minute-billing-verify` | Real invoices match the expected figures, renewals included |
 | Go live | `two-minute-billing-go-live` | A read-only audit passes; the user does the live steps |

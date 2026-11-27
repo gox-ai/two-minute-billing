@@ -309,6 +309,27 @@
       "when": 1796200700000,
       "tag": "0549_postal_codes",
       "breakpoints": true
+    },
+    {
+      "idx": 550,
+      "version": "7",
+      "when": 1796200800000,
+      "tag": "0550_bulk_imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 551,
+      "version": "7",
+      "when": 1796200900000,
+      "tag": "0551_embed_origins",
+      "breakpoints": true
+    },
+    {
+      "idx": 552,
+      "version": "7",
+      "when": 1796201000000,
+      "tag": "0552_bulk_exports",
+      "breakpoints": true
     }
   ],
   "floor": {

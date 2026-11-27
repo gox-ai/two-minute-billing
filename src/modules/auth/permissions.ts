@@ -234,6 +234,10 @@ const DEFS = {
     "Override the live-mode check of a transfer",
     true,
   ),
+  "imports:view": d("read", "admin", "Settings", "View file imports and their rows"),
+  "imports:manage": d("write", "admin", "Settings", "Upload, check, start and undo file imports"),
+  "exports:view": d("read", "admin", "Settings", "View bulk exports and download their files"),
+  "exports:manage": d("write", "admin", "Settings", "Start and delete bulk exports"),
   "test_tools:view": d("read", "any", "Settings", "View time travel"),
   "test_tools:manage": d(
     "write",

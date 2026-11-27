@@ -697,6 +697,7 @@
         "credits",
         "customers",
         "emails",
+        "embedding",
         "events",
         "gateway",
         "invoicing",
@@ -706,6 +707,23 @@
         "payments",
         "subscriptions",
         "transactions"
+      ]
+    },
+    {
+      "id": "embedding",
+      "layer": "customer",
+      "responsibility": "Which websites may embed a business's checkout, portal and usage widget: one allowed-websites list per business, the session's embed_origin checked against it on mint, and the frame-ancestor lookup the storefront makes before a framed page load (null once the website is removed).",
+      "tables": [],
+      "routeFile": "embedding-routes.ts",
+      "keyFunctions": [
+        "normaliseEmbedOrigin",
+        "setEmbedOrigins",
+        "checkEmbedOrigin",
+        "resolveFrameAncestor"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "tenancy"
       ]
     },
     {
@@ -1085,6 +1103,7 @@
         "coupons",
         "customers",
         "emails",
+        "embedding",
         "invoicing",
         "reason-codes",
         "subscriptions",
@@ -1114,6 +1133,7 @@
         "customer-portal",
         "customers",
         "emails",
+        "embedding",
         "events",
         "invoicing",
         "metadata-rules",
@@ -1304,6 +1324,58 @@
         "tenancy",
         "transactions",
         "wallet"
+      ]
+    },
+    {
+      "id": "bulk-import",
+      "layer": "tooling",
+      "responsibility": "Self-serve import from CSV files (plans, add-ons, coupons, customers, subscriptions) or the JSON file: upload, check with a review summary, start, per-row results, undo. Writes through the migration engine.",
+      "tables": [
+        "migration"
+      ],
+      "routeFile": "import-routes.ts",
+      "routes": 10,
+      "keyFunctions": [
+        "createImportRun",
+        "startImportRun",
+        "undoImportRun",
+        "analyze",
+        "runImportJob"
+      ],
+      "emits": [],
+      "dependsOn": [
+        "audit",
+        "emails",
+        "migration",
+        "tenancy"
+      ]
+    },
+    {
+      "id": "bulk-export",
+      "layer": "tooling",
+      "responsibility": "Self-serve bulk export of a business as a zip of CSV files in the columns the file import reads: preview, background job in one snapshot, related records, download, 7-day expiry.",
+      "tables": [
+        "migration"
+      ],
+      "routeFile": "export-routes.ts",
+      "routes": 7,
+      "keyFunctions": [
+        "previewExport",
+        "createExportRun",
+        "runExportJob",
+        "exportZip",
+        "rowSet"
+      ],
+      "emits": [
+        "export_completed",
+        "export_failed"
+      ],
+      "dependsOn": [
+        "audit",
+        "bulk-import",
+        "emails",
+        "events",
+        "tenancy"
       ]
     },
     {

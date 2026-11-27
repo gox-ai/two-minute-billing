@@ -69,6 +69,10 @@ export interface AddressFieldLocks {
   country: boolean;
   /** A GST tax region exists. */
   state_code: boolean;
+  /** A Stripe account in India takes payments: country required, name and line 1 visible. */
+  gateway_address?: boolean;
+  /** With `gateway_address`: we fill the street, so line 1 may hide; postal code and city stay. */
+  gateway_street_fill?: boolean;
 }
 
 export type ChargebackSubscriptionAction =
@@ -372,6 +376,8 @@ export interface Business {
   storefront_config?: {
     hide_zero_value_lines?: boolean;
     collect_po_number?: boolean;
+    /** India Stripe: send city + state as line 1 when a buyer abroad gives no street. */
+    fill_export_street?: boolean;
     /** Fallback for the checkout mint, which requires these per call today. */
     default_return_url?: string | null;
     default_cancel_url?: string | null;
@@ -2198,31 +2204,24 @@ export const getBusinessAnalytics = (
 export const API_URL = BASE;
 
 /**
- * Base URL the BROWSER (or a third party, like a payment gateway) must be able to
- * reach this API at.
+ * This API's public base URL (`ADVERTISED_API_URL`, the engine's own setting, read from the
+ * root `.env`): what a BROWSER, a developer or a payment gateway must reach. Developer page,
+ * API reference links, embed snippets, and the gateway webhook base when that is unset.
  *
  * NOT `BASE`. `TMBILLING_API_URL` is the SERVER-TO-SERVER address this Next process
  * dials the engine on, and in production that is a loopback address on the same box
  * (`http://localhost:4001`). Rendering it into an `<a href>` or a copyable field hands
- * out a URL only the server can open — which is exactly how the /developer "API
- * reference" links shipped pointing at localhost.
+ * out a URL only the server can open.
  *
- * Falls back to `BASE` because in local dev the two genuinely are the same origin.
- * Production must set `TMBILLING_PUBLIC_API_URL` (the engine already knows the same
- * value as `WEBHOOK_BASE_URL`); when it does not, `publicApiReachable` is false and
- * callers must degrade rather than render a dead link.
+ * Falls back to `BASE` because in local dev the two genuinely are the same origin. In a
+ * production build without it, `advertisedApiReachable` is false and callers must degrade
+ * rather than render a dead link.
  */
-export const PUBLIC_API_URL = (process.env.TMBILLING_PUBLIC_API_URL ?? BASE).replace(/\/+$/, "");
+export const ADVERTISED_API_URL = (process.env.ADVERTISED_API_URL || BASE).replace(/\/+$/, "");
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"]);
 
-/**
- * False when `PUBLIC_API_URL` is a loopback address in a production build — i.e. the
- * deployment never set `TMBILLING_PUBLIC_API_URL` and anything we render from it would
- * be unreachable for the person reading it.
- *
- * True in development, where loopback is the correct answer.
- */
+/** False for a loopback address in a production build: nobody outside could open it. */
 function reachableFromOutside(url: string): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   try {
@@ -2233,29 +2232,18 @@ function reachableFromOutside(url: string): boolean {
   }
 }
 
-export const publicApiReachable = reachableFromOutside(PUBLIC_API_URL);
+export const advertisedApiReachable = reachableFromOutside(ADVERTISED_API_URL);
 
 /**
  * Base of the Notification URLs new gateway registrations use: the engine's own
- * `GATEWAY_WEBHOOK_BASE_URL`, read from the same root `.env`. Unset or empty: `PUBLIC_API_URL`.
- * Only a fallback: the webhook card shows the URL the account is registered under.
+ * `GATEWAY_WEBHOOK_BASE_URL`, read from the same root `.env`. Unset or empty:
+ * `ADVERTISED_API_URL`. Only a fallback: the webhook card shows the URL the account is
+ * registered under.
  */
 export const GATEWAY_WEBHOOK_BASE_URL = (
-  process.env.GATEWAY_WEBHOOK_BASE_URL || PUBLIC_API_URL
+  process.env.GATEWAY_WEBHOOK_BASE_URL || ADVERTISED_API_URL
 ).replace(/\/+$/, "");
 export const gatewayWebhookBaseReachable = reachableFromOutside(GATEWAY_WEBHOOK_BASE_URL);
-
-/**
- * The API base URL we tell developers to call (Developer page, API reference links): the
- * engine's own `ADVERTISED_API_URL`, read from the same root `.env`. Not the gateway webhook
- * base above: gateways keep the URL they registered. Unset or empty: `PUBLIC_API_URL`.
- */
-export const ADVERTISED_API_URL = (process.env.ADVERTISED_API_URL || PUBLIC_API_URL).replace(
-  /\/+$/,
-  "",
-);
-
-export const advertisedApiReachable = reachableFromOutside(ADVERTISED_API_URL);
 
 // Presentation helpers live in lib/format (client-safe); re-exported here so the
 // many server components importing them from '@/lib/api' keep working.

@@ -39,6 +39,7 @@ describe("resolveStorefrontConfig — defaults (0243)", () => {
       skipRenewalLimit: 3,
       hideZeroValueLines: false,
       collectPoNumber: false,
+      fillExportStreet: false,
       defaultReturnUrl: null,
       defaultCancelUrl: null,
       // No custom copy: the portal shows its built-in "link can't be used" message.

@@ -276,6 +276,9 @@
       "key": "usage_margin:view"
     },
     "GET /v1/businesses/:biz/retries": "any",
+    "GET /v1/businesses/:biz/settings/embedding": {
+      "key": "settings:view"
+    },
     "GET /v1/businesses/:biz/settings/usage_widget": {
       "key": "usage_controls:view"
     },
@@ -702,6 +705,9 @@
     "PUT /v1/businesses/:biz/products/:product/usage_invoice_thresholds/:currency": {
       "key": "usage_controls:manage"
     },
+    "PUT /v1/businesses/:biz/settings/embedding": {
+      "key": "settings:manage"
+    },
     "PUT /v1/businesses/:biz/settings/usage_widget": {
       "key": "usage_controls:manage"
     },
@@ -838,6 +844,57 @@
     },
     "GET /v1/businesses/:biz/reports/credit_refused_demand": {
       "key": "credits:view"
+    },
+    "GET /v1/businesses/:biz/imports/templates/:entity": {
+      "key": "imports:view"
+    },
+    "POST /v1/businesses/:biz/imports": {
+      "key": "imports:manage"
+    },
+    "GET /v1/businesses/:biz/imports": {
+      "key": "imports:view"
+    },
+    "GET /v1/businesses/:biz/imports/:id": {
+      "key": "imports:view"
+    },
+    "GET /v1/businesses/:biz/imports/:id/rows": {
+      "key": "imports:view"
+    },
+    "GET /v1/businesses/:biz/imports/:id/files/:entity": {
+      "key": "imports:view"
+    },
+    "POST /v1/businesses/:biz/imports/:id/check": {
+      "key": "imports:manage"
+    },
+    "POST /v1/businesses/:biz/imports/:id/start": {
+      "key": "imports:manage"
+    },
+    "POST /v1/businesses/:biz/imports/:id/undo": {
+      "key": "imports:manage"
+    },
+    "POST /v1/businesses/:biz/imports/:id/discard": {
+      "key": "imports:manage"
+    },
+    "POST /v1/businesses/:biz/exports/preview": {
+      "key": "exports:view"
+    },
+    "POST /v1/businesses/:biz/exports": {
+      "key": "exports:manage"
+    },
+    "GET /v1/businesses/:biz/exports": {
+      "key": "exports:view"
+    },
+    "GET /v1/businesses/:biz/exports/:id": {
+      "key": "exports:view"
+    },
+    "GET /v1/businesses/:biz/exports/:id/file": {
+      "key": "exports:view"
+    },
+    "GET /v1/businesses/:biz/exports/:id/files/:entity": {
+      "key": "exports:view"
+    },
+    "POST /v1/businesses/:biz/exports/:id/delete": {
+      "key": "exports:manage"
     }
   }
 }

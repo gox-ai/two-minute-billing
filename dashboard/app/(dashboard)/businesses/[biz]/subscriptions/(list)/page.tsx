@@ -1,7 +1,7 @@
 import { listBusinesses, listSubscriptions } from "@/lib/api";
 import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import { listCustomFieldDefinitions, type CustomFieldDefinition } from "@/lib/api/custom-fields";
-import { requirePermission } from "@/lib/session";
+import { allows, requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { SubscriptionsTable } from "@/components/subscriptions/subscriptions-table";
 import { ErrorState } from "@/components/states";
@@ -21,7 +21,7 @@ export default async function SubscriptionsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const [{ biz }, search] = await Promise.all([params, searchParams]);
-  await requirePermission("subscriptions:view", "manager");
+  const user = await requirePermission("subscriptions:view", "manager");
 
   // Business Home's plan mix links here as `?plan=<product>&status=active`, the
   // same set that panel counts. Both land as visible, clearable filter rows.
@@ -76,6 +76,7 @@ export default async function SubscriptionsPage({
         }}
         gatewayCatalog={gatewayCatalog}
         biz={biz}
+        canImport={allows(user, "imports:manage", "admin")}
         rows={subscriptions.data}
         tz={bizRow?.timezone ?? null}
         total={subscriptions.total ?? subscriptions.data.length}

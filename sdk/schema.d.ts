@@ -3049,6 +3049,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/settings/embedding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the allowed websites
+         * @description The websites that may show this business's checkout, customer portal and usage widget inside their own pages. The usage widget settings read the same list.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The allowed websites. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmbeddingSettings"];
+                    };
+                };
+            };
+        };
+        /**
+         * Set the allowed websites
+         * @description Replaces the list of websites, as origins (scheme, host and port, for example `https://app.example.com`). https only; plain http is accepted only from a loopback origin, and a session may name a loopback origin in a test business only. A checkout or portal session names one of these in `embed_origin`. Removing a website stops its embeds on the next page load. At most 20.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description The business's id (biz_…). */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["EmbeddingSettingsUpdate"];
+                };
+            };
+            responses: {
+                /** @description The saved list. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmbeddingSettings"];
+                    };
+                };
+                /** @description A website is not a valid origin. `param` names it. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/customers/{cus}/spend_limits": {
         parameters: {
             query?: never;
@@ -8076,6 +8169,8 @@ export interface paths {
                         object?: string;
                         /** @description How long this link works, in days. Needs link_kind email. Default: the business's email link setting (portal_email_link_days, else 5 days). */
                         link_valid_days?: number;
+                        /** @description The one website that may show this portal inside a frame on its own page, as an origin (scheme, host and port), for example `https://app.example.com`. It must be on the business's allowed websites (`PUT /v1/businesses/{biz}/settings/embedding`); a loopback origin is accepted in a test business only. Without it the portal works only as a hosted page. Needs link_kind api. */
+                        embed_origin?: string;
                     };
                 };
             };
@@ -8089,7 +8184,7 @@ export interface paths {
                         "application/json": components["schemas"]["PortalSessionCreated"];
                     };
                 };
-                /** @description Invalid link_kind, redirect_url, forward_url or link_valid_days */
+                /** @description Invalid link_kind, redirect_url, forward_url, link_valid_days or embed_origin */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -8336,6 +8431,8 @@ export interface paths {
                          * @description http(s). Where the hosted page's cancel link goes, with `id` and `state=cancelled` appended.
                          */
                         cancel_url?: string;
+                        /** @description The one website that may show this checkout inside a frame on its own page, as an origin (scheme, host and port), for example `https://app.example.com`. It must be on the business's allowed websites (`PUT /v1/businesses/{biz}/settings/embedding`); a loopback origin is accepted in a test business only. Without it the checkout works only as a hosted page. */
+                        embed_origin?: string;
                         /** @description Your own context, stored with the session and returned by GET. Never interpreted. */
                         pass_thru_content?: string;
                         /** @description Metadata written when this checkout completes. mode='create' and 'change': onto the resulting subscription, REPLACED wholesale rather than merged. Applied only after completion succeeds, so a change that moves both items and a flag can be sent as one call and lands as both or neither. Send {} to clear; omit the key to leave the subscription's metadata untouched. mode='purchase': stored on the invoice the purchase raises, so a webhook handler can read back your own reference (for example `{"order_id": "…"}`) from the paid invoice. */
@@ -19190,12 +19287,30 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Cancelled: `{ object: "pending_change", id, cancelled: true }` */
+                /** @description Cancelled */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description Always `pending_change`.
+                             * @enum {string}
+                             */
+                            object: "pending_change";
+                            /**
+                             * @description The cancelled pending change's id.
+                             * @example spc_XXXXXXXXXXXX01
+                             */
+                            id: string;
+                            /**
+                             * @description Always true.
+                             * @enum {boolean}
+                             */
+                            cancelled: true;
+                        };
+                    };
                 };
                 /** @description No such subscription, or it has no pending change */
                 404: {
@@ -33121,7 +33236,30 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description Always `customer_discount`.
+                             * @enum {string}
+                             */
+                            object: "customer_discount";
+                            /**
+                             * @description The removed discount's id.
+                             * @example disc_XXXXXXXXXXXX01
+                             */
+                            id: string;
+                            /**
+                             * @description The customer's id.
+                             * @example cus_XXXXXXXXXXXX01
+                             */
+                            customer: string;
+                            /**
+                             * @description Always true.
+                             * @enum {boolean}
+                             */
+                            removed: true;
+                        };
+                    };
                 };
                 /** @description No such customer, or no active discount with this id */
                 404: {
@@ -36258,6 +36396,1550 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/businesses/{biz}/imports/templates/{entity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download an import template
+         * @description The CSV template of one import file: its columns and one example row. `format=json` returns each field with its accepted values, other header names it is recognised by, and help.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description `csv` (default) or `json`.
+                     * @enum {string}
+                     */
+                    format?: "csv" | "json";
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * @description The file.
+                     * @enum {string}
+                     */
+                    entity: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The template */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description No such template */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List imports
+         * @description The business's imports, newest first. Discarded imports are left out.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Imports per page. Default 20. */
+                    limit?: number;
+                    /**
+                     * Format: uuid
+                     * @description The last import id of the previous page.
+                     */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One page of imports */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The rows on this page. */
+                            data?: components["schemas"]["Import"][];
+                            /** @description True when there is another page. */
+                            has_more?: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Upload files to import
+         * @description Uploads one CSV file per entity (plans, add-ons, coupons, customers, subscriptions, and the history: invoices, credit notes, payments, usage), or a JSON file. Each file is read into rows and its columns are mapped to fields automatically. The check then runs in the background: read the import until `status` is `checked`. Nothing is written to billing data until you start the import. Up to 50,000 rows per file.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The files. One file per entity. */
+                        files: ({
+                            /**
+                             * @description What the file holds. `json`: plans, customers and subscriptions in one JSON file.
+                             * @enum {string}
+                             */
+                            entity: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage" | "json";
+                            /** @description The file's name, shown on the import. */
+                            filename: string;
+                            /** @description The file's text (UTF-8). */
+                            content: string;
+                        })[];
+                        /** @description Per file (`plans`, `addons`, `coupons`, `customers`, `subscriptions`, `invoices`, `credit_notes`, `payments`, `usage`): the file's column name → the field it fills, or null to skip the column. Columns you leave out keep their automatic mapping. */
+                        mapping?: {
+                            [key: string]: {
+                                [key: string]: Record<string, never>;
+                            };
+                        };
+                        /** @description How the check treats problem rows, and whether open imported invoices are collected. */
+                        options?: {
+                            /** @description Leave out rows with errors, and the rows that need them, instead of blocking the import. Default false. */
+                            skip_invalid_rows?: boolean;
+                            /** @description Leave out subscriptions that renew in the next 24 hours. Default false. */
+                            exclude_renewing_within_24h?: boolean;
+                            /** @description Open imported invoices enter the retry schedule from their due date, and a card on file is charged at the next retry. Default false: they import as owed and nothing collects them. */
+                            collect_open_invoices?: boolean;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description The import, with status `checking` */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description A file could not be read, or the mapping is not valid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires the imports:manage permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve an import
+         * @description The import with its files, column mapping, the check's summary and, after the run, its result. For a finished import, `undo_blockers` lists what stops an undo now (empty: you can undo it).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The import */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the rows of an import
+         * @description The rows of the uploaded files, with their errors, their state at the check and their result. Rows come in file order: by file, then by row number.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description Only rows of this file.
+                     * @enum {string}
+                     */
+                    entity?: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                    /**
+                     * @description Only rows with this state at the check.
+                     * @enum {string}
+                     */
+                    state?: "new" | "existing" | "invalid" | "excluded";
+                    /**
+                     * @description Only rows with this result.
+                     * @enum {string}
+                     */
+                    outcome?: "created" | "unchanged" | "failed" | "excluded";
+                    /** @description Rows per page. Default 100. */
+                    limit?: number;
+                    /**
+                     * Format: uuid
+                     * @description The last row id of the previous page.
+                     */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One page of rows */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The rows on this page. */
+                            data?: components["schemas"]["ImportRow"][];
+                            /** @description True when there is another page. */
+                            has_more?: boolean;
+                        };
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/files/{entity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a file with its errors
+         * @description One uploaded file as CSV, with an `import_errors` column added and, after the run, an `import_result` column. Correct the rows in this file and upload it again.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                    /**
+                     * @description The file.
+                     * @enum {string}
+                     */
+                    entity: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The file */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                    };
+                };
+                /** @description No such import or file */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an import again
+         * @description Checks the rows again with a changed column mapping or options. Only before the import starts.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Per file (`plans`, `addons`, `coupons`, `customers`, `subscriptions`, `invoices`, `credit_notes`, `payments`, `usage`): the file's column name → the field it fills, or null to skip the column. Columns you leave out keep their automatic mapping. */
+                        mapping?: {
+                            [key: string]: {
+                                [key: string]: Record<string, never>;
+                            };
+                        };
+                        /** @description How the check treats problem rows, and whether open imported invoices are collected. */
+                        options?: {
+                            /** @description Leave out rows with errors, and the rows that need them, instead of blocking the import. Default false. */
+                            skip_invalid_rows?: boolean;
+                            /** @description Leave out subscriptions that renew in the next 24 hours. Default false. */
+                            exclude_renewing_within_24h?: boolean;
+                            /** @description Open imported invoices enter the retry schedule from their due date, and a card on file is charged at the next retry. Default false: they import as owed and nothing collects them. */
+                            collect_open_invoices?: boolean;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description The import, with status `checking` */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description The mapping is not valid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The import has started */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start an import
+         * @description Starts a checked import whose summary has no blockers. The rows are checked again, then written in the background. The import never charges anyone: each subscription renews for the first time at the end of its current term. Emails and webhooks are not sent for imported records.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The business's name. Required when the business is live. */
+                        confirm?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description The import, with status `queued` */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description The business is live and `confirm` is not its name */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The import is not checked, has blockers, or another import is in progress */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo an import
+         * @description Deletes the records the import created, in the background. Refused (409, with `reasons`) when any of them has billing activity: an invoice, a payment, usage, a change after the import. Records that were in the business before the import are never deleted.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The business's name. Required when the business is live. */
+                        confirm?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description The import, with status `undoing` */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description The business is live and `confirm` is not its name */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The import is not finished, or records it created are in use */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/imports/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discard an import
+         * @description Throws away an import that has not started, with its rows.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The import's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The import, with status `discarded` */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Import"];
+                    };
+                };
+                /** @description No such import */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The import has started */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview an export
+         * @description Writes nothing. For each file the export would write: the number of records, how many of them its own filters chose and how many come because other rows refer to them, the file's columns, and the first rows exactly as the file will have them.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The record types to export. Each becomes one CSV file. */
+                        entities: ("plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage")[];
+                        /** @description Per record type, which rows to export. */
+                        filters?: {
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            plans?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            addons?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            coupons?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            customers?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            subscriptions?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            invoices?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            credit_notes?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            payments?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            usage?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                        };
+                        /** @description Also export the records the chosen rows refer to (an invoice's customer and subscription, a subscription's prices and coupons), so the files import on their own. Default true. */
+                        include_related?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description The files the export would write */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `export_preview`.
+                             * @enum {string}
+                             */
+                            object?: "export_preview";
+                            /** @description The include related. */
+                            include_related?: boolean;
+                            /** @description The files. */
+                            files?: ({
+                                /**
+                                 * @description The entity.
+                                 * @enum {string}
+                                 */
+                                entity?: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                                /** @description Records in the file. */
+                                rows?: number;
+                                /** @description Records the filters chose. */
+                                chosen?: number;
+                                /** @description Records added because chosen rows refer to them. */
+                                related?: number;
+                                /** @description The columns. */
+                                columns?: string[];
+                                /** @description Up to 10 rows, in the file's columns. */
+                                sample?: string[][];
+                            })[];
+                        };
+                    };
+                };
+                /** @description A filter is not valid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires the exports:view permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Idempotency-Key conflict — the key is already in flight, or was reused with a different request payload. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List exports
+         * @description The business's exports, newest first.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Exports per page. Default 20. */
+                    limit?: number;
+                    /**
+                     * Format: uuid
+                     * @description The last export id of the previous page.
+                     */
+                    starting_after?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One page of exports */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The object type; always `list`.
+                             * @enum {string}
+                             */
+                            object?: "list";
+                            /** @description The rows on this page. */
+                            data?: components["schemas"]["Export"][];
+                            /** @description True when there is another page. */
+                            has_more?: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Start an export
+         * @description Exports the chosen record types as CSV files, in the background. Read the export until `status` is `succeeded`, or listen for the `export_completed` webhook, then download the zip. Each file has the columns the file import reads, so an export imports into another business as it is. All files are taken from one moment. Files are kept 7 days. One export at a time per business.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The record types to export. Each becomes one CSV file. */
+                        entities: ("plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage")[];
+                        /** @description Per record type, which rows to export. */
+                        filters?: {
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            plans?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            addons?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            coupons?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            customers?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            subscriptions?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            invoices?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            credit_notes?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            payments?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                            /** @description Which rows of this record type to export. Leave out a key to keep every row. */
+                            usage?: {
+                                /** @description Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all. */
+                                status?: ("active" | "trialing" | "future" | "paused" | "non_renewing" | "cancelled" | "paid" | "open" | "void" | "succeeded" | "failed")[];
+                                /**
+                                 * @description Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.
+                                 * @enum {string}
+                                 */
+                                date_field?: "created" | "updated";
+                                /** @description Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required. */
+                                from?: Record<string, never>;
+                                /** @description Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant). */
+                                to?: Record<string, never>;
+                                /** @description Plans, add-ons and coupons: archived ones too. Default false. */
+                                include_archived?: boolean;
+                            };
+                        };
+                        /** @description Also export the records the chosen rows refer to (an invoice's customer and subscription, a subscription's prices and coupons), so the files import on their own. Default true. */
+                        include_related?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description The export, with status `queued` */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Export"];
+                    };
+                };
+                /** @description A filter is not valid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Requires the exports:manage permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Another export of this business is in progress */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve an export
+         * @description The export with its files, its progress while it runs, and when its files are deleted.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The export's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The export */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Export"];
+                    };
+                };
+                /** @description No such export */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports/{id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download an export
+         * @description The zip: one CSV per record type and a README.txt that says what the files hold. Each download is in the audit log.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The export's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The zip */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/zip": string;
+                    };
+                };
+                /** @description No such export */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The export is not ready, failed, or its files were deleted */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports/{id}/files/{entity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download one file of an export
+         * @description One CSV of the export. Each download is in the audit log.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The export's id.
+                     */
+                    id: string;
+                    /**
+                     * @description The file.
+                     * @enum {string}
+                     */
+                    entity: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The file */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                    };
+                };
+                /** @description No such export or file */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The export is not ready, failed, or its files were deleted */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/businesses/{biz}/exports/{id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete an export's files
+         * @description Deletes the files of a finished export now. The export stays in the list.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Safely retry writes — repeats return the original response. If a write FAILED after it had already taken effect, that failure is what repeats: the key is spent, and a new attempt needs a new key. */
+                    "Idempotency-Key"?: string;
+                };
+                path: {
+                    /** @description Business id (biz_…) */
+                    biz: string;
+                    /**
+                     * Format: uuid
+                     * @description The export's id.
+                     */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The export, with status `deleted` */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Export"];
+                    };
+                };
+                /** @description Requires the exports:manage permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such export */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The export is in progress */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/businesses/{biz}/transfer_configurations/preview": {
         parameters: {
             query?: never;
@@ -38561,7 +40243,7 @@ export interface paths {
                             /** @description Days before a scheduled resume: `subscription_resume_reminder`. [] (default) is off. */
                             resume?: number[];
                         } | null;
-                        /** @description Which checkout fields show, hide, or are required. Absent keys resolve to defaults that are not uniform: billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows, and invoice.po_number is hidden (and still gated by storefront_config.collect_po_number). A mandatory region or postal code applies only where the country has one. billing.country cannot be hide (400). While the business has a live tax region, billing.country must stay mandatory, and while it has a GST region billing.state_code must too (400 otherwise; see `address_field_locks`). Making billing.postal_code mandatory is also the AVS/ZIP-verification control, since AVS is checked gateway-side. */
+                        /** @description Which checkout fields show, hide, or are required. Absent keys resolve to defaults that are not uniform: billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows, and invoice.po_number is hidden (and still gated by storefront_config.collect_po_number). A mandatory region or postal code applies only where the country has one. billing.country may be hide: the checkout then asks for no postal code, city or state either, and with customer.first_name also hide it asks for the email only. While the business has a live tax region, billing.country must stay mandatory, and while it has a GST region billing.state_code must too (400 otherwise; see `address_field_locks`). Making billing.postal_code mandatory is also the AVS/ZIP-verification control, since AVS is checked gateway-side. When the business takes payments through a Stripe account in India, billing.country must stay mandatory, customer.first_name and billing.line1 cannot be hide, and a buyer outside India must give billing.line1 whatever this config says: Stripe refuses a foreign card without the buyer's name and street address (see `address_field_locks.gateway_address`). With storefront_config.fill_export_street on, billing.line1 may be hide and billing.postal_code and billing.city cannot (see `address_field_locks.gateway_street_fill`). With billing.line1 hide, the buyer's page also hides billing.line2 and billing.line3; their stored values are kept. */
                         checkout_field_config?: {
                             /**
                              * @description Whether checkout shows, hides or requires the customer's first name.
@@ -38644,7 +40326,7 @@ export interface paths {
                              */
                             "shipping.address"?: "show" | "hide" | "mandatory";
                         } | null;
-                        /** @description Which billing-detail fields the buyer portal shows, hides, requires, or shows read-only. Absent keys resolve to defaults: customer.first_name, customer.phone, billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows. A portal save keeps the stored value of every hide or read_only key; billing.state and billing.state_code are one region, kept only when both are hide or read_only. billing.country cannot be hide (400). The tax rules of checkout_field_config apply here too. */
+                        /** @description Which billing-detail fields the buyer portal shows, hides, requires, or shows read-only. Absent keys resolve to defaults: customer.first_name, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows. A portal save keeps the stored value of every hide or read_only key; billing.state and billing.state_code are one region, kept only when both are hide or read_only. A hidden customer.first_name means no billing name is required. The tax and gateway rules of checkout_field_config apply here too. With billing.line1 hide, the buyer's page also hides billing.line2 and billing.line3; their stored values are kept. */
                         portal_field_config?: {
                             /** @description Whether the portal shows, hides, requires or locks the customer's first name. */
                             "customer.first_name"?: components["schemas"]["PortalFieldState"];
@@ -38706,6 +40388,8 @@ export interface paths {
                             hide_zero_value_lines?: boolean;
                             /** @description Whether checkout asks for a purchase order number. */
                             collect_po_number?: boolean;
+                            /** @description India Stripe accounts only. When true, a buyer outside India who leaves billing.line1 empty is sent to Stripe with their city and state as line 1, so Stripe does not refuse the foreign card for a missing street. The business accepts that this is the address Stripe reports for the export. billing.line1 may then be hidden; billing.postal_code and billing.city must stay visible (`address_field_locks.gateway_street_fill`). Default false. */
+                            fill_export_street?: boolean;
                             /**
                              * Format: uri
                              * @description The URL checkout returns to after a payment, when the request has none.
@@ -41615,13 +43299,30 @@ export interface components {
             object?: "usage_widget_settings";
             /** @description The usage widget settings's origins. */
             origins?: string[];
-            /** @description Where the page loads `usage.js` from. Null when the API's public URL is not set. */
+            /** @description Where the page loads `usage.js` from: this API's public URL (ADVERTISED_API_URL). Null when it is not set. */
             script_url?: string | null;
             /** @description The Subresource Integrity hash for the script tag's `integrity` attribute. */
             script_integrity?: string;
         };
         UsageWidgetSettingsUpdate: {
             /** @description The usage widget settings's origins. */
+            origins: string[];
+        };
+        EmbeddingSettings: {
+            /**
+             * @description The object type; always `embedding_settings`.
+             * @enum {string}
+             */
+            object?: "embedding_settings";
+            /** @description The embedding settings's origins. */
+            origins?: string[];
+            /** @description Where the page loads `embed.js` from: this API's public URL (ADVERTISED_API_URL). Null when it is not set. */
+            script_url?: string | null;
+            /** @description The Subresource Integrity hash for the script tag's `integrity` attribute. */
+            script_integrity?: string;
+        };
+        EmbeddingSettingsUpdate: {
+            /** @description The embedding settings's origins. */
             origins: string[];
         };
         SpendLimit: {
@@ -42668,6 +44369,217 @@ export interface components {
                     })[];
                 })[];
             })[];
+        };
+        Export: {
+            /**
+             * @description The object type; always `export`.
+             * @enum {string}
+             */
+            object?: "export";
+            /** @description The export's id. */
+            id?: string;
+            /**
+             * @description `succeeded`: download the files until `expires_at`. `expired` and `deleted`: the files are gone; export again.
+             * @enum {string}
+             */
+            status?: "queued" | "running" | "succeeded" | "failed" | "expired" | "deleted";
+            /** @description The record types asked for. */
+            entities?: ("plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage")[];
+            /** @description The filters asked for, per record type. */
+            filters?: Record<string, never>;
+            /** @description Records the chosen rows refer to were exported too. */
+            include_related?: boolean;
+            /** @description The files written. A record type with no rows has no file. */
+            files?: ({
+                /**
+                 * @description The file's entity.
+                 * @enum {string}
+                 */
+                entity?: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                /** @description The file's name in the zip. */
+                name?: string;
+                /** @description Data rows in the file. */
+                rows?: number;
+                /** @description Records added because other rows refer to them. */
+                related?: number;
+                /** @description The file's size. */
+                bytes?: number;
+            })[];
+            /** @description Rows left out because the import cannot read them, and why. */
+            skipped?: {
+                /** @description The skipped's entity. */
+                entity?: string;
+                /** @description The reason. */
+                reason?: string;
+                /** @description The skipped's count. */
+                count?: number;
+            }[];
+            /** @description While it runs: the record type being written, and records done of all. */
+            progress?: {
+                /** @description The progress's entity. */
+                entity?: Record<string, never>;
+                /** @description The progress's done. */
+                done?: number;
+                /** @description The progress's rows. */
+                rows?: number;
+            };
+            /** @description The files' compressed size. */
+            size_bytes?: number;
+            /** @description Why the export failed. */
+            error?: Record<string, never>;
+            /** @description The export's created by. */
+            created_by?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the export was created (ISO-8601 UTC).
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description The moment every file was read at.
+             */
+            snapshot_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the export started (ISO-8601 UTC).
+             */
+            started_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the export finished (ISO-8601 UTC), or null.
+             */
+            finished_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the files are deleted.
+             */
+            expires_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description The deleted time (ISO-8601 UTC).
+             */
+            deleted_at?: Record<string, never>;
+        };
+        Import: {
+            /**
+             * @description The object type; always `import`.
+             * @enum {string}
+             */
+            object?: "import";
+            /** @description The import's id. */
+            id?: string;
+            /**
+             * @description Where the import is. `checked`: read `summary` and start it, or change the mapping and check again.
+             * @enum {string}
+             */
+            status?: "uploaded" | "checking" | "checked" | "queued" | "running" | "succeeded" | "partially_failed" | "failed" | "undoing" | "undone" | "discarded";
+            /** @description The uploaded files. */
+            files?: ({
+                /**
+                 * @description What the file holds.
+                 * @enum {string}
+                 */
+                entity?: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+                /** @description The file's name. */
+                filename?: string;
+                /** @description The file's column names. */
+                headers?: string[];
+                /** @description Column name → the field it fills, or null when the column is skipped. */
+                mapping?: {
+                    [key: string]: Record<string, never>;
+                };
+                /** @description Data rows in the file. */
+                rows?: number;
+                /** @description Required fields no column is mapped to. The check blocks until they are mapped. */
+                missing_required?: string[];
+            })[];
+            /** @description How the check treats problem rows, and whether open imported invoices are collected. */
+            options?: {
+                /** @description Leave out rows with errors, and the rows that need them, instead of blocking the import. Default false. */
+                skip_invalid_rows?: boolean;
+                /** @description Leave out subscriptions that renew in the next 24 hours. Default false. */
+                exclude_renewing_within_24h?: boolean;
+                /** @description Open imported invoices enter the retry schedule from their due date, and a card on file is charged at the next retry. Default false: they import as owed and nothing collects them. */
+                collect_open_invoices?: boolean;
+            };
+            /** @description The check's review: rows per file (new, existing, invalid, excluded), subscriptions, MRR that arrives per currency, saved cards at connected and not connected gateways, renewal dates, test-business limits, `history` when the files carry it (open invoices, the receivables and the refundable credit they open per currency, and the next invoice number when imported numbers move it), what no import carries, `blockers` (each stops the start) and `warnings`. `ready` is true when there are no blockers. */
+            summary?: Record<string, never>;
+            /** @description While the run is `running`: `progress` with `done` and `total` new records, updated every few seconds. After the run: rows per file that were created, unchanged, failed or left out, and the warnings. */
+            result?: Record<string, never>;
+            /** @description Why the run failed, or why an undo was refused. */
+            error?: Record<string, never>;
+            /** @description Who uploaded the files. */
+            created_by?: Record<string, never>;
+            /** @description Who started the import. */
+            started_by?: Record<string, never>;
+            /** @description Who undid the import. */
+            undone_by?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the files were uploaded.
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description When the last check ended.
+             */
+            checked_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the run started.
+             */
+            started_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the run ended.
+             */
+            finished_at?: Record<string, never>;
+            /**
+             * Format: date-time
+             * @description When the undo ended.
+             */
+            undone_at?: Record<string, never>;
+            /** @description Retrieve only. For a finished import: what stops an undo now. Empty: you can undo it. */
+            undo_blockers?: Record<string, never>;
+        };
+        ImportRow: {
+            /**
+             * @description The object type; always `import_row`.
+             * @enum {string}
+             */
+            object?: "import_row";
+            /** @description The row's id. */
+            id?: string;
+            /**
+             * @description The file the row is in.
+             * @enum {string}
+             */
+            entity?: "plans" | "addons" | "coupons" | "customers" | "subscriptions" | "invoices" | "credit_notes" | "payments" | "usage";
+            /** @description The data row in the file. The header line is row 0. */
+            row_number?: number;
+            /** @description The row's id column. */
+            source_id?: Record<string, never>;
+            /** @description At the check: `new` is imported; `existing` is in the business already and stays as it is; `invalid` has errors; `excluded` is left out. */
+            state?: "new" | "existing" | "invalid" | "excluded" | null;
+            /** @description After the run: what happened to the row. */
+            outcome?: "created" | "unchanged" | "failed" | "excluded" | null;
+            /** @description Why the row failed or was left out. */
+            outcome_message?: Record<string, never>;
+            /** @description Problems that stop the row. */
+            errors?: {
+                /** @description The file's column, or null for the row. */
+                column?: Record<string, never>;
+                /** @description The field. */
+                field?: Record<string, never>;
+                /** @description What to correct. */
+                message?: string;
+            }[];
+            /** @description Problems that do not stop the row. Same shape as `errors`. */
+            warnings?: Record<string, never>[];
+            /** @description The row's cells, by column name, as uploaded. */
+            values?: {
+                [key: string]: string;
+            };
         };
         TransferJob: {
             /**
@@ -44010,12 +45922,16 @@ export interface components {
         };
         /** @enum {string} */
         PortalFieldState: "show" | "hide" | "mandatory" | "read_only";
-        /** @description Address keys the business's live tax setup forces to mandatory on checkout and portal. The settings refuse any other state for them. */
+        /** @description Address keys the business's live tax setup forces to mandatory on checkout and portal, and the keys its payment gateway needs. The settings refuse any other state for them. */
         AddressFieldLocks: {
             /** @description The business has a live tax region. */
             country: boolean;
             /** @description The business has a live GST region. */
             state_code: boolean;
+            /** @description The business takes payments through a Stripe account in India, which needs the name, street address and country of a buyer outside India. billing.country stays mandatory, and customer.first_name and billing.line1 cannot be hide, or read_only in the portal (see `gateway_street_fill` for the exception). */
+            gateway_address: boolean;
+            /** @description With gateway_address: the business turned on storefront_config.fill_export_street, so the street sent to Stripe is built from the buyer's city and state (or postal code). billing.line1 may then be hide, and customer.first_name, billing.postal_code and billing.city cannot be hide, or read_only in the portal. */
+            gateway_street_fill: boolean;
         };
         /** @description One currency's exchange rate and where it came from. Reporting and the per-invoice snapshot only — no rate here ever decides what a customer is charged. */
         CurrencyRate: {
@@ -51082,6 +52998,11 @@ export interface components {
              * @example /portal?tab=methods
              */
             forward_url?: string;
+            /**
+             * @description The one website that may frame this portal. Present only when set.
+             * @example https://app.example.com
+             */
+            embed_origin?: string;
         };
         /** @description A customer portal session. The token never shows again. */
         PortalSession: {
@@ -51152,6 +53073,11 @@ export interface components {
              * @example /portal?tab=methods
              */
             forward_url?: string | null;
+            /**
+             * @description The one website that may frame this portal, or null.
+             * @example https://app.example.com
+             */
+            embed_origin?: string | null;
         };
         /** @description The portal session after revocation. */
         PortalSessionRevoked: {
@@ -51225,6 +53151,11 @@ export interface components {
             cancel_url?: string;
             /** @description The coupon codes applied. */
             coupons?: string[];
+            /**
+             * @description The one website that may frame this checkout. Present only when set.
+             * @example https://app.example.com
+             */
+            embed_origin?: string;
             /**
              * @description The bearer token for the checkout link. We never store it, so save it now.
              * @example cstk_XXXXXXXXXXXXXXXXXXXXXXXX
@@ -51323,6 +53254,11 @@ export interface components {
              * @example https://app.example.com/pricing
              */
             cancel_url?: string | null;
+            /**
+             * @description The one website that may frame this checkout, or null.
+             * @example https://app.example.com
+             */
+            embed_origin?: string | null;
             /**
              * @description Text that comes back to you unchanged when the session finishes.
              * @example ref=spring-campaign

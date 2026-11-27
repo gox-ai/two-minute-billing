@@ -554,10 +554,28 @@ export async function runBillingClockTickOnce(
         // Crash reapers compare wall-clock stamps, so they take the REAL time. The simulated
         // instant of a time-travel step would make every live row look stale, in every org.
         // Reap transfers stuck `running` after a crash (finale review).
+        // The same pass re-queues file imports whose runner stopped (bulk-import/runner.ts).
         const reaped = await runPass(
           "reap_transfers",
-          () => reapStuckTransfers(started),
-          (r) => ({ reaped: r.reaped, requeued: r.requeued }),
+          async () => {
+            const t = await reapStuckTransfers(started);
+            const { requeueStalledImports } = await import("@/modules/bulk-import/runner");
+            const { requeueStalledExports, expireExports } =
+              await import("@/modules/bulk-export/runner");
+            return {
+              ...t,
+              importsRequeued: await requeueStalledImports(started),
+              exportsRequeued: await requeueStalledExports(started),
+              exportsExpired: await expireExports(started),
+            };
+          },
+          (r) => ({
+            reaped: r.reaped,
+            requeued: r.requeued,
+            imports_requeued: r.importsRequeued,
+            exports_requeued: r.exportsRequeued,
+            exports_expired: r.exportsExpired,
+          }),
         );
         // Reap Idempotency-Key records orphaned by a process crash mid-request: a stale
         // `in_progress` (nothing durable written) is freed for a fresh attempt; a stale
@@ -1608,6 +1626,34 @@ const tasks: Record<string, Task> = {
     const { runTransferJob } = await import("@/modules/transfer/runner");
     const r = await runTransferJob(p.run);
     helpers.logger.info("transfer_run finished", { run: p.run, result: r });
+  },
+
+  /** File import (0550): check the rows, run the import, or undo it. Each is safe to repeat. */
+  import_check: async (payload, helpers) => {
+    const p = payload as { run?: string } | null;
+    if (!p?.run) throw new Error("import_check: payload needs run");
+    const { runCheckJob } = await import("@/modules/bulk-import/runner");
+    helpers.logger.info("import_check finished", { run: p.run, result: await runCheckJob(p.run) });
+  },
+  import_run: async (payload, helpers) => {
+    const p = payload as { run?: string } | null;
+    if (!p?.run) throw new Error("import_run: payload needs run");
+    const { runImportJob } = await import("@/modules/bulk-import/runner");
+    helpers.logger.info("import_run finished", { run: p.run, result: await runImportJob(p.run) });
+  },
+  import_undo: async (payload, helpers) => {
+    const p = payload as { run?: string } | null;
+    if (!p?.run) throw new Error("import_undo: payload needs run");
+    const { runUndoJob } = await import("@/modules/bulk-import/runner");
+    helpers.logger.info("import_undo finished", { run: p.run, result: await runUndoJob(p.run) });
+  },
+
+  /** Bulk export (0552): write the files of one export. Safe to repeat. */
+  export_run: async (payload, helpers) => {
+    const p = payload as { run?: string } | null;
+    if (!p?.run) throw new Error("export_run: payload needs run");
+    const { runExportJob } = await import("@/modules/bulk-export/runner");
+    helpers.logger.info("export_run finished", { run: p.run, result: await runExportJob(p.run) });
   },
 
   /** One channel of a support notice to our team, queued with the member's message (0513). */

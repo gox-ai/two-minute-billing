@@ -370,11 +370,11 @@ _Generated from [architecture.json](architecture/architecture.json). Each box is
 
 ```mermaid
 flowchart TB
-  subgraph sg_tooling["Ops tooling (7)"]
-    tooling["assistant · assistant-docs<br/>assistant-tools<br/>migration · oauth<br/>time-travel · transfer"]
+  subgraph sg_tooling["Ops tooling (9)"]
+    tooling["assistant · assistant-docs<br/>assistant-tools<br/>bulk-export · bulk-import<br/>migration · oauth<br/>time-travel · transfer"]
   end
-  subgraph sg_customer["Customers & balances (10)"]
-    customer["checkout · credit-notes<br/>credits · customer-portal<br/>customers · metadata-rules<br/>segments<br/>storefront-analytics<br/>usage-controls · wallet"]
+  subgraph sg_customer["Customers & balances (11)"]
+    customer["checkout · credit-notes<br/>credits · customer-portal<br/>customers · embedding<br/>metadata-rules · segments<br/>storefront-analytics<br/>usage-controls · wallet"]
   end
   subgraph sg_payments["Payments & gateway (9)"]
     payments["disputes · gateway<br/>payment-intents<br/>payment-methods<br/>payment-requests<br/>payments · receipts<br/>refunds · transactions"]
@@ -392,11 +392,11 @@ flowchart TB
   tooling -->|2| payments
   tooling -->|6| billing
   tooling -->|6| catalog
-  tooling <-->|9| foundation
+  tooling <-->|16| foundation
   customer <-->|28| payments
   customer <-->|34| billing
   customer <-->|14| catalog
-  customer <-->|35| foundation
+  customer <-->|36| foundation
   payments <-->|22| billing
   payments <-->|37| foundation
   billing <-->|11| catalog
@@ -408,10 +408,10 @@ flowchart TB
 |---|---|---|---|---|---|---|
 | **Foundation modules** | · | 4 | 12 | 12 | 15 | 1 |
 | **Catalog & pricing** | 6 | · | 3 | 2 |  |  |
-| **Customers & balances** | 23 | 11 | · | 19 | 14 | 1 |
+| **Customers & balances** | 24 | 11 | · | 19 | 14 | 1 |
 | **Subscriptions & billing** | 19 | 9 | 15 | · | 11 |  |
 | **Payments & gateway** | 22 |  | 14 | 11 | · |  |
-| **Ops tooling** | 8 | 6 | 5 | 6 | 2 | · |
+| **Ops tooling** | 15 | 6 | 5 | 6 | 2 | · |
 <!-- END GENERATED: architecture-mermaid -->
 
 Machine-readable module graph: [`architecture/architecture.json`](./architecture/architecture.json). Interactive

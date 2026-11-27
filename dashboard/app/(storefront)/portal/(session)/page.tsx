@@ -1,4 +1,7 @@
 import { cache } from "react";
+import { headers } from "next/headers";
+import { EmbedRoot } from "@/components/embed-bridge";
+import { EMBED_HEADER, EMBED_ORIGIN_HEADER } from "@/lib/storefront-embed";
 import { mandateRailLabel, mandateRevokeWhere } from "@/lib/mandate-rail";
 import Link from "next/link";
 import { CreditCard, FileText, Info, Package, LogOut } from "lucide-react";
@@ -127,7 +130,26 @@ export async function generateMetadata({
  * `portal-chrome.tsx`; this file stays the data + control layer, so every button
  * below still reaches a real endpoint.
  */
-export default async function PortalPage({
+/**
+ * Inside a business's frame (embedded portal) the page talks to its loader; elsewhere it renders as
+ * it is. Wrapped once here rather than at each of the page's returns.
+ */
+export default async function PortalPage(props: Parameters<typeof PortalContent>[0]) {
+  const node = await PortalContent(props);
+  const s = (await props.searchParams).s;
+  const sessionParam = typeof s === "string" ? s : null;
+  const h = await headers();
+  const framedBy = h.get(EMBED_ORIGIN_HEADER);
+  const token = await readSessionToken("portal", sessionParam);
+  // Framed, but the browser kept no cookie from the entry link: it refuses partitioned cookies.
+  if (!token && framedBy && sessionParam)
+    return <EmbedRoot origin={framedBy} error="cookies_blocked" />;
+  const me = token && h.get(EMBED_HEADER) === "1" ? await loadMe(token) : null;
+  const origin = framedBy ?? (me?.ok ? (me.data?.embed_origin ?? null) : null);
+  return origin ? <EmbedRoot origin={origin}>{node}</EmbedRoot> : node;
+}
+
+async function PortalContent({
   searchParams,
 }: {
   searchParams: Promise<{
@@ -179,6 +201,7 @@ export default async function PortalPage({
   // Signed out in THIS tab: never fall back to another account still open in the browser.
   // `?signed_out=1` comes from `portalLogoutAction`; a crafted one only hides the page.
   if (signed_out) return <SignedOutCard />;
+  const embedded = (await headers()).get(EMBED_HEADER) === "1";
   // A tab keeps its own account after another portal link opens in this browser.
   const token = await readSessionToken("portal", sessionParam);
   if (!token) return <ExpiredCard reason={link === "expired" ? "link" : "session"} />;
@@ -396,15 +419,19 @@ export default async function PortalPage({
                   is not destructive (nothing is deleted, nothing is charged), so it
                   reads as a plain, quiet control rather than a warning — the design
                   system reserves semantic colour for things that actually need one. */}
-                <form action={portalLogoutAction.bind(null, session)}>
-                  <button
-                    type="submit"
-                    className="flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground hover:underline"
-                  >
-                    <LogOut className="size-3" aria-hidden />
-                    Sign out
-                  </button>
-                </form>
+                {/* Embedded: the business's page signed the buyer in, and the loader's close
+                  button is the way out, so the portal offers no sign-out of its own. */}
+                {embedded ? null : (
+                  <form action={portalLogoutAction.bind(null, session)}>
+                    <button
+                      type="submit"
+                      className="flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      <LogOut className="size-3" aria-hidden />
+                      Sign out
+                    </button>
+                  </form>
+                )}
               </div>
             ) : null
           }

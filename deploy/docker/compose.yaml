@@ -122,7 +122,7 @@ services:
     restart: unless-stopped
     environment:
       TMBILLING_API_URL: http://api:4000
-      TMBILLING_PUBLIC_API_URL: ${TMBILLING_PUBLIC_API_URL:?run init-env.sh}
+      ADVERTISED_API_URL: ${ADVERTISED_API_URL:?run init-env.sh}
       ALLOW_INSECURE_COOKIES: ${ALLOW_INSECURE_COOKIES:-FALSE}
     read_only: true
     tmpfs:

@@ -23,6 +23,7 @@ checked against the API by an automated test in our repository.
 
 **Payments**
 - [One-time purchases](/help/developers/recipes/one-time-purchases) — sell once through checkout, payment links or your pricing page.
+- [Embed checkout and the portal](/help/developers/recipes/embed-checkout-and-portal) — the checkout as an overlay or inline in your app, the portal as an overlay, and events back to your page.
 - [Checkout and portal](/help/developers/recipes/checkout-and-portal) — collect a card without your API key reaching a browser.
 - [Failed payments](/help/developers/recipes/failed-payments) — retry schedules, dunning and what happens when retries run out.
 
@@ -30,4 +31,7 @@ checked against the API by an automated test in our repository.
 - [India GST invoices](/help/developers/recipes/india-gst-invoices) — CGST, SGST and IGST by place of supply.
 - [Recurring INR with mandates](/help/developers/recipes/india-mandates) — off-session renewals through Razorpay e-mandates.
 
-**Moving in**
+**Moving in and out**
+- [Import from CSV files](/help/developers/recipes/import-from-csv-files) — upload plans, add-ons, coupons, customers with saved cards and subscriptions; check, review, import and undo.
+- [Import from a JSON file](/help/developers/recipes/import-from-a-json-file) — move plans, customers, saved cards and subscriptions to a self-hosted install without charging twice.
+- [Export to CSV files](/help/developers/recipes/export-to-csv-files) — every record type in one zip, in the columns the import reads; preview, filter and get a webhook when it is ready.

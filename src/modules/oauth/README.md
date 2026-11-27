@@ -48,12 +48,14 @@ client gets a short-lived access token and a rotating refresh token.
   (its own business) and on in-process tool calls that carry the per-process secret header
   (`platform/inner-call.ts`) for its business. Never directly on `/v1`.
 - Revoking the grant's API key (Settings → Developer) ends the grant too.
-- The issuer is `MCP_PUBLIC_URL`, else `WEBHOOK_BASE_URL`, else the request origin. A dedicated
+- The issuer is `MCP_PUBLIC_URL`, else `ADVERTISED_API_URL`, else the request origin. A dedicated
   MCP host (`https://mcp.example.com`) must set `MCP_PUBLIC_URL`: connectors refuse metadata
   that names another origin, and the API's own host then never appears to a connector. The
   host's proxy forwards only `/mcp`, `/.well-known/oauth-*` and `/oauth/`.
 
 ## Changelog
+- **2026-11-27** — Issuer fallback: `MCP_PUBLIC_URL`, else `ADVERTISED_API_URL`, else the request origin, now
+  normalised (a default port in the Host header no longer makes the issuer differ from the resource URLs).
 - **2026-11-07** — `MCP_PUBLIC_URL`: a dedicated public host for the MCP server and its OAuth.
   Gate: `verify:mcp-oauth` § I.
 - **2026-11-06** — Created (0503, feat/mcp-server). Gate: `verify:mcp-oauth` (42 checks, incl.

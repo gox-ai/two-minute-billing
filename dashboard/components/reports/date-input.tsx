@@ -26,6 +26,7 @@ export function DateInput({
   min,
   max,
   tz,
+  onValueChange,
 }: {
   id: string;
   name: string;
@@ -35,6 +36,8 @@ export function DateInput({
   min?: Ymd;
   max?: Ymd;
   tz: string | null;
+  /** Called with each committed date, for a control that is not in a GET form. */
+  onValueChange?: (d: Ymd) => void;
 }) {
   const [value, setValue] = useDefaultState(defaultValue);
   const [text, setText] = useDefaultState(fmtDate(defaultValue, tz));
@@ -45,6 +48,7 @@ export function DateInput({
     setValue(d);
     setText(fmtDate(d, tz));
     setError(null);
+    onValueChange?.(d);
   };
 
   /** True when the typed text is a usable date (and is now the value). */

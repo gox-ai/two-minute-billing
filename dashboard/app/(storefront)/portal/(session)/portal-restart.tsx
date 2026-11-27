@@ -7,6 +7,7 @@ import { money } from "@/lib/format";
 import type { PortalSubscription } from "@/lib/portal-api";
 import { portalRestartAction } from "./actions";
 import { usePortalSession } from "./portal-session-context";
+import { useEmbed } from "@/components/embed-bridge";
 import { termName } from "./portal-change-view";
 
 type Restart = NonNullable<PortalSubscription["restart"]>;
@@ -28,6 +29,9 @@ export function PortalRestart({
   const session = usePortalSession();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const embedded = useEmbed().origin != null;
+  /** Embedded: the checkout cannot open inside the business's frame, so it opens in a tab. */
+  const [link, setLink] = React.useState<string | null>(null);
 
   if (!restart.allowed)
     return restart.message ? (
@@ -42,6 +46,10 @@ export function PortalRestart({
       setError(res.error);
       setBusy(false);
       return;
+    }
+    if (embedded) {
+      setBusy(false);
+      return void setLink(res.url);
     }
     window.location.assign(res.url);
   }
@@ -60,6 +68,18 @@ export function PortalRestart({
         </Button>
       </div>
       {error ? <Alert tone="error">{error}</Alert> : null}
+      {link ? (
+        <Alert tone="info" title="Reactivate in a new tab">
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-primary hover:underline"
+          >
+            Open the checkout
+          </a>
+        </Alert>
+      ) : null}
     </div>
   );
 }

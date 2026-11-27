@@ -20,7 +20,6 @@ import {
   putSubscriptionUsageThreshold,
   saveAutoTopup,
   saveUnitAutoTopup,
-  saveUsageWidgetOrigins,
   setAutoTopupEnabled,
   updateSpendLimit,
   type AutoTopupWrite,
@@ -666,29 +665,3 @@ export async function previewRateChangeAction(
 }
 
 // ── Usage widget origins ───────────────────────────────────────────────────────
-
-const originsSchema = z.object({
-  ...ids,
-  origins: z.string().max(10_000),
-});
-
-export async function saveUsageWidgetOriginsAction(
-  _prev: ActionResult | null,
-  fd: FormData,
-): Promise<ActionResult> {
-  await requirePermission(MANAGE, "manager");
-  const parsed = parseForm(originsSchema, fd);
-  if (parsed.error) return parsed.error;
-  const origins = parsed.data.origins
-    .split(/[\s,]+/)
-    .map((o) => o.trim())
-    .filter(Boolean);
-  if (origins.length > 20)
-    return actionError("Correct the highlighted fields.", {
-      errors: { origins: "Enter 20 origins or fewer." },
-    });
-  const res = await saveUsageWidgetOrigins(parsed.data.biz, origins);
-  revalidatePath(`/businesses/${parsed.data.biz}/settings/usage-controls`);
-  if (!res.ok) return fail(res, "We could not save the origins.", { origins: "origins" });
-  return actionOk("Origins saved.");
-}

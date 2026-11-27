@@ -50,7 +50,7 @@ One suite per phase, each in a throwaway database against a local HubSpot stand-
 A developer-platform project (2026.09) in the GoX developer account: OAuth app "Two Minute Billing",
 the billing card, two workflow actions. `hsprofile.local.json` / `hsprofile.production.json` set
 `API_BASE_URL` (production's is a placeholder until the domain is known). Upload with
-`hs project upload -p <profile>` from that folder. `WEBHOOK_BASE_URL` on the API must equal the
+`hs project upload -p <profile>` from that folder. `ADVERTISED_API_URL` on the API must equal the
 profile's `API_BASE_URL` host, or HubSpot's signatures will not verify behind a proxy.
 
 ## Changelog

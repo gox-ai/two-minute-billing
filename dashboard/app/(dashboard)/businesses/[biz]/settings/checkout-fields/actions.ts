@@ -15,7 +15,6 @@ import {
   CHECKOUT_STATES,
   PORTAL_KEYS,
   PORTAL_STATES,
-  neverHidden,
   portalInputName,
 } from "./field-matrix";
 
@@ -33,8 +32,7 @@ export async function saveCheckoutFieldsAction(
   const biz = String(fd.get("biz") ?? "").trim();
   if (!biz) return actionError("The business ID is missing. Reload the page.");
 
-  const valid = (k: string, v: string, states: readonly string[]) =>
-    states.includes(v) && !(v === "hide" && neverHidden(k));
+  const valid = (_k: string, v: string, states: readonly string[]) => states.includes(v);
 
   const checkout_field_config: Partial<Record<CheckoutFieldKey, CheckoutFieldState>> = {};
   for (const key of CHECKOUT_KEYS) {

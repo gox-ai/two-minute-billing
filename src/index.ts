@@ -172,7 +172,7 @@ export async function buildApp(opts?: {
   // Cross-origin policy (W7). Registered BEFORE anything that can answer a request, so
   // a preflight is decided by the allowlist rather than by whichever handler a browser's
   // OPTIONS happens to reach. Grants exactly the three origins this deployment names
-  // (DASHBOARD_BASE_URL / PORTAL_BASE_URL / WEBHOOK_BASE_URL) and nothing else — see
+  // (DASHBOARD_BASE_URL / PORTAL_BASE_URL / ADVERTISED_API_URL) and nothing else — see
   // platform/cors.ts for why it is an exact-match Set and why credentials are never
   // advertised.
   registerCors(app);

@@ -23,7 +23,7 @@
       "name": "Razorpay",
       "guide": "/help/guides/connect-a-payment-gateway/razorpay",
       "regions": "India",
-      "currencies": "124 currencies",
+      "currencies": "124 currencies. UPI Autopay: INR. Netbanking (eMandate): INR",
       "methods": ["Cards", "UPI Autopay", "Netbanking (eMandate)"],
       "payNowWallets": []
     },

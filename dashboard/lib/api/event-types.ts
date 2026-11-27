@@ -185,6 +185,8 @@ export const EVENT_TYPES = [
   "credit_auto_topup_skipped",
   "credit_auto_topup_threshold_low",
   "usage_threshold_reached",
+  "export_completed",
+  "export_failed",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -443,6 +445,10 @@ const EVENT_GROUPS: Record<string, readonly string[]> = {
   ],
   usage_threshold: [
     "usage_threshold_reached",
+  ],
+  export: [
+    "export_completed",
+    "export_failed",
   ],
 };
 

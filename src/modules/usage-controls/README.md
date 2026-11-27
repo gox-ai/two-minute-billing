@@ -43,7 +43,8 @@ Every control is off until a business configures one (`businesses.usage_controls
 - Σ interim subtotals + final subtotal = the single-invoice subtotal, per item, to the minor unit.
 - The price-change preview writes nothing (`set transaction read only`).
 - A widget token reads one customer only, and no write route accepts it. A browser gets the data
-  only from an origin in `businesses.usage_widget_origins` (exact origin match).
+  only from an origin in `businesses.embed_origins` (exact origin match; the `embedding` module's
+  list, shared with the embedded checkout and portal).
 
 ## Measure, dirty set and the check (`measure.ts`, `dirty.ts`, `check.ts`)
 - Spend = rated usage before tax and credits. Inside the current term an interval's spend is
@@ -96,6 +97,12 @@ Every control is off until a business configures one (`businesses.usage_controls
   origins.
 
 ## Changelog
+- **2026-11-27** — The widget `script_url` is built from `ADVERTISED_API_URL`; `WEBHOOK_BASE_URL` is gone.
+- 2026-11-26 — The dashboard edits the widget's origins on Settings → Checkout ("Embed on your
+  website"), the one list for checkout, portal and widget; the usage-controls page links to it.
+- 2026-11-26 — The widget's origins are now the business's one allowed-websites list
+  (`businesses.embed_origins`, `embedding` module); 0551 copied `usage_widget_origins` in, and the
+  widget settings route reads and writes the same list.
 - 2026-11-14 — `credit_config.auto_topup_on_hard_decline` (`disable` unset | `keep_enabled`):
   with `keep_enabled` a hard decline fails the run and voids its invoice, the config stays
   active, `credit_auto_topup_failed` carries `stays_enabled: true` (the email says the top-up

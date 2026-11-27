@@ -144,8 +144,8 @@ export function GatewayWebhookCard({
 
       {urlMissingBase ? (
         <Alert tone="warning">
-          <code className="font-mono text-xs">WEBHOOK_BASE_URL</code> is not configured, so this URL
-          has no origin. Before you register the endpoint, set it to the public base URL of this
+          <code className="font-mono text-xs">ADVERTISED_API_URL</code> is not configured, so this
+          URL has no origin. Before you register the endpoint, set it to the public base URL of this
           API. In local development, use a tunnel origin.
         </Alert>
       ) : null}

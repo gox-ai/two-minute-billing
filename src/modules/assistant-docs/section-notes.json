@@ -3588,7 +3588,7 @@
     "hash": "68abe0f3842b"
   },
   "developers/recipes/bill-ai-tokens#audio-images-and-other-units": {
-    "context": "Explains the units the model price list supports, such as tokens, images, audio seconds, characters and pages, and how to set one on a meter.",
+    "context": "Explains the units the model price list supports, such as tokens, images, audio seconds, characters and pages, with an example meter that bills transcription by audio seconds.",
     "asks": [
       "bill speech to text by hour",
       "price text to speech per character",
@@ -3600,9 +3600,10 @@
       "send quantity in seconds",
       "Where can I read which units the price list supports?",
       "Can I bill images or audio?",
-      "price list units"
+      "price list units",
+      "create a meter for transcription seconds"
     ],
-    "hash": "3005e8937085"
+    "hash": "8abc09908c20"
   },
   "developers/recipes/bill-ai-tokens#audio-images-and-other-units~2": {
     "context": "Explains how quality and resolution tiers pick a price, how to read them from event properties, and how to add your own tiered costs.",
@@ -3619,7 +3620,7 @@
       "my HD image is billed at the standard price",
       "quality tiers"
     ],
-    "hash": "33222b001301"
+    "hash": "f07dfc0af195"
   },
   "developers/recipes/bill-ai-tokens#bill-from-the-model-price-list": {
     "context": "Shows how to price AI usage from the dated public model price list plus a markup instead of typing a rate per model, and how to read the list with the API.",
@@ -3835,7 +3836,7 @@
     "hash": "02d9f547d5c0"
   },
   "developers/recipes/bill-ai-tokens#set-a-price-for-one-customer": {
-    "context": "On the AI tokens recipe: giving one customer their own markup or rates on their subscription item.",
+    "context": "On the AI tokens recipe: giving one customer on a list-plus price their own markup or rates, with PATCH on their subscription item.",
     "asks": [
       "special price for one customer",
       "custom discount on usage for a client",
@@ -3846,9 +3847,11 @@
       "Where can I read how to give one customer their own rates?",
       "one enterprise customer should pay less than everyone else",
       "customer markup",
-      "custom rates"
+      "custom rates",
+      "PATCH subscription item markup_percent",
+      "override model rates for one customer"
     ],
-    "hash": "366524db9bef"
+    "hash": "138c7592e45d"
   },
   "developers/recipes/bill-ai-tokens#what-the-invoice-shows": {
     "context": "On the AI tokens recipe: the invoice lines for token usage, rounded once, with exact quantity and rate fields.",
@@ -4107,7 +4110,7 @@
       "reusable coupon",
       "coupon id"
     ],
-    "hash": "aa8f4a3ab4e5"
+    "hash": "56a11a8f2518"
   },
   "developers/recipes/coupons#generate-single-use-codes-for-a-campaign": {
     "context": "On the coupons recipe: generating a coupon set of unique single-use codes for a campaign and tracking who redeemed what.",
@@ -4628,6 +4631,171 @@
     ],
     "hash": "bda258bbbc59"
   },
+  "developers/recipes/embed-checkout-and-portal": {
+    "context": "The embed recipe: show the hosted checkout as an overlay or inline, and the customer portal as an overlay, inside your own app, with events back to your page.",
+    "asks": [
+      "embed checkout in my app",
+      "checkout popup on my site",
+      "show checkout inside my page instead of redirecting",
+      "open the customer portal in a modal",
+      "in-app billing portal",
+      "checkout iframe",
+      "keep buyers on my website while they pay",
+      "How do I embed the checkout in my own app?",
+      "Can the customer portal open inside my product?"
+    ],
+    "hash": "8c85d0feb275"
+  },
+  "developers/recipes/embed-checkout-and-portal#1-allow-your-website": {
+    "context": "Step 1 of the embed recipe: add each website origin that may show the checkout or portal, in Settings → Checkout or with the embedding settings API.",
+    "asks": [
+      "allow my domain to embed checkout",
+      "allowed websites for embedding",
+      "embed origins list",
+      "checkout refuses to load in my iframe",
+      "frame-ancestors blocked my page",
+      "embed on localhost for testing",
+      "Where do I add my website so the checkout can open in it?",
+      "Why does the embedded checkout not load on my site?"
+    ],
+    "hash": "e85c98b089f3"
+  },
+  "developers/recipes/embed-checkout-and-portal#2-create-the-session-with-embedorigin": {
+    "context": "Step 2 of the embed recipe: create the checkout or portal session with embed_origin set to a website on the allowed list.",
+    "asks": [
+      "embed_origin parameter",
+      "create checkout session for embedding",
+      "portal session for an embedded portal",
+      "which origin do I pass when I create the session",
+      "embedded session refused origin not allowed",
+      "How do I create a session that opens inside my app?"
+    ],
+    "hash": "5b4cc6413878"
+  },
+  "developers/recipes/embed-checkout-and-portal#3-open-it-in-your-page": {
+    "context": "Step 3 of the embed recipe: load embed.js with its integrity hash, then open the checkout as an overlay or inline and the portal as an overlay.",
+    "asks": [
+      "embed.js script tag",
+      "TMB.checkout.open",
+      "TMB.portal.open",
+      "inline checkout in my layout",
+      "overlay checkout",
+      "script integrity hash for embed",
+      "where do I get the embed script URL",
+      "How do I open the checkout from a button on my page?",
+      "Where is the code to paste into my page?"
+    ],
+    "hash": "0cfe50b66576"
+  },
+  "developers/recipes/embed-checkout-and-portal#events": {
+    "context": "The events an embedded checkout or portal sends to your page: loaded, step, success, subscription and payment method changes, invoice paid, close.",
+    "asks": [
+      "know when the embedded checkout succeeds",
+      "refresh my app after the customer upgrades",
+      "checkout success event",
+      "listen for portal plan change",
+      "detect when the buyer closes the checkout",
+      "embedded checkout callback",
+      "How does my page know the subscription started?",
+      "Which events does the embedded portal send?"
+    ],
+    "hash": "2ad03e7020d9"
+  },
+  "developers/recipes/embed-checkout-and-portal#what-the-buyer-sees": {
+    "context": "What a buyer sees in an embedded checkout: payments the provider holds, provider pages that open in a new tab, and sign-in in the embedded portal.",
+    "asks": [
+      "PayPal opens a new tab from the embedded checkout",
+      "payment in progress in the overlay",
+      "success with paid false",
+      "3D Secure inside an embedded checkout",
+      "bank page does not load in the iframe",
+      "Why did the embedded checkout open a new tab?",
+      "What happens if the payment takes time to confirm?"
+    ],
+    "hash": "99c22d3c1408"
+  },
+  "developers/recipes/export-to-csv-files": {
+    "context": "The recipe for exporting a business's plans, add-ons, coupons, customers, subscriptions, invoices, credit notes, payments and usage through the exports API as one zip of CSV files in the columns the import reads.",
+    "asks": [
+      "export all my data",
+      "bulk export customers to csv",
+      "download all invoices",
+      "export api",
+      "back up my billing data",
+      "move my data to another business",
+      "export subscriptions as csv"
+    ],
+    "hash": "554f86ba2ecb"
+  },
+  "developers/recipes/export-to-csv-files#download": {
+    "context": "On the export recipe: download the zip or one CSV, the README in the zip, the audit log entry for each download, files kept 7 days, and deleting them sooner.",
+    "asks": [
+      "download my export",
+      "export zip",
+      "how long are export files kept",
+      "delete an export",
+      "download one file of an export",
+      "export expired"
+    ],
+    "hash": "03dc89d3eec0"
+  },
+  "developers/recipes/export-to-csv-files#permissions": {
+    "context": "On the export recipe: exports need exports:manage and exports:view; owners and admins have both and custom roles can get them.",
+    "asks": [
+      "who can export data",
+      "exports permission",
+      "let a team member export",
+      "can a manager export"
+    ],
+    "hash": "f8eec4dbd3fe"
+  },
+  "developers/recipes/export-to-csv-files#preview": {
+    "context": "On the export recipe: preview an export without writing anything, the record types and the filters each one takes (status, from, to, date field, archived).",
+    "asks": [
+      "export only paid invoices",
+      "export invoices from last month",
+      "filter an export by date",
+      "export only active subscriptions",
+      "how many rows will the export have",
+      "export usage records"
+    ],
+    "hash": "9d596d68b877"
+  },
+  "developers/recipes/export-to-csv-files#preview~2": {
+    "context": "On the export recipe: an export also writes the records its rows refer to (customers, subscriptions, prices, coupons, refunded payments) so the files import on their own, and include_related turns that off.",
+    "asks": [
+      "include related records in the export",
+      "export invoices with their customers",
+      "include_related",
+      "why does my export have extra customers",
+      "export that I can import again"
+    ],
+    "hash": "9d14f9229134"
+  },
+  "developers/recipes/export-to-csv-files#start": {
+    "context": "On the export recipe: start an export in the background, follow its progress and status, the export_completed and export_failed webhooks, the email, and one export at a time.",
+    "asks": [
+      "start an export",
+      "is my export ready",
+      "webhook when export is done",
+      "export_completed",
+      "export in progress error",
+      "how long does an export take"
+    ],
+    "hash": "15a8d8016b02"
+  },
+  "developers/recipes/export-to-csv-files#the-files": {
+    "context": "On the export recipe: the files have the import's columns first then read-only ones, one snapshot, invoice tax and discount on the first line, the quote before formula text, what is left out, and no card numbers.",
+    "asks": [
+      "export file columns",
+      "why is there a quote before the phone number",
+      "are card numbers in the export",
+      "why is a price missing from my export",
+      "export date format",
+      "amounts in the export"
+    ],
+    "hash": "8335c203fb09"
+  },
   "developers/recipes/failed-payments": {
     "context": "Developer recipe: set the retry schedule for declined cards, simulate a failed renewal, recover it with a new card and choose the final action.",
     "asks": [
@@ -4889,6 +5057,198 @@
       "resume dunning"
     ],
     "hash": "0978e15e3643"
+  },
+  "developers/recipes/import-from-a-json-file": {
+    "context": "The recipe for moving plans, customers, saved cards and subscriptions into a self-hosted install from one JSON file without charging twice; the same file can also be uploaded through the imports API.",
+    "asks": [
+      "migrate from my old billing system",
+      "move my subscribers to two minute billing",
+      "import customers and subscriptions",
+      "self hosted migration",
+      "import existing subscriptions without charging them",
+      "how do I import my data",
+      "bring over saved cards"
+    ],
+    "hash": "9a29cb69d4db"
+  },
+  "developers/recipes/import-from-a-json-file#check-the-file": {
+    "context": "On the JSON import recipe: a dry run validates every row and counts customers with a card, writing nothing.",
+    "asks": ["test the import first", "validate my import file", "dry run import"],
+    "hash": "1eecc5dc2d16"
+  },
+  "developers/recipes/import-from-a-json-file#connect-your-payment-gateway": {
+    "context": "On the JSON import recipe: connect the same gateway account that stores the cards before importing, because a card token works only at the account that saved it.",
+    "asks": [
+      "imported cards not charging",
+      "which stripe account to connect before import",
+      "card token from another account",
+      "renewal failed after migration"
+    ],
+    "hash": "1bdbb194baf5"
+  },
+  "developers/recipes/import-from-a-json-file#find-your-business-id": {
+    "context": "On the JSON import recipe: where to find the business id (biz_…) in the dashboard address bar.",
+    "asks": ["where is my business id", "biz id for import", "find business id"],
+    "hash": "0af9dde19a82"
+  },
+  "developers/recipes/import-from-a-json-file#import": {
+    "context": "On the JSON import recipe: run the import into an existing business with --business; without it a new organization and business are created.",
+    "asks": [
+      "import into my existing business",
+      "migrate json business flag",
+      "import created a new organization"
+    ],
+    "hash": "5660d200a729"
+  },
+  "developers/recipes/import-from-a-json-file#run-the-import": {
+    "context": "On the JSON import recipe: the import runs from a checkout of the repository with the engine's environment file.",
+    "asks": ["where do I run the import command", "run migrate json", "import from command line"],
+    "hash": "9db2e3afec83"
+  },
+  "developers/recipes/import-from-a-json-file#what-the-file-does-not-carry-yet": {
+    "context": "On the JSON import recipe: the file does not carry add-ons, coupons, tiered prices, addresses, tax ids or past invoices, and tax must be set up before the first renewal.",
+    "asks": [
+      "import coupons and add-ons",
+      "import invoice history",
+      "what is not imported",
+      "tax after migration"
+    ],
+    "hash": "a56fcfc67545"
+  },
+  "developers/recipes/import-from-a-json-file#what-the-import-guarantees": {
+    "context": "On the JSON import recipe: no invoice is raised, each subscription renews first at its term end, saved cards keep working, and the import can be run again safely.",
+    "asks": [
+      "will customers be charged twice",
+      "double billing after migration",
+      "when is the first charge after import",
+      "can I run the import again",
+      "import idempotent"
+    ],
+    "hash": "0072a303da04"
+  },
+  "developers/recipes/import-from-a-json-file#write-the-file": {
+    "context": "On the JSON import recipe: the file's three arrays (plans, customers, subscriptions), their fields, minor-unit amounts and ISO dates.",
+    "asks": [
+      "what format does the import file use",
+      "json export example",
+      "fields for importing subscriptions",
+      "amount in cents or dollars for import",
+      "date format for import"
+    ],
+    "hash": "e57bc5ae9d6b"
+  },
+  "developers/recipes/import-from-a-json-file#write-the-file~2": {
+    "context": "On the JSON import recipe: a saved card is a reference to the gateway's customer id and payment method id, never a card number, and created/updated dates are kept.",
+    "asks": [
+      "import saved cards",
+      "do I need card numbers to migrate",
+      "keep customers' cards when moving",
+      "payment method id in import",
+      "keep original created date on import"
+    ],
+    "hash": "0eee4c9574ee"
+  },
+  "developers/recipes/import-from-csv-files": {
+    "context": "The recipe for importing plans, add-ons, coupons, customers with saved cards, subscriptions and their history (invoices, credit notes, payments, usage) from CSV files through the imports API: upload, check, review, start and undo.",
+    "asks": [
+      "import customers from a csv",
+      "bulk import subscriptions",
+      "import invoices with the api",
+      "migrate from another billing system",
+      "move my subscribers over without charging them",
+      "import api",
+      "how do I import my data"
+    ],
+    "hash": "a86bdbaca942"
+  },
+  "developers/recipes/import-from-csv-files#read-the-check": {
+    "context": "On the CSV import recipe: the background check and its summary — new and existing rows, MRR, saved cards, renewals, the history block (open invoices, receivables, credit, next invoice number), blockers, warnings, what is not imported — and the rows with errors.",
+    "asks": [
+      "import check failed",
+      "why is my import blocked",
+      "see errors in my import",
+      "how much do imported open invoices owe",
+      "which customers have no card",
+      "gateway not connected warning"
+    ],
+    "hash": "7a774131dabd"
+  },
+  "developers/recipes/import-from-csv-files#read-the-check~2": {
+    "context": "On the CSV import recipe: check again with a changed column mapping, leave out rows with errors or subscriptions renewing in 24 hours, and choose whether open invoices are collected (collect_open_invoices).",
+    "asks": [
+      "change the column mapping",
+      "skip rows with errors",
+      "collect_open_invoices",
+      "collect imported open invoices",
+      "leave out subscriptions renewing soon"
+    ],
+    "hash": "729d4d32ec98"
+  },
+  "developers/recipes/import-from-csv-files#start": {
+    "context": "On the CSV import recipe: start a checked import, typing the business name for a live business; each row then shows created, unchanged, failed or excluded, and an email is sent when it ends.",
+    "asks": [
+      "start the import",
+      "confirm import into live business",
+      "import results per row",
+      "which rows failed to import"
+    ],
+    "hash": "a8a39b3e69c0"
+  },
+  "developers/recipes/import-from-csv-files#the-files": {
+    "context": "On the CSV import recipe: one file per kind of record (plans, add-ons, coupons, customers, subscriptions) and the optional history files (invoices, credit notes, payments, usage), with their required columns.",
+    "asks": [
+      "which columns do I need",
+      "column names for subscriptions import",
+      "invoice import columns",
+      "payments import file",
+      "one row per invoice line",
+      "usage import file format"
+    ],
+    "hash": "4a8b76b794f2"
+  },
+  "developers/recipes/import-from-csv-files#the-files~2": {
+    "context": "On the CSV import recipe: invoice totals must add up, payments and credit notes name an invoice, usage needs a usage price; templates, automatic column matching, amounts and dates, and saved cards as gateway references.",
+    "asks": [
+      "invoice total does not add up",
+      "where do I put tax on an imported invoice",
+      "download import template",
+      "date format in the import file",
+      "amount in dollars or cents",
+      "do I need card numbers"
+    ],
+    "hash": "1efc53d7ad35"
+  },
+  "developers/recipes/import-from-csv-files#undo": {
+    "context": "On the CSV import recipe: undo deletes only the records the import created, until billing touches them; opening balances are reversed with new ledger entries, never deleted; the next invoice number stays.",
+    "asks": [
+      "undo an import",
+      "roll back an import",
+      "undo an import with invoices",
+      "why can't I undo my import",
+      "does undo delete ledger entries"
+    ],
+    "hash": "ae4f2f71292d"
+  },
+  "developers/recipes/import-from-csv-files#upload": {
+    "context": "On the CSV import recipe: upload the files to POST /imports; the response shows the column mapping found and required fields with no column; up to 50,000 rows per file; a JSON file is accepted too.",
+    "asks": [
+      "upload import files",
+      "post imports api",
+      "how big can the import file be",
+      "import a json file through the api"
+    ],
+    "hash": "6ddeff5cb128"
+  },
+  "developers/recipes/import-from-csv-files#what-the-import-guarantees": {
+    "context": "On the CSV import recipe: no invoice is raised and nobody is charged, open invoices are collected only when asked, history is a record and not new revenue, no emails or webhooks, re-runs keep existing records, and only owners and admins can import.",
+    "asks": [
+      "will customers be charged twice",
+      "double billing after import",
+      "does imported history count as revenue",
+      "do customers get emails when imported",
+      "who can import data"
+    ],
+    "hash": "8bf897b11da0"
   },
   "developers/recipes/india-gst-invoices": {
     "context": "Developer recipe: charge GST from an Indian business through the API with CGST, SGST or IGST plus GSTIN and HSN or SAC on invoices.",
@@ -5769,7 +6129,7 @@
     "hash": "668ae57f7809"
   },
   "developers/recipes/one-time-purchases#discount-a-purchase-with-a-coupon": {
-    "context": "In the one-time purchase recipe, this explains how to apply discount codes, what makes them valid, and how to handle fully discounted or failed payments.",
+    "context": "In the one-time purchase recipe: create a coupon, then apply discount codes to a purchase checkout; what makes them valid, and how to handle fully discounted or failed payments.",
     "asks": [
       "How do I apply a discount code to a one-off charge?",
       "Why is a discount code rejected when I create checkout?",
@@ -5782,7 +6142,7 @@
       "purchase coupon",
       "free order"
     ],
-    "hash": "90e28a13b9ed"
+    "hash": "1faad01254f4"
   },
   "developers/recipes/one-time-purchases#discount-a-purchase-with-a-coupon~2": {
     "context": "In the one-time purchase recipe, this shows how to apply discount codes when creating an invoice directly instead of using checkout.",
@@ -5797,7 +6157,7 @@
       "invoice coupons",
       "coupons field"
     ],
-    "hash": "8ab1226e6707"
+    "hash": "8bb27264ff32"
   },
   "developers/recipes/one-time-purchases#link-the-purchase-to-your-order": {
     "context": "In the one-time purchase recipe, this shows how to match a paid invoice to your own order reference when it is time to fulfil the order.",
@@ -7182,9 +7542,16 @@
     "hash": "96faf6bb9748"
   },
   "developers/recipes~3": {
-    "context": "Lists the payment and India recipes: one-time sales, checkout and portal, failed payments, GST invoices and mandates.",
-    "asks": [],
-    "hash": "9911fe67aa16"
+    "context": "Lists the payment, India and moving in and out recipes: one-time sales, embedding checkout and the portal, checkout and portal, failed payments, GST invoices, mandates, importing from CSV or JSON files, and exporting to CSV files.",
+    "asks": [
+      "list of developer recipes",
+      "payment recipes",
+      "how-to guides for the API",
+      "embed checkout guide",
+      "Where are the step-by-step developer guides?",
+      "export guide"
+    ],
+    "hash": "fda083634901"
   },
   "developers/webhooks": {
     "context": "On the webhooks page: register an endpoint to receive signed, retried notifications about billing events.",
@@ -7366,7 +7733,7 @@
       "event types",
       "webhook events"
     ],
-    "hash": "19338fb987bd"
+    "hash": "575f99d1b00a"
   },
   "developers/webhooks/events#attacheditem": {
     "context": "On the webhook event reference page: events for add-ons or charges attached to a product so they carry onto its subscriptions.",
@@ -7591,6 +7958,16 @@
       "dunning_policy_updated"
     ],
     "hash": "4ed1c7941408"
+  },
+  "developers/webhooks/events#export": {
+    "context": "In the event reference: the export events, export_completed with the files and when they are deleted, and export_failed with the reason.",
+    "asks": [
+      "export_completed",
+      "export_failed",
+      "webhook when my export is ready",
+      "export finished event"
+    ],
+    "hash": "45c6975f61a8"
   },
   "developers/webhooks/events#feature": {
     "context": "On the webhook event reference page: events for features that plans can grant, used to refresh cached entitlements in your app.",
@@ -10948,7 +11325,7 @@
     "hash": "211cfc7f1f35"
   },
   "guides/connect-a-payment-gateway/razorpay#currencies": {
-    "context": "On the Razorpay gateway page: the list of currencies available through Razorpay.",
+    "context": "On the Razorpay gateway page: the currencies available through Razorpay, and the payment methods that take INR only (UPI Autopay, Netbanking eMandate).",
     "asks": [
       "which currencies does Razorpay support",
       "can I charge in dollars through Razorpay",
@@ -10956,9 +11333,11 @@
       "currency list for gateway",
       "where can I see the currencies Razorpay supports",
       "customer cannot be charged in their currency on Razorpay",
-      "Razorpay currencies"
+      "Razorpay currencies",
+      "does UPI Autopay work in dollars",
+      "which currency for netbanking mandates"
     ],
-    "hash": "a3c98afa19d8"
+    "hash": "750d2c6756c8"
   },
   "guides/connect-a-payment-gateway/razorpay#find-your-api-keys": {
     "context": "On the Razorpay gateway page: where to generate the Key ID and Key Secret in the Razorpay Dashboard.",
@@ -11454,7 +11833,7 @@
       "gateway currencies",
       "132 currencies"
     ],
-    "hash": "e0619d393e94"
+    "hash": "21039120c0d0"
   },
   "guides/connect-a-payment-gateway#regions-and-currencies~2": {
     "context": "On the payment gateways page: a warning to read each gateway's permissions before going live because connecting only checks the key is accepted.",
@@ -12104,6 +12483,57 @@
     ],
     "hash": "674e4ac0a005"
   },
+  "guides/export-your-data": {
+    "context": "The guide to exporting plans, add-ons, coupons, customers, subscriptions, invoices, credit notes, payments and usage as CSV files in one zip, under Settings › Import and export data › Export data.",
+    "asks": [
+      "how do I export my data",
+      "export all customers",
+      "download all my invoices",
+      "back up my billing data",
+      "export to csv",
+      "export everything from my account",
+      "move my data to another business"
+    ],
+    "hash": "91a8b8feae56"
+  },
+  "guides/export-your-data#choose-what-to-export": {
+    "context": "In the export guide: the record types, the filters each one takes (status, dates, archived), the record counts, Preview, and Include the records they refer to.",
+    "asks": [
+      "export only active subscriptions",
+      "export invoices from last month",
+      "export paid invoices only",
+      "preview the export",
+      "export invoices with their customers",
+      "export archived plans",
+      "export usage records"
+    ],
+    "hash": "0803184c6804"
+  },
+  "guides/export-your-data#export-and-download": {
+    "context": "In the export guide: the export runs in the background with an email when ready, one at a time; Download all or one file, the README, files kept 7 days, Delete files, Past exports and Export again.",
+    "asks": [
+      "is my export ready",
+      "download my export",
+      "how long are export files kept",
+      "delete my export",
+      "export again",
+      "see past exports",
+      "do I get an email when the export is done"
+    ],
+    "hash": "06df83eeda7b"
+  },
+  "guides/export-your-data#what-is-in-the-files": {
+    "context": "In the export guide: the files have the import's columns first, amounts in the main unit and dates in UTC, invoice lines with tax and discount on the first, no card numbers, a quote before formula text, and what is left out.",
+    "asks": [
+      "can I import the export into another business",
+      "why is there a quote before the phone number",
+      "are card numbers in the export",
+      "what timezone are export dates in",
+      "why is a price missing from my export",
+      "who downloaded the export"
+    ],
+    "hash": "996ae6d3da3d"
+  },
   "guides/handle-disputes": {
     "context": "On the disputes guide: see chargebacks when a customer's bank raises them, what happens to the invoice, and how to keep evidence in time.",
     "asks": [
@@ -12225,10 +12655,36 @@
     ],
     "hash": "434358f0469f"
   },
+  "guides/hosted-checkout-and-portal#choose-what-checkout-asks-for": {
+    "context": "On the hosted checkout and portal guide: set which fields checkout and the portal ask for (required, optional, hidden, read-only), and which fields tax setup or an Indian Stripe account keep required.",
+    "asks": [
+      "ask only for the email at checkout",
+      "make the address optional",
+      "hide the phone field at checkout",
+      "why can I not hide the country",
+      "why is state required",
+      "remove address fields from checkout",
+      "fewer fields at checkout",
+      "Can I hide address line 2?"
+    ],
+    "hash": "03b0f97809b0"
+  },
+  "guides/hosted-checkout-and-portal#customers-outside-india-on-an-indian-stripe-account": {
+    "context": "On the hosted checkout and portal guide: Stripe in India needs a name and street from customers outside India; the Fill the street setting sends their city and state as the street so they give only a postal code.",
+    "asks": [
+      "Stripe India refuses foreign cards",
+      "cross border classification missing name and address",
+      "international customers must enter a street",
+      "fill the street for buyers outside India",
+      "why does checkout ask US customers for an address",
+      "can foreign buyers skip the street address on Stripe India"
+    ],
+    "hash": "be5336253513"
+  },
   "guides/hosted-checkout-and-portal#related": {
-    "context": "On the hosted checkout and portal page: links to features, API recipes and emails and branding.",
+    "context": "On the hosted checkout and portal page: links to features, API recipes (including embedding checkout and the portal in your app) and emails and branding.",
     "asks": [],
-    "hash": "44ceccb7d217"
+    "hash": "e4d095dba949"
   },
   "guides/hosted-checkout-and-portal#send-a-customer-a-link": {
     "context": "On the hosted checkout and portal page: generating and sending one-use links, and avoiding expired-link problems.",
@@ -12258,6 +12714,133 @@
       "Where do I choose which self-service options are available?"
     ],
     "hash": "54c8fced2c32"
+  },
+  "guides/hosted-checkout-and-portal#show-them-inside-your-app": {
+    "context": "On the hosted checkout and portal guide: open checkout as a popup or inline, and the portal as a popup, inside your own website by allowing the website and giving your developer the code.",
+    "asks": [
+      "show checkout inside my app",
+      "checkout popup on my website",
+      "open the customer portal in my product",
+      "where do I allow my website to embed checkout",
+      "code to embed checkout",
+      "customers should not leave my site to pay",
+      "Can checkout open in a modal on my site?"
+    ],
+    "hash": "96636c3394be"
+  },
+  "guides/import-your-data": {
+    "context": "The guide to importing plans, add-ons, coupons, customers with saved cards, subscriptions and their history (invoices, credit notes, payments, usage) from CSV files in the dashboard, under Settings › Import and export data: check, review, import and undo.",
+    "asks": [
+      "how do I import my customers",
+      "import subscriptions from a csv",
+      "import my old invoices",
+      "move my billing history over",
+      "migrate from another billing system",
+      "bulk import without the api",
+      "will importing charge my customers"
+    ],
+    "hash": "587be1f04b88"
+  },
+  "guides/import-your-data#good-to-know": {
+    "context": "In the import guide: limits and behavior — imports only add records, re-imports add only new rows, 14 MB per dashboard import and 50,000 rows per file, the audit trail, the email when an import or an undo ends, and a link to exporting.",
+    "asks": [
+      "can the import update existing customers",
+      "import the same file again",
+      "maximum import file size",
+      "how many rows can I import",
+      "who imported this data",
+      "do I get an email when the import finishes",
+      "email when undo is done"
+    ],
+    "hash": "97ed56d804dd"
+  },
+  "guides/import-your-data#how-an-import-runs": {
+    "context": "In the import guide: the steps of a dashboard import, from upload and check to review, import and results.",
+    "asks": [
+      "what are the steps of an import",
+      "how does the csv import work",
+      "does anything change before I start the import"
+    ],
+    "hash": "34abc00de7e8"
+  },
+  "guides/import-your-data#import": {
+    "context": "In the import guide: Start the import, the typed business name on a live business, the background run and the email when it ends; the import charges no customer.",
+    "asks": [
+      "start the import",
+      "type the business name to confirm the import",
+      "can I close the page while it imports",
+      "does the import send emails or webhooks",
+      "will customers be charged when I import"
+    ],
+    "hash": "d6e438525014"
+  },
+  "guides/import-your-data#read-the-results": {
+    "context": "In the import guide: the per-row results of an import (added, not changed, left out, failed) and Download results.",
+    "asks": [
+      "which rows failed to import",
+      "download the import results",
+      "why did a row fail",
+      "import result file"
+    ],
+    "hash": "55123c43987a"
+  },
+  "guides/import-your-data#review": {
+    "context": "In the import guide: the review — new, blocked, existing and left-out rows, column mapping, MRR, saved cards, renewals, what open invoices owe, customer credit, the next invoice number — and whether open invoices are collected.",
+    "asks": [
+      "why is my row blocked",
+      "how do I map a column in my file",
+      "will imported open invoices be charged",
+      "collect imported unpaid invoices",
+      "stop collecting imported invoices",
+      "imported invoice numbers changed my numbering",
+      "subscriptions renewing in the next 24 hours"
+    ],
+    "hash": "f0f44372931b"
+  },
+  "guides/import-your-data#undo-an-import": {
+    "context": "In the import guide: Undo import deletes only what the import added, until billing touches it; opening balances of open invoices and credit are reversed in the ledger, and the next invoice number stays.",
+    "asks": [
+      "undo an import",
+      "delete everything I imported",
+      "undo an import with invoices",
+      "why can I not undo my import",
+      "does undo change the ledger"
+    ],
+    "hash": "c2ebb0050a56"
+  },
+  "guides/import-your-data#upload-and-check": {
+    "context": "In the import guide: selecting a file per section and Check what changes, which reads every row and writes nothing.",
+    "asks": [
+      "where do I upload my csv",
+      "check my file before importing",
+      "does the check change anything",
+      "check what changes"
+    ],
+    "hash": "0d8eb3f3b0ce"
+  },
+  "guides/import-your-data#what-you-can-import": {
+    "context": "In the import guide: the CSV files an import takes — plans and prices, add-ons, coupons, customers, subscriptions — and the optional history: invoices (one row per line), credit notes, payments and refunds, and usage.",
+    "asks": [
+      "what columns does the import file need",
+      "can I import invoices",
+      "import payments and refunds",
+      "import credit notes",
+      "import usage records",
+      "one row per invoice line",
+      "can I import add-ons and coupons"
+    ],
+    "hash": "e9a54abd8ff3"
+  },
+  "guides/import-your-data#what-you-can-import~2": {
+    "context": "In the import guide: templates, automatic column matching, the migration JSON file, and saved cards as references to the gateway, never card numbers.",
+    "asks": [
+      "where do I get a csv template",
+      "can I import saved cards",
+      "do I need card numbers to import customers",
+      "can I upload the migration json file in the dashboard",
+      "my columns have different names"
+    ],
+    "hash": "2fbc2cbc63cb"
   },
   "guides/invoices-and-credit-notes": {
     "context": "In the Invoices & Credit Notes guide, learn to check what a customer owes, record payments, and correct charges or return money.",
@@ -15975,9 +16558,9 @@
     "hash": "51aaf68bab68"
   },
   "guides#setting-up": {
-    "context": "On the guides index: links to setup guides for gateways, tax and checkout.",
+    "context": "On the guides index: links to setup guides for gateways, tax, checkout and portal, payment methods, emails, integrations, importing your data and exporting it.",
     "asks": [],
-    "hash": "01b50c99c0cf"
+    "hash": "9f5fb441d095"
   },
   "guides#usage-and-ai-billing": {
     "context": "On the guides index: links to usage and AI billing guides.",
@@ -18080,6 +18663,68 @@
     ],
     "hash": "788a8ab2b80d"
   },
+  "screen:/businesses/{business}/imports": {
+    "context": "The Import and export data screen (Settings › Import and export data): three tabs, Import files, Past imports and Export data; on Export data, select record types and filter them by status and date, with counts and a preview.",
+    "asks": [
+      "take me to import data",
+      "where do I import customers",
+      "where do I export my data",
+      "export all customers to csv",
+      "export only paid invoices",
+      "export invoices from last year",
+      "preview the export",
+      "where do I upload a csv"
+    ],
+    "hash": "ebb0af855405"
+  },
+  "screen:/businesses/{business}/imports~2": {
+    "context": "On Import and export data: the import steps, upload files, check what changes, review new, blocked, existing and left-out rows, and the export's date ranges.",
+    "asks": [
+      "check what changes before importing",
+      "leave out the blocked rows",
+      "where do I download a template for the import",
+      "start the import",
+      "export between two dates",
+      "change the export date range"
+    ],
+    "hash": "796fbca5619d"
+  },
+  "screen:/businesses/{business}/imports~3": {
+    "context": "On Import and export data: undo an import and download its results, past imports, and on Export data the What to export card with Include the records they refer to.",
+    "asks": [
+      "undo import",
+      "download the import results",
+      "see past imports",
+      "what to export",
+      "include related records in the export",
+      "export invoices with their customers"
+    ],
+    "hash": "9c1912dfe266"
+  },
+  "screen:/businesses/{business}/imports~4": {
+    "context": "On Export data: the export's progress, its files to download, what was left out, Delete files, past exports, and Export again.",
+    "asks": [
+      "download my export",
+      "is my export ready",
+      "delete the export files",
+      "export again with the same choices",
+      "why did my export fail",
+      "see past exports",
+      "why is a record missing from my export"
+    ],
+    "hash": "745553cb1244"
+  },
+  "screen:/businesses/{business}/imports~5": {
+    "context": "On Import and export data, the After the import card: monthly revenue, saved cards, renewals, test business limits, what open invoices owe, the credit customers can use, the next invoice number, and what no import carries.",
+    "asks": [
+      "how much MRR will the import add",
+      "how much do the imported open invoices owe",
+      "how much credit do imported customers have",
+      "what will my next invoice number be after import",
+      "does the import bring tax rates"
+    ],
+    "hash": "e52ba5dd09ad"
+  },
   "screen:/businesses/{business}/integrations": {
     "context": "Browse available CRM and affiliate connections and check whether integrations are loading or ready to connect.",
     "asks": [
@@ -18898,11 +19543,13 @@
       "Where can I change what customers see when they pay or manage a subscription?",
       "How do I find email reminders and invoice settings?",
       "Where are the tools for failed payments and recovering revenue?",
+      "Where do I import customers and subscriptions from CSV files?",
       "I need to review who changed our billing setup; where is that record?",
       "Where do I manage API access and event notifications?",
-      "How can I find team access or account security options?"
+      "How can I find team access or account security options?",
+      "Where do I export all my data to CSV?"
     ],
-    "hash": "5d220477d1f6"
+    "hash": "8a54993a5f39"
   },
   "screen:/businesses/{business}/settings/billing-frequencies": {
     "context": "Choose which recurring billing intervals are allowed and save the available frequency options.",
@@ -19550,16 +20197,18 @@
     "hash": "196eaecd8dde"
   },
   "screen:/businesses/{business}/settings/checkout": {
-    "context": "Choose the checkout page layout and set when checkout checks for automated activity after payment failures.",
+    "context": "Choose the checkout page layout, set when checkout checks for automated activity after payment failures, and list the websites that may embed the checkout and portal.",
     "asks": [
       "How do I make checkout a single page instead of several steps?",
       "Where can I change how the payment page is arranged?",
       "Customers are having trouble finishing checkout; can I change the flow?",
       "Can I make checkout check for bots after a failed payment?",
       "How many failed attempts should happen before the bot check appears?",
-      "Where do I turn off the automated traffic check?"
+      "Where do I turn off the automated traffic check?",
+      "Where do I add my website so the checkout can open inside it?",
+      "Where do I find the code to embed the checkout?"
     ],
-    "hash": "0f0ef4e8217e"
+    "hash": "cb3c55832e96"
   },
   "screen:/businesses/{business}/settings/checkout-fields": {
     "context": "Choose which customer details are required, shown, or read-only at checkout and in the customer portal.",
@@ -19591,16 +20240,18 @@
     "hash": "64ae477697c7"
   },
   "screen:/businesses/{business}/settings/checkout~3": {
-    "context": "Control whether checkout displays free line items or collects purchase order numbers, and set where customers go afterward.",
+    "context": "Control whether checkout displays free line items or collects purchase order numbers, fill the street for buyers outside India on an Indian Stripe account, set where customers go afterward, and edit the allowed websites for embedding.",
     "asks": [
       "How can I collect a purchase order reference during payment?",
       "Where do I send customers after they finish checkout?",
       "Can I choose where someone goes if they back out of checkout?",
       "How do I hide free items from the checkout summary?",
       "Customers need a PO reference for accounting; where can I ask for it?",
-      "Where do I change the destination after a completed or canceled checkout?"
+      "Stripe India refuses foreign cards without an address; can buyers skip the street?",
+      "Can I stop asking international buyers for their street address?",
+      "Where do I allow my website to embed the checkout?"
     ],
-    "hash": "d9749c9f274f"
+    "hash": "e93aecb47bb9"
   },
   "screen:/businesses/{business}/settings/credit-notes": {
     "context": "Set the wording and details shown on credit note documents, preview the title, and save the document display settings.",
@@ -20628,7 +21279,7 @@
     "hash": "26160e7c0b91"
   },
   "screen:/businesses/{business}/settings/usage-controls~2": {
-    "context": "Set usage alert thresholds and email notifications, choose the plan and meter to watch, and manage allowed website origins.",
+    "context": "Set usage alert thresholds and email notifications, choose the plan and meter to watch, and edit the allowed websites for the usage widget.",
     "asks": [
       "How can I email a customer when they are close to their usage allowance?",
       "Where do I set an alert based on how much of a feature limit is used?",
@@ -20636,10 +21287,10 @@
       "Take me to the alerts for a specific plan and usage meter.",
       "How do I choose the time period and currency for a usage warning?",
       "Where can I change the level that triggers a notification?",
-      "How do I allow only certain website addresses to use this feature?",
+      "Where do I allow my website to show the usage widget?",
       "I need to remove an old usage warning—where can I delete it?"
     ],
-    "hash": "2f1c9ea68ed8"
+    "hash": "6084243338a5"
   },
   "screen:/businesses/{business}/subscriptions": {
     "context": "Filter subscriptions by status or renewal timing, and review customer, plan, payment method, and recurring revenue details.",
@@ -20757,7 +21408,7 @@
       "Where can I see how a plan change affects credits and usage allowances?",
       "Take me to the options for applying a coupon during a subscription change."
     ],
-    "hash": "bd83fe9ec7c3"
+    "hash": "33b5ea99f926"
   },
   "screen:/businesses/{business}/subscriptions/{sub}/change~4": {
     "context": "Set the subscription’s purchase order details, automatic payment behavior, invoice notes, renewal term, and trial end date.",
@@ -21195,7 +21846,7 @@
       "Can I exclude blocked items from the copy?",
       "Where can I see which items were copied, skipped, or left unchanged?"
     ],
-    "hash": "3a1fe21d47f7"
+    "hash": "f3dfed99a4c9"
   },
   "screen:/businesses/{business}/transfer~2": {
     "context": "Change copy options, start or stop a business transfer, and retry items that failed to copy.",
@@ -21208,7 +21859,7 @@
       "Why was my copy plan replaced by a newer check?",
       "Where can I see which items were added, updated, deleted, or skipped?"
     ],
-    "hash": "5b541be27e4a"
+    "hash": "ef14ca2fd754"
   },
   "screen:/businesses/{business}/transfer~3": {
     "context": "Choose what business data to copy, handle existing records, track transfer progress, or manage test data.",

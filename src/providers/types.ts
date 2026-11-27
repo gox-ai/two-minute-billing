@@ -1806,6 +1806,15 @@ export interface PaymentProvider {
    */
   updateCustomer?(ref: ProviderCustomerRef, input: EnsureCustomerInput): Promise<void>;
 
+  /**
+   * The account's home country when a payer outside it must give a name and a street address
+   * before paying, else null. Stripe India: a foreign card is an export payment, and Stripe
+   * refuses it (`cross_border_classification_missing_name_and_address`) unless the customer
+   * has a name and `address.line1`; country, postal code, city and state are not enough.
+   * Optional: a gateway without the rule omits it.
+   */
+  streetAddressRequiredOutside?(): Promise<string | null>;
+
   vaultPaymentMethod(input: VaultPaymentMethodInput): Promise<ProviderPaymentMethodRef>;
 
   /**

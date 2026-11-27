@@ -28,8 +28,20 @@ Each business has a **live mode and a test mode**: two business ids, created tog
 | `GET` | [`/v1/businesses/{biz}/currencies/{currency}`](/help/developers/api-reference/businesses/get-one-currency) | Get one currency |
 | `PUT` | [`/v1/businesses/{biz}/currencies/{currency}`](/help/developers/api-reference/businesses/set-one-currency-s-exchange-rate-source) | Set one currency's exchange-rate source |
 | `DELETE` | [`/v1/businesses/{biz}/currencies/{currency}`](/help/developers/api-reference/businesses/stop-transacting-in-a-currency) | Stop transacting in a currency |
+| `GET` | [`/v1/businesses/{biz}/imports`](/help/developers/api-reference/businesses/list-imports) | List imports |
+| `POST` | [`/v1/businesses/{biz}/imports`](/help/developers/api-reference/businesses/upload-files-to-import) | Upload files to import |
+| `GET` | [`/v1/businesses/{biz}/imports/{id}`](/help/developers/api-reference/businesses/retrieve-an-import) | Retrieve an import |
+| `POST` | [`/v1/businesses/{biz}/imports/{id}/check`](/help/developers/api-reference/businesses/check-an-import-again) | Check an import again |
+| `POST` | [`/v1/businesses/{biz}/imports/{id}/discard`](/help/developers/api-reference/businesses/discard-an-import) | Discard an import |
+| `GET` | [`/v1/businesses/{biz}/imports/{id}/files/{entity}`](/help/developers/api-reference/businesses/download-a-file-with-its-errors) | Download a file with its errors |
+| `GET` | [`/v1/businesses/{biz}/imports/{id}/rows`](/help/developers/api-reference/businesses/list-the-rows-of-an-import) | List the rows of an import |
+| `POST` | [`/v1/businesses/{biz}/imports/{id}/start`](/help/developers/api-reference/businesses/start-an-import) | Start an import |
+| `POST` | [`/v1/businesses/{biz}/imports/{id}/undo`](/help/developers/api-reference/businesses/undo-an-import) | Undo an import |
+| `GET` | [`/v1/businesses/{biz}/imports/templates/{entity}`](/help/developers/api-reference/businesses/download-an-import-template) | Download an import template |
 | `POST` | [`/v1/businesses/{biz}/sample_data`](/help/developers/api-reference/businesses/seed-sample-data) | Seed sample data |
 | `DELETE` | [`/v1/businesses/{biz}/sample_data`](/help/developers/api-reference/businesses/delete-sample-data) | Delete sample data |
+| `GET` | [`/v1/businesses/{biz}/settings/embedding`](/help/developers/api-reference/businesses/get-the-allowed-websites) | Get the allowed websites |
+| `PUT` | [`/v1/businesses/{biz}/settings/embedding`](/help/developers/api-reference/businesses/set-the-allowed-websites) | Set the allowed websites |
 | `GET` | [`/v1/businesses/{biz}/team_alert_recipients`](/help/developers/api-reference/businesses/list-team-alert-recipients-and-their-confirmatio) | List team alert recipients and their confirmation state |
 | `POST` | [`/v1/businesses/{biz}/team_alert_recipients/resend`](/help/developers/api-reference/businesses/send-the-confirmation-email-to-a-pending-team-al) | Send the confirmation email to a pending team alert recipient again |
 | `DELETE` | [`/v1/businesses/{biz}/test_data`](/help/developers/api-reference/businesses/delete-test-data) | Delete test data |

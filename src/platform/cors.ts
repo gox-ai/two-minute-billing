@@ -8,7 +8,7 @@
  *
  *   DASHBOARD_BASE_URL   the operator dashboard
  *   PORTAL_BASE_URL      the buyer-facing portal / hosted checkout
- *   WEBHOOK_BASE_URL     this API's own public origin
+ *   ADVERTISED_API_URL   this API's own public origin
  *
  * Every other origin — and a request carrying no `Origin` at all — is granted nothing.
  * No credentials are advertised to anybody, ever. See "why no credentials" below.
@@ -121,7 +121,7 @@ function toOrigin(raw: string | undefined, name: string): string | null {
  * so no request can be answered against a different policy than the one an operator
  * could read off the config.
  *
- * `WEBHOOK_BASE_URL` is this API's own origin, and a page served from it would be
+ * `ADVERTISED_API_URL` is this API's own origin, and a page served from it would be
  * same-origin and never send a preflight at all; it is on the list because it is a
  * stated origin of this deployment and because the API is reachable under it through a
  * proxy that may not be the origin the page was loaded from. It grants nothing extra
@@ -130,13 +130,13 @@ function toOrigin(raw: string | undefined, name: string): string | null {
 export function resolveAllowedOrigins(from: {
   DASHBOARD_BASE_URL?: string | undefined;
   PORTAL_BASE_URL?: string | undefined;
-  WEBHOOK_BASE_URL?: string | undefined;
+  ADVERTISED_API_URL?: string | undefined;
 }): ReadonlySet<string> {
   return new Set(
     [
       toOrigin(from.DASHBOARD_BASE_URL, "DASHBOARD_BASE_URL"),
       toOrigin(from.PORTAL_BASE_URL, "PORTAL_BASE_URL"),
-      toOrigin(from.WEBHOOK_BASE_URL, "WEBHOOK_BASE_URL"),
+      toOrigin(from.ADVERTISED_API_URL, "ADVERTISED_API_URL"),
     ].filter((o): o is string => o !== null),
   );
 }

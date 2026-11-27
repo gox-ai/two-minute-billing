@@ -5,6 +5,8 @@
  * The Studio build is the exception. Studio previews an edit by changing the content database
  * in the browser, so there the pages query it directly, drafts and scheduled posts included.
  */
+import type { BlogCollectionItem } from "@nuxt/content";
+
 declare const __TM_STUDIO_BUILD__: boolean;
 export const STUDIO_BUILD = __TM_STUDIO_BUILD__;
 
@@ -24,6 +26,12 @@ const CARD_FIELDS = [
   "cover",
 ] as const;
 
+/** A post's card: the fields the index and "Read next" show. */
+type BlogCard = Pick<BlogCollectionItem, (typeof CARD_FIELDS)[number]>;
+// Typed as string: as a literal, $fetch matches it against every server route and the
+// type check overflows.
+const BLOG_POSTS_API: string = "/api/blog/posts";
+
 /** Every live post's card fields, newest first. */
 export function useBlogPosts() {
   return useAsyncData(
@@ -34,7 +42,7 @@ export function useBlogPosts() {
             .select(...CARD_FIELDS)
             .order("date", "DESC")
             .all()
-        : $fetch("/api/blog/posts"),
+        : $fetch<BlogCard[]>(BLOG_POSTS_API),
     { default: () => [] },
   );
 }

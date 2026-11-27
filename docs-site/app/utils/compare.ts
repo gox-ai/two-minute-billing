@@ -9,7 +9,7 @@
  * Change COMPARE_CHECKED only after re-checking every row. Never say a product lacks
  * something: say which of its pages does not list it.
  */
-import type { FaqItem } from "../composables/useMarketingSeo";
+import type { FaqItem } from "../types/seo";
 import type { SiteLink } from "./site";
 
 /** The day every competitor fact below was last checked against the vendor's own pages. */

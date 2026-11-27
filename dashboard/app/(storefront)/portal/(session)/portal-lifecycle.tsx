@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -112,6 +113,7 @@ export function PortalKeepSubscription({
             );
             if (!res.ok) setError(res.error ?? null);
             else {
+              embedNotify("subscription_changed", { subscription, change: "cancel_withdrawn" });
               toast.success("Subscription kept.");
               router.refresh();
             }
@@ -165,6 +167,7 @@ export function PortalLifecycle({
       setError(res.error ?? null);
       return false;
     }
+    embedNotify("subscription_changed", { subscription, change: action });
     if (action === "pause") toast.success("Subscription paused.");
     else if (action === "resume") toast.success("Subscription resumed.");
     router.refresh();
@@ -347,6 +350,10 @@ function CancelFlowDialog({
     );
     setBusy(false);
     if (!res.ok) return void setError(res.error ?? "We could not apply the offer.");
+    embedNotify("subscription_changed", {
+      subscription,
+      change: offer.offer === "pause" || offer.offer === "discount" ? offer.offer : "plan",
+    });
     if (offer.offer === "pause") toast.success("Subscription paused.");
     else if (offer.offer === "downgrade")
       toast.success(res.starts === "now" ? "Plan changed." : "Plan change scheduled.");
@@ -367,6 +374,7 @@ function CancelFlowDialog({
     );
     setBusy(false);
     if (!res.ok) return void setError(res.error ?? "We could not cancel the subscription.");
+    embedNotify("subscription_changed", { subscription, change: "cancel" });
     toast.success("Subscription cancelled.");
     onDone();
   }

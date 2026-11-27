@@ -15,7 +15,7 @@ export const TMTEST_FORM_POST_PATH = "/v1/tmtest/form_post";
 
 /** This API's public origin; the form is posted there by the buyer's browser. */
 export function formPostAction(): string {
-  const base = (config.WEBHOOK_BASE_URL ?? `http://localhost:${config.PORT}`).replace(/\/+$/, "");
+  const base = (config.ADVERTISED_API_URL ?? `http://localhost:${config.PORT}`).replace(/\/+$/, "");
   return `${base}${TMTEST_FORM_POST_PATH}`;
 }
 

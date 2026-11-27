@@ -95,7 +95,7 @@ async function main() {
   });
 
   // ── 1. Provision the endpoint at Stripe → get a REAL whsec_ ─────────────────
-  // WEBHOOK_BASE_URL must be set for URL construction; the URL itself never has to
+  // ADVERTISED_API_URL must be set for URL construction; the URL itself never has to
   // receive traffic here because we deliver the signed payload ourselves.
   const provisioned = await provisionWebhookEndpoint({
     organizationId: orgId,

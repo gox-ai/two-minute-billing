@@ -32,7 +32,7 @@
  * # terminal 2
  * ngrok http 4000
  * # terminal 3
- * WEBHOOK_BASE_URL=https://<id>.ngrok-free.app pnpm verify:paypal-tunnel
+ * ADVERTISED_API_URL=https://<id>.ngrok-free.app pnpm verify:paypal-tunnel
  * ```
  *
  * Sandbox only. Trivial amounts ($12 charge, $5 refund). The PayPal webhook is
@@ -72,14 +72,16 @@ if (!/sandbox/.test(config.PAYPAL_API_BASE)) {
   console.error(`REFUSING: PAYPAL_API_BASE=${config.PAYPAL_API_BASE} is not the sandbox`);
   process.exit(1);
 }
-if (!config.WEBHOOK_BASE_URL) {
+if (!config.ADVERTISED_API_URL) {
   console.error(
-    "REFUSING: WEBHOOK_BASE_URL must be the public tunnel origin (e.g. https://x.ngrok-free.app)",
+    "REFUSING: ADVERTISED_API_URL must be the public tunnel origin (e.g. https://x.ngrok-free.app)",
   );
   process.exit(1);
 }
-if (/localhost|127\.0\.0\.1|\.invalid/.test(config.WEBHOOK_BASE_URL)) {
-  console.error(`REFUSING: WEBHOOK_BASE_URL=${config.WEBHOOK_BASE_URL} is not publicly reachable`);
+if (/localhost|127\.0\.0\.1|\.invalid/.test(config.ADVERTISED_API_URL)) {
+  console.error(
+    `REFUSING: ADVERTISED_API_URL=${config.ADVERTISED_API_URL} is not publicly reachable`,
+  );
   process.exit(1);
 }
 
@@ -120,7 +122,7 @@ async function raw(
 }
 
 async function main() {
-  console.log(`tunnel origin: ${config.WEBHOOK_BASE_URL}\n`);
+  console.log(`tunnel origin: ${config.ADVERTISED_API_URL}\n`);
 
   // ── 1. tenant + a real paypal gateway account ─────────────────────────────
   console.log("── setup ──");

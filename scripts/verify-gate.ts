@@ -43,7 +43,7 @@ const EXCLUDED: Record<string, string> = {
   "verify:stripe-tunnel": "needs an operator-run tunnel",
   "verify:paypal-tunnel": "needs an operator-run tunnel",
   "verify:razorpay-tunnel": "needs an operator-run tunnel",
-  "verify:webhook-e2e": "needs WEBHOOK_BASE_URL (a publicly reachable URL)",
+  "verify:webhook-e2e": "needs ADVERTISED_API_URL (a publicly reachable URL)",
 };
 
 const LIVE_SUITES = [

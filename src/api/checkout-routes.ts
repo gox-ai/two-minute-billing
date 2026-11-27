@@ -86,6 +86,8 @@ import { resolveBusiness, badRequest, notFound, requirePerm, refusedByRateLimit 
 import { config } from "@/platform/config";
 import { AUTH_WINDOW_MS } from "@/platform/rate-limit";
 import { addressRefinement, requirementIssuesError } from "./address-validation";
+import { gatewayAddressRules } from "@/modules/gateway/address-rules";
+import type { GatewayAddressRules } from "@/modules/checkout/address-field-rules";
 import {
   resolveStorefrontConfig,
   resolveCheckoutRedirect,
@@ -100,7 +102,7 @@ import {
   addressFieldLocksFor,
   addressRequirementIssues,
   billingDetailsMissing,
-  withAddressFieldLocks,
+  buyerFieldConfig,
 } from "@/modules/checkout/address-field-rules";
 import { liveTaxRegimes } from "@/modules/tax/service";
 import { createLogger } from "@/platform/logger";
@@ -173,6 +175,8 @@ export const mintBody = z
     /** Where the hosted page sends the buyer after completing, and on cancel. */
     redirect_url: redirectUrl().optional(),
     cancel_url: redirectUrl().optional(),
+    /** The one website that may show this checkout in a frame. Must be on the business's list. */
+    embed_origin: z.string().min(1).max(300).optional(),
     /** Caller context, returned on retrieve. */
     pass_thru_content: z.string().max(2048).optional(),
     /**
@@ -460,17 +464,17 @@ async function buyerCouponsAllowed(ctx: { organizationId: string; businessId: st
 
 /** This business's EFFECTIVE checkout field matrix: stored (0245) plus the tax locks (0334).
  *  Read per request — a merchant can change the matrix while a checkout is open. */
-async function checkoutFieldConfigFor(ctx: {
-  organizationId: string;
-  businessId: string;
-}): Promise<CheckoutFieldConfig> {
+async function checkoutFieldConfigFor(
+  ctx: { organizationId: string; businessId: string },
+  rules: GatewayAddressRules,
+): Promise<CheckoutFieldConfig> {
   const [biz, regimes] = await Promise.all([
     getBusinessById(ctx.organizationId, ctx.businessId),
     liveTaxRegimes(ctx.organizationId, [ctx.businessId]),
   ]);
-  return withAddressFieldLocks(
+  return buyerFieldConfig(
     resolveCheckoutFieldConfig(biz),
-    addressFieldLocksFor(regimes.get(ctx.businessId) ?? []),
+    addressFieldLocksFor(regimes.get(ctx.businessId) ?? [], rules),
   );
 }
 
@@ -531,6 +535,9 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           redirectUrl: parsed.data.redirect_url,
           cancelUrl: parsed.data.cancel_url,
           passThruContent: parsed.data.pass_thru_content,
+          ...(parsed.data.embed_origin !== undefined
+            ? { embedOrigin: parsed.data.embed_origin }
+            : {}),
           ...(parsed.data.customer || parsed.data.billing_address
             ? {
                 prefill: {
@@ -564,6 +571,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
           ...(parsed.data.redirect_url ? { redirect_url: parsed.data.redirect_url } : {}),
           ...(parsed.data.cancel_url ? { cancel_url: parsed.data.cancel_url } : {}),
           ...(parsed.data.coupons?.length ? { coupons: parsed.data.coupons } : {}),
+          ...(session.embedOrigin ? { embed_origin: session.embedOrigin } : {}),
           // The bearer token is returned exactly once, at mint time.
           token: session.token,
           ...(session.url ? { url: session.url } : {}),
@@ -664,6 +672,7 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
         reactivate_from: iso(r.reactivateFrom),
         redirect_url: r.redirectUrl,
         cancel_url: r.cancelUrl,
+        embed_origin: r.embedOrigin,
         pass_thru_content: r.passThruContent,
         metadata: r.metadata,
         ...(r.prefill
@@ -743,10 +752,11 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
          * rendering instruction for the buyer's page, not a data-acceptance gate — the
          * same convention `storefront_config.collect_po_number` uses below.
          */
-        const fieldConfig = await checkoutFieldConfigFor(ctx);
+        const gatewayRules = await gatewayAddressRules(ctx.organizationId, ctx.businessId);
+        const fieldConfig = await checkoutFieldConfigFor(ctx, gatewayRules);
         // Only an address the caller sent is checked: an early step may set the email alone.
         const missing = parsed.data.address
-          ? addressRequirementIssues(fieldConfig, parsed.data.address)
+          ? addressRequirementIssues(fieldConfig, parsed.data.address, gatewayRules)
           : [];
         if (missing.length > 0) return badRequest(reply, requirementIssuesError(missing));
         if (
@@ -807,16 +817,21 @@ export async function registerCheckoutRoutes(app: FastifyInstance) {
               shippingAddress,
             });
         await markCheckoutDetailsSubmitted(ctx);
-        const billingMissing = billingDetailsMissing(fieldConfig, hasBillingName(customer), {
-          line1: customer.addressLine1,
-          city: customer.city,
-          state: customer.state,
-          state_code: customer.stateCode,
-          postal_code: customer.postalCode,
-          country: customer.country,
-          first_name: customer.billingFirstName,
-          phone: customer.billingPhone ?? customer.phone,
-        });
+        const billingMissing = billingDetailsMissing(
+          fieldConfig,
+          hasBillingName(customer),
+          {
+            line1: customer.addressLine1,
+            city: customer.city,
+            state: customer.state,
+            state_code: customer.stateCode,
+            postal_code: customer.postalCode,
+            country: customer.country,
+            first_name: customer.billingFirstName,
+            phone: customer.billingPhone ?? customer.phone,
+          },
+          gatewayRules,
+        );
         return reply.code(200).send({
           object: "checkout_customer",
           id: customer.publicId,

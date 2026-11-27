@@ -77,6 +77,8 @@ export const portalSessions = pgTable(
     redirectUrl: text("redirect_url"),
     /** Portal path the entry link opens on (0319). Null = `/portal`. */
     forwardUrl: text("forward_url"),
+    // 0551: the one website that may frame this session (`embedding` module). Null = hosted only.
+    embedOrigin: text("embed_origin"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

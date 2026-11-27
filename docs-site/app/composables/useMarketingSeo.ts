@@ -1,4 +1,5 @@
 import type { MaybeRefOrGetter } from "vue";
+import type { FaqItem } from "../types/seo";
 
 /**
  * Head tags for one marketing page: title, description, canonical, Open Graph and Twitter
@@ -11,10 +12,7 @@ import type { MaybeRefOrGetter } from "vue";
  */
 export const SITE_NAME = "Two Minute Billing";
 
-export interface FaqItem {
-  label: string;
-  content: string;
-}
+export type { FaqItem };
 
 export interface Crumb {
   name: string;

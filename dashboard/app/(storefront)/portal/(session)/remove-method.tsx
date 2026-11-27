@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import { mandateRailLabel, mandateRevokeWhere } from "@/lib/mandate-rail";
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -64,6 +65,7 @@ export function RemovePaymentMethod({
     }
     const res = await portalRemoveAction(session, null, data);
     if (!res.ok) return void toast.error(res.message ?? "We could not delete the payment method.");
+    embedNotify("payment_method_changed", { change: "removed" });
     toast.success(res.message ?? "Payment method deleted.");
     // The action revalidates the route; refresh so the list re-renders without it.
     router.refresh();

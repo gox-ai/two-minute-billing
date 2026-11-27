@@ -9,10 +9,10 @@
  * Requires a public tunnel to a running tmbilling API:
  *   1. start the API            → PORT=4444 pnpm tsx src/index.ts
  *   2. expose it                → ngrok http 4444
- *   3. run this with the URL    → WEBHOOK_BASE_URL=https://<id>.ngrok-free.app \
+ *   3. run this with the URL    → ADVERTISED_API_URL=https://<id>.ngrok-free.app \
  *                                 pnpm verify:stripe-tunnel
  *
- * Flow: provision a real Stripe webhook endpoint at WEBHOOK_BASE_URL (tmbilling
+ * Flow: provision a real Stripe webhook endpoint at ADVERTISED_API_URL (tmbilling
  * mints + stores the whsec_ itself) → real card charge → real refund → then POLL
  * `provider_events` until Stripe delivers `charge.refunded` on its own. Cleans up
  * the Stripe endpoint at the end.
@@ -65,9 +65,9 @@ async function main() {
     await closeDb();
     return;
   }
-  const baseUrl = config.WEBHOOK_BASE_URL;
+  const baseUrl = config.ADVERTISED_API_URL;
   if (!baseUrl || !baseUrl.startsWith("https://")) {
-    log("⊘ SKIP — set WEBHOOK_BASE_URL to your public https tunnel origin first");
+    log("⊘ SKIP — set ADVERTISED_API_URL to your public https tunnel origin first");
     await closeDb();
     return;
   }

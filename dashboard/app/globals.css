@@ -726,6 +726,19 @@ body[data-scroll-locked] > :not([data-aria-hidden]) {
 }
 
 /*
+  Embedded (a business's website frames the checkout): the frame is the room, so the page drops
+  the hosted page's outer space. `min-height: auto` lets an inline frame shrink to its content.
+*/
+main:has([data-embed-root]) {
+  min-height: auto;
+  padding: 12px 12px 16px;
+}
+/* An overlay: the loader's close button sits in the top-right corner; nothing goes under it. */
+main:has([data-embed-mode="overlay"]) {
+  padding-top: 52px;
+}
+
+/*
   ── CHECKOUT: the order beside the form, not above it ───────────────────────────────
 
   Checkout is a WIZARD, so it never had the portal's problem of whole sections going

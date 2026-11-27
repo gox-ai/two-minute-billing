@@ -380,9 +380,13 @@ export default async function GatewayDetailPage({
                     This deployment has no public API URL configured, so we cannot show the
                     Notification URL. Set{" "}
                     <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
-                      TMBILLING_PUBLIC_API_URL
+                      ADVERTISED_API_URL
                     </code>{" "}
-                    on the dashboard to the origin where this API is reachable.
+                    in the root{" "}
+                    <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
+                      .env
+                    </code>{" "}
+                    to the origin where this API is reachable.
                   </Alert>
                 )}
                 <ol className="m-0 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">

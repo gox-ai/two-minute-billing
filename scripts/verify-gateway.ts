@@ -1245,13 +1245,13 @@ ok("C1: get after delete → 404", gone.status === 404);
   }) as typeof fetch;
   const registrations = () => stubCalls.filter((c) => c.method !== "GET");
   const mutableConfig = config as {
-    WEBHOOK_BASE_URL?: string;
+    ADVERTISED_API_URL?: string;
     GATEWAY_WEBHOOK_BASE_URL?: string;
   };
-  const savedBase = mutableConfig.WEBHOOK_BASE_URL;
+  const savedBase = mutableConfig.ADVERTISED_API_URL;
   const savedGatewayBase = mutableConfig.GATEWAY_WEBHOOK_BASE_URL;
   mutableConfig.GATEWAY_WEBHOOK_BASE_URL = undefined;
-  mutableConfig.WEBHOOK_BASE_URL = "https://hooks.example.com";
+  mutableConfig.ADVERTISED_API_URL = "https://hooks.example.com";
   const storedCreds = async (gwa: string) =>
     decryptCredentials((await getGatewayAccount(orgId, wBiz.id, gwa))!.credentialsEnc);
 
@@ -1536,20 +1536,9 @@ ok("C1: get after delete → 404", gone.status === 404);
       JSON.stringify(delRefused.json),
     );
 
-    // Move to GATEWAY_WEBHOOK_BASE_URL. Accounts registered before it existed store no URL.
-    const legacyAccount = async (label: string) => {
-      const id = String((await createRzp(label)).json.id);
-      await updateGatewayAccount({
-        organizationId: orgId,
-        businessId: wBiz.id,
-        gwaPublicId: id,
-        credentials: { ...(await storedCreds(id)), webhook_url: null } as unknown as Record<
-          string,
-          string
-        >,
-      });
-      return id;
-    };
+    // Move to GATEWAY_WEBHOOK_BASE_URL. Accounts registered before it keep their stored URL
+    // (on the public API base) until a re-check moves them.
+    const legacyAccount = async (label: string) => String((await createRzp(label)).json.id);
     const moveId = await legacyAccount("move");
     const refusedMoveId = await legacyAccount("moverefused");
     const oldUrl = (await endpointOf(moveId)).notification_url;
@@ -1607,22 +1596,22 @@ ok("C1: get after delete → 404", gone.status === 404);
       "WH: a refused move keeps the old registration as it was",
       /^We could not move the webhook to the new URL\./.test(moveError) &&
         afterRefusedMove.webhook_endpoint_id === beforeRefused.webhook_endpoint_id &&
-        afterRefusedMove.webhook_url === undefined &&
+        afterRefusedMove.webhook_url === beforeRefused.webhook_url &&
         (await endpointOf(refusedMoveId)).notification_url.startsWith("https://hooks.example.com/"),
       moveError || "no error",
     );
     mutableConfig.GATEWAY_WEBHOOK_BASE_URL = undefined;
 
     stubCalls.length = 0;
-    mutableConfig.WEBHOOK_BASE_URL = undefined;
+    mutableConfig.ADVERTISED_API_URL = undefined;
     const createNoBase = await createRzp("nobase");
     ok(
-      "WH: no WEBHOOK_BASE_URL → create makes no gateway call",
+      "WH: no ADVERTISED_API_URL → create makes no gateway call",
       createNoBase.status === 201 && stubCalls.length === 0,
     );
   } finally {
     globalThis.fetch = realFetch;
-    mutableConfig.WEBHOOK_BASE_URL = savedBase;
+    mutableConfig.ADVERTISED_API_URL = savedBase;
     mutableConfig.GATEWAY_WEBHOOK_BASE_URL = savedGatewayBase;
   }
 }
@@ -1780,6 +1769,10 @@ ok("C1: get after delete → 404", gone.status === 404);
 // the portal and hosted checkout actually take) used to carry a hand-copied subset
 // that left this check out, so it only ever ran on the path nobody takes.
 {
+  // The guard first needs a webhook base at all; this block tests what comes after it.
+  const asyncCfg = config as { ADVERTISED_API_URL?: string };
+  const savedAsyncBase = asyncCfg.ADVERTISED_API_URL;
+  asyncCfg.ADVERTISED_API_URL ??= "https://hooks.example.com";
   const orgId = org.organization.id;
   const aBiz = await createBusiness({
     organizationId: orgId,
@@ -1927,7 +1920,7 @@ ok("C1: get after delete → 404", gone.status === 404);
   );
 
   // ⚠️ LIVE MODE ONLY. Every verify suite and the whole local loop registers mandates
-  // against a placeholder WEBHOOK_BASE_URL and settles by calling the inbound path
+  // against a placeholder ADVERTISED_API_URL and settles by calling the inbound path
   // directly; enforcing this in test would break the suites that prove the rail works.
   const tBiz = await createBusiness({
     organizationId: orgId,
@@ -1981,6 +1974,7 @@ ok("C1: get after delete → 404", gone.status === 404);
       webhook_secret: "restored-for-teardown",
     },
   });
+  asyncCfg.ADVERTISED_API_URL = savedAsyncBase;
 }
 
 // A gateway that wants a person's name refuses the email fallback (Cashfree mandate

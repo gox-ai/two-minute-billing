@@ -655,6 +655,7 @@ export function TransactionsTable({
       ]}
       searchPlaceholder="Search by ID, customer, gateway or invoice"
       exportName="transactions"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=payments`}
       persistKey={`transactions:${biz}`}
       // Off by default so the table fits its card at 1440px; all stay in the chooser. Type is
       // also in the title ("Payment of $29.00").

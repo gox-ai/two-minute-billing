@@ -299,7 +299,13 @@ export default async function BusinessSettingsHub({
           />
           <SettingsLinkRow
             title="Import and export data"
-            description="Import or export your data, and manage sample records."
+            description="Import plans, customers, saved cards and subscriptions from CSV files, and export them to CSV files."
+            href={`/businesses/${biz}/imports`}
+            external
+          />
+          <SettingsLinkRow
+            title="Transfer and sample data"
+            description="Copy the set-up of this business to another business, and manage sample records."
             href={`/businesses/${biz}/transfer`}
             external
           />

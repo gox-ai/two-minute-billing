@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { EMBED_HEADER } from "@/lib/storefront-embed";
 import { redirect } from "next/navigation";
 import { addMethodOutcome, outcomeIsEmpty, type AddMethodOutcome } from "./portal-state";
 import {
@@ -182,10 +184,13 @@ export async function portalBeginSetupAction(
   const token = await portalAuthFor(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const base = `${origin}${PORTAL_PATH}?s=${encodeURIComponent(session)}`;
+  // Embedded: the provider's tab is outside the frame and holds no session, so it lands on a
+  // page that says to return; the frame finishes from its own stash.
+  const embedded = (await headers()).get(EMBED_HEADER) === "1";
   const res = await portalBeginSetup(
     token,
-    `${base}&setup=return`,
-    `${base}&setup=cancel`,
+    embedded ? `${origin}/portal/approved` : `${base}&setup=return`,
+    embedded ? `${origin}/portal/approved?state=cancel` : `${base}&setup=cancel`,
     gatewayAccount,
     methodType,
   );
@@ -276,8 +281,13 @@ export async function portalPayInvoiceAction(
         }
       : {}),
     ...(methodType && !paymentIntent && !paymentMethod ? { method_type: methodType } : {}),
-    return_url: `${base}&pay=return`,
-    cancel_url: `${base}&pay=cancel`,
+    ...((await headers()).get(EMBED_HEADER) === "1"
+      ? {
+          // Embedded: see `portalBeginSetupAction`.
+          return_url: `${origin}/portal/approved?for=payment`,
+          cancel_url: `${origin}/portal/approved?state=cancel&for=payment`,
+        }
+      : { return_url: `${base}&pay=return`, cancel_url: `${base}&pay=cancel` }),
   });
   if (!res.ok || !res.data)
     return { ok: false, error: res.error ?? "We could not take the payment." };

@@ -37,6 +37,10 @@ with [Getting started](/help/getting-started).
   from, which emails go out, their wording, and your brand on invoices.
 - [Connect your other tools](/help/guides/connect-integrations): sync HubSpot both ways, and send
   sales and refunds to FirstPromoter for your affiliate program.
+- [Import your data](/help/guides/import-your-data): bring plans, customers with their saved
+  cards, and subscriptions over from CSV files; check every row first, and undo if you need to.
+- [Export your data](/help/guides/export-your-data): every record type as CSV files in one zip,
+  filtered and previewed, ready to import into another business.
 
 ## Usage and AI billing
 

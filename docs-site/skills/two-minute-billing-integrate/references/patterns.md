@@ -75,6 +75,57 @@ app.post("/billing/manage", requireUser, async (req, res) => {
   `subscription`. With no buyer present, change the subscription through the API directly.
 - `/billing/done` shows "processing" until the webhook arrives; it must not grant access itself.
 
+### Popup or inline (embed.js)
+
+The website must be on the business's allowed list first (`tmb.businesses.embedding.setOrigins`).
+
+```ts
+// POST /billing/subscribe-embedded   → JSON, the page opens it
+app.post("/billing/subscribe-embedded", requireUser, async (req, res) => {
+  const session = await tmb.checkoutSessions.create(BIZ, {
+    items: [{ price: req.body.price ?? "pro-monthly-usd", quantity: 1 }], // validate, as above
+    customer: { email: req.user.email },
+    metadata: { app_account_id: req.user.account.id },
+    embed_origin: process.env.APP_ORIGIN!, // e.g. https://app.example.com, on the allowed list
+  });
+  res.json({ url: session.url });
+});
+
+// POST /billing/manage-embedded
+app.post("/billing/manage-embedded", requireUser, async (req, res) => {
+  const cus = req.user.account.tmbilling_customer_id;
+  if (!cus) return res.status(409).json({ error: "no_billing_account" });
+  const portal = await tmb.paymentMethods.createPortalSession(BIZ, cus, {
+    embed_origin: process.env.APP_ORIGIN!,
+  });
+  res.json({ url: portal.url });
+});
+
+// GET /billing/embed-script → { script_url, script_integrity } for the <script> tag (cache it)
+app.get("/billing/embed-script", async (_req, res) => {
+  const { script_url, script_integrity } = await tmb.businesses.embedding.get(BIZ);
+  res.json({ script_url, script_integrity });
+});
+```
+
+```html
+<script src="{script_url}" integrity="{script_integrity}" crossorigin="anonymous"></script>
+<script>
+  async function upgrade(price) {
+    const { url } = await fetch("/billing/subscribe-embedded", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ price }),
+    }).then((r) => r.json());
+    const checkout = TMB.checkout.open({ url }); // or TMB.checkout.mount("#checkout", { url })
+    checkout.on("success", () => location.reload()); // access comes from the webhook
+  }
+</script>
+```
+
+- Events carry ids only; refresh from your server, which trusts the webhook.
+- `success` with `paid: false`: the provider still holds the payment. Keep "processing".
+
 ## Webhooks
 
 ### Verify (Node)

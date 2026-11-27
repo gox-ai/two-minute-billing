@@ -242,6 +242,7 @@ export function CouponsTable({
       topBarExtras={topBarExtras}
       searchPlaceholder="Search by ID or name"
       exportName="coupons"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=coupons`}
       persistKey={`coupons:${biz}`}
       rowHref={(c) => `/businesses/${biz}/catalog/coupons/${c.id}`}
       rowMenu={(c) => <CouponRowMenu biz={biz} id={c.id} label={c.id} active={c.active} />}

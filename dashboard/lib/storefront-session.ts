@@ -56,7 +56,8 @@
  * decision (a buyer returning to an abandoned checkout is ordinary and worth money),
  * not just a schema change — see `enterCheckout` in `lib/checkout-entry.ts`.
  */
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { EMBED_COOKIE, EMBED_HEADER } from "@/lib/storefront-embed";
 
 /** Portal and checkout hold SEPARATE cookies on separate paths. */
 export const PORTAL_COOKIE = "tmb_portal";
@@ -98,14 +99,34 @@ const SESSION_TTL_SECONDS = 72 * 3600;
  * `Path` scopes each surface to its own tree, so a checkout page never receives the
  * portal's credential and neither reaches the operator dashboard's routes.
  */
-function cookieAttrs(surface: StorefrontSurface) {
+async function cookieAttrs(surface: StorefrontSurface) {
+  const base = { httpOnly: true, path: SURFACES[surface].path, maxAge: SESSION_TTL_SECONDS };
+  // Embedded (see `storefront-embed.ts`): a cross-site frame never receives a Lax cookie, so
+  // the session cookies go in the frame's own partition instead. Hosted pages are unchanged.
+  if (await isEmbedded())
+    return { ...base, secure: true, sameSite: "none" as const, partitioned: true };
   return {
-    httpOnly: true,
+    ...base,
     secure: process.env.ALLOW_INSECURE_COOKIES !== "TRUE",
     sameSite: "lax" as const,
-    path: SURFACES[surface].path,
-    maxAge: SESSION_TTL_SECONDS,
   };
+}
+
+async function isEmbedded() {
+  return (await headers()).get(EMBED_HEADER) === "1";
+}
+
+/** Mark this partition as an embed, so the frame's server actions write the same cookies. */
+async function markEmbedded(jar: Awaited<ReturnType<typeof cookies>>) {
+  if (!(await isEmbedded()) || jar.get(EMBED_COOKIE)) return;
+  jar.set(EMBED_COOKIE, "1", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    partitioned: true,
+    path: "/",
+    maxAge: SESSION_TTL_SECONDS,
+  });
 }
 
 /**
@@ -119,7 +140,8 @@ function cookieAttrs(surface: StorefrontSurface) {
  */
 export async function setStorefrontToken(surface: StorefrontSurface, token: string): Promise<void> {
   const jar = await cookies();
-  jar.set(SURFACES[surface].cookie, token, cookieAttrs(surface));
+  jar.set(SURFACES[surface].cookie, token, await cookieAttrs(surface));
+  await markEmbedded(jar);
 }
 
 /**
@@ -173,14 +195,15 @@ export async function bindSessionToken(
   if (!SESSION_ID[surface].test(session)) return;
   const jar = await cookies();
   if (jar.get(boundCookie(surface, session))?.value === token) return;
-  jar.set(boundCookie(surface, session), token, cookieAttrs(surface));
+  jar.set(boundCookie(surface, session), token, await cookieAttrs(surface));
+  await markEmbedded(jar);
 }
 
 /** Drop one session's binding (sign-out). */
 export async function clearSessionToken(surface: StorefrontSurface, session: string) {
   if (!SESSION_ID[surface].test(session)) return;
   const jar = await cookies();
-  jar.set(boundCookie(surface, session), "", { ...cookieAttrs(surface), maxAge: 0 });
+  jar.set(boundCookie(surface, session), "", { ...(await cookieAttrs(surface)), maxAge: 0 });
 }
 
 export const readCheckoutToken = (session: string | null | undefined) =>
@@ -191,7 +214,7 @@ export const bindCheckoutToken = (session: string, token: string) =>
 /** Drop the cookie — used when the server has told us the session is no longer valid. */
 export async function clearStorefrontToken(surface: StorefrontSurface): Promise<void> {
   const jar = await cookies();
-  jar.set(SURFACES[surface].cookie, "", { ...cookieAttrs(surface), maxAge: 0 });
+  jar.set(SURFACES[surface].cookie, "", { ...(await cookieAttrs(surface)), maxAge: 0 });
 }
 
 /**
@@ -205,7 +228,7 @@ const PORTAL_BUSINESS_TTL_SECONDS = 400 * 24 * 3600;
 export async function rememberPortalBusiness(businessId: string): Promise<void> {
   const jar = await cookies();
   jar.set(PORTAL_BUSINESS_COOKIE, businessId, {
-    ...cookieAttrs("portal"),
+    ...(await cookieAttrs("portal")),
     maxAge: PORTAL_BUSINESS_TTL_SECONDS,
   });
 }

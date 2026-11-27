@@ -1,5 +1,6 @@
 "use client";
 
+import { useEmbed } from "@/components/embed-bridge";
 import * as React from "react";
 import { paymentMethodTypeLabel } from "@/lib/filter-options";
 import { toast } from "sonner";
@@ -848,6 +849,7 @@ function usePaymentChallenge({
   /** For a caller outside `ConsentContext` (the flow's own return leg). */
   consent?: ConsentState;
 }) {
+  const embedded = useEmbed().origin != null;
   const poFromContext = React.useContext(PoNumberContext);
   const po = poOverride ?? poFromContext;
   const consentFromContext = React.useContext(ConsentContext);
@@ -932,7 +934,9 @@ function usePaymentChallenge({
       const botCheckToken = turnstileToken();
       if (botCheckToken) completion = { ...completion, botCheckToken };
     }
-    const canReturn = canResumeAcrossRedirect();
+    // Embedded: a provider page never loads in the frame (it refuses to be framed), so no
+    // return_url; the redirect arm then opens it in a new tab with the Continue panel.
+    const canReturn = !embedded && canResumeAcrossRedirect();
     const res = await checkoutCompleteAction(
       scope,
       completion,
@@ -1363,6 +1367,9 @@ function usePaymentChallenge({
  * proration preview, and confirms. A card is only requested when none is on file.
  */
 export function CheckoutFlow({ view, countries }: { view: CheckoutView; countries: Country[] }) {
+  const embed = useEmbed();
+  const embedPost = embed.post;
+  const embedOrigin = embed.origin;
   const router = useRouter();
   const isChange = view.mode === "change";
   /** A one-time purchase: a paid invoice, no subscription. */
@@ -1379,6 +1386,9 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   const [step, setStep] = React.useState<"details" | "confirm" | "card" | "pay" | "done">(
     isChange ? "confirm" : "details",
   );
+  React.useEffect(() => {
+    embedPost("step", { step: step === "card" || step === "pay" ? "payment" : step });
+  }, [embedPost, step]);
   /** One page: details and payment together (Hosted pages → layout). Plan changes keep their review step. */
   const onePage = view.layout === "one_page" && !isChange;
   const [detailsSavedHere, setDetailsSaved] = React.useState(false);
@@ -1436,6 +1446,12 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   /** The completion itself came back paid — the only outcome that auto-redirects. */
   const [cleanCompletion, setCleanCompletion] = React.useState(false);
   const done = (outcome: CompletionOutcome) => {
+    // The page that framed us grants access from its webhook; this only tells it we are done.
+    embed.post("success", {
+      session: view.id,
+      subscription: outcome.subscriptionId || null,
+      paid: !outcome.unpaidInvoice && !outcome.paymentError,
+    });
     setSubscriptionId(outcome.subscriptionId || null);
     setUnpaid(outcome.unpaidInvoice ?? null);
     setPaymentError(outcome.paymentError ?? null);
@@ -1444,10 +1460,11 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
   };
   // Let the success card register before leaving; its "Continue" link is the fallback.
   React.useEffect(() => {
-    if (step !== "done" || !cleanCompletion || !successUrl) return;
+    // Embedded: the frame never leaves; the loader closes it after `success`.
+    if (step !== "done" || !cleanCompletion || !successUrl || embedOrigin) return;
     const timer = setTimeout(() => window.location.assign(successUrl), 1500);
     return () => clearTimeout(timer);
-  }, [step, cleanCompletion, successUrl]);
+  }, [step, cleanCompletion, successUrl, embedOrigin]);
   /**
    * What the buyer typed on the details step, forwarded to the gateway's own sheet.
    *
@@ -1511,6 +1528,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
           clearInterval(timer);
           if (res.invoice.state === "paid") {
             setUnpaid(null);
+            // Embedded: the page heard `success` with `paid: false`; now the money is confirmed.
+            embedPost("success", { session: view.id, paid: true });
             return void toast.success("Payment received.");
           }
           setUnpaid({
@@ -1534,7 +1553,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
     };
     // `unpaid.id`/`state`, not `unpaid`: re-running on a new object identity would
     // restart the poll on every render that reseats the same invoice.
-  }, [step, unpaid?.id, unpaid?.state]);
+  }, [step, unpaid?.id, unpaid?.state, embedPost, view.id]);
 
   // Two different redirects come back to this page and both are finished here:
   //   `?setup=return` — a redirect-mode vault SETUP (a PayPal wallet approval), which
@@ -1923,7 +1942,8 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                             : "Subscribe."
                 }
                 aside={
-                  cancelUrl && step !== "done" && !sessionEnded ? (
+                  // Embedded: the loader draws the close button, in every state.
+                  cancelUrl && step !== "done" && !sessionEnded && !embed.origin ? (
                     <a
                       data-document-link
                       href={cancelUrl}
@@ -2218,11 +2238,14 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                         onSessionEnded={() => setSessionEnded(true)}
                         countries={countries}
                         fieldConfig={view.field_config ?? {}}
+                        streetRequiredOutside={view.street_required_outside ?? null}
                       />
                       {!detailsSaved ? (
                         <StorefrontSection title="Payment">
                           <p className="text-sm text-muted-foreground">
-                            Enter your email and billing address to see the payment methods.
+                            {asksAddress(view.field_config)
+                              ? "Enter your email and billing address to see the payment methods."
+                              : "Enter your email to see the payment methods."}
                           </p>
                         </StorefrontSection>
                       ) : purchase && purchasePayStep === "pay" && step !== "card" ? (
@@ -2301,6 +2324,7 @@ export function CheckoutFlow({ view, countries }: { view: CheckoutView; countrie
                       onSessionEnded={() => setSessionEnded(true)}
                       countries={countries}
                       fieldConfig={view.field_config ?? {}}
+                      streetRequiredOutside={view.street_required_outside ?? null}
                     />
                   ) : step === "pay" && purchase ? (
                     <div key="step-pay" className="sf-step flex flex-col gap-4">
@@ -2752,6 +2776,14 @@ function OrderCard({
  * the payments after it. Every figure is the engine's; a figure it cannot state yet (no
  * address, so no tax) is left out with a line that says why.
  */
+/** Does the details step ask for an address? A hidden country hides postal code, city and region. */
+function asksAddress(cfg: CheckoutView["field_config"]): boolean {
+  if ((cfg?.["billing.country"] ?? "mandatory") !== "hide") return true;
+  return (["billing.line1", "billing.line2", "billing.line3"] as const).some(
+    (k) => (cfg?.[k] ?? "show") !== "hide",
+  );
+}
+
 function CreateTotals({ view }: { view: CheckoutView }) {
   const tz = view.business.timezone;
   const due = view.dueToday;
@@ -2800,9 +2832,11 @@ function CreateTotals({ view }: { view: CheckoutView }) {
   }
   const noAddress = (
     <p className="text-xs text-muted-foreground">
-      {view.coupons.length > 0
-        ? "We show your discount and the tax when you enter your billing address."
-        : "We show the tax when you enter your billing address."}
+      {!asksAddress(view.field_config)
+        ? "We show the total when you enter your email."
+        : view.coupons.length > 0
+          ? "We show your discount and the tax when you enter your billing address."
+          : "We show the tax when you enter your billing address."}
     </p>
   );
   if (due?.trial) {
@@ -3996,6 +4030,7 @@ function DetailsStep({
   countries,
   customer,
   fieldConfig,
+  streetRequiredOutside,
 }: {
   /**
    * Reports what the buyer typed, so the gateway's own sheet can be prefilled with it
@@ -4037,13 +4072,24 @@ function DetailsStep({
    * Null before the session has a customer — a create-mode buyer on their first pass.
    */
   customer?: CheckoutCustomerDetails | null;
-  /** The business's field matrix. Fields listed in lib/checkout-field-rules.ts ignore Hidden. */
+  /** The business's field matrix. A hidden first name means no name is asked. */
   fieldConfig: NonNullable<CheckoutView["field_config"]>;
+  /** A buyer outside this country must give address line 1 (the payment gateway's rule). */
+  streetRequiredOutside?: string | null;
 }) {
   const session = useCheckoutSession();
-  const state = (k: string) => fieldConfig[k];
-  // First name is not here: `requireContactName` always asks for it (checkout-field-rules).
+  /** The country selected in the address, for the tax ID's help and the street rule. */
+  const [country, setCountry] = useDefaultState<string>(customer?.address?.country ?? "");
+  const streetNeeded = Boolean(
+    streetRequiredOutside && country && country.toUpperCase() !== streetRequiredOutside,
+  );
+  const state = (k: string) =>
+    k === "billing.line1" && streetNeeded ? ("mandatory" as const) : fieldConfig[k];
+  // First name: asked and required unless hidden (an email-only checkout). There is no
+  // optional name here, so only Hidden reaches `AddressFields`.
+  const nameHidden = state("customer.first_name") === "hide";
   const fieldStates = {
+    ...(nameHidden ? { first_name: "hide" as const } : {}),
     last_name: state("customer.last_name"),
     company: state("customer.company"),
     phone: state("customer.phone"),
@@ -4083,8 +4129,6 @@ function DetailsStep({
   const savedOnce = customer != null || savedHere;
   /** The fields to correct, named; null until a save is tried on an invalid form. */
   const [problems, setProblems] = React.useState<string[] | null>(null);
-  /** The country selected in the address, for the tax ID's help. */
-  const [country, setCountry] = useDefaultState<string>(customer?.address?.country ?? "");
   const readCountry = () => {
     const v = formRef.current?.querySelector<HTMLInputElement>('input[name="country"]')?.value;
     if (v !== undefined && v !== country) setCountry(v);
@@ -4112,7 +4156,11 @@ function DetailsStep({
         errors.email = "Enter a valid email address, for example name@example.com.";
       if (errors.email) list.push(errors.email);
     }
-    if (!String(fd.get("first_name") ?? "").trim() && !String(fd.get("company") ?? "").trim())
+    if (
+      !nameHidden &&
+      !String(fd.get("first_name") ?? "").trim() &&
+      !String(fd.get("company") ?? "").trim()
+    )
       list.push("Enter the name to show on your invoices.");
     const countryValue = String(fd.get("country") ?? "").trim();
     if (!countryValue && state("billing.country") === "mandatory")
@@ -4321,7 +4369,13 @@ function DetailsStep({
   return (
     <StorefrontSection
       title="Your details"
-      description="Card networks require a billing name and address."
+      description={
+        !asksAddress(fieldConfig)
+          ? undefined
+          : nameHidden
+            ? "Card networks require a billing address."
+            : "Card networks require a billing name and address."
+      }
     >
       <form
         ref={formRef}
@@ -4355,7 +4409,7 @@ function DetailsStep({
         <AddressFields
           countries={countries}
           value={customer?.address ?? null}
-          requireContactName
+          requireContactName={!nameHidden}
           contactHeading="Your name (printed on your invoices)"
           fieldStates={billingStates}
         />
@@ -4545,6 +4599,7 @@ function CardStep({
   /** Raised when the engine says the session is gone — terminal, so the parent takes over. */
   onSessionEnded: () => void;
 }) {
+  const embedded = useEmbed().origin != null;
   const [setup, setSetup] = React.useState<CheckoutVaultSetup | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -4602,6 +4657,10 @@ function CardStep({
     intent?: string;
     token: string;
     url: string;
+    /** A bank e-mandate (RazorPay). Otherwise a provider's approval page opened from an embed. */
+    bank: boolean;
+    /** The provider's name for the buyer, when we know it (PayPal). */
+    provider: string | null;
   } | null>(null);
 
   React.useEffect(() => {
@@ -4879,7 +4938,9 @@ function CardStep({
      * popup blocker judges by the user gesture, and the gesture is gone by the time the
      * server action resolves. Blank now, pointed at the approval URL below.
      */
-    const strandedRail = isRazorpay && activeMethodType === "bank_transfer";
+    // Embedded: every provider redirect goes to a new tab, as RazorPay's bank rail does.
+    const bankRail = isRazorpay && activeMethodType === "bank_transfer";
+    const strandedRail = bankRail || embedded;
     const authTab = strandedRail ? window.open("", "_blank") : null;
     challenge.showRefusal(null);
     setStarting(true);
@@ -4912,6 +4973,8 @@ function CardStep({
      */
     if (strandedRail && res.setup.mode === "redirect" && res.setup.approval_url) {
       setAwaitingMandate({
+        bank: bankRail,
+        provider: res.setup.provider === "paypal" ? "PayPal" : null,
         token: res.setup.setup_token,
         url: res.setup.approval_url,
         ...(res.setup.payment_intent ? { intent: res.setup.payment_intent } : {}),
@@ -5015,17 +5078,32 @@ function CardStep({
     return (
       <StorefrontSection title="Payment">
         <div className="flex flex-col gap-3">
-          <Alert tone="info" title="Authorize the auto-debit with your bank">
-            <p>
-              Your bank&apos;s authorization page opens in a new tab. Approve it there. Then return
-              to this tab and continue. Your bank does not return you to this page automatically.
-            </p>
-            <p className="mt-2">
-              Some banks confirm a netbanking e-mandate on the next working day. If you cannot
-              continue yet, your authorization stays valid. We receive it when your bank confirms
-              it.
-            </p>
-          </Alert>
+          {awaitingMandate.bank ? (
+            <Alert tone="info" title="Authorize the auto-debit with your bank">
+              <p>
+                Your bank&apos;s authorization page opens in a new tab. Approve it there. Then
+                return to this tab and continue. Your bank does not return you to this page
+                automatically.
+              </p>
+              <p className="mt-2">
+                Some banks confirm a netbanking e-mandate on the next working day. If you cannot
+                continue yet, your authorization stays valid. We receive it when your bank confirms
+                it.
+              </p>
+            </Alert>
+          ) : (
+            // Embedded: the provider's page never loads inside the frame, so it gets a tab.
+            <Alert
+              tone="info"
+              title={`Approve with ${awaitingMandate.provider ?? "your provider"} in the new tab`}
+            >
+              <p>
+                {awaitingMandate.provider ?? "Your provider"} opens in a new tab. Approve the
+                payment method there. Then return to this page and select Continue after approval.
+              </p>
+              <p className="mt-2">We did not charge you yet.</p>
+            </Alert>
+          )}
           {/* An anchor, not a scripted redirect. This tab must survive — it holds the setup
               intent the checkout completes through — and a buyer-initiated `target=_blank`
               is the one way to open a page that no popup blocker can veto. */}
@@ -5035,11 +5113,17 @@ function CardStep({
             rel="noopener noreferrer"
             className="self-start text-sm font-medium text-primary hover:underline"
           >
-            Open your bank&apos;s authorization page
+            {awaitingMandate.bank
+              ? "Open your bank's authorization page"
+              : `Open ${awaitingMandate.provider ?? "the approval page"} again`}
           </a>
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={finishMandate} disabled={saving || challenge.busy}>
-              {saving || challenge.busy ? "Checking…" : "Continue after authorization"}
+              {saving || challenge.busy
+                ? "Checking…"
+                : awaitingMandate.bank
+                  ? "Continue after authorization"
+                  : "Continue after approval"}
             </Button>
             <Button
               variant="outline"

@@ -266,6 +266,9 @@ export const EVENT_TYPES = [
   "credit_auto_topup_skipped",
   "credit_auto_topup_threshold_low",
   "usage_threshold_reached",
+  // a bulk export of a business ended (0552): its files are ready, or it failed
+  "export_completed",
+  "export_failed",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -324,6 +327,7 @@ const RESOURCE_TYPES = [
   "usage_alert",
   "credit_auto_topup",
   "usage_threshold",
+  "export",
 ].sort((a, b) => b.length - a.length);
 
 /**
@@ -405,6 +409,7 @@ const SAMPLE_IDS: Record<string, string> = {
   usage_alert: "ualt_sample000000000000000",
   credit_auto_topup: "atu_sample0000000000000000",
   usage_threshold: "sub_sample0000000000000000",
+  export: "01960000-0000-7000-8000-000000000001",
 };
 
 /** A representative sample id for an event type's resource (test-send fixtures). */

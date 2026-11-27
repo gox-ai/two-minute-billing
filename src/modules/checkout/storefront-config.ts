@@ -80,6 +80,12 @@ export interface StorefrontConfig {
    */
   collectPoNumber: boolean;
   /**
+   * Default FALSE. On an India Stripe account, a buyer outside India who leaves address line 1
+   * empty is sent to Stripe with their city and state as line 1 (Stripe refuses a foreign card
+   * without a street line). The business turns it on knowingly: it is the export record.
+   */
+  fillExportStreet: boolean;
+  /**
    * Default null. Fallback `return_url` for `POST /checkout/v1/setup`, which otherwise
    * requires one on every call. An explicit `return_url` on the call always wins over this
    * default — it only fills the gap when the caller sends none.
@@ -269,6 +275,7 @@ export interface StorefrontConfig {
 export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
   hideZeroValueLines: false,
   collectPoNumber: false,
+  fillExportStreet: false,
   defaultReturnUrl: null,
   defaultCancelUrl: null,
   allowInvoiceDownload: true,
@@ -367,6 +374,7 @@ export function initialStorefrontConfig(creator: {
 interface StoredStorefrontConfig {
   hide_zero_value_lines?: unknown;
   collect_po_number?: unknown;
+  fill_export_street?: unknown;
   default_return_url?: unknown;
   default_cancel_url?: unknown;
   allow_invoice_download?: unknown;
@@ -483,6 +491,7 @@ export function resolveStorefrontConfig(
       DEFAULT_STOREFRONT_CONFIG.hideZeroValueLines,
     ),
     collectPoNumber: flag(raw?.collect_po_number, DEFAULT_STOREFRONT_CONFIG.collectPoNumber),
+    fillExportStreet: flag(raw?.fill_export_street, DEFAULT_STOREFRONT_CONFIG.fillExportStreet),
     defaultReturnUrl: sanitizeUrl(raw?.default_return_url),
     defaultCancelUrl: sanitizeUrl(raw?.default_cancel_url),
     // `flag` checks the literal type, so only an explicit `false` withdraws a permission —

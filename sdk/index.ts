@@ -264,6 +264,32 @@ export interface CheckoutSessionCreate {
   /** mode `create`: defaults for the buyer's details step. */
   customer?: { email?: string; tax_registration_number?: string };
   billing_address?: CustomerAddressWrite;
+  /**
+   * The website that may show this checkout in a frame (overlay or inline, via `embed.js`), as an
+   * origin such as `https://app.example.com`. It must be on `businesses.embedding` origins.
+   */
+  embed_origin?: string;
+}
+/** `POST …/customers/{cus}/portal_sessions` options; all optional. */
+export interface PortalSessionCreate {
+  /** `api` (default): the link lasts one hour. `email`: five days, for a message a person opens later. */
+  link_kind?: "api" | "email";
+  /** Where the buyer goes after signing out of the portal. */
+  redirect_url?: string;
+  /** The portal page the link opens on. Not with `action`. */
+  forward_url?:
+    | "/portal"
+    | "/portal?tab=invoices"
+    | "/portal?tab=plan"
+    | "/portal?tab=methods"
+    | "/portal?tab=details";
+  /** Open the portal on one task; `object` names its invoice or subscription. */
+  action?: "pay_invoice" | "update_card" | "change_plan" | "cancel_subscription";
+  object?: string;
+  /** Days the link works; needs `link_kind: "email"`. */
+  link_valid_days?: number;
+  /** The website that may show this portal in a frame (overlay, via `embed.js`). API links only. */
+  embed_origin?: string;
 }
 export type EventList = S["EventList"];
 
@@ -612,6 +638,25 @@ export class Tmbilling {
         credit_config?: S["CreditConfig"];
       },
     ) => this.request<Business>({ method: "PATCH", path: `/v1/businesses/${biz}`, body }),
+    /**
+     * The websites that may show this business's checkout, portal and usage widget in a frame,
+     * with the `embed.js` tag (`script_url`, `script_integrity`) to put on them.
+     */
+    embedding: {
+      get: (biz: string) =>
+        this.request<S["EmbeddingSettings"]>({
+          method: "GET",
+          path: `/v1/businesses/${biz}/settings/embedding`,
+        }),
+      /** Replaces the list. Origins only (`https://app.example.com`); at most 20. */
+      setOrigins: (biz: string, origins: string[], opts?: { idempotencyKey?: string }) =>
+        this.request<S["EmbeddingSettings"]>({
+          method: "PUT",
+          path: `/v1/businesses/${biz}/settings/embedding`,
+          body: { origins },
+          idempotencyKey: opts?.idempotencyKey,
+        }),
+    },
   };
 
   products = {
@@ -887,7 +932,11 @@ export class Tmbilling {
      * opens at /portal/<token> to manage their own payment methods. The token
      * is returned exactly once.
      */
-    createPortalSession: (biz: string, cus: string, opts?: { idempotencyKey?: string }) =>
+    createPortalSession: (
+      biz: string,
+      cus: string,
+      opts?: PortalSessionCreate & { idempotencyKey?: string },
+    ) =>
       this.request<{
         object: "portal_session";
         id: string;
@@ -905,7 +954,7 @@ export class Tmbilling {
       }>({
         method: "POST",
         path: `/v1/businesses/${biz}/customers/${cus}/portal_sessions`,
-        body: {},
+        body: (({ idempotencyKey: _k, ...body }) => body)(opts ?? {}),
         idempotencyKey: opts?.idempotencyKey,
       }),
   };

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { requirePermission } from "@/lib/session";
 import { getBusiness } from "@/lib/api/business-settings";
+import { getEmbeddingSettings } from "@/lib/api/embedding";
 import { ErrorState } from "@/components/states";
 import { ActionForm } from "@/components/form/action-form";
 import {
@@ -34,6 +35,7 @@ export default async function CheckoutSettings({ params }: { params: Promise<{ b
   if (!b)
     return <ErrorState title="Not found" description={`We could not find the business ${biz}.`} />;
 
+  const embedding = await getEmbeddingSettings(biz).catch(() => null);
   const base = `/businesses/${biz}/settings`;
   const sc = b.storefront_config;
   const d: CheckoutDefaults = {
@@ -41,6 +43,8 @@ export default async function CheckoutSettings({ params }: { params: Promise<{ b
     couponCodeLimit: b.max_customer_coupon_codes ?? 1,
     hideZeroLines: sc?.hide_zero_value_lines === true,
     collectPoNumber: sc?.collect_po_number === true,
+    fillExportStreet: sc?.fill_export_street === true,
+    exportLock: b.address_field_locks?.gateway_address === true,
     returnUrl: sc?.default_return_url ?? "",
     cancelUrl: sc?.default_cancel_url ?? "",
     oneTimeSave:
@@ -73,10 +77,10 @@ export default async function CheckoutSettings({ params }: { params: Promise<{ b
           <input type="hidden" name="expected_version" value={b.resource_version} />
         ) : null}
         <SettingsColumns
-          summary={<SettingsSummary items={summaryItems(d)} />}
+          summary={<SettingsSummary items={summaryItems(d, embedding?.origins.length ?? null)} />}
           save={{ note: "Applies to the next checkout a customer opens." }}
         >
-          <CheckoutFields d={d} base={base} />
+          <CheckoutFields d={d} base={base} embedding={embedding} />
         </SettingsColumns>
       </ActionForm>
     </SettingsPage>
@@ -84,7 +88,7 @@ export default async function CheckoutSettings({ params }: { params: Promise<{ b
 }
 
 /** "Your setup": the SAVED values, in plain lines. */
-function summaryItems(d: CheckoutDefaults) {
+function summaryItems(d: CheckoutDefaults, embedSites: number | null) {
   const save = (v: CheckoutDefaults["oneTimeSave"]) =>
     v === "always"
       ? "Payment method saved"
@@ -111,6 +115,7 @@ function summaryItems(d: CheckoutDefaults) {
       value: [
         d.hideZeroLines ? "Zero-value lines hidden" : "All lines shown",
         d.collectPoNumber ? "PO number collected" : null,
+        d.exportLock && d.fillExportStreet ? "Street filled for buyers outside India" : null,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -124,5 +129,16 @@ function summaryItems(d: CheckoutDefaults) {
             ? `Only the ${d.returnUrl ? "return" : "cancel"} URL is set`
             : "None. Every call must send both.",
     },
+    ...(embedSites == null
+      ? []
+      : [
+          {
+            label: "Embed on your website",
+            value:
+              embedSites === 0
+                ? "No websites. Hosted pages only."
+                : `${embedSites} ${embedSites === 1 ? "website" : "websites"}`,
+          },
+        ]),
   ];
 }

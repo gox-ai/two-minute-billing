@@ -388,5 +388,3 @@ export interface UsageWidgetSettings {
 
 export const getUsageWidgetSettings = (biz: string) =>
   apiGet<UsageWidgetSettings>(`${b(biz)}/settings/usage_widget`);
-export const saveUsageWidgetOrigins = (biz: string, origins: string[]) =>
-  apiWrite(`${b(biz)}/settings/usage_widget`, { origins }, "PUT");

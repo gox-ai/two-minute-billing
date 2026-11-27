@@ -1,12 +1,19 @@
 "use client";
 
+import { embedNotify, useEmbed } from "@/components/embed-bridge";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { openRazorpayCheckout, type RazorpayCheckoutDescriptor } from "@/lib/razorpay-checkout";
-import { formPostTargetIsSafe, openGatewaySdk, submitFormPost } from "@/lib/gateway-sdk";
+import {
+  formPostTargetIsSafe,
+  openGatewaySdk,
+  submitFormPost,
+  type FormPostDescriptor,
+} from "@/lib/gateway-sdk";
+import { Alert } from "@/components/ui/alert";
 import {
   PaymentDialog,
   PaymentDialogFooter,
@@ -242,6 +249,13 @@ export function PayInvoiceButton({
   const [started, setStarted] = React.useState(false);
   /** The page is going to a gateway's page: not "the buyer left without paying". */
   const leaving = React.useRef(false);
+  const embedded = useEmbed().origin != null;
+  /** Embedded: the provider's page goes to a new tab, from the buyer's own click on this panel. */
+  const [handoff, setHandoff] = React.useState<{
+    url?: string;
+    formPost?: FormPostDescriptor;
+    provider: string | null;
+  } | null>(null);
   const [slot, setSlot] = React.useState<HTMLElement | null>(null);
   // The same invoice has a Pay button in the balance card and in its row: a new try on
   // either one replaces the old refusal on both.
@@ -326,6 +340,7 @@ export function PayInvoiceButton({
     if (result.status === "paid" && result.saved_payment_method)
       toast.success("Payment received. We saved your payment method for future invoices.");
     else if (result.status === "paid") toast.success("Payment received");
+    if (result.status === "paid") embedNotify("invoice_paid", { invoice });
     else if (pending) toast("Your bank is processing the payment. This can take some days.");
     else toast("We are confirming your payment.");
     // The invoice row, its badge and the amount due all live in the server component.
@@ -605,6 +620,10 @@ export function PayInvoiceButton({
       // the webhook. Written BEFORE the navigation, because after it this code is gone.
       if (action.mode === "redirect" && action.approvalUrl) {
         savePendingPayment(scope, { invoice, paymentIntent: pending.payment_intent.id });
+        if (embedded) {
+          const paypal = /(^|\.)paypal\.com$/.test(new URL(action.approvalUrl).hostname);
+          return void setHandoff({ url: action.approvalUrl, provider: paypal ? "PayPal" : null });
+        }
         leaving.current = true;
         window.location.href = action.approvalUrl;
         return;
@@ -617,6 +636,7 @@ export function PayInvoiceButton({
         formPostTargetIsSafe(action.formPost.action)
       ) {
         savePendingPayment(scope, { invoice, paymentIntent: pending.payment_intent.id });
+        if (embedded) return void setHandoff({ formPost: action.formPost, provider: null });
         leaving.current = true;
         submitFormPost(action.formPost);
         return;
@@ -782,6 +802,56 @@ export function PayInvoiceButton({
           <RefusalAlert message={refusal} className="order-last basis-full" step="pay_invoice" />
         )
       ) : null}
+      {handoff
+        ? (() => {
+            const name = handoff.provider;
+            const box = (
+              <div className="flex flex-col gap-3">
+                <Alert tone="info" title={`Approve the payment with ${name ?? "your provider"}`}>
+                  <p>
+                    {name ?? "Your provider"} opens in a new tab. Approve the payment there. Then
+                    return to this page and select Continue after approval.
+                  </p>
+                  <p className="mt-2">We did not charge you yet.</p>
+                </Alert>
+                <div className="flex flex-wrap items-center gap-2">
+                  {handoff.url ? (
+                    <a
+                      href={handoff.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-primary hover:underline"
+                    >
+                      {`Open ${name ?? "the approval page"}`}
+                    </a>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => submitFormPost(handoff.formPost!, { newTab: true })}
+                    >
+                      Open the approval page
+                    </Button>
+                  )}
+                  <Button
+                    onClick={() =>
+                      window.location.assign(withPortalSession("/portal?pay=return", session))
+                    }
+                  >
+                    Continue after approval
+                  </Button>
+                  <Button variant="outline" onClick={() => setHandoff(null)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            );
+            return slot ? (
+              createPortal(box, slot)
+            ) : (
+              <div className="order-last basis-full">{box}</div>
+            );
+          })()
+        : null}
       {refusal && retryAvoid && !headless ? (
         <Button
           size={size}

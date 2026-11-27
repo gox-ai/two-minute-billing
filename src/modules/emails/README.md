@@ -295,8 +295,8 @@ Per business, `email_config.trackEngagement` ("Track opens and clicks"). Unset =
 that existed before it sends what it sent; `initialEmailConfig` sets it on for a business a person
 creates. API-created businesses start with tracking on too (2026-11-19), without the opt-in emails. When on, `deliverPendingEmails` calls
 `trackedHtmlFor` (`tracking-service.ts`): a 1x1 pixel goes before `</body>` in the HTML part only,
-and each http(s) link becomes `/e/c/<token>` on `ADVERTISED_API_URL` (else `WEBHOOK_BASE_URL`; with
-neither, nothing is added). `mailto:`, `tel:`, in-page anchors and any link with `unsubscribe` in it
+and each http(s) link becomes `/e/c/<token>` on `ADVERTISED_API_URL` (when it is
+unset, nothing is added). `mailto:`, `tel:`, in-page anchors and any link with `unsubscribe` in it
 are never rewritten. The stored `body_html` and the text part stay as rendered, so a resend and the
 preview are clean. System mail (`SYSTEM_EMAIL_TYPES`) is never tracked.
 

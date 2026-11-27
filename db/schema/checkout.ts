@@ -155,6 +155,8 @@ export const checkoutSessions = pgTable(
     /** Where the hosted page sends the buyer after completing, and on cancel. */
     redirectUrl: text("redirect_url"),
     cancelUrl: text("cancel_url"),
+    // 0551: the one website that may frame this session (`embedding` module). Null = hosted only.
+    embedOrigin: text("embed_origin"),
     /** Caller's opaque context, returned on retrieve. Never interpreted. */
     passThruContent: text("pass_thru_content"),
     /**

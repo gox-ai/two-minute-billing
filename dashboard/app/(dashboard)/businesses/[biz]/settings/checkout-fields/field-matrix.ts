@@ -60,17 +60,42 @@ export const PORTAL_STATES: readonly PortalFieldState[] = [
   "read_only",
 ];
 
-/** Country decides the region list and the postal format, so it is never hidden. */
-export const neverHidden = (k: string) => k === "billing.country";
+/**
+ * The checkout asks for a name unless it is hidden: there is no optional name there, so a
+ * stored "show" reads as Required (it always behaved so).
+ */
+export const NAME_KEY = "customer.first_name";
 
-/** Tax setup forces these to Required on both surfaces. */
+/** Tax setup or the payment gateway forces these to Required on both surfaces. */
 export function lockedBy(locks: AddressFieldLocks | null | undefined, k: string): string | null {
   if (k === "billing.country" && locks?.country)
     return "Tax is set up, so country must stay required.";
+  if (k === "billing.country" && locks?.gateway_address)
+    return "A Stripe account in India takes your payments. It needs the buyer's country, so country must stay required.";
   if (k === "billing.state_code" && locks?.state_code)
     return "GST is set up, so state must stay required.";
   return null;
 }
+
+/** A payment gateway needs this field from some buyers, so it stays visible and editable. */
+export function keptVisibleBy(
+  locks: AddressFieldLocks | null | undefined,
+  k: string,
+): string | null {
+  if (!locks?.gateway_address) return null;
+  if (locks.gateway_street_fill) {
+    if (k === NAME_KEY)
+      return "A Stripe account in India takes your payments. Buyers outside India must give their name, so this field cannot be hidden.";
+    if (k === "billing.postal_code" || k === "billing.city")
+      return "A Stripe account in India takes your payments. We make the street for buyers outside India from their city and state, so this field cannot be hidden.";
+    return null;
+  }
+  if (k === "billing.line1" || k === NAME_KEY)
+    return "A Stripe account in India takes your payments. Buyers outside India must give their name and street address, so this field cannot be hidden.";
+  return null;
+}
+
+const keptOut = (state: string | undefined) => state === "hide" || state === "read_only";
 
 /** Only an explicit valid value opts out of the default; a lock wins over both. */
 export function resolveCheckout(
@@ -80,9 +105,10 @@ export function resolveCheckout(
   return Object.fromEntries(
     CHECKOUT_KEYS.map((k) => {
       const raw = cfg?.[k];
-      const ok =
-        raw !== undefined && CHECKOUT_STATES.includes(raw) && !(raw === "hide" && neverHidden(k));
-      return [k, lockedBy(locks, k) ? "mandatory" : ok ? raw : CHECKOUT_DEFAULTS[k]];
+      const ok = raw !== undefined && CHECKOUT_STATES.includes(raw);
+      const v = lockedBy(locks, k) ? "mandatory" : ok ? raw : CHECKOUT_DEFAULTS[k];
+      const kept = keptVisibleBy(locks, k) && keptOut(v) ? "show" : v;
+      return [k, k === NAME_KEY && kept === "show" ? "mandatory" : kept];
     }),
   ) as Record<CheckoutFieldKey, CheckoutFieldState>;
 }
@@ -94,9 +120,9 @@ export function resolvePortal(
   return Object.fromEntries(
     PORTAL_KEYS.map((k) => {
       const raw = cfg?.[k];
-      const ok =
-        raw !== undefined && PORTAL_STATES.includes(raw) && !(raw === "hide" && neverHidden(k));
-      return [k, lockedBy(locks, k) ? "mandatory" : ok ? raw : PORTAL_DEFAULTS[k]];
+      const ok = raw !== undefined && PORTAL_STATES.includes(raw);
+      const v = lockedBy(locks, k) ? "mandatory" : ok ? raw : PORTAL_DEFAULTS[k];
+      return [k, keptVisibleBy(locks, k) && keptOut(v) ? "show" : v];
     }),
   ) as Record<PortalFieldKey, PortalFieldState>;
 }

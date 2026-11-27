@@ -7,6 +7,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DIALOG_FROM_CLICK } from "@/lib/motion";
+import { InModalContext } from "@/components/ui/in-modal";
 import {
   installPressOrigin,
   lastPress,
@@ -167,7 +168,7 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
+        <InModalContext.Provider value={true}>{children}</InModalContext.Provider>
         {motion === "dialog" && showCloseButton ? <SheetGrabber closeRef={closeRef} /> : null}
         {showCloseButton && (
           <DialogPrimitive.Close

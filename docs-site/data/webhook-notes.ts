@@ -85,12 +85,17 @@ export const FAMILY_SUMMARIES: Record<string, string> = {
   credit_auto_topup: "Automatic top-up: credit bought when the balance is low or on a schedule.",
   usage_threshold:
     "Usage invoiced during the period because the unbilled usage reached the amount that you set.",
+  export: "A bulk export of a business ended: its files are ready to download, or it failed.",
 };
 
 /**
  * Only where the event type's name does not carry the meaning. Keyed by event type.
  */
 export const EVENT_SUMMARIES: Record<string, string> = {
+  export_completed:
+    "`content.export` is the export: its `id`, its `files` with their row counts, and `expires_at`, when the files are deleted. Download the zip from `GET /v1/businesses/{biz}/exports/{id}/file`.",
+  export_failed:
+    "`content.export` is the export, with the reason in `error`. Start the export again.",
   invoice_paid:
     "`content.invoice` holds the invoice's `id`, `amount_minor` and `currency` (plus `paid_with_credit` when credit paid it). Fetch the invoice for its lines, customer, `metadata` and status. Whether a total-0 invoice sends this event is the billing rule `zero_invoice_paid_event`.",
   payment_failed:

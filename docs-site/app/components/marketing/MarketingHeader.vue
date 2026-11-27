@@ -5,7 +5,7 @@
  * (MkMenuPanel) and dim the page behind them; below 860px everything moves into the
  * slideover behind the menu button.
  */
-import type { NavigationMenuItem } from "@nuxt/ui";
+import type { NavigationMenuItem } from "#ui/types";
 import MkLogo from "~/components/marketing/MkLogo.vue";
 import MkMenuPanel from "~/components/marketing/MkMenuPanel.vue";
 
@@ -83,7 +83,7 @@ const sheetUi = {
 
     <UNavigationMenu v-model="open" :items="items" variant="link" class="mk-nav" :ui="navUi">
       <template #menu-content="{ item }">
-        <MkMenuPanel :menu="menuOf(item.value)" @close="open = ''" />
+        <MkMenuPanel :menu="menuOf((item as NavigationMenuItem).value)" @close="open = ''" />
       </template>
     </UNavigationMenu>
 

@@ -211,6 +211,8 @@ export interface ListPageProps<T, TValue = unknown> {
   searchable?: boolean;
   /** Enables the Export menu; also the CSV file name. */
   exportName?: string;
+  /** Adds "Export all in the background": the bulk export of this record type. */
+  bulkExportHref?: string;
   /** localStorage key for column visibility + the selected view. */
   persistKey?: string;
   columnChooser?: boolean;
@@ -326,6 +328,7 @@ export function ListPage<T, TValue = unknown>({
   searchPlaceholder,
   searchable,
   exportName,
+  bulkExportHref,
   persistKey,
   columnChooser = true,
   initialHidden,
@@ -1109,6 +1112,7 @@ export function ListPage<T, TValue = unknown>({
         searchPlaceholder={searchPlaceholder ?? `Search by ID or name`}
         searchable={searchable}
         exportName={exportName}
+        bulkExportHref={bulkExportHref}
         columnChooser={columnChooser}
         initialHidden={initialHidden}
         persistKey={persistKey}

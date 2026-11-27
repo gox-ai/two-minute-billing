@@ -15,7 +15,7 @@
  *              takes the signing secret — so we generate the secret, register the
  *              endpoint with it ourselves, and keep it. Nothing to paste either.
  *              If registration fails (a merchant without webhook API access, or a
- *              WEBHOOK_BASE_URL whose host RazorPay can't resolve), we keep the
+ *              webhook base URL whose host RazorPay can't resolve), we keep the
  *              generated secret and show it for pasting.
  *   tmtest   → in-process; no external endpoint.
  *
@@ -26,7 +26,6 @@
 import { randomBytes } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { withTenant } from "@/platform/db";
-import { config } from "@/platform/config";
 import { encryptCredentials, decryptCredentials } from "@/platform/secrets";
 import { resolveAdapter } from "@/providers/registry";
 import {
@@ -366,7 +365,7 @@ export async function provisionWebhookEndpoint(input: {
     return getWebhookEndpointInfo({ ...input, reveal: true });
   if (!gatewayWebhookBaseUrl())
     throw new GatewayError(
-      "WEBHOOK_BASE_URL is not configured. Set it to the public base URL of this API before you provision webhooks.",
+      "ADVERTISED_API_URL is not configured. Set it to the public base URL of this API before you provision webhooks.",
     );
 
   const row = await withTenant(input.organizationId, async (tx) => {
@@ -418,7 +417,7 @@ export async function provisionWebhookEndpoint(input: {
   } else {
     // WE own the secret. Register the endpoint carrying it so the operator has nothing
     // to paste. Registration is best-effort: a merchant without webhook API access — or a
-    // WEBHOOK_BASE_URL whose host the gateway cannot resolve — falls back to the paste
+    // webhook base URL whose host the gateway cannot resolve — falls back to the paste
     // flow with the same secret. Only `force` rotates: the current secret may already be
     // pasted at the gateway.
     const current =
@@ -544,7 +543,7 @@ export async function saveOperatorWebhookSecret(input: {
 /**
  * Register a new account's endpoint straight away, so its card never claims a failure
  * before anything tried. Best effort: a failure never fails the create, and the account
- * stays in whatever mode provisioning left it. Skipped without `WEBHOOK_BASE_URL`, which
+ * stays in whatever mode provisioning left it. Skipped without a webhook base URL, which
  * is also what keeps tests off the network.
  */
 export async function registerWebhookEndpointOnCreate(input: {
@@ -594,8 +593,8 @@ export async function removeWebhookEndpointOnDelete(
   try {
     url = currentNotificationUrl(row);
   } catch {
-    // Unreadable credentials: the pre-move URL is the best guess.
-    url = gatewayNotificationUrl(row.gatewayKey, row.publicId, config.WEBHOOK_BASE_URL);
+    // Unreadable credentials: the current base is the best guess.
+    url = gatewayNotificationUrl(row.gatewayKey, row.publicId);
   }
   const manual = def.webhook.removalInstructions?.(url) ?? [
     `In the ${def.displayName} dashboard, delete the webhook with this URL: ${url}`,

@@ -1,7 +1,7 @@
 import { listBusinesses, listCustomers, listSubscriptions, type Subscription } from "@/lib/api";
 import { getGatewayCatalogOrEmpty } from "@/lib/api/gateways";
 import { listCustomFieldDefinitions, type CustomFieldDefinition } from "@/lib/api/custom-fields";
-import { requirePermission } from "@/lib/session";
+import { allows, requirePermission } from "@/lib/session";
 import { PageHeader } from "@/components/page-header";
 import { CustomersTable } from "@/components/customers/customers-table";
 import { ErrorState } from "@/components/states";
@@ -25,7 +25,7 @@ export default async function CustomersPage({
   const [{ biz }, search] = await Promise.all([params, searchParams]);
   const msg = typeof search.msg === "string" ? search.msg : undefined;
   const error = typeof search.error === "string" ? search.error : undefined;
-  await requirePermission("customers:view", "manager");
+  const user = await requirePermission("customers:view", "manager");
 
   // Deep links from Business Home's signup counts arrive as
   // `?created_at[on]=…` / `?created_at[after]=…&created_at[before]=…`, in the
@@ -114,6 +114,7 @@ export default async function CustomersPage({
         }}
         gatewayCatalog={gatewayCatalog}
         biz={biz}
+        canImport={allows(user, "imports:manage", "admin")}
         rows={customers.data}
         subsByCustomer={subsByCustomer}
         total={customers.total ?? customers.data.length}

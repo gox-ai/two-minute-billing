@@ -8,6 +8,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { primeGeoReference } from "@/platform/geo";
 import {
   DEFAULT_PORTAL_FIELD_CONFIG,
+  NO_ADDRESS_FIELD_LOCKS,
   addressFieldLockViolation,
   addressFieldLocksFor,
   addressRequirementIssues,
@@ -17,7 +18,9 @@ import {
   mergePortalAddress,
   resolvePortalFieldConfig,
   withAddressFieldLocks,
+  buyerFieldConfig,
 } from "@/modules/checkout/address-field-rules";
+import { filledLine1 } from "@/modules/payment-methods/export-street";
 import { resolveCheckoutFieldConfig } from "@/modules/checkout/field-config";
 
 beforeAll(() => {
@@ -62,9 +65,12 @@ describe("resolvePortalFieldConfig", () => {
     );
   });
 
-  it("billing.country is never hidden", () => {
+  it("billing.country may be hidden; only a lock brings it back", () => {
     const cfg = resolvePortalFieldConfig({ portalFieldConfig: { "billing.country": "hide" } });
-    expect(cfg["billing.country"]).toBe("mandatory");
+    expect(cfg["billing.country"]).toBe("hide");
+    expect(withAddressFieldLocks(cfg, addressFieldLocksFor(["vat"]))["billing.country"]).toBe(
+      "mandatory",
+    );
   });
 
   it("hide and read_only keys are locked to the stored value; show/mandatory are not", () => {
@@ -80,18 +86,38 @@ describe("resolvePortalFieldConfig", () => {
 
 describe("tax locks", () => {
   it("no live region → no locks", () => {
-    expect(addressFieldLocksFor([])).toEqual({ country: false, state_code: false });
+    expect(addressFieldLocksFor([])).toEqual({
+      country: false,
+      state_code: false,
+      gateway_address: false,
+      gateway_street_fill: false,
+    });
   });
   it("any region → country; a gst region → state_code too", () => {
-    expect(addressFieldLocksFor(["vat"])).toEqual({ country: true, state_code: false });
-    expect(addressFieldLocksFor(["flat", "gst"])).toEqual({ country: true, state_code: true });
+    expect(addressFieldLocksFor(["vat"])).toEqual({
+      country: true,
+      state_code: false,
+      gateway_address: false,
+      gateway_street_fill: false,
+    });
+    expect(addressFieldLocksFor(["flat", "gst"])).toEqual({
+      country: true,
+      state_code: true,
+      gateway_address: false,
+      gateway_street_fill: false,
+    });
   });
 
   it("forces locked keys to mandatory at runtime", () => {
     const stored = resolveCheckoutFieldConfig({
       checkoutFieldConfig: { "billing.country": "show", "billing.state_code": "hide" },
     });
-    const eff = withAddressFieldLocks(stored, { country: true, state_code: true });
+    const eff = withAddressFieldLocks(stored, {
+      country: true,
+      state_code: true,
+      gateway_address: false,
+      gateway_street_fill: false,
+    });
     expect(eff["billing.country"]).toBe("mandatory");
     expect(eff["billing.state_code"]).toBe("mandatory");
     expect(stored["billing.country"]).toBe("show"); // input not mutated
@@ -101,16 +127,33 @@ describe("tax locks", () => {
     const loose = resolvePortalFieldConfig({
       portalFieldConfig: { "billing.country": "read_only", "billing.state_code": "show" },
     });
-    expect(addressFieldLockViolation(loose, { country: true, state_code: false })).toBe(
-      "Billing country must stay required while tax is set up.",
-    );
+    expect(
+      addressFieldLockViolation(loose, {
+        country: true,
+        state_code: false,
+        gateway_address: false,
+        gateway_street_fill: false,
+      }),
+    ).toBe("Billing country must stay required while tax is set up.");
     const stateOnly = resolvePortalFieldConfig({
       portalFieldConfig: { "billing.state_code": "show" },
     });
-    expect(addressFieldLockViolation(stateOnly, { country: true, state_code: true })).toBe(
-      "State must stay required while GST is set up.",
-    );
-    expect(addressFieldLockViolation(stateOnly, { country: true, state_code: false })).toBeNull();
+    expect(
+      addressFieldLockViolation(stateOnly, {
+        country: true,
+        state_code: true,
+        gateway_address: false,
+        gateway_street_fill: false,
+      }),
+    ).toBe("State must stay required while GST is set up.");
+    expect(
+      addressFieldLockViolation(stateOnly, {
+        country: true,
+        state_code: false,
+        gateway_address: false,
+        gateway_street_fill: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -294,8 +337,201 @@ describe("billingDetailsComplete / billingDetailsMissing", () => {
   it("a tax-forced country still blocks", () => {
     const cfg = withAddressFieldLocks(
       resolvePortalFieldConfig({ portalFieldConfig: { "billing.country": "show" } }),
-      { country: true, state_code: false },
+      { country: true, state_code: false, gateway_address: false, gateway_street_fill: false },
     );
     expect(billingDetailsComplete(cfg, true, {})).toBe(false);
+  });
+});
+
+describe("gateway street rule (Stripe India: a foreign card needs name + line1)", () => {
+  const cfg = DEFAULT_PORTAL_FIELD_CONFIG;
+  const rules = { streetRequiredOutside: "IN" };
+  const us = { country: "US", postal_code: "94103", state_code: "CA", first_name: "Ana" };
+
+  it("asks a buyer outside the account's country for line 1", () => {
+    expect(billingDetailsMissing(cfg, true, us, rules)).toEqual(["line1"]);
+    expect(addressRequirementIssues(cfg, us, rules)[0]?.message).toBe(
+      "Address line 1 is required for United States.",
+    );
+  });
+
+  it("leaves a buyer in the account's country and a gateway without the rule alone", () => {
+    const india = { country: "IN", postal_code: "560001", state_code: "KA", first_name: "Ana" };
+    expect(billingDetailsMissing(cfg, true, india, rules)).toEqual([]);
+    expect(billingDetailsMissing(cfg, true, us)).toEqual([]);
+  });
+
+  it("is satisfied by line 1, and does not report it twice when the config requires it", () => {
+    expect(billingDetailsMissing(cfg, true, { ...us, line1: "1 Market St" }, rules)).toEqual([]);
+    const strict = { ...cfg, "billing.line1": "mandatory" as const };
+    expect(billingDetailsMissing(strict, true, us, rules)).toEqual(["line1"]);
+  });
+});
+
+describe("gateway address lock (a gateway needs name, street and country)", () => {
+  const locks = addressFieldLocksFor([], { streetRequiredOutside: "IN" });
+
+  it("comes from the gateway rule, not from tax", () => {
+    expect(locks).toEqual({
+      country: false,
+      state_code: false,
+      gateway_address: true,
+      gateway_street_fill: false,
+    });
+    expect(addressFieldLocksFor(["gst"]).gateway_address).toBe(false);
+  });
+
+  it("keeps country required and first name + line 1 editable at runtime", () => {
+    const loose = {
+      ...DEFAULT_PORTAL_FIELD_CONFIG,
+      "customer.first_name": "hide" as const,
+      "billing.line1": "read_only" as const,
+      "billing.country": "hide" as const,
+    };
+    const eff = withAddressFieldLocks(loose, locks);
+    expect(eff["customer.first_name"]).toBe("show");
+    expect(eff["billing.line1"]).toBe("show");
+    expect(eff["billing.country"]).toBe("mandatory");
+    const required = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.line1": "mandatory" as const };
+    expect(withAddressFieldLocks(required, locks)["billing.line1"]).toBe("mandatory");
+  });
+
+  it("refuses a settings save that hides them, and allows optional", () => {
+    const hidden = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.line1": "hide" as const };
+    expect(addressFieldLockViolation(hidden, locks)).toMatch(/must stay visible/);
+    const noCountry = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.country": "show" as const };
+    expect(addressFieldLockViolation(noCountry, locks)).toMatch(/country must stay required/);
+    expect(addressFieldLockViolation(DEFAULT_PORTAL_FIELD_CONFIG, locks)).toBeNull();
+  });
+});
+
+describe("gateway address lock with the street fill on", () => {
+  const locks = addressFieldLocksFor([], { streetRequiredOutside: "IN", streetFill: true });
+  const lineHidden = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.line1": "hide" as const };
+
+  it("is set only with the gateway rule", () => {
+    expect(locks.gateway_street_fill).toBe(true);
+    expect(addressFieldLocksFor([], { streetFill: true }).gateway_street_fill).toBe(false);
+  });
+
+  it("lets line 1 hide and keeps postal code and city editable", () => {
+    expect(addressFieldLockViolation(lineHidden, locks)).toBeNull();
+    const loose = {
+      ...lineHidden,
+      "billing.postal_code": "hide" as const,
+      "billing.city": "read_only" as const,
+    };
+    const eff = withAddressFieldLocks(loose, locks);
+    expect(eff["billing.line1"]).toBe("hide");
+    expect(eff["billing.postal_code"]).toBe("show");
+    expect(eff["billing.city"]).toBe("show");
+    expect(addressFieldLockViolation(loose, locks)).toMatch(
+      /postal code and city must stay visible/,
+    );
+  });
+
+  it("asks a foreign buyer with line 1 hidden for the postal code, never line 1", () => {
+    const cfg = withAddressFieldLocks(lineHidden, locks);
+    const rules = { streetRequiredOutside: "IN", streetFill: true };
+    const issues = addressRequirementIssues(cfg, { country: "US", first_name: "Ana" }, rules);
+    expect(issues.map((i) => i.field)).toContain("postal_code");
+    expect(issues.map((i) => i.field)).not.toContain("line1");
+    const us = { country: "US", postal_code: "94103", state_code: "CA", first_name: "Ana" };
+    expect(addressRequirementIssues(cfg, us, rules)).toEqual([]);
+  });
+});
+
+describe("email-only buyer details (no tax, no gateway rule)", () => {
+  const emailOnly = Object.fromEntries(
+    Object.keys(DEFAULT_PORTAL_FIELD_CONFIG).map((k) => [k, "hide"]),
+  ) as typeof DEFAULT_PORTAL_FIELD_CONFIG;
+
+  it("keeps a hidden country and asks for no name or address", () => {
+    expect(resolvePortalFieldConfig({ portalFieldConfig: emailOnly })["billing.country"]).toBe(
+      "hide",
+    );
+    expect(billingDetailsMissing(emailOnly, false, {})).toEqual([]);
+    expect(addressFieldLockViolation(emailOnly, NO_ADDRESS_FIELD_LOCKS)).toBeNull();
+  });
+
+  it("still asks for the name when only the address is hidden", () => {
+    const noAddress = { ...emailOnly, "customer.first_name": "mandatory" as const };
+    expect(billingDetailsMissing(noAddress, false, {})).toEqual(["first_name"]);
+  });
+
+  it("a tax region still forces the country back", () => {
+    const tax = addressFieldLocksFor(["vat"]);
+    expect(withAddressFieldLocks(emailOnly, tax)["billing.country"]).toBe("mandatory");
+    expect(addressFieldLockViolation(emailOnly, tax)).toMatch(/country must stay required/);
+  });
+});
+
+describe("fill line 1 for an export (storefront_config.fill_export_street)", () => {
+  const cfg = DEFAULT_PORTAL_FIELD_CONFIG;
+  const fill = { streetRequiredOutside: "IN", streetFill: true };
+  it("asks a buyer abroad for the postal code, not the street", () => {
+    const missing = billingDetailsMissing(cfg, true, { country: "US", first_name: "Ana" }, fill);
+    expect(missing).toContain("postal_code");
+    expect(missing).not.toContain("line1");
+    expect(
+      billingDetailsMissing(
+        cfg,
+        true,
+        { country: "US", postal_code: "94103", state_code: "CA" },
+        fill,
+      ),
+    ).toEqual([]);
+  });
+  it("falls back to the street when the postal code is hidden", () => {
+    const hidden = { ...cfg, "billing.postal_code": "hide" as const };
+    expect(billingDetailsMissing(hidden, true, { country: "US", state_code: "CA" }, fill)).toEqual([
+      "line1",
+    ]);
+  });
+});
+
+describe("filledLine1", () => {
+  const base = {
+    country: "US",
+    addressLine1: null,
+    city: "San Francisco",
+    state: "California",
+    postalCode: "94103",
+  };
+  it("uses city and state for a buyer abroad with no street", () => {
+    expect(filledLine1(base, "IN")).toBe("San Francisco, California");
+  });
+  it("keeps a typed street, an Indian buyer and a business that did not opt in unchanged", () => {
+    expect(filledLine1({ ...base, addressLine1: "1 Market St" }, "IN")).toBeUndefined();
+    expect(filledLine1({ ...base, country: "IN" }, "IN")).toBeUndefined();
+    expect(filledLine1(base, null)).toBeUndefined();
+  });
+  it("falls back to the postal code when there is no city or state", () => {
+    expect(filledLine1({ ...base, city: null, state: null }, "IN")).toBe("94103");
+  });
+});
+
+describe("street lines 2 and 3 follow line 1 on the buyer's page", () => {
+  it("hides them with a hidden line 1, and leaves the stored config alone", () => {
+    const stored = {
+      ...DEFAULT_PORTAL_FIELD_CONFIG,
+      "billing.line1": "hide" as const,
+      "billing.line2": "mandatory" as const,
+      "billing.line3": "show" as const,
+    };
+    const eff = buyerFieldConfig(stored, NO_ADDRESS_FIELD_LOCKS);
+    expect(eff["billing.line2"]).toBe("hide");
+    expect(eff["billing.line3"]).toBe("hide");
+    expect(stored["billing.line2"]).toBe("mandatory");
+  });
+
+  it("keeps them when a lock shows line 1 again, or line 1 is only read-only", () => {
+    const stored = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.line1": "hide" as const };
+    const gateway = addressFieldLocksFor([], { streetRequiredOutside: "IN" });
+    expect(buyerFieldConfig(stored, gateway)["billing.line2"]).toBe(stored["billing.line2"]);
+    const readOnly = { ...DEFAULT_PORTAL_FIELD_CONFIG, "billing.line1": "read_only" as const };
+    expect(buyerFieldConfig(readOnly, NO_ADDRESS_FIELD_LOCKS)["billing.line2"]).toBe(
+      readOnly["billing.line2"],
+    );
   });
 });

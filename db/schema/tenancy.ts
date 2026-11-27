@@ -583,6 +583,12 @@ export const businesses = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    // 0551: websites that may embed this business's checkout, portal and usage widget. Replaces
+    // `usage_widget_origins`, which the app keeps in step until it is dropped.
+    embedOrigins: text("embed_origins")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     // 0477: set when the first limit, alert, auto top-up or threshold is created; until then
     // ingest skips the usage-control dirty mark.
     usageControlsActive: boolean("usage_controls_active").notNull().default(false),

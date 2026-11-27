@@ -1687,7 +1687,7 @@ export class SquareProvider implements PaymentProvider {
   }): Promise<ProvisionedWebhook> {
     if (!input.url.startsWith("https://"))
       throw new Error(
-        "Square accepts only HTTPS notification URLs. Set WEBHOOK_BASE_URL to an HTTPS URL.",
+        "Square accepts only HTTPS notification URLs. Set ADVERTISED_API_URL (or GATEWAY_WEBHOOK_BASE_URL) to an HTTPS URL.",
       );
     const events = [...SQUARE_WEBHOOK_EVENTS];
     type Sub = { id?: string; signature_key?: string; enabled?: boolean; event_types?: string[] };

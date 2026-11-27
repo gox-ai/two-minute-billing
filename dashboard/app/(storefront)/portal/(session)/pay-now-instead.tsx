@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -144,9 +145,10 @@ function ReleaseHoldButton({
       setOpen(false);
       // Not a success toast: nothing succeeded, a block was lifted. The one case that
       // IS a success is the one where their money had already arrived.
-      if (res.result.outcome === "settled")
+      if (res.result.outcome === "settled") {
+        embedNotify("invoice_paid", { invoice });
         toast.success("Your bank confirmed this payment. The invoice is paid.");
-      else if (res.result.voided_at_gateway)
+      } else if (res.result.voided_at_gateway)
         // The intent is genuinely dead, so the dialog's warning no longer applies and
         // repeating it here would frighten a buyer who is not at risk. Say the one thing
         // that changed: their bank's request cannot take money any more.

@@ -329,6 +329,8 @@ export interface BusinessSettingsPatch {
   storefront_config?: {
     hide_zero_value_lines?: boolean;
     collect_po_number?: boolean;
+    /** India Stripe: send city + state as line 1 when a buyer abroad gives no street. */
+    fill_export_street?: boolean;
     /** Fallback for the checkout mint, which requires these per call today. */
     default_return_url?: string | null;
     default_cancel_url?: string | null;

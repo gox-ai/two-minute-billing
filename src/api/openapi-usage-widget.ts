@@ -240,7 +240,7 @@ export const USAGE_WIDGET_SCHEMAS = {
         type: "string",
         nullable: true,
         description:
-          "Where the page loads `usage.js` from. Null when the API's public URL is not set.",
+          "Where the page loads `usage.js` from: this API's public URL (ADVERTISED_API_URL). Null when it is not set.",
       },
       script_integrity: {
         type: "string",

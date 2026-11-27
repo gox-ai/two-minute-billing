@@ -310,6 +310,7 @@ function options(values: (string | null | undefined)[]): { value: string; label:
 export function CustomersTable({
   page,
   biz,
+  canImport,
   gatewayCatalog,
   rows,
   subsByCustomer,
@@ -323,6 +324,8 @@ export function CustomersTable({
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
   biz: string;
+  /** The signed-in person may import data: the Import button opens Import data. */
+  canImport?: boolean;
   /** `GET /v1/gateways` — the gateway filter's options. */
   gatewayCatalog: GatewayCatalogEntry[];
   /** First page, server-rendered. */
@@ -1178,9 +1181,14 @@ export function CustomersTable({
         { id: "company", label: "Company" },
       ]}
       createAction={createAction("Customer", `/businesses/${biz}/customers/new`)}
-      importAction={importAction("Customers", undefined, "CSV import is not configured yet")}
+      importAction={
+        canImport
+          ? importAction("Customers", `/businesses/${biz}/imports?section=customers`)
+          : undefined
+      }
       searchPlaceholder="Search by ID, name, email or company"
       exportName="customers"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=customers`}
       persistKey={`customers:${biz}`}
       enableSelection
       rowHref={(c) => `/businesses/${biz}/customers/${c.id}`}

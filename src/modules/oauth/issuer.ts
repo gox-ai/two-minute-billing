@@ -3,13 +3,14 @@ import { config } from "@/platform/config";
 
 /**
  * The OAuth issuer and the base of the MCP resource URLs: `MCP_PUBLIC_URL`, else
- * `WEBHOOK_BASE_URL`, else the request's own origin. A connector refuses a server whose metadata
+ * `ADVERTISED_API_URL`, else the request's own origin. A connector refuses a server whose metadata
  * names another origin than the URL it was given, so a dedicated MCP host must set the first.
  */
 export function issuerFor(req: FastifyRequest): string {
-  const base = config.MCP_PUBLIC_URL?.trim() || config.WEBHOOK_BASE_URL?.trim();
+  const base = config.MCP_PUBLIC_URL?.trim() || config.ADVERTISED_API_URL?.trim();
   if (base) return base.replace(/\/+$/, "");
-  return `${req.protocol}://${req.host}`;
+  // Normalised, so a default port in the Host header (`:443`, `:80`) matches the resource URLs.
+  return new URL(`${req.protocol}://${req.host}`).origin;
 }
 
 /** The dashboard origin, where the member signs in and decides. */

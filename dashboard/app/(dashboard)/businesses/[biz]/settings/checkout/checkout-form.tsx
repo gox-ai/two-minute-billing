@@ -8,6 +8,11 @@ import { Input } from "@/components/ui/input";
 import { SelectAnswer } from "@/components/patterns/settings-page";
 import { SettingRow, SettingsCard } from "@/components/settings/settings-layout";
 import { SwitchRow, ErrorLinkedInput } from "../_components/hosted-rows";
+import { Button } from "@/components/ui/button";
+import { Plus, X } from "lucide-react";
+import { useFieldError } from "@/components/form/action-form";
+import { CopyButton } from "@/components/patterns/copy-button";
+import type { EmbeddingSettings } from "@/lib/api/embedding";
 
 export interface CheckoutDefaults {
   coupons: boolean;
@@ -15,6 +20,10 @@ export interface CheckoutDefaults {
   couponCodeLimit: number;
   hideZeroLines: boolean;
   collectPoNumber: boolean;
+  /** India Stripe: send city + state as line 1 when a buyer abroad gives no street. */
+  fillExportStreet: boolean;
+  /** A Stripe account in India takes payments, so the switch above applies. */
+  exportLock: boolean;
   returnUrl: string;
   cancelUrl: string;
   /** One-time purchases: keep the buyer's payment method? */
@@ -31,12 +40,22 @@ export interface CheckoutDefaults {
   botCheckAfterFailures: number | null;
 }
 
-export function CheckoutFields({ d, base }: { d: CheckoutDefaults; base: string }) {
+export function CheckoutFields({
+  d,
+  base,
+  embedding,
+}: {
+  d: CheckoutDefaults;
+  base: string;
+  /** Null when the settings did not load: the card says so and the save leaves the list alone. */
+  embedding: EmbeddingSettings | null;
+}) {
   const [coupons, setCoupons] = useDefaultState(d.coupons);
   const [couponLimit, setCouponLimit] = useDefaultState(String(d.couponCodeLimit));
   const [oneTimeSave, setOneTimeSave] = useDefaultState<string>(d.oneTimeSave);
   const [hideZero, setHideZero] = useDefaultState(d.hideZeroLines);
   const [po, setPo] = useDefaultState(d.collectPoNumber);
+  const [fillStreet, setFillStreet] = useDefaultState(d.fillExportStreet);
   const [recurringConsent, setRecurringConsent] = useDefaultState(d.recurringConsent);
   const [requireTerms, setRequireTerms] = useDefaultState(d.requireTerms);
   const [marketing, setMarketing] = useDefaultState(d.marketingConsent);
@@ -242,6 +261,8 @@ export function CheckoutFields({ d, base }: { d: CheckoutDefaults; base: string 
         />
       </SettingsCard>
 
+      <EmbeddingCard embedding={embedding} />
+
       <SettingsCard title="Checkout" meta="Line items, PO number and redirects">
         <SwitchRow
           name="hide_zero_value_lines"
@@ -271,6 +292,22 @@ export function CheckoutFields({ d, base }: { d: CheckoutDefaults; base: string 
           off="The hosted checkout shows no PO number field, and we do not apply the Checkout and portal fields rule."
           more="In both cases, if the API sends a PO number when a checkout completes, we save it on the subscription."
         />
+        {d.exportLock ? (
+          <>
+            {/* Marks the switch as on the form: an unchecked switch posts nothing. */}
+            <input type="hidden" name="fill_export_street_present" value="1" />
+            <SwitchRow
+              name="fill_export_street"
+              label="Fill the street for buyers outside India"
+              help="Stripe in India refuses a card from outside India without a street address."
+              checked={fillStreet}
+              onChange={setFillStreet}
+              on="When a buyer outside India does not enter address line 1, we send their city and state to Stripe as line 1. The postal code fills both. Your invoices show what the buyer entered. You can hide address line 1 in Checkout fields."
+              off="Buyers outside India must enter address line 1 before they pay."
+              more="Stripe uses these details to report the export to its banks. Turn this on only if you accept that Stripe receives the city and state in place of a street."
+            />
+          </>
+        ) : null}
         <SettingRow
           placement="end"
           label="Default return URL"
@@ -307,5 +344,143 @@ export function CheckoutFields({ d, base }: { d: CheckoutDefaults; base: string 
         />
       </SettingsCard>
     </>
+  );
+}
+
+const MAX_ORIGINS = 20;
+
+/**
+ * One input per website. Never zero rows: the blank row is the empty state, and it keeps
+ * `embed_origins` in the post, so clearing every website still saves. The action drops blanks.
+ */
+function OriginsList({ origins }: { origins: string[] }) {
+  const error = useFieldError("embed_origins");
+  const nextId = React.useRef(origins.length + 1);
+  const seed = () =>
+    origins.length ? origins.map((value, id) => ({ id, value })) : [{ id: 0, value: "" }];
+  const [rows, setRows] = useDefaultState(seed(), (r) => r.map((x) => x.value).join("\n"));
+  const [added, setAdded] = React.useState<number | null>(null);
+  // The engine's message names the website it refused; mark that row, else all of them.
+  const refused = error
+    ? rows
+        .filter((r) => r.value.trim() && error.includes(r.value.trim()))
+        .sort((a, b) => b.value.length - a.value.length)[0]
+    : undefined;
+  const invalid = (value: string) => Boolean(error) && (refused ? refused.value === value : true);
+  const set = (id: number, value: string) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, value } : r)));
+  const remove = (id: number) =>
+    setRows((prev) => {
+      const left = prev.filter((r) => r.id !== id);
+      return left.length ? left : [{ id: nextId.current++, value: "" }];
+    });
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((r, i) => (
+        <div key={r.id} className="flex items-center gap-2">
+          <Input
+            id={i === 0 ? "embed_origins" : undefined}
+            ref={r.id === added ? (el) => el?.focus() : undefined}
+            name="embed_origins"
+            type="url"
+            inputMode="url"
+            value={r.value}
+            onChange={(e) => set(r.id, e.target.value)}
+            maxLength={300}
+            placeholder="https://app.example.com"
+            aria-label={`Website ${i + 1}`}
+            aria-invalid={invalid(r.value) ? true : undefined}
+            aria-describedby={invalid(r.value) ? "embed_origins-error" : undefined}
+            className="w-full font-mono text-sm sm:max-w-md"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="size-8 shrink-0"
+            aria-label={`Remove website ${i + 1}`}
+            disabled={rows.length === 1 && !r.value}
+            onClick={() => remove(r.id)}
+          >
+            <X className="size-4" aria-hidden />
+          </Button>
+        </div>
+      ))}
+      {rows.length < MAX_ORIGINS ? (
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const id = nextId.current++;
+              setAdded(id);
+              setRows((prev) => [...prev, { id, value: "" }]);
+            }}
+          >
+            <Plus className="size-4" aria-hidden /> Add website
+          </Button>
+        </div>
+      ) : (
+        <p className="m-0 text-xs text-muted-foreground">The maximum is 20 websites.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The websites that may show the checkout, the portal and the usage widget in a frame. One list
+ * (`businesses.embed_origins`); the page's save sends it with the rest of the form.
+ */
+function EmbeddingCard({ embedding }: { embedding: EmbeddingSettings | null }) {
+  const snippet = embedding?.script_url
+    ? [
+        `<script src="${embedding.script_url}" integrity="${embedding.script_integrity}" crossorigin="anonymous"></script>`,
+        ``,
+        `// Your backend creates a checkout or portal session with embed_origin set to this website.`,
+        `const checkout = TMB.checkout.open({ url: session.url });`,
+        `checkout.on("success", (e) => refreshPlan(e.subscription));`,
+        `TMB.portal.open({ url: portalSession.url });`,
+      ].join("\n")
+    : null;
+  return (
+    <SettingsCard
+      id="embedding"
+      title="Embed on your website"
+      meta="Checkout, portal and usage widget"
+    >
+      {!embedding ? (
+        <p className="m-0 px-5 py-4 text-sm text-muted-foreground">
+          We could not load the allowed websites. Reload the page to edit them.
+        </p>
+      ) : (
+        <>
+          <SettingRow
+            label="Allowed websites"
+            htmlFor="embed_origins"
+            errorFor="embed_origins"
+            help="Websites that can show your checkout, customer portal and usage widget inside their own pages. Enter the address only, with no path. Use https. http://localhost works in a test business only."
+            control={<OriginsList origins={embedding.origins} />}
+          />
+          <div className="flex flex-col gap-2 px-5 py-4">
+            {snippet ? (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Code for your page</span>
+                  <CopyButton value={snippet} />
+                </div>
+                <pre className="m-0 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+                  {snippet}
+                </pre>
+              </>
+            ) : (
+              <p className="m-0 text-sm text-muted-foreground">
+                The script address is not available because the API&apos;s public URL is not set.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </SettingsCard>
   );
 }

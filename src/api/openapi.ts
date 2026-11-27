@@ -56,6 +56,7 @@ import {
   USAGE_WIDGET_PATHS,
   USAGE_WIDGET_SCHEMAS,
 } from "./openapi-usage-widget";
+import { EMBEDDING_PATHS, EMBEDDING_SCHEMAS } from "./openapi-embedding";
 import { USAGE_CONTROL_PATHS, USAGE_CONTROL_SCHEMAS } from "./openapi-usage-controls";
 import { withCreditSettingsDocs } from "./openapi-credit-settings";
 
@@ -626,6 +627,170 @@ const errResp = (description: string) => ({
   content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
 });
 
+/** File imports (`/imports`): shared parameters and responses. */
+const importIdParam = {
+  name: "id",
+  in: "path",
+  required: true,
+  schema: { type: "string", format: "uuid" },
+  description: "The import's id.",
+};
+const importEntityEnum = [
+  "plans",
+  "addons",
+  "coupons",
+  "customers",
+  "subscriptions",
+  "invoices",
+  "credit_notes",
+  "payments",
+  "usage",
+];
+/** Bulk exports (`/exports`): shared parameters, bodies and responses. */
+const exportIdParam = {
+  name: "id",
+  in: "path",
+  required: true,
+  schema: { type: "string", format: "uuid" },
+  description: "The export's id.",
+};
+const exportRunResp = (description: string) => ({
+  description,
+  content: { "application/json": { schema: { $ref: "#/components/schemas/Export" } } },
+});
+const exportFilterSchema = {
+  type: "object",
+  additionalProperties: false,
+  description: "Which rows of this record type to export. Leave out a key to keep every row.",
+  properties: {
+    status: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "string",
+        enum: [
+          "active",
+          "trialing",
+          "future",
+          "paused",
+          "non_renewing",
+          "cancelled",
+          "paid",
+          "open",
+          "void",
+          "succeeded",
+          "failed",
+        ],
+      },
+      description:
+        "Subscriptions: `active`, `trialing`, `future`, `paused`, `non_renewing`, `cancelled`. Invoices: `paid`, `open`, `void`. Payments: `succeeded`, `failed`. Empty: all.",
+    },
+    date_field: {
+      type: "string",
+      enum: ["created", "updated"],
+      description:
+        "Customers and subscriptions: the date that `from` and `to` apply to. Default `created`.",
+    },
+    from: {
+      type: ["string", "null"],
+      description:
+        "Rows on or after this date (`YYYY-MM-DD`, or an ISO 8601 instant). Invoices and credit notes: their date. Payments: when they happened. Usage: required.",
+    },
+    to: {
+      type: ["string", "null"],
+      description: "Rows before this date (`YYYY-MM-DD`, or an ISO 8601 instant).",
+    },
+    include_archived: {
+      type: "boolean",
+      description: "Plans, add-ons and coupons: archived ones too. Default false.",
+    },
+  },
+};
+const exportBody = {
+  required: true,
+  content: {
+    "application/json": {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["entities"],
+        properties: {
+          entities: {
+            type: "array",
+            minItems: 1,
+            maxItems: importEntityEnum.length,
+            items: { type: "string", enum: importEntityEnum },
+            description: "The record types to export. Each becomes one CSV file.",
+          },
+          filters: {
+            type: "object",
+            additionalProperties: false,
+            description: "Per record type, which rows to export.",
+            properties: Object.fromEntries(importEntityEnum.map((e) => [e, exportFilterSchema])),
+          },
+          include_related: {
+            type: "boolean",
+            description:
+              "Also export the records the chosen rows refer to (an invoice's customer and subscription, a subscription's prices and coupons), so the files import on their own. Default true.",
+          },
+        },
+      },
+    },
+  },
+};
+const importRunResp = (description: string) => ({
+  description,
+  content: { "application/json": { schema: { $ref: "#/components/schemas/Import" } } },
+});
+const importMappingSchema = {
+  type: "object",
+  description:
+    "Per file (`plans`, `addons`, `coupons`, `customers`, `subscriptions`, `invoices`, `credit_notes`, `payments`, `usage`): the file's column name → the field it fills, or null to skip the column. Columns you leave out keep their automatic mapping.",
+  additionalProperties: {
+    type: "object",
+    additionalProperties: { type: ["string", "null"] },
+  },
+};
+const importOptionsSchema = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "How the check treats problem rows, and whether open imported invoices are collected.",
+  properties: {
+    skip_invalid_rows: {
+      type: "boolean",
+      description:
+        "Leave out rows with errors, and the rows that need them, instead of blocking the import. Default false.",
+    },
+    exclude_renewing_within_24h: {
+      type: "boolean",
+      description: "Leave out subscriptions that renew in the next 24 hours. Default false.",
+    },
+    collect_open_invoices: {
+      type: "boolean",
+      description:
+        "Open imported invoices enter the retry schedule from their due date, and a card on file is charged at the next retry. Default false: they import as owed and nothing collects them.",
+    },
+  },
+};
+const importConfirmBody = {
+  required: false,
+  content: {
+    "application/json": {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          confirm: {
+            type: "string",
+            description: "The business's name. Required when the business is live.",
+          },
+        },
+      },
+    },
+  },
+};
+
 /** The invoice list grammar, shared with the Orders list. */
 const INVOICE_LIST_OPTS: Parameters<typeof listParams>[0] = {
   // Mirrors INVOICE_SORT_FIELDS / INVOICE_FILTER_OPS
@@ -1099,6 +1264,7 @@ const openapiSpec = {
     ...USAGE_VIEW_PATHS,
     ...CREDIT_PATHS,
     ...USAGE_WIDGET_PATHS,
+    ...EMBEDDING_PATHS,
     ...USAGE_CONTROL_PATHS,
     "/health": {
       get: {
@@ -2096,6 +2262,12 @@ const openapiSpec = {
                     description:
                       "How long this link works, in days. Needs link_kind email. Default: the business's email link setting (portal_email_link_days, else 5 days).",
                   },
+                  embed_origin: {
+                    type: "string",
+                    maxLength: 300,
+                    description:
+                      "The one website that may show this portal inside a frame on its own page, as an origin (scheme, host and port), for example `https://app.example.com`. It must be on the business's allowed websites (`PUT /v1/businesses/{biz}/settings/embedding`); a loopback origin is accepted in a test business only. Without it the portal works only as a hosted page. Needs link_kind api.",
+                  },
                 },
               },
             },
@@ -2105,7 +2277,9 @@ const openapiSpec = {
           "201": {
             description: "Portal session (id, status, token, url?, access_expires_at, expires_at)",
           },
-          "400": errResp("Invalid link_kind, redirect_url, forward_url or link_valid_days"),
+          "400": errResp(
+            "Invalid link_kind, redirect_url, forward_url, link_valid_days or embed_origin",
+          ),
           "404": errResp("No such customer"),
         },
       },
@@ -2263,6 +2437,12 @@ const openapiSpec = {
                     format: "uri",
                     description:
                       "http(s). Where the hosted page's cancel link goes, with `id` and `state=cancelled` appended.",
+                  },
+                  embed_origin: {
+                    type: "string",
+                    maxLength: 300,
+                    description:
+                      "The one website that may show this checkout inside a frame on its own page, as an origin (scheme, host and port), for example `https://app.example.com`. It must be on the business's allowed websites (`PUT /v1/businesses/{biz}/settings/embedding`); a loopback origin is accepted in a test business only. Without it the checkout works only as a hosted page.",
                   },
                   pass_thru_content: {
                     type: "string",
@@ -6951,7 +7131,30 @@ const openapiSpec = {
           "`billing_rules_config.failed_change_charge: apply_when_paid`: cancel the subscription's pending change. Its invoice and the credit notes the change raised are voided, and nothing in it applies. 409 `pending_change_payment_in_progress` while a payment for it is in progress; 409 `pending_change_applied` when the invoice is already paid (the change is applied).",
         parameters: [bizParam, subParam, idempotencyHeader],
         responses: {
-          "200": { description: 'Cancelled: `{ object: "pending_change", id, cancelled: true }`' },
+          "200": {
+            description: "Cancelled",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["object", "id", "cancelled"],
+                  properties: {
+                    object: {
+                      type: "string",
+                      enum: ["pending_change"],
+                      description: "Always `pending_change`.",
+                    },
+                    id: {
+                      type: "string",
+                      description: "The cancelled pending change's id.",
+                      example: "spc_XXXXXXXXXXXX01",
+                    },
+                    cancelled: { type: "boolean", enum: [true], description: "Always true." },
+                  },
+                },
+              },
+            },
+          },
           "404": errResp("No such subscription, or it has no pending change"),
           "409": errResp("A payment for the pending change is in progress, or it is already paid"),
         },
@@ -12556,7 +12759,35 @@ const openapiSpec = {
           idempotencyHeader,
         ],
         responses: {
-          "200": { description: "Removed" },
+          "200": {
+            description: "Removed",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["object", "id", "customer", "removed"],
+                  properties: {
+                    object: {
+                      type: "string",
+                      enum: ["customer_discount"],
+                      description: "Always `customer_discount`.",
+                    },
+                    id: {
+                      type: "string",
+                      description: "The removed discount's id.",
+                      example: "disc_XXXXXXXXXXXX01",
+                    },
+                    customer: {
+                      type: "string",
+                      description: "The customer's id.",
+                      example: "cus_XXXXXXXXXXXX01",
+                    },
+                    removed: { type: "boolean", enum: [true], description: "Always true." },
+                  },
+                },
+              },
+            },
+          },
           "404": errResp("No such customer, or no active discount with this id"),
         },
       },
@@ -14000,6 +14231,476 @@ const openapiSpec = {
     // ── The correctness half of /ops. Everything above answers "is the engine UP?";
     // these answer "is it RIGHT?" — the question a liveness panel structurally cannot
     // ask, and the one that lets a wrong number sit green for weeks.
+    "/v1/businesses/{biz}/imports/templates/{entity}": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Download an import template",
+        description:
+          "The CSV template of one import file: its columns and one example row. `format=json` returns each field with its accepted values, other header names it is recognised by, and help.",
+        parameters: [
+          bizParam,
+          {
+            name: "entity",
+            in: "path",
+            required: true,
+            schema: { type: "string", enum: importEntityEnum },
+            description: "The file.",
+          },
+          {
+            name: "format",
+            in: "query",
+            schema: { type: "string", enum: ["csv", "json"] },
+            description: "`csv` (default) or `json`.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "The template",
+            content: {
+              "text/csv": { schema: { type: "string" } },
+              "application/json": { schema: { type: "object" } },
+            },
+          },
+          "404": errResp("No such template"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Upload files to import",
+        description:
+          "Uploads one CSV file per entity (plans, add-ons, coupons, customers, subscriptions, and the history: invoices, credit notes, payments, usage), or a JSON file. Each file is read into rows and its columns are mapped to fields automatically. The check then runs in the background: read the import until `status` is `checked`. Nothing is written to billing data until you start the import. Up to 50,000 rows per file.",
+        parameters: [bizParam, idempotencyHeader],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["files"],
+                properties: {
+                  files: {
+                    type: "array",
+                    minItems: 1,
+                    maxItems: importEntityEnum.length,
+                    description: "The files. One file per entity.",
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["entity", "filename", "content"],
+                      properties: {
+                        entity: {
+                          type: "string",
+                          enum: [...importEntityEnum, "json"],
+                          description:
+                            "What the file holds. `json`: plans, customers and subscriptions in one JSON file.",
+                        },
+                        filename: {
+                          type: "string",
+                          description: "The file's name, shown on the import.",
+                        },
+                        content: { type: "string", description: "The file's text (UTF-8)." },
+                      },
+                    },
+                  },
+                  mapping: importMappingSchema,
+                  options: importOptionsSchema,
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": importRunResp("The import, with status `checking`"),
+          "400": errResp("A file could not be read, or the mapping is not valid"),
+          "403": errResp("Requires the imports:manage permission"),
+        },
+      },
+      get: {
+        tags: ["Businesses"],
+        summary: "List imports",
+        description: "The business's imports, newest first. Discarded imports are left out.",
+        parameters: [
+          bizParam,
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+            description: "Imports per page. Default 20.",
+          },
+          {
+            name: "starting_after",
+            in: "query",
+            schema: { type: "string", format: "uuid" },
+            description: "The last import id of the previous page.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "One page of imports",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: { type: "array", items: { $ref: "#/components/schemas/Import" } },
+                    has_more: { type: "boolean", description: "True when there is another page." },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Retrieve an import",
+        description:
+          "The import with its files, column mapping, the check's summary and, after the run, its result. For a finished import, `undo_blockers` lists what stops an undo now (empty: you can undo it).",
+        parameters: [bizParam, importIdParam],
+        responses: {
+          "200": importRunResp("The import"),
+          "404": errResp("No such import"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/rows": {
+      get: {
+        tags: ["Businesses"],
+        summary: "List the rows of an import",
+        description:
+          "The rows of the uploaded files, with their errors, their state at the check and their result. Rows come in file order: by file, then by row number.",
+        parameters: [
+          bizParam,
+          importIdParam,
+          {
+            name: "entity",
+            in: "query",
+            schema: { type: "string", enum: importEntityEnum },
+            description: "Only rows of this file.",
+          },
+          {
+            name: "state",
+            in: "query",
+            schema: { type: "string", enum: ["new", "existing", "invalid", "excluded"] },
+            description: "Only rows with this state at the check.",
+          },
+          {
+            name: "outcome",
+            in: "query",
+            schema: { type: "string", enum: ["created", "unchanged", "failed", "excluded"] },
+            description: "Only rows with this result.",
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 500 },
+            description: "Rows per page. Default 100.",
+          },
+          {
+            name: "starting_after",
+            in: "query",
+            schema: { type: "string", format: "uuid" },
+            description: "The last row id of the previous page.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "One page of rows",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: { type: "array", items: { $ref: "#/components/schemas/ImportRow" } },
+                    has_more: { type: "boolean", description: "True when there is another page." },
+                  },
+                },
+              },
+            },
+          },
+          "404": errResp("No such import"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/files/{entity}": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Download a file with its errors",
+        description:
+          "One uploaded file as CSV, with an `import_errors` column added and, after the run, an `import_result` column. Correct the rows in this file and upload it again.",
+        parameters: [
+          bizParam,
+          importIdParam,
+          {
+            name: "entity",
+            in: "path",
+            required: true,
+            schema: { type: "string", enum: importEntityEnum },
+            description: "The file.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "The file",
+            content: { "text/csv": { schema: { type: "string" } } },
+          },
+          "404": errResp("No such import or file"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/check": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Check an import again",
+        description:
+          "Checks the rows again with a changed column mapping or options. Only before the import starts.",
+        parameters: [bizParam, importIdParam, idempotencyHeader],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: { mapping: importMappingSchema, options: importOptionsSchema },
+              },
+            },
+          },
+        },
+        responses: {
+          "202": importRunResp("The import, with status `checking`"),
+          "400": errResp("The mapping is not valid"),
+          "404": errResp("No such import"),
+          "409": errResp("The import has started"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/start": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Start an import",
+        description:
+          "Starts a checked import whose summary has no blockers. The rows are checked again, then written in the background. The import never charges anyone: each subscription renews for the first time at the end of its current term. Emails and webhooks are not sent for imported records.",
+        parameters: [bizParam, importIdParam, idempotencyHeader],
+        requestBody: importConfirmBody,
+        responses: {
+          "202": importRunResp("The import, with status `queued`"),
+          "400": errResp("The business is live and `confirm` is not its name"),
+          "404": errResp("No such import"),
+          "409": errResp(
+            "The import is not checked, has blockers, or another import is in progress",
+          ),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/undo": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Undo an import",
+        description:
+          "Deletes the records the import created, in the background. Refused (409, with `reasons`) when any of them has billing activity: an invoice, a payment, usage, a change after the import. Records that were in the business before the import are never deleted.",
+        parameters: [bizParam, importIdParam, idempotencyHeader],
+        requestBody: importConfirmBody,
+        responses: {
+          "202": importRunResp("The import, with status `undoing`"),
+          "400": errResp("The business is live and `confirm` is not its name"),
+          "404": errResp("No such import"),
+          "409": errResp("The import is not finished, or records it created are in use"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/imports/{id}/discard": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Discard an import",
+        description: "Throws away an import that has not started, with its rows.",
+        parameters: [bizParam, importIdParam, idempotencyHeader],
+        responses: {
+          "200": importRunResp("The import, with status `discarded`"),
+          "404": errResp("No such import"),
+          "409": errResp("The import has started"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports/preview": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Preview an export",
+        description:
+          "Writes nothing. For each file the export would write: the number of records, how many of them its own filters chose and how many come because other rows refer to them, the file's columns, and the first rows exactly as the file will have them.",
+        parameters: [bizParam],
+        requestBody: exportBody,
+        responses: {
+          "200": {
+            description: "The files the export would write",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["export_preview"] },
+                    include_related: { type: "boolean" },
+                    files: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          entity: { type: "string", enum: importEntityEnum },
+                          rows: { type: "integer", description: "Records in the file." },
+                          chosen: { type: "integer", description: "Records the filters chose." },
+                          related: {
+                            type: "integer",
+                            description: "Records added because chosen rows refer to them.",
+                          },
+                          columns: { type: "array", items: { type: "string" } },
+                          sample: {
+                            type: "array",
+                            items: { type: "array", items: { type: "string" } },
+                            description: "Up to 10 rows, in the file's columns.",
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": errResp("A filter is not valid"),
+          "403": errResp("Requires the exports:view permission"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Start an export",
+        description:
+          "Exports the chosen record types as CSV files, in the background. Read the export until `status` is `succeeded`, or listen for the `export_completed` webhook, then download the zip. Each file has the columns the file import reads, so an export imports into another business as it is. All files are taken from one moment. Files are kept 7 days. One export at a time per business.",
+        parameters: [bizParam, idempotencyHeader],
+        requestBody: exportBody,
+        responses: {
+          "202": exportRunResp("The export, with status `queued`"),
+          "400": errResp("A filter is not valid"),
+          "403": errResp("Requires the exports:manage permission"),
+          "409": errResp("Another export of this business is in progress"),
+        },
+      },
+      get: {
+        tags: ["Businesses"],
+        summary: "List exports",
+        description: "The business's exports, newest first.",
+        parameters: [
+          bizParam,
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+            description: "Exports per page. Default 20.",
+          },
+          {
+            name: "starting_after",
+            in: "query",
+            schema: { type: "string", format: "uuid" },
+            description: "The last export id of the previous page.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "One page of exports",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    object: { type: "string", enum: ["list"] },
+                    data: { type: "array", items: { $ref: "#/components/schemas/Export" } },
+                    has_more: { type: "boolean", description: "True when there is another page." },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports/{id}": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Retrieve an export",
+        description:
+          "The export with its files, its progress while it runs, and when its files are deleted.",
+        parameters: [bizParam, exportIdParam],
+        responses: {
+          "200": exportRunResp("The export"),
+          "404": errResp("No such export"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports/{id}/file": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Download an export",
+        description:
+          "The zip: one CSV per record type and a README.txt that says what the files hold. Each download is in the audit log.",
+        parameters: [bizParam, exportIdParam],
+        responses: {
+          "200": {
+            description: "The zip",
+            content: { "application/zip": { schema: { type: "string", format: "binary" } } },
+          },
+          "404": errResp("No such export"),
+          "409": errResp("The export is not ready, failed, or its files were deleted"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports/{id}/files/{entity}": {
+      get: {
+        tags: ["Businesses"],
+        summary: "Download one file of an export",
+        description: "One CSV of the export. Each download is in the audit log.",
+        parameters: [
+          bizParam,
+          exportIdParam,
+          {
+            name: "entity",
+            in: "path",
+            required: true,
+            schema: { type: "string", enum: importEntityEnum },
+            description: "The file.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "The file",
+            content: { "text/csv": { schema: { type: "string" } } },
+          },
+          "404": errResp("No such export or file"),
+          "409": errResp("The export is not ready, failed, or its files were deleted"),
+        },
+      },
+    },
+    "/v1/businesses/{biz}/exports/{id}/delete": {
+      post: {
+        tags: ["Businesses"],
+        summary: "Delete an export's files",
+        description: "Deletes the files of a finished export now. The export stays in the list.",
+        parameters: [bizParam, exportIdParam, idempotencyHeader],
+        responses: {
+          "200": exportRunResp("The export, with status `deleted`"),
+          "404": errResp("No such export"),
+          "409": errResp("The export is in progress"),
+          "403": errResp("Requires the exports:manage permission"),
+        },
+      },
+    },
     "/v1/businesses/{biz}/transfer_configurations/preview": {
       post: {
         tags: ["Businesses"],
@@ -15678,7 +16379,7 @@ const openapiSpec = {
                     type: "object",
                     nullable: true,
                     description:
-                      "Which checkout fields show, hide, or are required. Absent keys resolve to defaults that are not uniform: billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows, and invoice.po_number is hidden (and still gated by storefront_config.collect_po_number). A mandatory region or postal code applies only where the country has one. billing.country cannot be hide (400). While the business has a live tax region, billing.country must stay mandatory, and while it has a GST region billing.state_code must too (400 otherwise; see `address_field_locks`). Making billing.postal_code mandatory is also the AVS/ZIP-verification control, since AVS is checked gateway-side.",
+                      "Which checkout fields show, hide, or are required. Absent keys resolve to defaults that are not uniform: billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows, and invoice.po_number is hidden (and still gated by storefront_config.collect_po_number). A mandatory region or postal code applies only where the country has one. billing.country may be hide: the checkout then asks for no postal code, city or state either, and with customer.first_name also hide it asks for the email only. While the business has a live tax region, billing.country must stay mandatory, and while it has a GST region billing.state_code must too (400 otherwise; see `address_field_locks`). Making billing.postal_code mandatory is also the AVS/ZIP-verification control, since AVS is checked gateway-side. When the business takes payments through a Stripe account in India, billing.country must stay mandatory, customer.first_name and billing.line1 cannot be hide, and a buyer outside India must give billing.line1 whatever this config says: Stripe refuses a foreign card without the buyer's name and street address (see `address_field_locks.gateway_address`). With storefront_config.fill_export_street on, billing.line1 may be hide and billing.postal_code and billing.city cannot (see `address_field_locks.gateway_street_fill`). With billing.line1 hide, the buyer's page also hides billing.line2 and billing.line3; their stored values are kept.",
                     properties: {
                       "customer.first_name": {
                         type: "string",
@@ -15716,7 +16417,7 @@ const openapiSpec = {
                     type: "object",
                     nullable: true,
                     description:
-                      "Which billing-detail fields the buyer portal shows, hides, requires, or shows read-only. Absent keys resolve to defaults: customer.first_name, customer.phone, billing.line1, billing.city, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows. A portal save keeps the stored value of every hide or read_only key; billing.state and billing.state_code are one region, kept only when both are hide or read_only. billing.country cannot be hide (400). The tax rules of checkout_field_config apply here too.",
+                      "Which billing-detail fields the buyer portal shows, hides, requires, or shows read-only. Absent keys resolve to defaults: customer.first_name, billing.state_code, billing.postal_code and billing.country are mandatory, everything else shows. A portal save keeps the stored value of every hide or read_only key; billing.state and billing.state_code are one region, kept only when both are hide or read_only. A hidden customer.first_name means no billing name is required. The tax and gateway rules of checkout_field_config apply here too. With billing.line1 hide, the buyer's page also hides billing.line2 and billing.line3; their stored values are kept.",
                     properties: {
                       "customer.first_name": { $ref: "#/components/schemas/PortalFieldState" },
                       "customer.last_name": { $ref: "#/components/schemas/PortalFieldState" },
@@ -15782,6 +16483,11 @@ const openapiSpec = {
                     properties: {
                       hide_zero_value_lines: { type: "boolean" },
                       collect_po_number: { type: "boolean" },
+                      fill_export_street: {
+                        type: "boolean",
+                        description:
+                          "India Stripe accounts only. When true, a buyer outside India who leaves billing.line1 empty is sent to Stripe with their city and state as line 1, so Stripe does not refuse the foreign card for a missing street. The business accepts that this is the address Stripe reports for the export. billing.line1 may then be hidden; billing.postal_code and billing.city must stay visible (`address_field_locks.gateway_street_fill`). Default false.",
+                      },
                       default_return_url: { type: "string", format: "uri", nullable: true },
                       default_cancel_url: { type: "string", format: "uri", nullable: true },
                       allow_invoice_download: {
@@ -16370,6 +17076,7 @@ const openapiSpec = {
       ...USAGE_VIEW_SCHEMAS,
       ...CREDIT_SCHEMAS,
       ...USAGE_WIDGET_SCHEMAS,
+      ...EMBEDDING_SCHEMAS,
       ...USAGE_CONTROL_SCHEMAS,
       Error: error,
       /** A saved report dashboard (`serializeDashboard`), its tiles without their answers. */
@@ -16734,6 +17441,257 @@ const openapiSpec = {
                 },
               },
             },
+          },
+        },
+      },
+      /** A file import (`/imports`). */
+      Export: {
+        type: "object",
+        properties: {
+          object: { type: "string", enum: ["export"] },
+          id: { type: "string", description: "The export's id." },
+          status: {
+            type: "string",
+            enum: ["queued", "running", "succeeded", "failed", "expired", "deleted"],
+            description:
+              "`succeeded`: download the files until `expires_at`. `expired` and `deleted`: the files are gone; export again.",
+          },
+          entities: {
+            type: "array",
+            items: { type: "string", enum: importEntityEnum },
+            description: "The record types asked for.",
+          },
+          filters: { type: "object", description: "The filters asked for, per record type." },
+          include_related: {
+            type: "boolean",
+            description: "Records the chosen rows refer to were exported too.",
+          },
+          files: {
+            type: "array",
+            description: "The files written. A record type with no rows has no file.",
+            items: {
+              type: "object",
+              properties: {
+                entity: { type: "string", enum: importEntityEnum },
+                name: { type: "string", description: "The file's name in the zip." },
+                rows: { type: "integer", description: "Data rows in the file." },
+                related: {
+                  type: "integer",
+                  description: "Records added because other rows refer to them.",
+                },
+                bytes: { type: "integer", description: "The file's size." },
+              },
+            },
+          },
+          skipped: {
+            type: "array",
+            description: "Rows left out because the import cannot read them, and why.",
+            items: {
+              type: "object",
+              properties: {
+                entity: { type: "string" },
+                reason: { type: "string" },
+                count: { type: "integer" },
+              },
+            },
+          },
+          progress: {
+            type: ["object", "null"],
+            description: "While it runs: the record type being written, and records done of all.",
+            properties: {
+              entity: { type: ["string", "null"] },
+              done: { type: "integer" },
+              rows: { type: "integer" },
+            },
+          },
+          size_bytes: { type: "integer", description: "The files' compressed size." },
+          error: { type: ["string", "null"], description: "Why the export failed." },
+          created_by: { type: ["string", "null"] },
+          created_at: { type: "string", format: "date-time" },
+          snapshot_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "The moment every file was read at.",
+          },
+          started_at: { type: ["string", "null"], format: "date-time" },
+          finished_at: { type: ["string", "null"], format: "date-time" },
+          expires_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "When the files are deleted.",
+          },
+          deleted_at: { type: ["string", "null"], format: "date-time" },
+        },
+      },
+      Import: {
+        type: "object",
+        properties: {
+          object: { type: "string", enum: ["import"] },
+          id: { type: "string", description: "The import's id." },
+          status: {
+            type: "string",
+            enum: [
+              "uploaded",
+              "checking",
+              "checked",
+              "queued",
+              "running",
+              "succeeded",
+              "partially_failed",
+              "failed",
+              "undoing",
+              "undone",
+              "discarded",
+            ],
+            description:
+              "Where the import is. `checked`: read `summary` and start it, or change the mapping and check again.",
+          },
+          files: {
+            type: "array",
+            description: "The uploaded files.",
+            items: {
+              type: "object",
+              properties: {
+                entity: {
+                  type: "string",
+                  enum: importEntityEnum,
+                  description: "What the file holds.",
+                },
+                filename: { type: "string", description: "The file's name." },
+                headers: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "The file's column names.",
+                },
+                mapping: {
+                  type: "object",
+                  additionalProperties: { type: ["string", "null"] },
+                  description:
+                    "Column name → the field it fills, or null when the column is skipped.",
+                },
+                rows: { type: "integer", description: "Data rows in the file." },
+                missing_required: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Required fields no column is mapped to. The check blocks until they are mapped.",
+                },
+              },
+            },
+          },
+          options: importOptionsSchema,
+          summary: {
+            type: ["object", "null"],
+            description:
+              "The check's review: rows per file (new, existing, invalid, excluded), subscriptions, MRR that arrives per currency, saved cards at connected and not connected gateways, renewal dates, test-business limits, `history` when the files carry it (open invoices, the receivables and the refundable credit they open per currency, and the next invoice number when imported numbers move it), what no import carries, `blockers` (each stops the start) and `warnings`. `ready` is true when there are no blockers.",
+          },
+          result: {
+            type: ["object", "null"],
+            description:
+              "While the run is `running`: `progress` with `done` and `total` new records, updated every few seconds. After the run: rows per file that were created, unchanged, failed or left out, and the warnings.",
+          },
+          error: {
+            type: ["string", "null"],
+            description: "Why the run failed, or why an undo was refused.",
+          },
+          created_by: { type: ["string", "null"], description: "Who uploaded the files." },
+          started_by: { type: ["string", "null"], description: "Who started the import." },
+          undone_by: { type: ["string", "null"], description: "Who undid the import." },
+          created_at: {
+            type: "string",
+            format: "date-time",
+            description: "When the files were uploaded.",
+          },
+          checked_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "When the last check ended.",
+          },
+          started_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "When the run started.",
+          },
+          finished_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "When the run ended.",
+          },
+          undone_at: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "When the undo ended.",
+          },
+          undo_blockers: {
+            type: ["array", "null"],
+            description:
+              "Retrieve only. For a finished import: what stops an undo now. Empty: you can undo it.",
+            items: {
+              type: "object",
+              properties: {
+                code: { type: "string", description: "The reason, for code." },
+                message: { type: "string", description: "The reason, for people." },
+                count: { type: "integer", description: "How many records." },
+              },
+            },
+          },
+        },
+      },
+      /** One row of an uploaded file. */
+      ImportRow: {
+        type: "object",
+        properties: {
+          object: { type: "string", enum: ["import_row"] },
+          id: { type: "string", description: "The row's id." },
+          entity: {
+            type: "string",
+            enum: importEntityEnum,
+            description: "The file the row is in.",
+          },
+          row_number: {
+            type: "integer",
+            description: "The data row in the file. The header line is row 0.",
+          },
+          source_id: { type: ["string", "null"], description: "The row's id column." },
+          state: {
+            type: ["string", "null"],
+            enum: ["new", "existing", "invalid", "excluded", null],
+            description:
+              "At the check: `new` is imported; `existing` is in the business already and stays as it is; `invalid` has errors; `excluded` is left out.",
+          },
+          outcome: {
+            type: ["string", "null"],
+            enum: ["created", "unchanged", "failed", "excluded", null],
+            description: "After the run: what happened to the row.",
+          },
+          outcome_message: {
+            type: ["string", "null"],
+            description: "Why the row failed or was left out.",
+          },
+          errors: {
+            type: "array",
+            description: "Problems that stop the row.",
+            items: {
+              type: "object",
+              properties: {
+                column: {
+                  type: ["string", "null"],
+                  description: "The file's column, or null for the row.",
+                },
+                field: { type: ["string", "null"], description: "The field." },
+                message: { type: "string", description: "What to correct." },
+              },
+            },
+          },
+          warnings: {
+            type: "array",
+            description: "Problems that do not stop the row. Same shape as `errors`.",
+            items: { type: "object" },
+          },
+          values: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: "The row's cells, by column name, as uploaded.",
           },
         },
       },
@@ -18478,11 +19436,21 @@ const openapiSpec = {
       AddressFieldLocks: {
         type: "object",
         description:
-          "Address keys the business's live tax setup forces to mandatory on checkout and portal. The settings refuse any other state for them.",
-        required: ["country", "state_code"],
+          "Address keys the business's live tax setup forces to mandatory on checkout and portal, and the keys its payment gateway needs. The settings refuse any other state for them.",
+        required: ["country", "state_code", "gateway_address", "gateway_street_fill"],
         properties: {
           country: { type: "boolean", description: "The business has a live tax region." },
           state_code: { type: "boolean", description: "The business has a live GST region." },
+          gateway_address: {
+            type: "boolean",
+            description:
+              "The business takes payments through a Stripe account in India, which needs the name, street address and country of a buyer outside India. billing.country stays mandatory, and customer.first_name and billing.line1 cannot be hide, or read_only in the portal (see `gateway_street_fill` for the exception).",
+          },
+          gateway_street_fill: {
+            type: "boolean",
+            description:
+              "With gateway_address: the business turned on storefront_config.fill_export_street, so the street sent to Stripe is built from the buyer's city and state (or postal code). billing.line1 may then be hide, and customer.first_name, billing.postal_code and billing.city cannot be hide, or read_only in the portal.",
+          },
         },
       },
       CurrencyRate: {
@@ -26261,6 +27229,10 @@ const FIELD_RULES: Array<[string, string]> = [
     "Whether lines with a zero value are hidden.",
   ],
   [
+    "OP PATCH / storefront_config.fill_export_street",
+    "Whether an India Stripe account sends the city and state as address line 1 when a buyer abroad gives no street.",
+  ],
+  [
     "OP PATCH / storefront_config.collect_po_number",
     "Whether checkout asks for a purchase order number.",
   ],
@@ -27371,6 +28343,9 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
         example: "https://app.example.com/billing",
       }),
       forward_url: str("The portal page the link opens on.", { example: "/portal?tab=methods" }),
+      embed_origin: str("The one website that may frame this portal. Present only when set.", {
+        example: "https://app.example.com",
+      }),
     },
     ["object", "id", "status", "token", "access_expires_at", "expires_at"],
   ),
@@ -27398,6 +28373,9 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
         example: "https://app.example.com/billing",
       }),
       forward_url: nstr("The portal page the link opens on.", { example: "/portal?tab=methods" }),
+      embed_origin: nstr("The one website that may frame this portal, or null.", {
+        example: "https://app.example.com",
+      }),
     },
     ["object", "id", "status", "created_at", "expires_at"],
   ),
@@ -27445,6 +28423,9 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
         { type: "string", description: "A coupon code.", example: "welcome-10" },
         "The coupon codes applied.",
       ),
+      embed_origin: str("The one website that may frame this checkout. Present only when set.", {
+        example: "https://app.example.com",
+      }),
       token: str("The bearer token for the checkout link. We never store it, so save it now.", {
         example: "cstk_XXXXXXXXXXXXXXXXXXXXXXXX",
       }),
@@ -27501,6 +28482,9 @@ const RESPONSE_COMPONENTS: Record<string, unknown> = {
       }),
       cancel_url: nstr("Where checkout sends the buyer who leaves.", {
         example: "https://app.example.com/pricing",
+      }),
+      embed_origin: nstr("The one website that may frame this checkout, or null.", {
+        example: "https://app.example.com",
       }),
       pass_thru_content: nstr("Text that comes back to you unchanged when the session finishes."),
       metadata: {

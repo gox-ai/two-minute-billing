@@ -21,7 +21,7 @@ import {
 } from "@/modules/gateway/service";
 import { selectGatewayAccount, handlesCurrency } from "@/modules/gateway/router";
 import { settlesAsynchronously, getWebhookEndpointInfo } from "@/modules/gateway/webhook-endpoint";
-import { config } from "@/platform/config";
+import { gatewayWebhookBaseUrl } from "@/providers/notification-url";
 import { emitEvent } from "@/modules/events/emit";
 import { buildEventData } from "@/modules/events/registry";
 import {
@@ -80,6 +80,8 @@ export {
   type MandateChargeability,
 } from "./mandate-afa";
 import { gatewayReturnUrl } from "@/providers/buyer-return";
+import { filledLine1 } from "./export-street";
+import { exportStreetFillHome } from "@/modules/gateway/address-rules";
 import { providerPaymentMethodRef } from "./provider-ref";
 export { getPaymentRoleIds };
 
@@ -97,7 +99,10 @@ export function providerContact(customer: typeof customers.$inferSelect): Provid
 }
 
 /** Provider-facing identity details for a customer (name+address matter for e.g. India exports). */
-function providerCustomerDetails(customer: typeof customers.$inferSelect): EnsureCustomerInput {
+function providerCustomerDetails(
+  customer: typeof customers.$inferSelect,
+  fillHome: string | null = null,
+): EnsureCustomerInput {
   const holder = accountHolderName(customer);
   return {
     customerRef: customer.publicId,
@@ -116,7 +121,9 @@ function providerCustomerDetails(customer: typeof customers.$inferSelect): Ensur
     // back to the billing-address phone.
     phone: customer.phone ?? customer.billingPhone ?? undefined,
     address: {
-      line1: customer.addressLine1 ?? undefined,
+      line1: customer.addressLine1?.trim()
+        ? customer.addressLine1
+        : filledLine1(customer, fillHome),
       line2: customer.addressLine2 ?? undefined,
       city: customer.city ?? undefined,
       state: customer.state ?? undefined,
@@ -182,9 +189,14 @@ export async function syncProviderCustomerBeforeCharge(input: {
   );
   if (!row || row.customer.updatedAt <= row.syncedAt) return;
   try {
+    const fillHome = await exportStreetFillHome(
+      input.organizationId,
+      row.customer.businessId,
+      input.provider,
+    );
     await input.provider.updateCustomer(
       { providerKey: input.provider.key, providerCustomerId },
-      providerCustomerDetails(row.customer),
+      providerCustomerDetails(row.customer, fillHome),
     );
     await markProviderCustomerSynced(input.organizationId, row.mappingId);
   } catch (e) {
@@ -215,7 +227,10 @@ export async function ensureProviderCustomer(input: {
   provider: PaymentProvider;
   gatewayAccountId: string | null;
 }): Promise<ProviderCustomerRef> {
-  const details = providerCustomerDetails(input.customer);
+  const details = providerCustomerDetails(
+    input.customer,
+    await exportStreetFillHome(input.organizationId, input.businessId, input.provider),
+  );
   const scope = and(
     eq(providerCustomers.customerId, input.customer.id),
     eq(providerCustomers.providerKey, input.provider.key),
@@ -1517,7 +1532,7 @@ export async function listVaultGatewaysForBusiness(
  *
  * ⚠️ **LIVE MODE ONLY.** Test accounts are routinely used without a webhook — every
  * `verify:*` suite and the whole local dev loop registers mandates against a
- * placeholder `WEBHOOK_BASE_URL` and settles by calling the inbound path directly.
+ * placeholder `ADVERTISED_API_URL` and settles by calling the inbound path directly.
  * Enforcing this in test would break the suites that prove the rail works, to guard
  * against a state that costs nothing there.
  *
@@ -1539,12 +1554,12 @@ async function assertSettlementReachable(
   // No public base URL means there is no address for the gateway to POST to at all:
   // `buildNotificationUrl` would hand it a bare path. Checked separately because the
   // account's own credentials look perfectly configured in that state.
-  if (!config.WEBHOOK_BASE_URL) {
+  if (!gatewayWebhookBaseUrl()) {
     throw new PaymentMethodConfigError(
       `Gateway account ${acc.publicId} (${acc.gatewayKey}, live) settles these debits asynchronously, but ` +
-        "this deployment has no WEBHOOK_BASE_URL. The gateway has no address to send the " +
+        "this deployment has no ADVERTISED_API_URL. The gateway has no address to send the " +
         "settlement callback to. If you register a mandate now, we would collect money that we can never reconcile. " +
-        "Set WEBHOOK_BASE_URL to the public origin of this API. Then provision the endpoint.",
+        "Set ADVERTISED_API_URL to the public origin of this API. Then provision the endpoint.",
     );
   }
   let configured = false;

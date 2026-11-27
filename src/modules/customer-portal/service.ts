@@ -5,6 +5,7 @@ import { publicId } from "@/platform/ids";
 import { portalSessions, customers, businesses, paymentLinks } from "@db/schema";
 import { createLogger } from "@/platform/logger";
 import { resolveStorefrontConfig } from "@/modules/checkout/storefront-config";
+import { checkEmbedOrigin } from "@/modules/embedding/service";
 
 const log = createLogger("customer-portal");
 
@@ -91,8 +92,13 @@ const sessionTtlFor = (biz?: { storefrontConfig: unknown } | null): number => {
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
+/** A portal session's `embed_origin` was refused (not a valid origin, or not on the list). */
+export class PortalEmbedError extends Error {}
+
 export interface PortalSessionRef {
   publicId: string;
+  /** The one website that may frame this session, or null. */
+  embedOrigin: string | null;
   /**
    * The single-use ENTRY credential (`pstk_…`) — returned exactly once at mint, never
    * stored in plaintext, and accepted by nothing except `exchangePortalAccessToken`.
@@ -120,6 +126,8 @@ export async function createPortalSession(input: {
   redirectUrl?: string | null;
   /** Portal path the link opens on (one of `PORTAL_FORWARD_PATHS`). Absent = `/portal`. */
   forwardUrl?: string | null;
+  /** The one website that may frame this session (`embedding`). Must be on the business's list. */
+  embedOrigin?: string;
   /**
    * Run inside an EXISTING transaction instead of opening one.
    *
@@ -146,8 +154,14 @@ export async function createPortalSession(input: {
   const biz = await (input.tx ? bizRow(input.tx) : withTenant(input.organizationId, bizRow));
   const expiresAt = new Date(now + sessionTtlFor(biz));
   const accessExpiresAt = new Date(now + (input.accessTtlMs ?? accessTtlFor(kind, biz)));
-  const insert = (tx: Tx) =>
-    tx.insert(portalSessions).values({
+  let embedOrigin: string | null = null;
+  const insert = async (tx: Tx) => {
+    if (input.embedOrigin !== undefined) {
+      const e = await checkEmbedOrigin(tx, input.businessId, input.embedOrigin);
+      if ("error" in e) throw new PortalEmbedError(`embed_origin: ${e.error}`);
+      embedOrigin = e.origin;
+    }
+    await tx.insert(portalSessions).values({
       organizationId: input.organizationId,
       businessId: input.businessId,
       customerId: input.customerId,
@@ -164,7 +178,9 @@ export async function createPortalSession(input: {
       expiresAt,
       redirectUrl: input.redirectUrl ?? null,
       forwardUrl: input.forwardUrl ?? null,
+      embedOrigin,
     });
+  };
   await (input.tx ? insert(input.tx) : withTenant(input.organizationId, insert));
   // A portal session is a bearer credential handed to an end customer. Never log the
   // token — the session's public id is what correlates it with its later requests.
@@ -175,7 +191,7 @@ export async function createPortalSession(input: {
     createdBy: input.createdBy ?? null,
     kind,
   });
-  return { publicId: psessId, accessToken, accessExpiresAt, expiresAt };
+  return { publicId: psessId, accessToken, accessExpiresAt, expiresAt, embedOrigin };
 }
 
 /**

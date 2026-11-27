@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -134,6 +135,7 @@ export function PortalChangePlan({
             return void toast.error(
               buyerChangeError(res.error, "We could not withdraw the change."),
             );
+          embedNotify("subscription_changed", { subscription, change: "plan_change_withdrawn" });
           toast.success("Plan change withdrawn.");
           router.refresh();
         }}
@@ -285,6 +287,10 @@ function ChangePlanDialog({
       return;
     }
     const r = res.data;
+    embedNotify("subscription_changed", {
+      subscription,
+      change: r.scheduled_change ? "plan_change_scheduled" : "plan",
+    });
     if (r.scheduled_change) toast.success("Plan change scheduled.");
     else if (r.invoice && r.invoice.status !== "paid" && r.invoice.amount_due_minor > 0)
       toast.warning(

@@ -80,6 +80,10 @@ export const PERMISSIONS = [
   { key: "transfers:status", resource: "transfers", mode: "read", legacy: "any", area: "Settings", label: "View one business transfer", operatorOnly: false },
   { key: "transfers:manage", resource: "transfers", mode: "write", legacy: "admin", area: "Settings", label: "Preview and run business transfers", operatorOnly: false },
   { key: "transfers:live_override", resource: "transfers", mode: "write", legacy: "admin", area: "Settings", label: "Override the live-mode check of a transfer", operatorOnly: true },
+  { key: "imports:view", resource: "imports", mode: "read", legacy: "admin", area: "Settings", label: "View file imports and their rows", operatorOnly: false },
+  { key: "imports:manage", resource: "imports", mode: "write", legacy: "admin", area: "Settings", label: "Upload, check, start and undo file imports", operatorOnly: false },
+  { key: "exports:view", resource: "exports", mode: "read", legacy: "admin", area: "Settings", label: "View bulk exports and download their files", operatorOnly: false },
+  { key: "exports:manage", resource: "exports", mode: "write", legacy: "admin", area: "Settings", label: "Start and delete bulk exports", operatorOnly: false },
   { key: "test_tools:view", resource: "test_tools", mode: "read", legacy: "any", area: "Settings", label: "View time travel", operatorOnly: false },
   { key: "test_tools:manage", resource: "test_tools", mode: "write", legacy: "admin", area: "Settings", label: "Use time travel, and create or delete sample and test data", operatorOnly: false },
   { key: "test_clock:advance", resource: "test_clock", mode: "write", legacy: "ops", area: "Settings", label: "Advance the test clock", operatorOnly: false },
@@ -101,7 +105,7 @@ export const PERMISSIONS = [
 ] as const satisfies readonly PermissionDef[];
 
 /** Resources an API key permission map may name. */
-export const KEY_RESOURCES: readonly string[] = ["customers","payment_methods","credits","credit_holds","subscriptions","usage","usage_events","usage_controls","invoices","credit_notes","payments","checkout_sessions","catalog","meters","model_prices","coupons","taxes","emails","comments","reports","usage_margin","views","audit_logs","events","settings","businesses","test_mode","dunning_policies","gateways","integrations","transfers","test_tools","test_clock","api_keys","webhooks","api_logs","mcp"];
+export const KEY_RESOURCES: readonly string[] = ["customers","payment_methods","credits","credit_holds","subscriptions","usage","usage_events","usage_controls","invoices","credit_notes","payments","checkout_sessions","catalog","meters","model_prices","coupons","taxes","emails","comments","reports","usage_margin","views","audit_logs","events","settings","businesses","test_mode","dunning_policies","gateways","integrations","transfers","imports","exports","test_tools","test_clock","api_keys","webhooks","api_logs","mcp"];
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 

@@ -11,7 +11,7 @@
 -- graphile_worker.add_job()), apply this file once, record the cut below in
 -- drizzle.__drizzle_migrations, then apply the migrations newer than the cut.
 --
--- baseline-cut: 0549_postal_codes 1796200700000
+-- baseline-cut: 0552_bulk_exports 1796201000000
 --
 
 -- withTenant switches to this role; the grants below are what it may touch.
@@ -137,6 +137,72 @@ begin
     max_attempts => 1,
     -- Coalesce a burst of events into ONE pending nudge rather than one per event.
     job_key => 'webhook_outbox_nudge'
+  );
+end
+$$;
+
+
+--
+-- Name: app_queue_export_job("uuid", "text"); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION "public"."app_queue_export_job"("p_run" "uuid", "p_trace" "text" DEFAULT NULL::"text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  if not exists (
+    select 1 from public.export_runs r
+     where r.id = p_run
+       and r.status = 'queued'
+       and r.organization_id = nullif(current_setting('app.org_id', true), '')::uuid
+  ) then
+    raise exception 'app_queue_export_job: no queued export % in this organization', p_run;
+  end if;
+  perform graphile_worker.add_job(
+    'export_run',
+    json_strip_nulls(json_build_object(
+      'run', p_run::text,
+      '_trace', case when p_trace is null then null else json_build_object('traceId', p_trace) end
+    )),
+    max_attempts => 5,
+    job_key => 'export_run:' || p_run::text
+  );
+end
+$$;
+
+
+--
+-- Name: app_queue_import_job("text", "uuid", "text"); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION "public"."app_queue_import_job"("p_task" "text", "p_run" "uuid", "p_trace" "text" DEFAULT NULL::"text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_status text;
+begin
+  if p_task not in ('import_check', 'import_run', 'import_undo') then
+    raise exception 'app_queue_import_job: unknown task %', p_task;
+  end if;
+  v_status := case p_task when 'import_check' then 'checking' when 'import_run' then 'queued' else 'undoing' end;
+  if not exists (
+    select 1 from public.import_runs r
+     where r.id = p_run
+       and r.status = v_status
+       and r.organization_id = nullif(current_setting('app.org_id', true), '')::uuid
+  ) then
+    raise exception 'app_queue_import_job: no % import % in this organization', v_status, p_run;
+  end if;
+  perform graphile_worker.add_job(
+    p_task,
+    json_strip_nulls(json_build_object(
+      'run', p_run::text,
+      '_trace', case when p_trace is null then null else json_build_object('traceId', p_trace) end
+    )),
+    max_attempts => 5,
+    job_key => p_task || ':' || p_run::text
   );
 end
 $$;
@@ -999,6 +1065,7 @@ CREATE TABLE "public"."businesses" (
     "team_alerts_config" "jsonb",
     "max_customer_coupon_codes" smallint DEFAULT 1 NOT NULL,
     "button_text_color" "text",
+    "embed_origins" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
     CONSTRAINT "businesses_billing_mode_ck" CHECK ((((("anchor_granularity" = 'instant'::"text") AND ("proration_granularity" = 'exact'::"text")) OR (("anchor_granularity" = 'instant'::"text") AND ("proration_granularity" = 'whole_day'::"text"))) OR (("anchor_granularity" = 'day'::"text") AND ("proration_granularity" = 'whole_day'::"text")))),
     CONSTRAINT "businesses_brand_color_hex" CHECK ((("brand_color" IS NULL) OR ("brand_color" ~ '^#[0-9A-Fa-f]{6}$'::"text"))),
     CONSTRAINT "businesses_button_text_color_hex" CHECK ((("button_text_color" IS NULL) OR ("button_text_color" ~ '^#[0-9A-Fa-f]{6}$'::"text"))),
@@ -1154,6 +1221,7 @@ CREATE TABLE "public"."checkout_sessions" (
     "customer_coupon_codes" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
     "charge_payment_intent" "text",
     "charge_completion" "jsonb",
+    "embed_origin" "text",
     CONSTRAINT "checkout_sessions_device_class_ck" CHECK ((("device_class" IS NULL) OR ("device_class" = ANY (ARRAY['mobile'::"text", 'tablet'::"text", 'desktop'::"text"])))),
     CONSTRAINT "checkout_sessions_layout_ck" CHECK ((("layout" IS NULL) OR ("layout" = ANY (ARRAY['steps'::"text", 'one_page'::"text"])))),
     CONSTRAINT "checkout_sessions_mode_target_ck" CHECK (((("mode" = ANY (ARRAY['create'::"text", 'purchase'::"text"])) AND ("subscription_id" IS NULL)) OR (("mode" = 'change'::"text") AND ("subscription_id" IS NOT NULL))))
@@ -2429,6 +2497,57 @@ CREATE TABLE "public"."exchange_rate_history" (
 
 
 --
+-- Name: export_parts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."export_parts" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "run_id" "uuid" NOT NULL,
+    "entity" "text" NOT NULL,
+    "seq" integer NOT NULL,
+    "data" "bytea" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL
+);
+
+
+--
+-- Name: export_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."export_runs" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "status" "text" DEFAULT 'queued'::"text" NOT NULL,
+    "entities" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "filters" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "include_related" boolean DEFAULT true NOT NULL,
+    "files" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "skipped" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "progress" "jsonb",
+    "size_bytes" bigint DEFAULT 0 NOT NULL,
+    "error" "text",
+    "created_by" "text",
+    "created_by_user_id" "uuid",
+    "notified_at" timestamp with time zone,
+    "snapshot_at" timestamp with time zone,
+    "queued_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "expires_at" timestamp with time zone,
+    "deleted_at" timestamp with time zone,
+    "deleted_by" "text",
+    "heartbeat_at" timestamp with time zone,
+    "lease_token" "uuid",
+    "lease_count" integer DEFAULT 0 NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "export_runs_status_check" CHECK (("status" = ANY (ARRAY['queued'::"text", 'running'::"text", 'succeeded'::"text", 'failed'::"text", 'expired'::"text", 'deleted'::"text"])))
+);
+
+
+--
 -- Name: features; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2711,7 +2830,70 @@ CREATE TABLE "public"."import_records" (
     "source_id" "text" NOT NULL,
     "target_type" "text" NOT NULL,
     "target_id" "uuid" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "run_id" "uuid"
+);
+
+
+--
+-- Name: import_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."import_rows" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "run_id" "uuid" NOT NULL,
+    "entity" "text" NOT NULL,
+    "row_number" integer NOT NULL,
+    "source_id" "text",
+    "raw" "jsonb" NOT NULL,
+    "parsed" "jsonb",
+    "errors" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "warnings" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "state" "text",
+    "outcome" "text",
+    "outcome_message" "text",
+    "target_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    CONSTRAINT "import_rows_outcome_check" CHECK (("outcome" = ANY (ARRAY['created'::"text", 'unchanged'::"text", 'failed'::"text", 'excluded'::"text"]))),
+    CONSTRAINT "import_rows_state_check" CHECK (("state" = ANY (ARRAY['new'::"text", 'existing'::"text", 'invalid'::"text", 'excluded'::"text"])))
+);
+
+
+--
+-- Name: import_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."import_runs" (
+    "id" "uuid" DEFAULT "public"."uuid_v7"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "business_id" "uuid" NOT NULL,
+    "status" "text" DEFAULT 'uploaded'::"text" NOT NULL,
+    "source_name" "text" NOT NULL,
+    "files" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "options" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "summary" "jsonb",
+    "result" "jsonb",
+    "error" "text",
+    "created_by" "text",
+    "created_by_user_id" "uuid",
+    "started_by" "text",
+    "started_by_user_id" "uuid",
+    "notified_at" timestamp with time zone,
+    "undone_by" "text",
+    "checked_at" timestamp with time zone,
+    "queued_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "undone_at" timestamp with time zone,
+    "heartbeat_at" timestamp with time zone,
+    "lease_token" "uuid",
+    "lease_count" integer DEFAULT 0 NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "public"."app_now"() NOT NULL,
+    "undone_by_user_id" "uuid",
+    "undo_notified_at" timestamp with time zone,
+    CONSTRAINT "import_runs_status_check" CHECK (("status" = ANY (ARRAY['uploaded'::"text", 'checking'::"text", 'checked'::"text", 'queued'::"text", 'running'::"text", 'succeeded'::"text", 'partially_failed'::"text", 'failed'::"text", 'undoing'::"text", 'undone'::"text", 'discarded'::"text"])))
 );
 
 
@@ -4369,6 +4551,7 @@ CREATE TABLE "public"."portal_sessions" (
     "access_kind" "text" DEFAULT 'api'::"text" NOT NULL,
     "redirect_url" "text",
     "forward_url" "text",
+    "embed_origin" "text",
     CONSTRAINT "portal_sessions_access_kind_ck" CHECK (("access_kind" = ANY (ARRAY['api'::"text", 'email'::"text"]))),
     CONSTRAINT "portal_sessions_status_ck" CHECK (("status" = ANY (ARRAY['created'::"text", 'logged_in'::"text", 'logged_out'::"text"])))
 );
@@ -7230,6 +7413,22 @@ ALTER TABLE ONLY "public"."exchange_rate_history"
 
 
 --
+-- Name: export_parts export_parts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_parts"
+    ADD CONSTRAINT "export_parts_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: export_runs export_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_runs"
+    ADD CONSTRAINT "export_runs_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: features features_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7331,6 +7530,22 @@ ALTER TABLE ONLY "public"."idempotency_keys"
 
 ALTER TABLE ONLY "public"."import_records"
     ADD CONSTRAINT "import_records_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: import_rows import_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_rows"
+    ADD CONSTRAINT "import_rows_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: import_runs import_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_runs"
+    ADD CONSTRAINT "import_runs_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -9987,6 +10202,34 @@ CREATE UNIQUE INDEX "exchange_rate_history_observation_key" ON "public"."exchang
 
 
 --
+-- Name: export_parts_run_seq_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "export_parts_run_seq_uq" ON "public"."export_parts" USING "btree" ("run_id", "entity", "seq");
+
+
+--
+-- Name: export_runs_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "export_runs_business_idx" ON "public"."export_runs" USING "btree" ("business_id", "created_at" DESC);
+
+
+--
+-- Name: export_runs_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "export_runs_expiry_idx" ON "public"."export_runs" USING "btree" ("expires_at") WHERE ("status" = 'succeeded'::"text");
+
+
+--
+-- Name: export_runs_one_active_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "export_runs_one_active_uq" ON "public"."export_runs" USING "btree" ("business_id") WHERE ("status" = ANY (ARRAY['queued'::"text", 'running'::"text"]));
+
+
+--
 -- Name: features_business_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10162,10 +10405,45 @@ CREATE INDEX "import_records_business_idx" ON "public"."import_records" USING "b
 
 
 --
+-- Name: import_records_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "import_records_run_idx" ON "public"."import_records" USING "btree" ("run_id") WHERE ("run_id" IS NOT NULL);
+
+
+--
 -- Name: import_records_uq; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX "import_records_uq" ON "public"."import_records" USING "btree" ("organization_id", "source", "source_type", "source_id");
+
+
+--
+-- Name: import_rows_run_row_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "import_rows_run_row_uq" ON "public"."import_rows" USING "btree" ("run_id", "entity", "row_number");
+
+
+--
+-- Name: import_rows_run_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "import_rows_run_source_idx" ON "public"."import_rows" USING "btree" ("run_id", "entity", "source_id");
+
+
+--
+-- Name: import_runs_business_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "import_runs_business_idx" ON "public"."import_runs" USING "btree" ("business_id", "created_at" DESC);
+
+
+--
+-- Name: import_runs_one_active_uq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "import_runs_one_active_uq" ON "public"."import_runs" USING "btree" ("business_id") WHERE ("status" = ANY (ARRAY['queued'::"text", 'running'::"text", 'undoing'::"text"]));
 
 
 --
@@ -15179,6 +15457,38 @@ ALTER TABLE ONLY "public"."exchange_rate_history"
 
 
 --
+-- Name: export_parts export_parts_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_parts"
+    ADD CONSTRAINT "export_parts_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: export_parts export_parts_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_parts"
+    ADD CONSTRAINT "export_parts_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "public"."export_runs"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: export_runs export_runs_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_runs"
+    ADD CONSTRAINT "export_runs_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: export_runs export_runs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."export_runs"
+    ADD CONSTRAINT "export_runs_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
 -- Name: features features_business_id_businesses_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15424,6 +15734,46 @@ ALTER TABLE ONLY "public"."import_records"
 
 ALTER TABLE ONLY "public"."import_records"
     ADD CONSTRAINT "import_records_organization_id_organizations_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: import_records import_records_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_records"
+    ADD CONSTRAINT "import_records_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "public"."import_runs"("id") ON DELETE SET NULL;
+
+
+--
+-- Name: import_rows import_rows_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_rows"
+    ADD CONSTRAINT "import_rows_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: import_rows import_rows_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_rows"
+    ADD CONSTRAINT "import_rows_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "public"."import_runs"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: import_runs import_runs_business_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_runs"
+    ADD CONSTRAINT "import_runs_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE CASCADE;
+
+
+--
+-- Name: import_runs import_runs_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."import_runs"
+    ADD CONSTRAINT "import_runs_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
 
 --
@@ -18227,6 +18577,18 @@ ALTER TABLE "public"."events" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."exchange_rate_history" ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: export_parts; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."export_parts" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: export_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."export_runs" ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: features; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -18303,6 +18665,18 @@ ALTER TABLE "public"."idempotency_keys" ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE "public"."import_records" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: import_rows; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."import_rows" ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: import_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE "public"."import_runs" ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: imported_events; Type: ROW SECURITY; Schema: public; Owner: -
@@ -18943,6 +19317,20 @@ CREATE POLICY "org_isolation" ON "public"."exchange_rate_history" USING (("organ
 
 
 --
+-- Name: export_parts org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."export_parts" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: export_runs org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."export_runs" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
 -- Name: features org_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -19024,6 +19412,20 @@ CREATE POLICY "org_isolation" ON "public"."idempotency_keys" USING (("organizati
 --
 
 CREATE POLICY "org_isolation" ON "public"."import_records" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: import_rows org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."import_rows" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
+
+
+--
+-- Name: import_runs org_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY "org_isolation" ON "public"."import_runs" USING (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid")) WITH CHECK (("organization_id" = ("current_setting"('app.org_id'::"text", true))::"uuid"));
 
 
 --
@@ -20220,6 +20622,22 @@ GRANT ALL ON FUNCTION "public"."app_nudge_webhook_outbox"() TO "tmbilling_app";
 
 
 --
+-- Name: FUNCTION "app_queue_export_job"("p_run" "uuid", "p_trace" "text"); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION "public"."app_queue_export_job"("p_run" "uuid", "p_trace" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_queue_export_job"("p_run" "uuid", "p_trace" "text") TO "tmbilling_app";
+
+
+--
+-- Name: FUNCTION "app_queue_import_job"("p_task" "text", "p_run" "uuid", "p_trace" "text"); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION "public"."app_queue_import_job"("p_task" "text", "p_run" "uuid", "p_trace" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_queue_import_job"("p_task" "text", "p_run" "uuid", "p_trace" "text") TO "tmbilling_app";
+
+
+--
 -- Name: FUNCTION "app_queue_support_notice"("p_message" "uuid", "p_trace" "text"); Type: ACL; Schema: public; Owner: -
 --
 
@@ -20670,6 +21088,20 @@ GRANT SELECT,INSERT ON TABLE "public"."exchange_rate_history" TO "tmbilling_app"
 
 
 --
+-- Name: TABLE "export_parts"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."export_parts" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "export_runs"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."export_runs" TO "tmbilling_app";
+
+
+--
 -- Name: TABLE "features"; Type: ACL; Schema: public; Owner: -
 --
 
@@ -20758,6 +21190,20 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."idempotency_keys" TO "tmbil
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."import_records" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "import_rows"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."import_rows" TO "tmbilling_app";
+
+
+--
+-- Name: TABLE "import_runs"; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."import_runs" TO "tmbilling_app";
 
 
 --

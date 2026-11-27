@@ -30,11 +30,11 @@ const originsBody = z.object({
   origins: z.array(z.string().min(1).max(300)).max(MAX_WIDGET_ORIGINS),
 });
 
-/** Where the snippet loads the script from: this API's public origin. */
-const scriptUrl = () =>
-  config.WEBHOOK_BASE_URL
-    ? `${config.WEBHOOK_BASE_URL.replace(/\/$/, "")}/widget/v1/usage.js`
-    : null;
+/** Where the snippet loads the script from: the API host developers are told to call. */
+const scriptUrl = () => {
+  const base = config.ADVERTISED_API_URL;
+  return base ? `${base.replace(/\/$/, "")}/widget/v1/usage.js` : null;
+};
 
 const settingsView = (origins: string[]) => ({
   object: "usage_widget_settings",

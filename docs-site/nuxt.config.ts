@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { addServerTemplate } from "nuxt/kit";
 import { STATIC_OG, staticOgPath } from "./app/utils/og";
@@ -187,6 +188,18 @@ const illustrationVersions: Record<string, string> = existsSync(ILLUSTRATIONS)
  * cached `immutable` for a year, so a returning browser mixed old and new CSS (2026-11-11: the
  * pre-change campaign bar colour won). A new folder per build means no cached file is reused.
  */
+/**
+ * The fallback head for any page that sets none, and the one brand suffix every page title
+ * gets (`appConfig.seo` below). Docus's type has `titleTemplate`; this file's type check does
+ * not see Docus's types, so the object is built here rather than written inline.
+ */
+const SEO_DEFAULTS = {
+  titleTemplate: "%s | Two Minute Billing",
+  title: "Subscription billing documentation",
+  description:
+    "Guides, recipes and the API reference for Two Minute Billing: subscription billing on your own Stripe, Razorpay or PayPal account, on Cloud or self-hosted.",
+};
+
 const ASSET_DIR = process.argv.includes("build") ? `/_nuxt/${BUILT_AT.toString(36)}/` : undefined;
 
 export default defineNuxtConfig({
@@ -227,13 +240,16 @@ export default defineNuxtConfig({
     },
     (_options, nuxt) => {
       nuxt.hook("modules:done", () => {
-        nuxt.options.appConfig.github = {
+        // Docus's app config type (owner, name, url, branch, rootDir); this file's type check
+        // sees a narrower one, so the object is built first and then assigned.
+        const github = {
           owner: "gox-ai",
           name: "two-minute-billing",
           url: "https://github.com/gox-ai/two-minute-billing",
           branch: "main",
           rootDir: "docs-site",
         };
+        nuxt.options.appConfig.github = github;
         // The Changelog is a marketing page, so only a Cloud build links it. App config merges
         // arrays by appending, so this lands after app.config.ts's API reference link.
         if (CLOUD) {
@@ -249,6 +265,19 @@ export default defineNuxtConfig({
   ],
 
   hooks: {
+    // A component that wraps a Docus one imports it as `docus/app/…`. Type-check that import at
+    // Docus's real directory: through the node_modules symlink its own imports do not resolve.
+    "prepare:types"({ tsConfig }) {
+      const docusApp = join(
+        dirname(createRequire(import.meta.url).resolve("docus/package.json")),
+        "app",
+      );
+      tsConfig.compilerOptions ??= {};
+      tsConfig.compilerOptions.paths = {
+        ...tsConfig.compilerOptions.paths,
+        "docus/app/*": [`${docusApp}/*`],
+      };
+    },
     // Self-hosted: every page in app/pages/ is marketing, so none is built.
     "pages:extend"(pages) {
       if (WITH_CMS)
@@ -301,14 +330,7 @@ export default defineNuxtConfig({
    * suffix stays within 60. Set here, not in app.config.ts: Docus writes its own `seo` defaults
    * into `nuxt.options.appConfig`, which beats the file but not this.
    */
-  appConfig: {
-    seo: {
-      titleTemplate: "%s | Two Minute Billing",
-      title: "Subscription billing documentation",
-      description:
-        "Guides, recipes and the API reference for Two Minute Billing: subscription billing on your own Stripe, Razorpay or PayPal account, on Cloud or self-hosted.",
-    },
-  },
+  appConfig: { seo: SEO_DEFAULTS },
 
   // Our identity on top of the Docus shell — see the file header.
   /**

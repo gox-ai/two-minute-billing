@@ -281,6 +281,7 @@ export function ProductsListPage({
       topBarExtras={topBarExtras}
       searchPlaceholder="Search by ID or name"
       exportName={kind === "plan" ? "plans" : kind === "addon" ? "addons" : "charges"}
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=${kind === "plan" ? "plans" : "addons"}`}
       persistKey={`${kind}s:${biz}`}
       rowHref={(p) => `/businesses/${biz}/catalog/products/${p.id}`}
       rowMenu={(p) => <ProductRowMenu biz={biz} id={p.id} label={p.name} active={p.active} />}

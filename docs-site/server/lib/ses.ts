@@ -32,7 +32,7 @@ const word = (s: string) => {
 const address = (s: string) => {
   const m = /^(.*)<([^<>\s]+)>\s*$/.exec(s.replace(/[\r\n]+/g, " "));
   if (!m) return s.replace(/[\r\n\s]+/g, "");
-  const name = m[1].trim().replace(/["\\]/g, "");
+  const name = (m[1] ?? "").trim().replace(/["\\]/g, "");
   return name ? `${/^[\x20-\x7e]*$/.test(name) ? `"${name}"` : word(name)} <${m[2]}>` : m[2];
 };
 

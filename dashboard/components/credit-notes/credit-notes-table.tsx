@@ -518,6 +518,7 @@ export function CreditNotesTable({
       createAction={createAction("Credit Note", createHref)}
       searchPlaceholder="Search by number or ID"
       exportName="credit-notes"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=credit_notes`}
       persistKey={`credit-notes:${biz}`}
       rowHref={(c) => `/businesses/${biz}/credit_notes/${c.id}`}
       rowMenu={(c) => {

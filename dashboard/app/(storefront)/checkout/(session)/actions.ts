@@ -23,6 +23,8 @@ import {
   type CheckoutInvoiceState,
 } from "@/lib/checkout-api";
 import { readCheckoutToken } from "@/lib/storefront-session";
+import { headers } from "next/headers";
+import { EMBED_HEADER } from "@/lib/storefront-embed";
 import type { CheckoutAuth } from "@/lib/checkout-api";
 
 /** The token for the page's own session, sent with that session's id so the API checks it. */
@@ -141,10 +143,13 @@ export async function checkoutBeginSetupAction(
   const token = await checkoutAuth(session);
   if (!token) return { ok: false, error: NO_SESSION };
   const base = `${origin}${CHECKOUT_PATH}?s=${encodeURIComponent(session)}`;
+  // Embedded: the provider's tab is outside the frame and holds no session, so it lands on a
+  // page that only says to return to the checkout (which finishes through the setup intent).
+  const embedded = (await headers()).get(EMBED_HEADER) === "1";
   const res = await checkoutBeginSetup(
     token,
-    `${base}&setup=return`,
-    `${base}&setup=cancel`,
+    embedded ? `${origin}/checkout/approved` : `${base}&setup=return`,
+    embedded ? `${origin}/checkout/approved?state=cancel` : `${base}&setup=cancel`,
     gatewayAccount,
     methodType,
     consent,

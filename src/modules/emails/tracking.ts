@@ -49,7 +49,7 @@ export function verifyToken(
 
 /** Public base of this API for tracking links; null = tracking cannot be added. */
 export function trackingBase(): string | null {
-  const b = config.ADVERTISED_API_URL ?? config.WEBHOOK_BASE_URL;
+  const b = config.ADVERTISED_API_URL;
   return b ? b.replace(/\/+$/, "") : null;
 }
 

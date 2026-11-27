@@ -18,6 +18,8 @@ export interface PortalMe {
   session?: string;
   /** Phase 4b: where "Back to <business>" goes. Null = no link. Absent on older engines. */
   return_url?: string | null;
+  /** The one website that may frame this session (embedded portal), or null. */
+  embed_origin?: string | null;
   customer: {
     id: string;
     /**

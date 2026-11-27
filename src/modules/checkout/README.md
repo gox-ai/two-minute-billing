@@ -111,6 +111,32 @@ updated, so the buyer cannot alter what they were sent to buy. A change session 
 - Changing to the price the plan is *already* on is a no-op success (a double-submit is harmless).
 
 ## Changelog
+- **2026-11-27** — A hidden `billing.line1` also hides `billing.line2`/`line3` on the buyer's page
+  (`buyerFieldConfig` = locks + this rule); stored values are kept.
+- **2026-11-27** — With `fill_export_street` on, the gateway lock lets `billing.line1` hide and keeps
+  `billing.postal_code` + `billing.city` visible instead (`AddressFieldLocks.gateway_street_fill`);
+  `street_required_outside` is null in the buyer view then.
+- **2026-11-26** — `storefront_config.fill_export_street` (opt-in, India Stripe only): a buyer abroad
+  with no street is sent to Stripe with city + state as line 1 and is asked for the postal code
+  instead (`GatewayAddressRules.streetFill`, `payment-methods/export-street.ts`).
+- **2026-11-26** — Email-only buyer details: `customer.first_name` and `billing.country` may be
+  `hide` unless tax or the gateway lock keeps them (`nameAsked`, `AddressFieldLocks.gateway_address`).
+- **2026-11-26** — A payment gateway can require a street address for buyers outside its
+  home country (`streetAddressRequiredOutside`, read by `gatewayAddressRules` in
+  `modules/gateway/address-rules.ts`). Stripe India returns `IN`: a foreign card is an export
+  payment and Stripe refuses it without the customer's name and `address.line1`. The checkout
+  details save, the portal save and both `billing_details_missing` add `line1` for such a
+  buyer (`GatewayAddressRules` in `address-field-rules.ts`); the buyer view and `portal_me`
+  carry `street_required_outside`, and the checkout form marks line 1 required once a country
+  outside it is selected. Fails open when the gateway cannot be read.
+  On such a business `AddressFieldLocks.gateway_address` keeps country required and first
+  name + line 1 editable at runtime, and the settings save refuses anything looser.
+- **2026-11-26** — Embedded checkout (Phase 2a): `/checkout/v1/session` returns `embed_origin`; inside
+  a business's frame the flow posts events to it, never navigates the frame after success, and opens
+  every provider redirect in a new tab (`canResumeAcrossRedirect` is false in a frame).
+- **2026-11-26** — `embed_origin` on `POST /v1/businesses/:biz/checkout_sessions` (0551): the one
+  website that may frame the checkout, checked against the business's allowed websites
+  (`embedding` module). Framed, the storefront's cookies are `SameSite=None; Secure; Partitioned`.
 - **2026-11-25** — `/checkout/v1/complete` answers 400 `no_chargeable_payment_method` with a buyer
   next step when the engine finds no usable payment method (was a 500).
 - **2026-11-25** — `authenticateCheckout` refuses a token whose session differs from an

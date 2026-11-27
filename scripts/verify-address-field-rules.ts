@@ -3,7 +3,7 @@
  * portal (0334), end to end through the HTTP routes.
  *
  * Proves: defaults are unchanged; `show` makes a field optional; a hidden or read-only
- * portal key keeps the stored value; the region is one pair; country cannot be hidden; the
+ * portal key keeps the stored value; the region is one pair; email-only is allowed without tax; the
  * tax guard refuses a save AND forces the key at runtime; `billing_details_complete`
  * follows the effective config; the 0334 data step rewrites old stored values.
  */
@@ -180,20 +180,41 @@ const plain = await newBusiness("Plain");
   await setStored(plain.biz.id, { checkoutFieldConfig: null });
 }
 
-// ── C. Country cannot be hidden ──────────────────────────────────────────────
+// ── C. Email-only: name and country may be hidden when nothing locks them ───
 {
+  const allHidden = Object.fromEntries(
+    [
+      "customer.first_name",
+      "customer.last_name",
+      "customer.phone",
+      "customer.company",
+      "billing.line1",
+      "billing.line2",
+      "billing.line3",
+      "billing.city",
+      "billing.state",
+      "billing.state_code",
+      "billing.postal_code",
+      "billing.country",
+    ].map((k) => [k, "hide"]),
+  );
   const c = await patchBiz(plain.biz.publicId, {
-    checkout_field_config: { "billing.country": "hide" },
-  });
-  const p = await patchBiz(plain.biz.publicId, {
-    portal_field_config: { "billing.country": "hide" },
+    checkout_field_config: allHidden,
+    portal_field_config: allHidden,
   });
   ok(
-    "PATCH: checkout billing.country = hide → 400",
-    c.statusCode === 400 && /cannot be hidden/.test(json(c).error?.message ?? ""),
+    "PATCH: an email-only checkout and portal are accepted without tax",
+    c.statusCode === 200,
     show(c),
   );
-  ok("PATCH: portal billing.country = hide → 400", p.statusCode === 400, show(p));
+  const tok = await checkoutToken(plain.biz.id, plain.price.publicId);
+  const res = await postCheckoutCustomer(tok, {});
+  ok(
+    "checkout: email alone completes the details step",
+    res.statusCode === 200 && json(res).billing_details_complete === true,
+    show(res),
+  );
+  await setStored(plain.biz.id, { checkoutFieldConfig: null, portalFieldConfig: null });
 }
 
 // ── D. Portal: defaults, hidden/read-only keep stored, region pair ───────────
@@ -445,6 +466,16 @@ await createFlatTaxRate({
     c.statusCode === 400 &&
       json(c).error?.message === "Billing country must stay required while tax is set up.",
     show(c),
+  );
+  const hiddenUnderTax = await patchBiz(taxed.biz.publicId, {
+    checkout_field_config: { "billing.country": "hide" },
+  });
+  ok(
+    "PATCH: checkout country → hide refused while tax is set up",
+    hiddenUnderTax.statusCode === 400 &&
+      json(hiddenUnderTax).error?.message ===
+        "Billing country must stay required while tax is set up.",
+    show(hiddenUnderTax),
   );
   const p = await patchBiz(taxed.biz.publicId, {
     portal_field_config: { "billing.country": "read_only" },

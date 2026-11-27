@@ -114,8 +114,16 @@ async function runBash(page: string, bs: Block[]) {
       const status = Number(parts[i]);
       statuses.push(status);
       try {
-        const body = JSON.parse(parts[i - 1]!) as { id?: unknown };
-        if (typeof body.id === "string") ids.push(body.id);
+        const body = JSON.parse(parts[i - 1]!) as unknown;
+        // Nested ids too: `export ITEM=si_…` reads a subscription's item.
+        const collect = (v: unknown): void => {
+          if (Array.isArray(v)) return v.forEach(collect);
+          if (!v || typeof v !== "object") return;
+          const o = v as Record<string, unknown>;
+          if (typeof o.id === "string") ids.push(o.id);
+          for (const [k, x] of Object.entries(o)) if (k !== "id") collect(x);
+        };
+        collect(body);
         dumped.push({ line, status, body });
       } catch {
         // not JSON — the status check below still applies
@@ -165,7 +173,13 @@ async function runTs(page: string, bs: Block[]) {
   try {
     const file = join(dir, "snippet.ts");
     const program = bs.map((b) => b.code).join("\n");
-    writeFileSync(file, program.replaceAll(/from "\.\/sdk"/g, `from "${join(ROOT, "sdk")}"`));
+    writeFileSync(
+      file,
+      program.replaceAll(
+        /from "(?:\.\/sdk|@two-minute-billing\/sdk)"/g,
+        `from "${join(ROOT, "sdk")}"`,
+      ),
+    );
     writeFileSync(
       join(dir, "tsconfig.json"),
       JSON.stringify({

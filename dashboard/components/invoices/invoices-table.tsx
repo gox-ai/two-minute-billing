@@ -679,6 +679,7 @@ export function InvoicesTable({
       createSlot={createSlot}
       searchPlaceholder="Search by number or ID"
       exportName="invoices"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=invoices`}
       persistKey={`invoices:${biz}`}
       enableSelection
       rowHref={(i) => `/businesses/${biz}/invoices/${i.id}`}

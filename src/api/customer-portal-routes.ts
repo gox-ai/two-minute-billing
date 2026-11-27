@@ -63,6 +63,7 @@ import { resolveOfferedReasons } from "@/modules/reason-codes/service";
 import { applyCouponToSubscription, removeDiscount, CouponError } from "@/modules/coupons/service";
 import {
   createPortalSession,
+  PortalEmbedError,
   revokePortalSession,
   getPortalCustomer,
   getPortalBusiness,
@@ -165,11 +166,14 @@ import {
   addressRequirementIssues,
   billingDetailsMissing,
   isPortalKeyLocked,
+  nameAsked,
   mergePortalAddress,
   resolvePortalFieldConfig,
-  withAddressFieldLocks,
+  buyerFieldConfig,
+  type GatewayAddressRules,
   type AddressFieldLocks,
 } from "@/modules/checkout/address-field-rules";
+import { gatewayAddressRules } from "@/modules/gateway/address-rules";
 import type { AddressMatrixField } from "@/modules/checkout/field-config";
 import { liveTaxRegimes } from "@/modules/tax/service";
 import { hasBillingName, holderName } from "@/modules/customers/names";
@@ -626,6 +630,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     object: z.string().min(1).max(LIMITS.id).optional(),
     /** `email` links only: this link's lifetime in days, overriding the business setting. */
     link_valid_days: z.number().int().min(1).max(14).optional(),
+    /** The one website that may show this portal in a frame. Must be on the business's list. */
+    embed_origin: z.string().min(1).max(300).optional(),
   });
 
   const portalCancelBody = z.object({
@@ -651,6 +657,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     revoked_at: s.revokedAt?.toISOString() ?? null,
     redirect_url: s.redirectUrl,
     forward_url: s.forwardUrl,
+    embed_origin: s.embedOrigin,
   });
 
   // ——— Operator: mint a portal link ————————————————————————————————————————
@@ -696,19 +703,33 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         }
         // Turned off for this business: the link opens the portal home, as before.
       }
-      const session = await createPortalSession({
-        organizationId: req.organization!.id,
-        businessId: business.id,
-        customerId: customer.id,
-        // Absent → `createPortalSession`'s own default of 'api'. Left to the service
-        // rather than defaulted here so there is one definition of the default.
-        ...(parsedBody.data.link_kind ? { kind: parsedBody.data.link_kind } : {}),
-        redirectUrl: parsedBody.data.redirect_url ?? null,
-        forwardUrl,
-        ...(parsedBody.data.link_valid_days
-          ? { accessTtlMs: parsedBody.data.link_valid_days * 86_400_000 }
-          : {}),
-      });
+      if (parsedBody.data.embed_origin && parsedBody.data.link_kind === "email")
+        return badRequest(
+          reply,
+          'embed_origin needs link_kind "api": an emailed link opens in a new tab.',
+        );
+      let session: Awaited<ReturnType<typeof createPortalSession>>;
+      try {
+        session = await createPortalSession({
+          organizationId: req.organization!.id,
+          businessId: business.id,
+          customerId: customer.id,
+          ...(parsedBody.data.embed_origin !== undefined
+            ? { embedOrigin: parsedBody.data.embed_origin }
+            : {}),
+          // Absent → `createPortalSession`'s own default of 'api'. Left to the service
+          // rather than defaulted here so there is one definition of the default.
+          ...(parsedBody.data.link_kind ? { kind: parsedBody.data.link_kind } : {}),
+          redirectUrl: parsedBody.data.redirect_url ?? null,
+          forwardUrl,
+          ...(parsedBody.data.link_valid_days
+            ? { accessTtlMs: parsedBody.data.link_valid_days * 86_400_000 }
+            : {}),
+        });
+      } catch (e) {
+        if (e instanceof PortalEmbedError) return badRequest(reply, e.message);
+        throw e;
+      }
       return reply.code(201).send({
         object: "portal_session",
         id: session.publicId,
@@ -734,6 +755,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         expires_at: session.expiresAt.toISOString(),
         ...(parsedBody.data.redirect_url ? { redirect_url: parsedBody.data.redirect_url } : {}),
         ...(forwardUrl ? { forward_url: forwardUrl } : {}),
+        ...(session.embedOrigin ? { embed_origin: session.embedOrigin } : {}),
       });
     },
   );
@@ -1112,33 +1134,46 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
   const collectsShipping = (business: PortalBusinessRow) =>
     resolveCheckoutFieldConfig(business)["shipping.address"] !== "hide";
   /** The business's tax locks, from its live tax regions (0334). */
-  const portalLocks = async (business: PortalBusinessRow): Promise<AddressFieldLocks> =>
+  const portalLocks = async (
+    business: PortalBusinessRow,
+    rules: GatewayAddressRules,
+  ): Promise<AddressFieldLocks> =>
     addressFieldLocksFor(
       (await liveTaxRegimes(business.organizationId, [business.id])).get(business.id) ?? [],
+      rules,
     );
   const portalBillingMissing = (
     customer: NonNullable<Awaited<ReturnType<typeof getPortalCustomer>>>,
     fieldConfig: ReturnType<typeof resolvePortalFieldConfig>,
+    rules: GatewayAddressRules,
   ) =>
-    billingDetailsMissing(fieldConfig, hasBillingName(customer), {
-      line1: customer.addressLine1,
-      city: customer.city,
-      state: customer.state,
-      state_code: customer.stateCode,
-      postal_code: customer.postalCode,
-      country: customer.country,
-      first_name: customer.billingFirstName,
-      phone: customer.billingPhone ?? customer.phone,
-    });
+    billingDetailsMissing(
+      fieldConfig,
+      hasBillingName(customer),
+      {
+        line1: customer.addressLine1,
+        city: customer.city,
+        state: customer.state,
+        state_code: customer.stateCode,
+        postal_code: customer.postalCode,
+        country: customer.country,
+        first_name: customer.billingFirstName,
+        phone: customer.billingPhone ?? customer.phone,
+      },
+      rules,
+    );
   const serializePortalMe = (
     customer: NonNullable<Awaited<ReturnType<typeof getPortalCustomer>>>,
     business: PortalBusinessRow,
     locks: AddressFieldLocks,
-    fieldConfig = withAddressFieldLocks(resolvePortalFieldConfig(business), locks),
+    rules: GatewayAddressRules,
+    fieldConfig = buyerFieldConfig(resolvePortalFieldConfig(business), locks),
   ) => ({
     object: "portal_me" as const,
     /** Effective portal field matrix (0334): stored, with tax-locked keys `mandatory`. */
     field_config: fieldConfig,
+    /** A buyer outside this country must give address line 1 (`gatewayAddressRules`). */
+    street_required_outside: rules.streetFill ? null : (rules.streetRequiredOutside ?? null),
     address_field_locks: locks,
     customer: {
       id: customer.publicId,
@@ -1180,8 +1215,8 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
       // (country and postal code by default). `billing_details_missing` names the ones still
       // empty, so the add-card row can ask for exactly those. Any usable billing name counts
       // (`hasBillingName`), not the legacy `customer.name` column.
-      billing_details_complete: portalBillingMissing(customer, fieldConfig).length === 0,
-      billing_details_missing: portalBillingMissing(customer, fieldConfig),
+      billing_details_complete: portalBillingMissing(customer, fieldConfig, rules).length === 0,
+      billing_details_missing: portalBillingMissing(customer, fieldConfig, rules),
     },
     // Brand Styles (0185) — without these the hosted portal has no identity but the
     // business NAME, which is why it drew an initials monogram. Falls back
@@ -1228,19 +1263,26 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
     // Phase 4b: where "Back to <business>" goes. The integration's own redirect_url wins.
     const [sessionRow] = await withTenant(ctx.organizationId, (tx) =>
       tx
-        .select({ redirectUrl: portalSessions.redirectUrl })
+        .select({
+          redirectUrl: portalSessions.redirectUrl,
+          embedOrigin: portalSessions.embedOrigin,
+        })
         .from(portalSessions)
         .where(eq(portalSessions.publicId, ctx.sessionPublicId))
         .limit(1),
     );
     const sf = resolveStorefrontConfig(business);
-    const me = serializePortalMe(customer, business, await portalLocks(business));
+    const rules = await gatewayAddressRules(business.organizationId, business.id);
+    const locks = await portalLocks(business, rules);
+    const me = serializePortalMe(customer, business, locks, rules);
     return {
       ...me,
       // The storefront names this session in its URL so a second portal tab cannot take it.
       session: ctx.sessionPublicId,
       business: { ...me.business, has_pricing_page: await businessHasPricingPage(business.id) },
       return_url: sessionRow?.redirectUrl ?? sf.portalReturnUrl ?? sf.defaultReturnUrl,
+      // The one website that may frame this session; the embedded portal posts its events there.
+      embed_origin: sessionRow?.embedOrigin ?? null,
     };
   });
 
@@ -1259,8 +1301,9 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
         getPortalBusiness(ctx),
       ]);
       if (!customer || !business) return notFound(reply, "Portal session target no longer exists");
-      const locks = await portalLocks(business);
-      const fieldConfig = withAddressFieldLocks(resolvePortalFieldConfig(business), locks);
+      const rules = await gatewayAddressRules(business.organizationId, business.id);
+      const locks = await portalLocks(business, rules);
+      const fieldConfig = buyerFieldConfig(resolvePortalFieldConfig(business), locks);
       // `applyAddress` replaces the whole address, so a hidden or read-only key must carry
       // the STORED value through, whatever the body says.
       const stored: Record<AddressMatrixField, string | null> = {
@@ -1290,7 +1333,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           }
         }
         const keptAny = merged.keptAny;
-        const missing = addressRequirementIssues(fieldConfig, address);
+        const missing = addressRequirementIssues(fieldConfig, address, rules);
         if (missing.length > 0) return badRequest(reply, requirementIssuesError(missing));
         // The body was format-checked alone; a kept value can change what is valid
         // (a read-only country decides the region list).
@@ -1331,7 +1374,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
             }
           : {}),
       };
-      if (!hasBillingName(afterUpdate)) {
+      if (nameAsked(fieldConfig) && !hasBillingName(afterUpdate)) {
         return badRequest(
           reply,
           "A billing name is required. Give the contact a first name, a last name or a company name. We print this name on your invoices.",
@@ -1365,7 +1408,7 @@ export async function registerCustomerPortalRoutes(app: FastifyInstance) {
           : {}),
       });
       if (!updated) return notFound(reply, "Portal session target no longer exists");
-      return serializePortalMe(updated, business, locks, fieldConfig);
+      return serializePortalMe(updated, business, locks, rules, fieldConfig);
     },
   );
 

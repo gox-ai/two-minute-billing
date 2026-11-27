@@ -1,5 +1,7 @@
 "use client";
 
+import { useEmbed } from "@/components/embed-bridge";
+import { embedNotify } from "@/components/embed-bridge";
 import { paymentMethodTypeLabel } from "@/lib/filter-options";
 import { CLOSE_ADD_METHOD_EVENT } from "./section-link";
 import * as React from "react";
@@ -155,6 +157,13 @@ export function AddCard({
 }) {
   const session = usePortalSession();
   const router = useRouter();
+  const embedded = useEmbed().origin != null;
+  /** Embedded: a provider's approval page opened in a new tab; the frame waits for the buyer. */
+  const [awaitingApproval, setAwaitingApproval] = React.useState<{
+    /** A redirect's approval page, which the buyer can open again; null for a signed POST. */
+    url: string | null;
+    provider: string | null;
+  } | null>(null);
   const [setup, setSetup] = React.useState<PortalVaultSetup | null>(null);
   /** What the new method did to the open invoices, shown once it is saved. */
   const [outcome, setOutcome] = React.useState<AddMethodOutcome | null>(null);
@@ -273,6 +282,7 @@ export function AddCard({
     clearActiveIntent();
     if (res.outcome) setOutcome(res.outcome);
     else {
+      embedNotify("payment_method_changed", { change: "added" });
       toast.success("Payment method added.");
       window.dispatchEvent(new Event(CLOSE_ADD_METHOD_EVENT));
     }
@@ -320,7 +330,8 @@ export function AddCard({
      */
     const strandedRail =
       selectedGw?.gateway_key === "razorpay" && activeMethodType === "bank_transfer";
-    const authTab = strandedRail ? window.open("", "_blank") : null;
+    // Embedded: every provider page opens in a new tab, opened inside the click for the same reason.
+    const authTab = strandedRail || embedded ? window.open("", "_blank") : null;
     setRefusal(null);
     setStarting(true);
     const res = await portalBeginSetupAction(
@@ -346,6 +357,23 @@ export function AddCard({
       setAwaitingMandate(res.setup.approval_url);
       return;
     }
+    if (embedded && res.setup.mode === "redirect" && res.setup.approval_url) {
+      // The frame keeps the stash (its own storage) and finishes through `?setup=return` when the
+      // buyer selects Continue after approval; the provider's tab only lands on /portal/approved.
+      savePendingVaultSetup(scope, {
+        setupToken: res.setup.setup_token,
+        provider: res.setup.provider,
+        ...(selected ? { gateway: selected } : {}),
+        ...(res.setup.payment_intent ? { paymentIntent: res.setup.payment_intent } : {}),
+      });
+      if (authTab) authTab.location.href = res.setup.approval_url;
+      setAwaitingApproval({
+        url: res.setup.approval_url,
+        provider: res.setup.provider === "paypal" ? "PayPal" : null,
+      });
+      return;
+    }
+    authTab?.close();
     if (res.setup.mode === "redirect" && res.setup.approval_url) {
       // We're about to leave the site for the provider's approval page. Stash what
       // the return leg (setup-return.tsx) needs to exchange the approved token —
@@ -372,7 +400,9 @@ export function AddCard({
         ...(selected ? { gateway: selected } : {}),
         ...(res.setup.payment_intent ? { paymentIntent: res.setup.payment_intent } : {}),
       });
-      submitFormPost(res.setup.form_post);
+      // Embedded: the signed POST goes to a new tab, and the frame waits as for a redirect.
+      submitFormPost(res.setup.form_post, { newTab: embedded });
+      if (embedded) setAwaitingApproval({ url: null, provider: null });
       return;
     }
     // RazorPay card + UPI: the mandate is authorized in their embedded modal, opened
@@ -525,6 +555,43 @@ export function AddCard({
    * A netbanking e-mandate can take until the next working day to confirm, which is far
    * longer than anyone will sit on this screen.
    */
+  if (awaitingApproval) {
+    const name = awaitingApproval.provider;
+    return (
+      <div className="flex flex-col gap-3">
+        <Alert tone="info" title={`Approve with ${name ?? "your provider"} in the new tab`}>
+          <p>
+            {name ?? "Your provider"} opens in a new tab. Approve the payment method there. Then
+            return to this page and select Continue after approval.
+          </p>
+        </Alert>
+        {awaitingApproval.url ? (
+          <a
+            href={awaitingApproval.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="self-start text-sm font-medium text-primary hover:underline"
+          >
+            {`Open ${name ?? "the approval page"} again`}
+          </a>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            data-document-link
+            onClick={() =>
+              window.location.assign(withPortalSession("/portal?setup=return", session))
+            }
+          >
+            Continue after approval
+          </Button>
+          <Button variant="outline" onClick={() => setAwaitingApproval(null)}>
+            Add a different method
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (awaitingMandate) {
     return (
       <div className="flex flex-col gap-3">

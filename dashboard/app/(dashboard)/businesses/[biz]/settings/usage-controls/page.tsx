@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { listProducts } from "@/lib/api";
 import { getBusiness } from "@/lib/api/business-settings";
 import { listMeters } from "@/lib/api/meters";
@@ -27,7 +28,6 @@ import {
   CreateAlertButton,
   CreateTierButton,
 } from "@/components/usage-controls/controls";
-import { WidgetOriginsForm } from "@/components/usage-controls/widget-origins-form";
 import {
   deleteSpendLimitTierAction,
   deleteUsageAlertAction,
@@ -224,16 +224,21 @@ export default async function UsageControlSettingsPage({
           <div className="flex flex-col gap-4">
             <p className="m-0 text-sm text-muted-foreground">
               Your backend creates a token for the signed-in customer. The token can only read that
-              customer&apos;s usage, and stops working after 15 minutes. Only the origins below can
-              show the data in a browser.
+              customer&apos;s usage, and stops working after 15 minutes. Only your allowed websites
+              can show the data in a browser. The checkout and the customer portal use the same
+              list.
             </p>
-            {canManage ? (
-              <WidgetOriginsForm biz={biz} origins={widget.origins} />
-            ) : (
-              <p className="m-0 text-sm">
-                {widget.origins.length ? widget.origins.join(", ") : "No origins."}
-              </p>
-            )}
+            <p className="m-0 text-sm">
+              {widget.origins.length ? widget.origins.join(", ") : "No allowed websites."}{" "}
+              {canManage ? (
+                <Link
+                  href={`/businesses/${biz}/settings/checkout#embedding`}
+                  className="text-primary hover:underline"
+                >
+                  Edit allowed websites
+                </Link>
+              ) : null}
+            </p>
             {snippet ? (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">

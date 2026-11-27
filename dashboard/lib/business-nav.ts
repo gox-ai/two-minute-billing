@@ -332,6 +332,11 @@ export function businessNavEntries({
           label: "Transfer & sample data",
           show: sees(perms, "transfers:manage"),
         },
+        {
+          href: `${base}/imports`,
+          label: "Import and export data",
+          show: sees(perms, "imports:view", "admin") || sees(perms, "exports:view", "admin"),
+        },
         { href: `${base}/audit`, label: "Audit log", show: sees(perms, "audit_logs:view") },
       ],
     },

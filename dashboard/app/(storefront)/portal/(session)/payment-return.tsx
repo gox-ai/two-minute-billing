@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -152,6 +153,7 @@ export function PaymentReturn({
       markPaymentProcessing(scope, invoice, false);
       setWatch((w) => (w ? { ...w, state } : w));
       if (state === "failed") void readInvoice(invoice);
+      else embedNotify("invoice_paid", { invoice });
       router.refresh();
     };
 

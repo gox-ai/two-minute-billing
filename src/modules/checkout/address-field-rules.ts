@@ -54,8 +54,8 @@ export const DEFAULT_PORTAL_FIELD_CONFIG: PortalFieldConfig = {
 export const PORTAL_FIELD_KEYS = Object.keys(DEFAULT_PORTAL_FIELD_CONFIG) as PortalFieldKey[];
 
 /**
- * Stored jsonb → every key resolved. Only a valid state opts out of a key's default, and
- * `billing.country` never resolves to `hide`.
+ * Stored jsonb → every key resolved. Only a valid state opts out of a key's default. A hidden
+ * country is allowed unless a lock keeps it (`withAddressFieldLocks`).
  */
 export function resolvePortalFieldConfig(
   biz: { portalFieldConfig?: unknown } | null | undefined,
@@ -70,9 +70,6 @@ export function resolvePortalFieldConfig(
       typeof v === "string" && (PORTAL_FIELD_STATES as readonly string[]).includes(v)
         ? (v as PortalFieldState)
         : DEFAULT_PORTAL_FIELD_CONFIG[key];
-  }
-  if (out["billing.country"] === "hide") {
-    out["billing.country"] = DEFAULT_PORTAL_FIELD_CONFIG["billing.country"];
   }
   return out;
 }
@@ -121,27 +118,35 @@ export function mergePortalAddress(
 
 /**
  * The add-card gate (`billing_details_complete`) and the inline form behind it: the fields
- * still missing before a payment method can be saved. A billing name is always needed (any
- * usable one counts: `hasName`); everything else follows this surface's effective config
+ * still missing before a payment method can be saved. A billing name is needed unless the
+ * first name is hidden (any usable one counts: `hasName`); everything else follows this surface's effective config
  * through `addressRequirementIssues`, so the gate and the save check cannot disagree.
  */
 export function billingDetailsMissing(
   cfg: Partial<Record<AddressMatrixKey, string>>,
   hasName: boolean,
   address: RequirementAddress,
+  rules: GatewayAddressRules = {},
 ): AddressMatrixField[] {
-  const missing = addressRequirementIssues(cfg, address)
+  const missing = addressRequirementIssues(cfg, address, rules)
     .map((i) => i.field)
     .filter((f) => f !== "first_name");
-  return hasName ? missing : ["first_name", ...missing];
+  // A hidden first name means the business does not ask for a name at all.
+  return hasName || !nameAsked(cfg) ? missing : ["first_name", ...missing];
+}
+
+/** False only when the business hides the first name: then no name is asked or required. */
+export function nameAsked(cfg: Partial<Record<AddressMatrixKey, string>>): boolean {
+  return cfg["customer.first_name"] !== "hide";
 }
 
 export function billingDetailsComplete(
   cfg: Partial<Record<AddressMatrixKey, string>>,
   hasName: boolean,
   address: RequirementAddress,
+  rules: GatewayAddressRules = {},
 ): boolean {
-  return billingDetailsMissing(cfg, hasName, address).length === 0;
+  return billingDetailsMissing(cfg, hasName, address, rules).length === 0;
 }
 
 // ── Tax guard ─────────────────────────────────────────────────────────────────
@@ -152,13 +157,47 @@ export interface AddressFieldLocks {
   country: boolean;
   /** Any live tax region with `regime = 'gst'`. */
   state_code: boolean;
+  /**
+   * A payment gateway needs the name, street and country from some buyers
+   * (`GatewayAddressRules.streetRequiredOutside`): country stays required, and first name and
+   * line 1 may not be hidden, or read-only in the portal, or those buyers could never give them.
+   */
+  gateway_address: boolean;
+  /**
+   * With `gateway_address`: the business fills line 1 for those buyers (`fill_export_street`), so
+   * line 1 may be hidden and the postal code and city, which the fill is built from, stay visible.
+   */
+  gateway_street_fill: boolean;
 }
 
-export const NO_ADDRESS_FIELD_LOCKS: AddressFieldLocks = { country: false, state_code: false };
+export const NO_ADDRESS_FIELD_LOCKS: AddressFieldLocks = {
+  country: false,
+  state_code: false,
+  gateway_address: false,
+  gateway_street_fill: false,
+};
 
-/** Regimes of the business's live tax regions → the locks they impose. */
-export function addressFieldLocksFor(regimes: readonly string[]): AddressFieldLocks {
-  return { country: regimes.length > 0, state_code: regimes.includes("gst") };
+/** The business's live tax regimes and gateway rules → the locks they impose. */
+export function addressFieldLocksFor(
+  regimes: readonly string[],
+  rules: GatewayAddressRules = {},
+): AddressFieldLocks {
+  return {
+    country: regimes.length > 0,
+    state_code: regimes.includes("gst"),
+    gateway_address: Boolean(rules.streetRequiredOutside),
+    gateway_street_fill: Boolean(rules.streetRequiredOutside && rules.streetFill),
+  };
+}
+
+const lockedOut = (state: string | undefined) => state === "hide" || state === "read_only";
+
+/** Keys a gateway lock keeps visible and editable (see `AddressFieldLocks.gateway_address`). */
+export function gatewayKeptVisible(locks: AddressFieldLocks): readonly AddressMatrixKey[] {
+  if (!locks.gateway_address) return [];
+  return locks.gateway_street_fill
+    ? ["customer.first_name", "billing.postal_code", "billing.city"]
+    : ["customer.first_name", "billing.line1"];
 }
 
 /** Effective config = stored config with the locked keys forced to `mandatory`. */
@@ -169,7 +208,25 @@ export function withAddressFieldLocks<C extends CheckoutFieldConfig | PortalFiel
   const out = { ...cfg };
   if (locks.country) out["billing.country"] = "mandatory";
   if (locks.state_code) out["billing.state_code"] = "mandatory";
+  if (locks.gateway_address) {
+    out["billing.country"] = "mandatory";
+    for (const k of gatewayKeptVisible(locks)) if (lockedOut(out[k])) out[k] = "show";
+  }
   return out;
+}
+
+/**
+ * The config a buyer's page applies: the locks, then lines 2 and 3 hidden with a hidden line 1
+ * (a second street line without a first one reads as a mistake). The stored values of lines 2
+ * and 3 are kept, so showing line 1 again brings them back.
+ */
+export function buyerFieldConfig<C extends CheckoutFieldConfig | PortalFieldConfig>(
+  cfg: C,
+  locks: AddressFieldLocks,
+): C {
+  const out = withAddressFieldLocks(cfg, locks);
+  if (out["billing.line1"] !== "hide") return out;
+  return { ...out, "billing.line2": "hide", "billing.line3": "hide" };
 }
 
 /**
@@ -186,12 +243,35 @@ export function addressFieldLockViolation(
   if (locks.state_code && cfg["billing.state_code"] !== "mandatory") {
     return "State must stay required while GST is set up.";
   }
+  if (locks.gateway_address && cfg["billing.country"] !== "mandatory") {
+    return "Billing country must stay required while a Stripe account in India takes your payments.";
+  }
+  if (gatewayKeptVisible(locks).some((k) => lockedOut(cfg[k]))) {
+    return locks.gateway_street_fill
+      ? "First name, postal code and city must stay visible while a Stripe account in India takes your payments and we fill the street."
+      : "First name and address line 1 must stay visible while a Stripe account in India takes your payments.";
+  }
   return null;
 }
 
 // ── Requiredness ──────────────────────────────────────────────────────────────
 
 export type RequirementAddress = Partial<Record<AddressMatrixField | "zip", string | null>>;
+
+/** What the business's payment gateway needs on top of the field config. */
+export interface GatewayAddressRules {
+  /**
+   * A payer whose country is not this one must give address line 1 (`streetAddressRequiredOutside`
+   * on the adapter: Stripe India refuses a foreign card without it). Null/absent = no rule.
+   */
+  streetRequiredOutside?: string | null;
+  /**
+   * The business fills line 1 from the city and state for such a buyer
+   * (`storefront_config.fill_export_street`), so the postal code (which fills both) is asked for
+   * instead of the street.
+   */
+  streetFill?: boolean;
+}
 
 export interface AddressRequirementIssue {
   field: AddressMatrixField;
@@ -221,6 +301,7 @@ const LABELS: Record<AddressMatrixField, string> = {
 export function addressRequirementIssues(
   cfg: Partial<Record<AddressMatrixKey, string>>,
   address: RequirementAddress,
+  rules: GatewayAddressRules = {},
 ): AddressRequirementIssue[] {
   const issues: AddressRequirementIssue[] = [];
   const required = (key: AddressMatrixKey) => cfg[key] === "mandatory";
@@ -236,6 +317,32 @@ export function addressRequirementIssues(
   }
   if (!country) return issues;
 
+  const home = rules.streetRequiredOutside?.toUpperCase();
+  if (home && country.code !== home && !required("billing.line1") && blank(address.line1)) {
+    if (!rules.streetFill) {
+      issues.push({ field: "line1", message: `Address line 1 is required for ${country.name}.` });
+    } else if (
+      blank(address.city) &&
+      blank(address.postal_code) &&
+      blank(address.zip) &&
+      // A mandatory postal code is reported below already.
+      !(country.hasPostalCode && required("billing.postal_code"))
+    ) {
+      // Line 1 is built from the city and state, which the postal code fills in. A postal code
+      // the buyer cannot edit leaves the street (kept editable by the gateway lock).
+      const postalAsked = !["hide", "read_only"].includes(cfg["billing.postal_code"] ?? "");
+      issues.push(
+        country.hasPostalCode && postalAsked
+          ? {
+              field: "postal_code",
+              message: `${country.postalLabel} is required for ${country.name}.`,
+            }
+          : !country.hasPostalCode && !["hide", "read_only"].includes(cfg["billing.city"] ?? "")
+            ? { field: "city", message: `City is required for ${country.name}.` }
+            : { field: "line1", message: `Address line 1 is required for ${country.name}.` },
+      );
+    }
+  }
   if (required("billing.city") && blank(address.city)) {
     issues.push({ field: "city", message: "City is required." });
   }

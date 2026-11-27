@@ -19,7 +19,6 @@ import { parse } from "dotenv";
 /** Keys the dashboard takes from the root `.env`. */
 export const ROOT_ENV_KEYS = Object.freeze([
   "TMBILLING_API_URL",
-  "TMBILLING_PUBLIC_API_URL",
   "ADVERTISED_API_URL",
   "GATEWAY_WEBHOOK_BASE_URL",
   "TMBILLING_EDITION",

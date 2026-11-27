@@ -22,7 +22,7 @@
  * # terminal 2 — expose it
  * ngrok http 4000
  * # terminal 3
- * WEBHOOK_BASE_URL=https://<id>.ngrok-free.app pnpm verify:razorpay-tunnel
+ * ADVERTISED_API_URL=https://<id>.ngrok-free.app pnpm verify:razorpay-tunnel
  * ```
  *
  * The API process must be reachable through the tunnel AND share this script's
@@ -64,15 +64,15 @@ if (!config.RAZORPAY_TEST_KEY_ID.startsWith("rzp_test")) {
   console.error("REFUSING: RAZORPAY_TEST_KEY_ID is not a test key");
   process.exit(1);
 }
-if (!config.WEBHOOK_BASE_URL) {
+if (!config.ADVERTISED_API_URL) {
   console.error(
-    "REFUSING: WEBHOOK_BASE_URL must be the public tunnel origin (e.g. https://x.ngrok-free.app)",
+    "REFUSING: ADVERTISED_API_URL must be the public tunnel origin (e.g. https://x.ngrok-free.app)",
   );
   process.exit(1);
 }
-if (/localhost|127\.0\.0\.1|\.invalid/.test(config.WEBHOOK_BASE_URL)) {
+if (/localhost|127\.0\.0\.1|\.invalid/.test(config.ADVERTISED_API_URL)) {
   console.error(
-    `REFUSING: WEBHOOK_BASE_URL=${config.WEBHOOK_BASE_URL} is not publicly reachable — RazorPay resolves the host`,
+    `REFUSING: ADVERTISED_API_URL=${config.ADVERTISED_API_URL} is not publicly reachable — RazorPay resolves the host`,
   );
   process.exit(1);
 }
@@ -90,7 +90,7 @@ let warnLate: string | null = null;
 const teardown: { run: (() => Promise<void>) | null } = { run: null };
 
 async function main() {
-  console.log(`tunnel origin: ${config.WEBHOOK_BASE_URL}\n`);
+  console.log(`tunnel origin: ${config.ADVERTISED_API_URL}\n`);
 
   // ── 1. tenant + a REAL razorpay gateway account ───────────────────────────
   console.log("── setup ──");

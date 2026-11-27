@@ -363,28 +363,24 @@ const schema = z
     // EXCHANGE route, never the portal page itself (W1).
     PORTAL_BASE_URL: z.string().optional(),
 
-    // Public base URL this API is reachable at, used to build the per-gateway-account
-    // webhook Notification URL we hand to providers. Must be publicly reachable for
-    // real gateway traffic — in local dev this is a tunnel (`stripe listen` / ngrok)
-    // origin.
-    WEBHOOK_BASE_URL: z.string().optional(),
     /**
      * Base URL for the gateway Notification URLs we register from now on, e.g. a dedicated
      * `webhooks.` host that forwards only `/v1/gateway_webhooks/`. Accounts registered under
      * an older base move on their next registration (`provisionWebhookEndpoint`). Unset:
-     * `WEBHOOK_BASE_URL`.
+     * `ADVERTISED_API_URL`.
      */
     GATEWAY_WEBHOOK_BASE_URL: z.string().url().optional(),
     /**
      * Public origin of the MCP server and its OAuth (e.g. a dedicated `mcp.` host behind the
-     * same API). The connector URL is `{MCP_PUBLIC_URL}/mcp`. Unset: `WEBHOOK_BASE_URL`, else
+     * same API). The connector URL is `{MCP_PUBLIC_URL}/mcp`. Unset: `ADVERTISED_API_URL`, else
      * the request's origin.
      */
     MCP_PUBLIC_URL: z.string().url().optional(),
     /**
-     * The API base URL we tell developers to call: OpenAPI `servers` and the docs. Distinct
-     * from `WEBHOOK_BASE_URL`, which gateways already have registered and must keep. Unset:
-     * `WEBHOOK_BASE_URL`.
+     * This API's public base URL, as a browser, a developer or a gateway reaches it: OpenAPI
+     * `servers`, the docs, the embed and usage-widget scripts, email link tracking, and the
+     * gateway webhook base when `GATEWAY_WEBHOOK_BASE_URL` is unset. In local dev, a tunnel
+     * origin (`stripe listen` / ngrok) for real gateway traffic.
      */
     ADVERTISED_API_URL: z.string().url().optional(),
 

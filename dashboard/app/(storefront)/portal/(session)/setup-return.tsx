@@ -1,5 +1,6 @@
 "use client";
 
+import { embedNotify } from "@/components/embed-bridge";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -112,7 +113,10 @@ export function SetupReturn({ scope, me }: { scope: string; me: PortalMe }) {
         return void toast.error(text);
       }
       if (res.outcome) setOutcome(res.outcome);
-      else toast.success("Payment method added.");
+      else {
+        toast.success("Payment method added.");
+        embedNotify("payment_method_changed", { change: "added" });
+      }
     })();
   }, [scope, router]);
 

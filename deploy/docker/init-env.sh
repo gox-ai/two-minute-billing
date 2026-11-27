@@ -77,7 +77,7 @@ umask 077
   [ "$LOCAL" = 1 ] && echo "COMPOSE_FILE=compose.yaml:compose.local.yaml"
   echo "APP_HOST=$TMB_APP_HOST"
   echo "API_HOST=$TMB_API_HOST"
-  echo "TMBILLING_PUBLIC_API_URL=$api_url"
+  echo "ADVERTISED_API_URL=$api_url"
   echo "POSTGRES_PASSWORD=$(hex 24)"
   echo "APP_DB_PASSWORD=$(hex 24)"
   echo
@@ -96,7 +96,7 @@ umask 077
   echo "GATEWAY_CREDENTIALS_KEY=$(hex 32)"
   echo "DASHBOARD_BASE_URL=$app_url"
   echo "PORTAL_BASE_URL=$app_url"
-  echo "WEBHOOK_BASE_URL=$api_url"
+  echo "ADVERTISED_API_URL=$api_url"
   echo "TRUST_PROXY_HOPS=$hops"
   echo "PASSWORD_BREACH_CHECK=TRUE"
   echo "# Logs go to stdout and your Docker log driver. TRUE ships them to Google Cloud Logging."

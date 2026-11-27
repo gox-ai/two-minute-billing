@@ -1,4 +1,5 @@
 import { registerNewLinkRoutes } from "./new-link-routes";
+import { gatewayAddressRulesByBusiness } from "@/modules/gateway/address-rules";
 import {
   initialEmailConfig,
   MAX_FOOTER_NOTE_CHARS,
@@ -225,6 +226,7 @@ import { registerCreditSettingsRoutes } from "./credit-settings-routes";
 import { registerCreditReportRoutes } from "./credit-report-routes";
 import { registerRateChangePreviewRoutes } from "./rate-change-preview-routes";
 import { registerUsageWidgetRoutes } from "./usage-widget-routes";
+import { registerEmbeddingRoutes } from "./embedding-routes";
 import { registerUsageControlRoutes } from "./usage-control-routes";
 import { registerPortalUsageControlRoutes } from "./portal-usage-control-routes";
 import { registerUsageBillingRoutes } from "./usage-billing-routes";
@@ -239,6 +241,8 @@ import { registerListViewRoutes } from "./list-view-routes";
 import { registerReportDashboardRoutes } from "./report-dashboard-routes";
 import { registerSegmentRoutes } from "./segment-routes";
 import { registerTransferRoutes } from "./transfer-routes";
+import { registerImportRoutes } from "./import-routes";
+import { registerExportRoutes } from "./export-routes";
 import { registerTimeTravelRoutes } from "./time-travel-routes";
 import { registerCustomFieldRoutes } from "./custom-field-routes";
 import { registerMetadataRuleRoutes } from "./metadata-rule-routes";
@@ -599,13 +603,18 @@ export const currencyRateBody = z.union([
 
 const portalFieldState = z.enum(["show", "hide", "mandatory", "read_only"]).optional();
 
-/** A business's address field locks: which keys its live tax setup forces to `mandatory`. */
+/** A business's address field locks: from its live tax setup and its payment gateways. */
 async function addressFieldLocksByBusiness(
   organizationId: string,
   businessIds: readonly string[],
 ): Promise<Map<string, AddressFieldLocks>> {
-  const regimes = await liveTaxRegimes(organizationId, businessIds);
-  return new Map([...regimes].map(([id, r]) => [id, addressFieldLocksFor(r)]));
+  const [regimes, rules] = await Promise.all([
+    liveTaxRegimes(organizationId, businessIds),
+    gatewayAddressRulesByBusiness(organizationId, businessIds),
+  ]);
+  return new Map(
+    businessIds.map((id) => [id, addressFieldLocksFor(regimes.get(id) ?? [], rules.get(id))]),
+  );
 }
 
 /** One kind's reminder lead days: whole days before the date, distinct. */
@@ -1083,7 +1092,7 @@ export const updateBusinessBody = z.object({
   /**
    * The buyer portal's billing-details matrix (0334). Absent/null → `resolvePortalFieldConfig`
    * defaults. `hide` and `read_only` keys keep the customer's stored value on a portal save.
-   * `billing.country` accepts `hide` here only to refuse it with a clear 400.
+   * A hidden `billing.country` is refused only while a tax or gateway lock keeps it required.
    */
   portal_field_config: z
     .object({
@@ -1149,6 +1158,7 @@ export const updateBusinessBody = z.object({
     .object({
       hide_zero_value_lines: z.boolean().optional(),
       collect_po_number: z.boolean().optional(),
+      fill_export_street: z.boolean().optional(),
       // Scheme-restricted: zod 4's `.url()` accepts `javascript:` and `data:` (verified),
       // and while the providers reject those themselves — these are handed to Stripe /
       // PayPal / RazorPay, never navigated by us — a clear 400 here beats an opaque
@@ -1822,8 +1832,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // `sdk/openapi.json` — a build artifact that must stay deterministic, so it is NOT
   // config-derived. The LIVE spec names this deployment, because Scalar builds its client
   // snippets and try-it requests from `servers`. `ADVERTISED_API_URL` is the host developers
-  // should call; without it, `WEBHOOK_BASE_URL` (the base gateways have registered).
-  const advertisedBase = config.ADVERTISED_API_URL ?? config.WEBHOOK_BASE_URL;
+  // should call.
+  const advertisedBase = config.ADVERTISED_API_URL;
   const publicSpec = advertisedBase
     ? {
         ...openapiDocument,
@@ -2073,15 +2083,6 @@ export async function registerRoutes(app: FastifyInstance) {
         "invoice_customization.signature.image_url": d.invoice_customization?.signature?.image_url,
       });
       if (urlRefusal) return badRequest(reply, urlRefusal);
-      if (
-        d.checkout_field_config?.["billing.country"] === "hide" ||
-        d.portal_field_config?.["billing.country"] === "hide"
-      ) {
-        return badRequest(
-          reply,
-          "Billing country cannot be hidden. The country sets the region list and the postal code format.",
-        );
-      }
       // Save-time tax guard (0334): the runtime forces these keys anyway; refusing here
       // stops the settings screen from showing a state that does not apply.
       let locks: AddressFieldLocks | undefined;
@@ -2090,6 +2091,10 @@ export async function registerRoutes(app: FastifyInstance) {
         locks = (await addressFieldLocksByBusiness(req.organization!.id, [bizRow.id])).get(
           bizRow.id,
         );
+        // Judge the field config against the fill this same request sets.
+        const fill = d.storefront_config?.fill_export_street;
+        if (locks?.gateway_address && fill !== undefined)
+          locks = { ...locks, gateway_street_fill: fill };
         const violation =
           (d.checkout_field_config != null &&
             locks &&
@@ -3389,6 +3394,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerCreditReportRoutes(app);
   await registerRateChangePreviewRoutes(app);
   await registerUsageWidgetRoutes(app);
+  await registerEmbeddingRoutes(app);
   await registerUsageControlRoutes(app);
   await registerPortalUsageControlRoutes(app);
   await registerUsageBillingRoutes(app);
@@ -3396,6 +3402,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerReportDashboardRoutes(app);
   await registerSegmentRoutes(app);
   await registerTransferRoutes(app);
+  await registerImportRoutes(app);
+  await registerExportRoutes(app);
   await registerTimeTravelRoutes(app);
   await registerCustomFieldRoutes(app);
   await registerMetadataRuleRoutes(app);

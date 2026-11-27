@@ -3,8 +3,8 @@
     "src/modules/events/registry.ts",
     "src/modules/webhooks/outbox.ts"
   ],
-  "event_count": 172,
-  "family_count": 41,
+  "event_count": 174,
+  "family_count": 42,
   "delivery": {
     "success": "Any 2xx response.",
     "max_attempts": 6,
@@ -1161,6 +1161,23 @@
         {
           "type": "usage_threshold_reached",
           "summary": null,
+          "internal_note": null
+        }
+      ]
+    },
+    {
+      "key": "export",
+      "summary": "A bulk export of a business ended: its files are ready to download, or it failed.",
+      "internal_note": "a bulk export of a business ended (0552): its files are ready, or it failed",
+      "events": [
+        {
+          "type": "export_completed",
+          "summary": "`content.export` is the export: its `id`, its `files` with their row counts, and `expires_at`, when the files are deleted. Download the zip from `GET /v1/businesses/{biz}/exports/{id}/file`.",
+          "internal_note": null
+        },
+        {
+          "type": "export_failed",
+          "summary": "`content.export` is the export, with the reason in `error`. Start the export again.",
           "internal_note": null
         }
       ]

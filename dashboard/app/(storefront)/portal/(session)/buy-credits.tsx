@@ -9,6 +9,8 @@ import { money } from "@/lib/format";
 import type { PortalCreditPackQuote } from "@/lib/portal-api";
 import { portalBuyCreditsAction, portalQuoteCreditsAction } from "./credits-actions";
 import { usePortalSession } from "./portal-session-context";
+import { useEmbed } from "@/components/embed-bridge";
+import { Alert } from "@/components/ui/alert";
 
 /**
  * "Buy" for one credit pack: opens the purchase checkout for the quantity selected. The
@@ -34,6 +36,9 @@ export function BuyCreditsForm({
   const [coupon, setCoupon] = React.useState("");
   const [quote, setQuote] = React.useState<PortalCreditPackQuote | null>(null);
   const [quoteError, setQuoteError] = React.useState<string | null>(null);
+  const embedded = useEmbed().origin != null;
+  /** Embedded: the checkout cannot open inside the business's frame, so it opens in a tab. */
+  const [link, setLink] = React.useState<string | null>(null);
   const [checking, startCheck] = React.useTransition();
   const valid = Number.isInteger(qty) && qty >= 1 && qty <= 100;
 
@@ -48,7 +53,8 @@ export function BuyCreditsForm({
     <ActionForm
       action={portalBuyCreditsAction.bind(null, session)}
       onSuccess={(r) => {
-        if (r.redirectTo) window.location.assign(r.redirectTo);
+        if (r.redirectTo && embedded) setLink(r.redirectTo);
+        else if (r.redirectTo) window.location.assign(r.redirectTo);
       }}
       className="flex flex-wrap items-center gap-2 sm:justify-end"
     >
@@ -95,6 +101,18 @@ export function BuyCreditsForm({
           error={quoteError}
           label={label}
         />
+      ) : null}
+      {link ? (
+        <Alert tone="info" title="Pay in a new tab" className="basis-full">
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-primary hover:underline"
+          >
+            Open the checkout
+          </a>
+        </Alert>
       ) : null}
     </ActionForm>
   );

@@ -64,6 +64,9 @@ sweep. Collection falls back primary → backup on hard decline.
   `serializePaymentMethodWithGateway` so `gateway_account*` is populated too.
 
 ## Changelog
+- **2026-11-26** — `storefront_config.fill_export_street` (opt-in, India Stripe only): a buyer abroad
+  with no street is sent to Stripe with city + state as line 1 and is asked for the postal code
+  instead (`GatewayAddressRules.streetFill`, `payment-methods/export-street.ts`).
 - **2026-11-25** — Stripe's refusal of a debit outside the mandate's currency ("mandate can only be
   used for a payment in …") books `mandate_currency_mismatch`, not `mandate_expired`: the card is
   never marked `invalid` for it and dunning parks. Stripe `card` is now
@@ -473,7 +476,7 @@ sweep. Collection falls back primary → backup on hard decline.
   account — the message alone proves nothing, because the legacy fallback raises the same words one
   gateway round-trip later. Both were mutation-tested red.
   * Same entry, the rule became **method-aware** — see `gateway/README.md` for the shape and why.
-  * Same entry, `WEBHOOK_BASE_URL` unset is now its own refusal. `getWebhookEndpointInfo().configured`
+  * Same entry, `ADVERTISED_API_URL` unset is now its own refusal. `getWebhookEndpointInfo().configured`
     only means "we hold verification material for this account"; with no public base URL there is no
     address for the gateway to POST to at all, and the account's credentials look perfectly configured
     in that state. ⚠️ `configured` remains a PROXY either way: a RazorPay endpoint the operator pasted

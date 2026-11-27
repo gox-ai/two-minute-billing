@@ -570,9 +570,9 @@ const c1 = await connect();
 
 // ── § I · a dedicated MCP host ───────────────────────────────────────────────────
 {
-  const cfg = config as { MCP_PUBLIC_URL?: string; WEBHOOK_BASE_URL?: string };
-  const before = { mcp: cfg.MCP_PUBLIC_URL, webhook: cfg.WEBHOOK_BASE_URL };
-  cfg.WEBHOOK_BASE_URL = "https://api-internal.example.com";
+  const cfg = config as { MCP_PUBLIC_URL?: string; ADVERTISED_API_URL?: string };
+  const before = { mcp: cfg.MCP_PUBLIC_URL, webhook: cfg.ADVERTISED_API_URL };
+  cfg.ADVERTISED_API_URL = "https://api-internal.example.com";
   cfg.MCP_PUBLIC_URL = "https://mcp.example.com/";
   const r = await mcp(null, `/mcp/${biz.publicId}`);
   const www = String(r.headers["www-authenticate"] ?? "");
@@ -599,7 +599,7 @@ const c1 = await connect();
   );
   ok("I2 the API's own host never appears to a connector", !seen.includes("api-internal"));
   cfg.MCP_PUBLIC_URL = before.mcp;
-  cfg.WEBHOOK_BASE_URL = before.webhook;
+  cfg.ADVERTISED_API_URL = before.webhook;
 }
 
 await app.close();

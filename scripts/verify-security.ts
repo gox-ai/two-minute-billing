@@ -337,6 +337,45 @@ const BASELINE = [
   }
 }
 
+// ── § C3 · an embedded storefront page names ONE website, never a wildcard ───────
+// `proxy.ts` answers a framed storefront page with the storefront policy plus the session's own
+// `embed_origin`, and only after the API confirmed it is still on the business's list
+// (`verify:embedding`). This holds the policy and the URL parsing it starts from.
+{
+  const policyPath = "../dashboard/lib/csp-policy.mjs";
+  const policy = (await import(policyPath)) as {
+    buildCsp: (o: { storefront: boolean; frameAncestor?: string | null }) => string;
+  };
+  const embedPath = "../dashboard/lib/storefront-embed.ts";
+  const embed = (await import(embedPath)) as { embedCredential: (u: URL) => string | null };
+  const base = policy.buildCsp({ storefront: true });
+  const framed = policy.buildCsp({ storefront: true, frameAncestor: "https://app.example.com" });
+  ok(
+    "§C3 the storefront policy is 'none' unless an embed origin is given",
+    base.includes("frame-ancestors 'none'"),
+  );
+  ok(
+    "§C3 an embedded page changes frame-ancestors only",
+    framed === base.replace("frame-ancestors 'none'", "frame-ancestors https://app.example.com"),
+  );
+  const cred = (u: string) => embed.embedCredential(new URL(u, "https://pay.example.com"));
+  ok(
+    "§C3 the entry token and the ?s= session are the credentials a framed URL carries",
+    cred("/checkout/s/cstk_abcDEF123_-x") === "cstk_abcDEF123_-x" &&
+      cred("/portal/s/pstk_abc") === "pstk_abc" &&
+      cred("/portal/continue/pstk_abc") === "pstk_abc" &&
+      cred("/checkout?s=cosess_abc") === "cosess_abc" &&
+      cred("/portal/billing?s=psess_abc") === "psess_abc",
+  );
+  ok(
+    "§C3 anything else carries no credential (so the page stays unframed)",
+    cred("/checkout") === null &&
+      cred("/checkout?s=https://evil.example") === null &&
+      cred("/checkout/s/x%20y") === null &&
+      cred("/buy/s/cstk_abc") === null,
+  );
+}
+
 // ── § D · the invoice script is admitted by hash, not by 'unsafe-inline' ─────────
 {
   // Derived from the constant the renderer serves, so this asserts the two agree
@@ -600,7 +639,7 @@ const BASELINE = [
 //
 // THE POLICY, WRITTEN DOWN: this API grants cross-origin access to EXACTLY the three
 // origins the deployment already names for itself — DASHBOARD_BASE_URL,
-// PORTAL_BASE_URL and WEBHOOK_BASE_URL — and to nobody else, with credentials
+// PORTAL_BASE_URL and ADVERTISED_API_URL — and to nobody else, with credentials
 // advertised to nobody at all. `src/platform/cors.ts` is the implementation and carries
 // the reasoning; this section is the part that fails loudly when somebody relaxes it.
 //
@@ -620,7 +659,7 @@ const BASELINE = [
   const prod = resolveAllowedOrigins({
     DASHBOARD_BASE_URL: "https://app.example.com",
     PORTAL_BASE_URL: "https://portal.example.com/",
-    WEBHOOK_BASE_URL: "https://api.example.com",
+    ADVERTISED_API_URL: "https://api.example.com",
   });
   ok("§I the allowlist is exactly three origins", prod.size === 3);
   ok(

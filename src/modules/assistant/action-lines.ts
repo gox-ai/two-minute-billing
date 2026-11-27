@@ -496,6 +496,7 @@ const FIELDS: Record<string, FieldText> = {
     },
   },
   object: { label: "Record", plain: true },
+  embed_origin: { label: "Shown inside website", plain: true },
 
   // emails and payment requests
   type: {

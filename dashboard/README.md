@@ -32,7 +32,7 @@ mode and HSTS are fixed at build; the rest is read when `next start` starts.
   plus org-level `developer/`, `audit/`, `metrics/`, `ops/`, `team/`, `settings/`, `login/`.
   Server actions live in colocated `actions.ts` files; every list page has a `loading.tsx`.
 - **`lib/api/`** — one thin typed wrapper per domain (subscriptions, invoices, coupons, gateways,
-  ops, transfer, time-travel, credit-notes, payments, developer, event-types, business-settings)
+  ops, transfer, imports, time-travel, credit-notes, payments, developer, event-types, business-settings)
   over `lib/api.ts` (base fetch + auth + error handling). Add a wrapper here when a new backend
   route needs UI.
 - **`components/`** — domain folders (catalog, customers, subscriptions, invoices, payments, …) +

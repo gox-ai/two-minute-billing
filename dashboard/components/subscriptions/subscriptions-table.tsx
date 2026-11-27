@@ -332,6 +332,7 @@ const paymentMethodFields = (gatewayCatalog: readonly GatewayCatalogEntry[]) => 
 export function SubscriptionsTable({
   page,
   biz,
+  canImport,
   rows,
   tz,
   total,
@@ -344,6 +345,8 @@ export function SubscriptionsTable({
   /** The page header, drawn by the list (see ListPage.page). */
   page?: ListPageHeader;
   biz: string;
+  /** The signed-in person may import data: the Import button opens Import data. */
+  canImport?: boolean;
   /** `GET /v1/gateways` — the payer-gateway filter's options. */
   gatewayCatalog: GatewayCatalogEntry[];
   /** First page, server-rendered — later pages stream in through fetchPage. */
@@ -1012,9 +1015,14 @@ export function SubscriptionsTable({
         { id: "status", label: "Status" },
       ]}
       createAction={createAction("Subscription", `/businesses/${biz}/subscriptions/new`)}
-      importAction={importAction("Subscriptions", undefined, "CSV import is not configured yet")}
+      importAction={
+        canImport
+          ? importAction("Subscriptions", `/businesses/${biz}/imports?section=subscriptions`)
+          : undefined
+      }
       searchPlaceholder="Search by ID, name or plan"
       exportName="subscriptions"
+      bulkExportHref={`/businesses/${biz}/imports?tab=export&section=subscriptions`}
       persistKey={`subs:${biz}`}
       // Customer ID duplicates the name+email already in Customer Info, and it was
       // the widest low-value column — with it visible the MRR figures were clipped

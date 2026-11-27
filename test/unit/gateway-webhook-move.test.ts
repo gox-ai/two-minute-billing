@@ -1,8 +1,8 @@
 /**
- * Gateway webhooks move to `GATEWAY_WEBHOOK_BASE_URL` without breaking registrations made
- * under `WEBHOOK_BASE_URL`. Regresses if: an old registration reads as the new URL (removal
- * and Square's signature check miss it), or a move creates a second registration instead
- * of changing the URL of the existing one (every event then arrives twice).
+ * Gateway webhooks move to `GATEWAY_WEBHOOK_BASE_URL` without breaking the URL an account is
+ * registered under. Regresses if: a stored registration reads as another URL (removal and
+ * Square's signature check miss it), or a move creates a second registration instead of
+ * changing the URL of the existing one (every event then arrives twice).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "@/platform/config";
@@ -22,13 +22,13 @@ const ROW = { gatewayKey: "razorpay", publicId: "gwa_XXXXXXXXXXXX01" };
 const OLD_URL = `${OLD}/v1/gateway_webhooks/razorpay?id=gwa_XXXXXXXXXXXX01`;
 const NEW_URL = `${NEW}/v1/gateway_webhooks/razorpay?id=gwa_XXXXXXXXXXXX01`;
 
-const saved = { base: config.WEBHOOK_BASE_URL, gateway: config.GATEWAY_WEBHOOK_BASE_URL };
+const saved = { base: config.ADVERTISED_API_URL, gateway: config.GATEWAY_WEBHOOK_BASE_URL };
 beforeEach(() => {
-  config.WEBHOOK_BASE_URL = OLD;
+  config.ADVERTISED_API_URL = OLD;
   config.GATEWAY_WEBHOOK_BASE_URL = NEW;
 });
 afterEach(() => {
-  config.WEBHOOK_BASE_URL = saved.base;
+  config.ADVERTISED_API_URL = saved.base;
   config.GATEWAY_WEBHOOK_BASE_URL = saved.gateway;
 });
 
@@ -37,9 +37,10 @@ describe("account notification URL", () => {
     expect(gatewayNotificationUrl(ROW.gatewayKey, ROW.publicId)).toBe(NEW_URL);
   });
 
-  it("an account registered before the move keeps the old URL", () => {
-    expect(accountNotificationUrl(ROW, { webhook_endpoint_id: "wh_1" })).toBe(OLD_URL);
-    expect(accountNotificationUrl(ROW, { webhook_id: "WH-1" })).toBe(OLD_URL);
+  it("an account keeps the URL it is registered under", () => {
+    expect(accountNotificationUrl(ROW, { webhook_endpoint_id: "wh_1", webhook_url: OLD_URL })).toBe(
+      OLD_URL,
+    );
   });
 
   it("a stored URL wins; an unregistered account gets the new URL", () => {
@@ -49,15 +50,15 @@ describe("account notification URL", () => {
     expect(accountNotificationUrl(ROW, { webhook_secret: "s" })).toBe(NEW_URL);
   });
 
-  it("unset gateway base = WEBHOOK_BASE_URL, so nothing moves", () => {
+  it("unset gateway base = the public API URL", () => {
     config.GATEWAY_WEBHOOK_BASE_URL = undefined;
     expect(accountNotificationUrl(ROW, {})).toBe(OLD_URL);
-    expect(accountNotificationUrl(ROW, { webhook_endpoint_id: "wh_1" })).toBe(OLD_URL);
   });
 
-  it("signature candidates: the registered URL first, both bases, no duplicates", () => {
-    const creds = { webhook_endpoint_id: "wh_1", webhook_url: NEW_URL };
-    expect(accountNotificationUrlCandidates(ROW, creds)).toEqual([NEW_URL, OLD_URL]);
+  it("signature candidates: the registered URL first, then the current base, no duplicates", () => {
+    const creds = { webhook_endpoint_id: "wh_1", webhook_url: OLD_URL };
+    expect(accountNotificationUrlCandidates(ROW, creds)).toEqual([OLD_URL, NEW_URL]);
+    expect(accountNotificationUrlCandidates(ROW, { webhook_url: NEW_URL })).toEqual([NEW_URL]);
   });
 });
 

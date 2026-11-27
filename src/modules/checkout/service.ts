@@ -3,6 +3,7 @@ import {
   CARD_LIMIT_CHECKOUT_STEP,
   CARD_LIMIT_CODE,
 } from "@/modules/invoicing/card-limit";
+import { gatewayAddressRules } from "@/modules/gateway/address-rules";
 import { createHash, randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { enforceMetadataRules } from "@/modules/metadata-rules/service";
@@ -13,6 +14,7 @@ import { notDeleted } from "@/modules/subscriptions/deleted-sql";
 import { meterBillingConflict } from "@/modules/subscriptions/meter-billing";
 import { publicId } from "@/platform/ids";
 import { config } from "@/platform/config";
+import { checkEmbedOrigin } from "@/modules/embedding/service";
 import { formatMoney } from "@/platform/currency";
 import { PAYMENT_ALREADY_IN_PROGRESS } from "@/providers/payer-wording";
 import { payerFailureText, payerRefusal, PAYER_REASON_WITHHELD } from "@/providers/decline-codes";
@@ -119,10 +121,7 @@ import {
   resolveCheckoutFieldConfig,
   type CheckoutFieldConfig,
 } from "@/modules/checkout/field-config";
-import {
-  addressFieldLocksFor,
-  withAddressFieldLocks,
-} from "@/modules/checkout/address-field-rules";
+import { addressFieldLocksFor, buyerFieldConfig } from "@/modules/checkout/address-field-rules";
 import { liveTaxRegimesTx } from "@/modules/tax/service";
 import {
   billSubscriptionPeriod,
@@ -411,6 +410,8 @@ export interface CheckoutSessionRef {
   /** Bearer token — returned exactly once at mint time, never stored. */
   token: string;
   url?: string;
+  /** The one website that may frame this checkout, or null. */
+  embedOrigin: string | null;
   expiresAt: Date;
 }
 
@@ -484,6 +485,8 @@ export async function createCheckoutSession(input: {
   mode?: CheckoutMode;
   /** Required when mode='change': sub_… public id of the subscription to change. */
   subscriptionId?: string;
+  /** The one website that may frame this checkout (`embedding`). Must be on the business's list. */
+  embedOrigin?: string;
   /**
    * mode='change'. Default false = upsert (listed items applied, unlisted left
    * alone). True declares the item list EXHAUSTIVE: unlisted
@@ -793,6 +796,7 @@ export async function createCheckoutSession(input: {
 
   const token = `cstk_${randomBytes(32).toString("base64url")}`;
   const cosessId = publicId("cosess");
+  let embedOrigin: string | null = null;
   const expiresAt = new Date(Date.now() + (input.ttlMs ?? CHECKOUT_SESSION_TTL_MS));
   await withTenant(input.organizationId, async (tx) => {
     // Checked when the operator mints the link, since the buyer cannot fix it at completion.
@@ -804,6 +808,11 @@ export async function createCheckoutSession(input: {
         existing: targetMetadata,
         scope: "supplied_only",
       });
+    if (input.embedOrigin !== undefined) {
+      const e = await checkEmbedOrigin(tx, input.businessId, input.embedOrigin);
+      if ("error" in e) throw new CheckoutError(`embed_origin: ${e.error}`);
+      embedOrigin = e.origin;
+    }
     const [session] = await tx
       .insert(checkoutSessions)
       .values({
@@ -829,6 +838,7 @@ export async function createCheckoutSession(input: {
         resultingCustomerId: pinnedCustomerId,
         customerPinned: pinnedCustomerId != null,
         paymentLinkId: input.paymentLinkId ?? null,
+        embedOrigin,
         publicId: cosessId,
         tokenHash: tokenHash(token),
         createdBy: input.createdBy ?? null,
@@ -855,6 +865,7 @@ export async function createCheckoutSession(input: {
     // The EXCHANGE route (W1), not the checkout page — see the note on the portal's
     // equivalent in customer-portal/service.ts.
     ...(base ? { url: `${base}/checkout/s/${token}` } : {}),
+    embedOrigin,
     expiresAt,
   };
 }
@@ -879,6 +890,7 @@ export interface CheckoutSessionRecord {
   reactivateFrom: Date | null;
   redirectUrl: string | null;
   cancelUrl: string | null;
+  embedOrigin: string | null;
   passThruContent: string | null;
   metadata: Record<string, unknown> | null;
   prefill: CheckoutPrefill | null;
@@ -956,6 +968,7 @@ export async function getCheckoutSession(input: {
       reactivateFrom: s.reactivateFrom,
       redirectUrl: s.redirectUrl,
       cancelUrl: s.cancelUrl,
+      embedOrigin: s.embedOrigin,
       passThruContent: s.passThruContent,
       metadata: (s.metadata as Record<string, unknown> | null) ?? null,
       prefill: (s.prefill as CheckoutPrefill | null) ?? null,
@@ -1153,6 +1166,8 @@ export interface CheckoutContext {
   /** Where the hosted page sends the buyer after completing, and on cancel. */
   redirectUrl: string | null;
   cancelUrl: string | null;
+  /** The one website that may frame this session, or null (`embedding`). */
+  embedOrigin: string | null;
   /**
    * Metadata to write onto the resulting subscription on completion, or null when this
    * session has no opinion. Null and `{}` mean different things — see the column comment.
@@ -1253,6 +1268,7 @@ function contextFromSessionRow(
     replaceCouponList: s.replaceCouponList,
     redirectUrl: s.redirectUrl,
     cancelUrl: s.cancelUrl,
+    embedOrigin: s.embedOrigin,
     metadata: (s.metadata as Record<string, unknown> | null) ?? null,
     prefill: (s.prefill as CheckoutPrefill | null) ?? null,
     couponCodes: s.couponCodes ?? [],
@@ -1916,6 +1932,11 @@ export interface CheckoutView {
   coupon_refusals: Record<string, string>;
   /** The business's resolved checkout field matrix (0245) — what the details step shows and requires. */
   field_config: CheckoutFieldConfig;
+  /**
+   * A buyer whose country is not this one must give address line 1 (the payment gateway's
+   * rule, `gatewayAddressRules`: Stripe India refuses a foreign card without it). Null = none.
+   */
+  street_required_outside: string | null;
   /** `storefront_config.collect_po_number` (0243): render the PO number field. */
   collect_po_number: boolean;
   status: string;
@@ -1925,6 +1946,8 @@ export interface CheckoutView {
   /** Where the page sends the buyer after completing / on cancel; null = stay here. */
   redirect_url: string | null;
   cancel_url: string | null;
+  /** The one website that may frame this session, or null. The frame posts its events there. */
+  embed_origin: string | null;
   /**
    * What this composition costs per billing period, WITH tax — see
    * `projectRecurringPayment`. Absent whenever it cannot be stated honestly (no customer
@@ -3698,7 +3721,10 @@ async function purchaseView(ctx: CheckoutContext): Promise<CheckoutPurchaseView 
 }
 
 export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<CheckoutView | null> {
-  const refusals = await sessionCouponRefusals(sessionCtx);
+  const [refusals, addressRules] = await Promise.all([
+    sessionCouponRefusals(sessionCtx),
+    gatewayAddressRules(sessionCtx.organizationId, sessionCtx.businessId),
+  ]);
   // Every figure below is priced without the refused codes; `coupons` still lists them.
   const ctx =
     Object.keys(refusals).length > 0
@@ -3818,12 +3844,19 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
       // Effective: tax-locked keys already `mandatory` (0334). A customer the session did
       // not create keeps their own address book: no shipping section (see the customer route).
       field_config: {
-        ...withAddressFieldLocks(
+        ...buyerFieldConfig(
           resolveCheckoutFieldConfig(biz),
-          addressFieldLocksFor((await liveTaxRegimesTx(tx, [biz.id])).get(biz.id) ?? []),
+          addressFieldLocksFor(
+            (await liveTaxRegimesTx(tx, [biz.id])).get(biz.id) ?? [],
+            addressRules,
+          ),
         ),
         ...(ctx.customerPinned ? { "shipping.address": "hide" as const } : {}),
       },
+      // Filled from the city and state when the business opts in: then the street is not asked.
+      street_required_outside: addressRules.streetFill
+        ? null
+        : (addressRules.streetRequiredOutside ?? null),
       collect_po_number: storefrontConfig.collectPoNumber,
       layout: storefrontConfig.checkoutLayout,
       wallets_first: storefrontConfig.walletsFirst,
@@ -3853,6 +3886,7 @@ export async function getCheckoutView(sessionCtx: CheckoutContext): Promise<Chec
         ) ??
         null,
       cancel_url: ctx.cancelUrl,
+      embed_origin: ctx.embedOrigin,
     };
   });
   if (!base) return null;

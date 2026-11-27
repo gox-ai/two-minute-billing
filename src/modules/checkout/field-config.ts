@@ -34,8 +34,9 @@
  * A business that has stored a state for a key keeps it; only an unset key follows this.
  *   - every other field → **show**
  *
- * `billing.country` can never be `hide` (0334): it decides the region list and postal
- * format. A stored `hide` resolves to the default.
+ * `billing.country` may be `hide` (an email-only checkout); then the postal code, city and
+ * region have no country to follow and are not asked either. Tax and gateway locks keep it
+ * required (`withAddressFieldLocks`).
  *   - `invoice.po_number` → not collected before 0243     → **hide**, and this matrix
  *     never overrides `storefront_config.collect_po_number` (`./storefront-config.ts`):
  *     that switch decides whether the field is on the form AT ALL; this one only decides
@@ -141,8 +142,6 @@ export function resolveCheckoutFieldConfig(
   for (const key of CHECKOUT_FIELD_KEYS) {
     out[key] = resolveOne(raw?.[key], DEFAULT_CHECKOUT_FIELD_CONFIG[key]);
   }
-  if (out["billing.country"] === "hide")
-    out["billing.country"] = DEFAULT_CHECKOUT_FIELD_CONFIG["billing.country"];
   return out;
 }
 

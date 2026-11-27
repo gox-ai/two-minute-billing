@@ -258,6 +258,8 @@ export interface CheckoutView {
    * Hidden fields are not rendered; required ones are required on the page too.
    */
   field_config?: Partial<Record<string, "show" | "hide" | "mandatory">>;
+  /** A buyer outside this country must give address line 1 (the payment gateway's rule). */
+  street_required_outside?: string | null;
   /** Render a PO number field (Hosted pages → collect PO number). */
   collect_po_number?: boolean;
   /** Per-period cost incl. tax — see `CheckoutNextPayment`. */
@@ -313,6 +315,8 @@ export interface CheckoutView {
   redirect_url: string | null;
   /** Where the buyer's "Cancel" link goes. */
   cancel_url: string | null;
+  /** The one website that may frame this session (embedded checkout), or null. */
+  embed_origin?: string | null;
   /**
    * The billing details already on this session's customer, for the details step to
    * PREFILL from. Absent until the session has a customer (a create-mode buyer who has not

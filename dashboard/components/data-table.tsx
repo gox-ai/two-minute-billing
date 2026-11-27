@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   type ColumnDef,
@@ -154,6 +155,8 @@ export interface DataTableProps<TData, TValue> {
   countSingular?: string;
   /** Enable the Export CSV button; used as the downloaded file name. */
   exportName?: string;
+  /** The bulk export of this record type: every row, in the background, import-ready. */
+  bulkExportHref?: string;
   /** Show the column-visibility chooser. */
   columnChooser?: boolean;
   /** Persist column visibility under this localStorage key. */
@@ -304,6 +307,7 @@ export function DataTable<TData, TValue>({
   countLabel,
   countSingular,
   exportName,
+  bulkExportHref,
   columnChooser = false,
   persistKey,
   enableSelection = false,
@@ -741,6 +745,14 @@ export function DataTable<TData, TValue>({
                         >
                           Export selected as CSV
                         </DropdownMenuItem>
+                      ) : null}
+                      {bulkExportHref ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <Link href={bulkExportHref}>Export all in the background</Link>
+                          </DropdownMenuItem>
+                        </>
                       ) : null}
                     </DropdownMenuContent>
                   </DropdownMenu>

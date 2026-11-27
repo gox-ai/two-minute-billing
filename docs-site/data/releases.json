@@ -1,5 +1,35 @@
 [
   {
+    "slug": "2026-11-26-import-data",
+    "title": "Import your customers, subscriptions and billing history from CSV files",
+    "date": "2026-11-26",
+    "type": "Feature",
+    "tags": [
+      "Migration",
+      "Customers",
+      "Subscriptions",
+      "Invoicing",
+      "Payments",
+      "Dashboard",
+      "Developers"
+    ],
+    "summary": "Bring plans, coupons, customers with their saved cards, subscriptions, invoices, payments, credit notes and usage over from CSV files. Check every row first, then import, and undo if you need to.",
+    "body": "Move your billing from another system in the dashboard, with no code. Open\n**Settings → Import data**, or select **Import customers** on the Customers list.\n\n## Your set-up and your customers\n\n- **One file for each section.** Upload plans and prices, add-ons, coupons, customers and\n  subscriptions. Each section has a template with an example row. Columns with a known name are\n  matched to their field, so most exports need no changes. You can also upload the migration JSON\n  file.\n- **Saved cards come with the customer.** A customer row can refer to a card that is saved at your\n  payment gateway. Renewals charge that card when the same gateway account is connected. Card\n  numbers are never in the file.\n\n## Your billing history\n\n- **Invoices.** Paid, open and void invoices, one row for each line, with their tax and discount.\n  We check that each invoice adds up to its total before anything is written.\n- **Payments and refunds.** Each payment with the invoice it paid, and refunds of those payments.\n- **Credit notes.** The credit a customer can still use becomes credit on the customer.\n- **Usage.** Usage records for a usage price that is on a subscription.\n- **Open invoices are not collected unless you choose it.** They import as owed, because your\n  current system may still collect them. Select **Collect them** in the review to have your retry\n  schedule collect them from their due date, or collect one later with **Collect payment** on the\n  invoice.\n\n## Check, import, undo\n\n- **Check before anything changes.** **Check what changes** reads every row. The review shows each\n  row as new, blocked or in this business already, with the reason for each blocked row. Leave out\n  blocked rows, or correct the file and upload it again.\n- **See what arrives.** The review shows the monthly recurring revenue the subscriptions bring,\n  how many customers have a card at a connected gateway, the first renewal date, what open invoices\n  owe, the credit customers can use, and your next invoice number if the imported numbers change\n  it. It tells you about subscriptions that renew in the next 24 hours, so you can stop them in\n  your old system first or leave them out.\n- **No surprises for customers.** An import charges no customer, and sends no emails or webhooks.\n  In a live business, you type the business name to start it.\n- **Results for each row.** The import runs in the background, and the person who started it gets\n  an email when it ends. Download each file again with the result of each row.\n- **Undo an import.** **Undo import** deletes only the records the import added, and reverses the\n  opening balances of its open invoices and credit in the ledger. You can undo an import until the\n  first renewal, invoice, payment or change on a record it added.\n- **Past imports.** Every import stays on the list, with who started it and when.\n- **Import with the API too.** The same import is in the API: upload, check, start, read the\n  results and undo.\n\n## Also in this release\n\n- **Long lists in dialogs scroll.** A dropdown list in a dialog or a side panel, such as the\n  attribute list in **Add a filter** on Customers, now scrolls with the mouse wheel.\n\nRead [Import your data](https://twominutebilling.com/help/guides/import-your-data) for the columns\nof each file. To import with the API, see\n[Import from CSV files](https://twominutebilling.com/help/developers/recipes/import-from-csv-files)."
+  },
+  {
+    "slug": "2026-11-26-embedded-checkout-and-portal",
+    "title": "Your checkout and customer portal, inside your own app",
+    "date": "2026-11-26",
+    "type": "Feature",
+    "tags": [
+      "Checkout",
+      "Portal",
+      "Developers"
+    ],
+    "summary": "Show the checkout over your page or in your layout, and the customer portal over your page. Your app gets an event when the customer pays or makes a change.",
+    "body": "Customers can now subscribe and manage their billing without leaving your app.\n\n- **Checkout over your page.** The checkout opens in a panel over your app. On a phone it fills the\n  screen. The customer closes it with the close button or the Escape key.\n- **Checkout in your layout.** Put the checkout in your own pricing page. It takes the height of\n  its content.\n- **Customer portal over your page.** Customers change their plan, add a payment method and pay\n  invoices in a panel over your app.\n- **Events for your app.** Your page gets an event when the customer pays, changes a plan or\n  adds a payment method. Your app can then show the new plan at once.\n- **Only your websites.** Add your websites under **Settings → Checkout → Embed on your\n  website**. Other websites cannot show your checkout or portal. The usage widget uses the same\n  list.\n- **Payments that need another page.** PayPal and bank pages open in a new tab. The customer\n  approves there and continues in your app.\n\nRead Embed checkout and the portal for the\nsteps and the code."
+  },
+  {
     "slug": "2026-11-20-reports-and-portal-for-every-business",
     "title": "Reports and Home that fit the way you sell, and a portal that saves the payment method",
     "date": "2026-11-20",

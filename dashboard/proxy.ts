@@ -1,6 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth-cookies";
 import { REDIRECT_PARAM } from "@/lib/redirect-to";
+import {
+  EMBED_COOKIE,
+  EMBED_HEADER,
+  EMBED_ORIGIN_HEADER,
+  embedCredential,
+  fetchFrameAncestor,
+} from "@/lib/storefront-embed";
+import { buildCsp, cspHeaderNameFor } from "@/lib/csp-policy.mjs";
+
+const API_BASE = process.env.TMBILLING_API_URL ?? "http://localhost:4000";
 
 /**
  * Third layer of dashboard authorization, beneath two that do the real work (audit H4).
@@ -80,8 +90,34 @@ const PUBLIC = [
   "/api/apple-pay-domain-association",
 ];
 
-export default function proxy(req: NextRequest) {
+/**
+ * The storefront, which may be framed by a business's allowed website (embedded checkout and
+ * portal). A framed page load asks the API which website its session names; only that one
+ * origin goes into `frame-ancestors`, and only while it is still on the business's list.
+ * Everything else keeps the config's `'none'`. A client cannot send EMBED_HEADER itself.
+ */
+async function storefront(req: NextRequest) {
+  const headers = new Headers(req.headers);
+  headers.delete(EMBED_HEADER);
+  headers.delete(EMBED_ORIGIN_HEADER);
+  let origin: string | null = null;
+  if (req.headers.get("sec-fetch-dest") === "iframe") {
+    const credential = embedCredential(req.nextUrl);
+    if (credential) origin = await fetchFrameAncestor(API_BASE, credential);
+  }
+  if (origin || req.cookies.has(EMBED_COOKIE)) headers.set(EMBED_HEADER, "1");
+  if (origin) headers.set(EMBED_ORIGIN_HEADER, origin);
+  const res = NextResponse.next({ request: { headers } });
+  if (origin)
+    res.headers.set(cspHeaderNameFor(), buildCsp({ storefront: true, frameAncestor: origin }));
+  return res;
+}
+
+export default async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  if (["/checkout", "/portal"].some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    return storefront(req);
+  }
   // Prefix match with an explicit boundary: `startsWith(p + '/')` rather than
   // `startsWith(p)`, or `/logins-are-fun` would inherit `/login`'s exemption.
   if (PUBLIC.some((p) => pathname === p || pathname.startsWith(p + "/"))) {

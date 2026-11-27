@@ -1,4 +1,5 @@
-import { cache } from "react";
+import { cache, type ReactNode } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { CheckCircle2, Clock } from "lucide-react";
 import { checkoutSession } from "@/lib/checkout-api";
@@ -9,6 +10,8 @@ import { NoticeCard } from "../../chrome";
 import { newLinkAvailable } from "@/lib/new-link-api";
 import { NewLinkButton } from "../../new-link/new-link-button";
 import { emailNewCheckoutLinkAction } from "../../new-link/actions";
+import { EmbedRoot } from "@/components/embed-bridge";
+import { EMBED_HEADER, EMBED_ORIGIN_HEADER } from "@/lib/storefront-embed";
 
 export const dynamic = "force-dynamic";
 
@@ -67,12 +70,22 @@ async function ExpiredCard({ token }: { token: string | null }) {
  * token in the URL it travelled to that host as a `Referer` on the very request that
  * loads the payment form.
  */
+/** Inside a business's frame, the page talks to its loader; elsewhere it renders as it is. */
+const framed = (origin: string | null, node: ReactNode) =>
+  origin ? <EmbedRoot origin={origin}>{node}</EmbedRoot> : node;
+
 export default async function CheckoutPage(props: Search) {
+  const h = await headers();
   // A tab keeps its own session after another checkout link opens in this browser.
   const token = await readCheckoutToken(await sessionOf(props));
+  // Framed by the session's own website, but the browser kept no cookie from the entry link:
+  // it refuses partitioned cookies. The loader offers the same link in a new tab.
+  const framedBy = h.get(EMBED_ORIGIN_HEADER);
+  if (!token && framedBy && (await sessionOf(props)))
+    return <EmbedRoot origin={framedBy} error="cookies_blocked" />;
   // No cookie at all — opened directly, or the session expired. Same card as an
   // invalid token below: from the buyer's side these are one situation.
-  if (!token) return <ExpiredCard token={null} />;
+  if (!token) return framed(framedBy, <ExpiredCard token={null} />);
 
   const res = await loadSession(token);
   const countries = await getCountries();
@@ -80,7 +93,9 @@ export default async function CheckoutPage(props: Search) {
   // Invalid / expired / revoked / non-open token → friendly card (same component
   // the portal's expired link uses; these had drifted into three hand-rolled
   // centred divs that no longer matched each other).
-  if (!res.ok || !res.data) return <ExpiredCard token={token} />;
+  if (!res.ok || !res.data) return framed(framedBy, <ExpiredCard token={token} />);
+  // Embedded: framed by (or a request from inside the frame of) the session's own website.
+  const embedOrigin = h.get(EMBED_HEADER) === "1" ? (res.data.embed_origin ?? null) : null;
 
   // Name the session in the URL before any script runs, so a reload or refresh of this tab
   // keeps it after another checkout link opens in the same browser. Other params stay.
@@ -94,16 +109,17 @@ export default async function CheckoutPage(props: Search) {
 
   // Already completed → nothing left to do.
   if (res.data.status === "completed") {
-    return (
+    return framed(
+      embedOrigin,
       <NoticeCard icon={<CheckCircle2 />} tone="success" title="This checkout is already complete">
         {res.data.mode === "change" && res.data.change?.reactivation
           ? "Your subscription is already reactivated."
           : res.data.mode === "change"
             ? "Your plan is already changed."
             : "We created your subscription."}
-      </NoticeCard>
+      </NoticeCard>,
     );
   }
 
-  return <CheckoutFlow view={res.data} countries={countries} />;
+  return framed(embedOrigin, <CheckoutFlow view={res.data} countries={countries} />);
 }

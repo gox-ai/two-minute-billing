@@ -1890,6 +1890,15 @@ export class StripeProvider implements PaymentProvider {
     return hit;
   }
 
+  /**
+   * India export rules: a foreign card needs the customer's name and street address.
+   * Measured 2026-11-26 on our IN test account: name + country, postal code, city and state
+   * is refused; name + line1 + country passes; an Indian card needs neither.
+   */
+  async streetAddressRequiredOutside(): Promise<string | null> {
+    return (await this.accountCountry()) === "IN" ? "IN" : null;
+  }
+
   /** The account's country, read once per secret key for the process. */
   private accountCountry(): Promise<string | null> {
     let hit = ACCOUNT_COUNTRY_BY_KEY.get(this.keyHash);

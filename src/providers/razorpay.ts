@@ -3000,7 +3000,7 @@ export class RazorpayProvider implements PaymentProvider {
    *  - PUT requires the full object (`url` at minimum) — a partial body is rejected
    *    with "url: cannot be blank".
    *  - there is **no DELETE** verb; deactivating (`active: false`) is the only removal.
-   *  - the URL's host is **resolved** — a placeholder `WEBHOOK_BASE_URL` such as
+   *  - the URL's host is **resolved** — a placeholder webhook base URL such as
    *    `…example.invalid` is rejected outright, which is why the caller keeps a
    *    paste-the-secret fallback.
    */

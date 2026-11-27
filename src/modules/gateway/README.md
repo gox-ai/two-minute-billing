@@ -100,7 +100,7 @@ RazorPay API shapes, all verified live 2026-07-27 (each is a 404/400 trap):
   provisioning to revive a disabled endpoint.
 - Duplicate URLs are **accepted** — RazorPay will happily register the same URL twice and then
   double-deliver every event, so `provisionWebhookEndpoint` looks the URL up and updates in place.
-- The URL's host is **resolved**, so a placeholder `WEBHOOK_BASE_URL` like `…example.invalid` is
+- The URL's host is **resolved**, so a placeholder `ADVERTISED_API_URL` like `…example.invalid` is
   rejected outright. That's the main reason the paste fallback exists.
 
 Mode is derived from stored state: a `webhook_endpoint_id` in the credentials blob means registration
@@ -110,13 +110,13 @@ The Notification URL carries the gateway account's public id so inbound events a
 exact account. **One shape for every gateway:**
 
 ```
-{GATEWAY_WEBHOOK_BASE_URL ?? WEBHOOK_BASE_URL}/v1/gateway_webhooks/<gateway>?id=<gwa_…>
+{GATEWAY_WEBHOOK_BASE_URL ?? ADVERTISED_API_URL}/v1/gateway_webhooks/<gateway>?id=<gwa_…>
 ```
 
-**Base URL and moves.** New registrations use `GATEWAY_WEBHOOK_BASE_URL` (unset = `WEBHOOK_BASE_URL`),
+**Base URL and moves.** New registrations use `GATEWAY_WEBHOOK_BASE_URL` (unset = `ADVERTISED_API_URL`),
 so gateways can post to a host that forwards only `/v1/gateway_webhooks/`. Each account stores the
 URL it is registered under as `webhook_url` (platform-owned, like `webhook_endpoint_id`); an account
-registered before that key existed reads as `WEBHOOK_BASE_URL` (`accountNotificationUrl`). The card,
+with none uses the current base (`accountNotificationUrl`). The card,
 removal on delete, the adapter's `notificationUrl` and Square's signature check all use that stored
 URL; Square also accepts the old and new bases while retries drain.
 
@@ -140,14 +140,14 @@ knowing:
 - An inbound request with **no `?id=`** is now refused `404 gateway_account_not_specified` rather than
   guessing "the single active account of this key" — which silently picked one once a business had
   more than one account per gateway.
-- Re-run `WEBHOOK_BASE_URL=… pnpm tsx scripts/setup-dev-gateways.ts` after changing the base URL; it
+- Re-run `ADVERTISED_API_URL=… pnpm tsx scripts/setup-dev-gateways.ts` after changing the base URL; it
   re-registers (PayPal *adopts* a matching endpoint rather than duplicating).
 - Deleting a gateway account removes its registration at the gateway (`removeWebhookEndpointOnDelete`,
   2026-10-25): only the one whose URL is this account's notification URL. RazorPay has **no
   DELETE**, so it is switched off (`PUT active:false`) and the operator deletes it. Never touch
   endpoints you did not register — the same sandbox gateway accounts may also serve other systems.
 
-Requires **`WEBHOOK_BASE_URL`** = the public origin this API is reachable at. Locally that means a
+Requires **`ADVERTISED_API_URL`** = the public origin this API is reachable at (or `GATEWAY_WEBHOOK_BASE_URL` when gateways post to their own host). Locally that means a
 tunnel (`stripe listen --forward-to …`, ngrok) — gateways cannot reach localhost. API surface:
 `GET|POST /v1/businesses/:biz/gateway_accounts/:gwa/webhook_endpoint` (`?reveal=true` to include a
 paste-required secret; `{force:true}` to re-register / rotate).
@@ -437,11 +437,11 @@ customer→vault→charge→refund→webhook-provision, plus RazorPay/PayPal con
 `pnpm verify:webhook-e2e` closes the **inbound** half. It provisions a real endpoint at Stripe to
 obtain a genuine `whsec_`, makes a real charge + refund, then delivers webhook payloads signed with
 **Stripe's own signing implementation** (`generateTestHeaderString`) to the real HTTP route. Run it
-with `WEBHOOK_BASE_URL` set (any URL — the payloads are delivered directly, so the URL never has to
+with `ADVERTISED_API_URL` set (any URL — the payloads are delivered directly, so the URL never has to
 receive traffic):
 
 ```
-WEBHOOK_BASE_URL=https://tmbilling-e2e.example.invalid pnpm verify:webhook-e2e
+ADVERTISED_API_URL=https://tmbilling-e2e.example.invalid pnpm verify:webhook-e2e
 ```
 
 It proves: a Stripe-signed payload is accepted while a wrong-secret **and** a tampered payload are
@@ -464,7 +464,7 @@ PORT=4444 pnpm tsx src/index.ts
 # terminal 2 — expose it
 ngrok http 4444
 # terminal 3 — run against the tunnel origin
-WEBHOOK_BASE_URL=https://<id>.ngrok-free.app pnpm verify:stripe-tunnel
+ADVERTISED_API_URL=https://<id>.ngrok-free.app pnpm verify:stripe-tunnel
 ```
 
 It registers a real Stripe endpoint at that URL, makes a real charge, issues a **real refund**, then
@@ -1085,7 +1085,7 @@ pnpm dev
 # terminal 2
 ngrok http 4000
 # terminal 3
-WEBHOOK_BASE_URL=https://<id>.ngrok-free.app pnpm verify:razorpay-tunnel
+ADVERTISED_API_URL=https://<id>.ngrok-free.app pnpm verify:razorpay-tunnel
 ```
 
 It creates a gateway account with the real test credentials, **self-registers the endpoint at
@@ -1160,6 +1160,19 @@ Known live findings:
   UPI Autopay is scriptable (see `verify:razorpay-live`); only its *card* rail needs the merchant flag.
 
 ## Changelog
+- **2026-11-27** — `WEBHOOK_BASE_URL` removed. New registrations use `GATEWAY_WEBHOOK_BASE_URL`, else
+  `ADVERTISED_API_URL`; an account's registered URL is always its stored `webhook_url` (the rebuild-from-old-base
+  fallback is gone; prod checked: every registered account stores one).
+- **2026-11-26** — A payment gateway can require a street address for buyers outside its
+  home country (`streetAddressRequiredOutside`, read by `gatewayAddressRules` in
+  `modules/gateway/address-rules.ts`). Stripe India returns `IN`: a foreign card is an export
+  payment and Stripe refuses it without the customer's name and `address.line1`. The checkout
+  details save, the portal save and both `billing_details_missing` add `line1` for such a
+  buyer (`GatewayAddressRules` in `address-field-rules.ts`); the buyer view and `portal_me`
+  carry `street_required_outside`, and the checkout form marks line 1 required once a country
+  outside it is selected. Fails open when the gateway cannot be read.
+  On such a business `AddressFieldLocks.gateway_address` keeps country required and first
+  name + line 1 editable at runtime, and the settings save refuses anything looser.
 
 - **2026-11-20 (merchant-account alert)** — payer-side refusals no longer read as the merchant's
   setup: PayU `E755`/`E756` → `card_restricted`, `E4290` → `bank_account_restricted` (terminal,
@@ -2187,7 +2200,7 @@ Known live findings:
     EXISTING secret, so a hand-pasted secret stays valid if registration fails.
   - Account create over the API (`registerWebhookEndpointOnCreate`) registers straight away for
     every gateway with webhook material. Best effort: a failure never fails the create. Skipped
-    without `WEBHOOK_BASE_URL`, which keeps tests off the network.
+    without `ADVERTISED_API_URL`, which keeps tests off the network.
   - Rotation (`force`) registers the new secret FIRST and stores it only once RazorPay accepts it.
     A refused PUT keeps the old secret (RazorPay still holds it) and answers "We could not rotate
     the webhook secret…". RazorPay signs retries of earlier events with the old secret, so those

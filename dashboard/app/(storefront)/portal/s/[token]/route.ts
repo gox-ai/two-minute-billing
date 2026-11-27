@@ -1,4 +1,6 @@
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { EMBED_ORIGIN_HEADER } from "@/lib/storefront-embed";
 import { portalExchange, portalPeek, portalResume } from "@/lib/portal-api";
 import { portalLinkLanding } from "@/lib/portal-link-landing";
 import { enterPortal } from "@/lib/portal-entry";
@@ -21,7 +23,41 @@ import { readStorefrontToken, rememberPortalBusiness } from "@/lib/storefront-se
  */
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
+const PROBE = "tmb_embed_probe";
+
+/**
+ * Embedded (framed by the session's own website): the link is single-use, so check that this
+ * browser keeps a partitioned cookie BEFORE spending it. If it does not (Safari before 26.2), the
+ * frame says `cookies_blocked` and the loader opens the same, still unspent, link in a new tab.
+ */
+async function embedProbe(req: Request): Promise<Response | null> {
+  const origin = (await headers()).get(EMBED_ORIGIN_HEADER);
+  if (!origin) return null;
+  const url = new URL(req.url);
+  const jar = await cookies();
+  if (!url.searchParams.has("probe")) {
+    jar.set(PROBE, "1", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      partitioned: true,
+      path: "/portal",
+      maxAge: 60,
+    });
+    url.searchParams.set("probe", "1");
+    redirect(`${url.pathname}${url.search}`);
+  }
+  if (jar.get(PROBE)) return null;
+  const message = JSON.stringify({ source: "tmb-embed", type: "error", code: "cookies_blocked" });
+  return new Response(
+    `<!doctype html><meta charset="utf-8"><script>parent.postMessage(${message}, ${JSON.stringify(origin)});</script>`,
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
+  );
+}
+
+export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
+  const blocked = await embedProbe(req);
+  if (blocked) return blocked;
   const { token } = await params;
   // An emailed link is never spent on a page load: mail scanners load links before the
   // customer does. It goes to a page whose button spends it (Phase 4b). API links, opened

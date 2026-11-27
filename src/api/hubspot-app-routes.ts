@@ -43,13 +43,16 @@ const createBody = recordBody.extend({
   quantity: z.number().int().positive().max(LIMITS.quantity).default(1),
 });
 
-/** Every URI HubSpot may have signed: our public base first, then the host we were reached on. */
+/**
+ * Every URI HubSpot may have signed: our public base first, then the host we were reached on
+ * (HubSpot calls https; the proxy may report another scheme).
+ */
 function signedUris(req: FastifyRequest): string[] {
   const out: string[] = [];
-  const base = config.WEBHOOK_BASE_URL?.replace(/\/+$/, "");
+  const base = config.ADVERTISED_API_URL?.replace(/\/+$/, "");
   if (base) out.push(`${base}${req.url}`);
-  out.push(`${req.protocol}://${req.host}${req.url}`);
-  return out;
+  out.push(`https://${req.host}${req.url}`, `${req.protocol}://${req.host}${req.url}`);
+  return out.filter((u, i) => out.indexOf(u) === i);
 }
 
 function parseJson(req: FastifyRequest): { raw: string; body: Record<string, unknown> } {

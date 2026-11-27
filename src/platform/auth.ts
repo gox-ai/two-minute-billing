@@ -198,6 +198,8 @@ export const READ_SCOPE_POSTS: ReadonlySet<string> = new Set([
   "/v1/businesses/:biz/subscriptions/count",
   "/v1/businesses/:biz/emails/templates/:type/preview",
   "/v1/businesses/:biz/prices/:price/rate_change_preview",
+  // Row counts and a sample of an export's files; it writes nothing (bulk-export/runs.ts).
+  "/v1/businesses/:biz/exports/preview",
   // A batch of analytics questions; POST only because the batch does not fit a query string.
   "/v1/analytics/query",
   // MCP's JSON-RPC envelope is a POST; every tool behind it is a read (src/api/mcp-routes.ts).

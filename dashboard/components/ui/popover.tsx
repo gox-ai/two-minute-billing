@@ -4,6 +4,7 @@ import * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { useInModal } from "@/components/ui/in-modal";
 
 /**
  * Popover — the container the app was missing for filter panels, column pickers
@@ -11,8 +12,15 @@ import { cn } from "@/lib/utils";
  * a hand-rolled absolutely-positioned div (no focus trap, no collision handling,
  * no escape-to-close).
  */
-function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />;
+/**
+ * Inside a modal Dialog or Sheet the popover is modal too (unless the caller says otherwise):
+ * the dialog's scroll lock covers everything outside it, and the portalled content is outside
+ * it, so a non-modal popover's list would not scroll (reported on the segment filter dialog,
+ * 2026-11-26). Modal gives the content its own lock, which takes over while it is open.
+ */
+function Popover({ modal, ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
+  const inModal = useInModal();
+  return <PopoverPrimitive.Root data-slot="popover" modal={modal ?? inModal} {...props} />;
 }
 
 function PopoverTrigger({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {

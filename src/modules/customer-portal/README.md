@@ -129,6 +129,28 @@ carries the same argument from the browser side.
   attached to a DIFFERENT provider customer.
 
 ## Changelog
+- **2026-11-27** — A hidden `billing.line1` also hides `billing.line2`/`line3` on the buyer's page
+  (`buyerFieldConfig` = locks + this rule); stored values are kept.
+- **2026-11-27** — With `fill_export_street` on, the gateway lock lets `billing.line1` hide and keeps
+  `billing.postal_code` + `billing.city` visible instead (`AddressFieldLocks.gateway_street_fill`);
+  `street_required_outside` is null in the buyer view then.
+- **2026-11-26** — Email-only buyer details: `customer.first_name` and `billing.country` may be
+  `hide` unless tax or the gateway lock keeps them (`nameAsked`, `AddressFieldLocks.gateway_address`).
+- **2026-11-26** — A payment gateway can require a street address for buyers outside its
+  home country (`streetAddressRequiredOutside`, read by `gatewayAddressRules` in
+  `modules/gateway/address-rules.ts`). Stripe India returns `IN`: a foreign card is an export
+  payment and Stripe refuses it without the customer's name and `address.line1`. The checkout
+  details save, the portal save and both `billing_details_missing` add `line1` for such a
+  buyer (`GatewayAddressRules` in `address-field-rules.ts`); the buyer view and `portal_me`
+  carry `street_required_outside`, and the checkout form marks line 1 required once a country
+  outside it is selected. Fails open when the gateway cannot be read.
+  On such a business `AddressFieldLocks.gateway_address` keeps country required and first
+  name + line 1 editable at runtime, and the settings save refuses anything looser.
+- **2026-11-26** — Embedded portal: `/portal/v1/me` returns `embed_origin`. Inside a business's frame
+  the portal posts change events to it, hides Sign out, and opens provider pages in a new tab
+  (`embedding` README).
+- **2026-11-26** — `embed_origin` on `POST …/customers/:cus/portal_sessions` (0551), api links only:
+  the one website that may frame the portal (`embedding` module). Shown on the session read.
 - **2026-11-25** — `authenticatePortal` refuses a token whose session differs from an
   `X-Portal-Session` header (409 `portal_session_mismatch`); `/portal/v1/me` returns `session`
   and email-code sign-in returns `id`. The storefront binds each tab to its own session, so two

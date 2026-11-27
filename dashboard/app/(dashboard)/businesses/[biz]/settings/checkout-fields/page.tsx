@@ -13,7 +13,6 @@ import {
 } from "@/components/settings/settings-layout";
 import { saveCheckoutFieldsAction } from "./actions";
 import { CheckoutFieldsCards } from "./checkout-fields-form";
-import { isAlwaysAskedCheckoutField } from "@/lib/checkout-field-rules";
 import { resolveCheckout, resolvePortal } from "./field-matrix";
 
 export const dynamic = "force-dynamic";
@@ -71,13 +70,14 @@ export default async function CheckoutFieldsSettings({
   const listed = (values: Record<string, string>, state: string) =>
     Object.keys(values)
       .filter((k) => !ownLine.includes(k) && values[k] === state)
-      // An always-asked field stored as Hidden still shows on the checkout.
-      .filter((k) => !(values === checkout && state === "hide" && isAlwaysAskedCheckoutField(k)))
       .map((k) => LABELS[k as CheckoutFieldKey]);
   const list = (labels: string[]) => (labels.length ? labels.join(", ") : "None");
-  const checkoutHidden = listed(checkout, "hide");
-  const portalHidden = listed(portal, "hide");
-  const portalReadOnly = listed(portal, "read_only");
+  // A hidden line 1 hides lines 2 and 3 on the buyer's page, so the summary lists them too.
+  const asBuyerSees = (v: Record<string, string>) =>
+    v["billing.line1"] === "hide" ? { ...v, "billing.line2": "hide", "billing.line3": "hide" } : v;
+  const checkoutHidden = listed(asBuyerSees(checkout), "hide");
+  const portalHidden = listed(asBuyerSees(portal), "hide");
+  const portalReadOnly = listed(asBuyerSees(portal), "read_only");
 
   return (
     <SettingsPage

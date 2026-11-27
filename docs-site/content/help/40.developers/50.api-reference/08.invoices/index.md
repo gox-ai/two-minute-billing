@@ -46,6 +46,8 @@ Refunds are grouped here because a refund follows a credit note: issue one again
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/stop_dunning`](/help/developers/api-reference/invoices/stop-dunning-for-an-invoice) | Stop dunning for an invoice |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/void`](/help/developers/api-reference/invoices/void-an-open-invoice) | Void an open invoice |
 | `POST` | [`/v1/businesses/{biz}/invoices/{inv}/write_off`](/help/developers/api-reference/invoices/write-off-an-unpaid-invoice-as-bad-debt) | Write off an unpaid invoice as bad debt |
+| `GET` | [`/v1/businesses/{biz}/orders`](/help/developers/api-reference/invoices/list-orders) | List orders |
+| `GET` | [`/v1/businesses/{biz}/orders/{id}`](/help/developers/api-reference/invoices/get-an-order) | Get an order |
 | `POST` | [`/v1/businesses/{biz}/payments/{pay}/cancel_pending_debit`](/help/developers/api-reference/invoices/cancel-a-debit-the-gateway-has-not-collected-yet) | Cancel a debit the gateway has not collected yet |
 | `POST` | [`/v1/businesses/{biz}/payments/{pay}/refund`](/help/developers/api-reference/invoices/refund-a-payment) | Refund a payment |
 | `GET` | [`/v1/businesses/{biz}/retries`](/help/developers/api-reference/invoices/list-invoices-under-retry) | List invoices under retry (dunning) |

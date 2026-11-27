@@ -12,8 +12,7 @@ import type {
 import { useDefaultState } from "@/lib/use-default-state";
 import { SelectField } from "@/components/ui/select-field";
 import { SettingRow, SettingsCard } from "@/components/settings/settings-layout";
-import { isAlwaysAskedCheckoutField } from "@/lib/checkout-field-rules";
-import { lockedBy, neverHidden, portalInputName } from "./field-matrix";
+import { NAME_KEY, keptVisibleBy, lockedBy, portalInputName } from "./field-matrix";
 
 const STATE_LABEL: Record<PortalFieldState, string> = {
   mandatory: "Required",
@@ -26,8 +25,11 @@ const options = (states: readonly PortalFieldState[]) =>
   states.map((v) => ({ value: v, label: STATE_LABEL[v] }));
 const CHECKOUT_OPTIONS = options(["mandatory", "show", "hide"]);
 const CHECKOUT_NO_HIDDEN = options(["mandatory", "show"]);
+/** The checkout's name: asked (and required) or not asked at all. */
+const CHECKOUT_NAME = options(["mandatory", "hide"]);
+const CHECKOUT_NAME_KEPT = options(["mandatory"]);
 const PORTAL_OPTIONS = options(["mandatory", "show", "hide", "read_only"]);
-const PORTAL_NO_HIDDEN = options(["mandatory", "show", "read_only"]);
+const PORTAL_EDITABLE = options(["mandatory", "show"]);
 
 /** A key both matrices carry; checkout-only rows (email, PO number) are built separately. */
 type Row = { key: CheckoutFieldKey & PortalFieldKey; label: string; help?: React.ReactNode };
@@ -38,7 +40,7 @@ const CUSTOMER: Row[] = [
   {
     key: "customer.first_name",
     label: "First name",
-    help: "The hosted checkout always asks for it. It is the name on the invoice.",
+    help: "The name on the invoice. Hidden: we do not ask for a name, and invoices show the email address.",
   },
   { key: "customer.last_name", label: "Last name" },
   { key: "customer.phone", label: "Phone number" },
@@ -65,7 +67,7 @@ const BILLING: Row[] = [
   {
     key: "billing.country",
     label: "Country",
-    help: "Cannot be hidden. It sets the state list and the postal code format.",
+    help: "It sets the state list and the postal code format. Hidden: we also do not ask for the postal code, city or state.",
   },
 ];
 
@@ -119,6 +121,19 @@ function SurfaceSelect({
   );
 }
 
+/** Lines 2 and 3 on a surface where line 1 is hidden: shown as Hidden, own value still saved. */
+function FollowsLine1({ caption, name, value }: { caption: string; name: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground sm:hidden">{caption}</span>
+      <input type="hidden" name={name} value={value} />
+      <span className="flex h-9 w-30 items-center text-sm text-muted-foreground">Hidden</span>
+    </div>
+  );
+}
+
+const FOLLOWS_LINE1 = new Set<string>(["billing.line2", "billing.line3"]);
+
 /**
  * One field's two pickers. A locked field renders both disabled at Required; a disabled
  * `SelectField` still posts its value, so the save carries the lock too.
@@ -129,20 +144,32 @@ function FieldStateRow({
   portal,
   locks,
   consequence,
+  onChange,
+  line1Hidden,
 }: {
   row: Row;
   checkout: CheckoutFieldState;
   portal: PortalFieldState;
   locks: AddressFieldLocks | null;
   consequence?: (c: CheckoutFieldState, p: PortalFieldState) => React.ReactNode;
+  /** Reports this row's live values (line 1 only: lines 2 and 3 follow it). */
+  onChange?: (surface: "checkout" | "portal", v: string) => void;
+  line1Hidden?: { checkout: boolean; portal: boolean };
 }) {
   const lock = lockedBy(locks, row.key);
-  const checkoutNoHidden = isAlwaysAskedCheckoutField(row.key) || neverHidden(row.key);
-  // A Hidden stored for an always-asked field reads as Optional, which is what it did.
-  const [c, setC] = useDefaultState<string>(
-    lock ? "mandatory" : checkoutNoHidden && checkout === "hide" ? "show" : checkout,
-  );
+  const keptVisible = keptVisibleBy(locks, row.key);
+  const isName = row.key === NAME_KEY;
+  const checkoutOptions = isName
+    ? keptVisible
+      ? CHECKOUT_NAME_KEPT
+      : CHECKOUT_NAME
+    : keptVisible
+      ? CHECKOUT_NO_HIDDEN
+      : CHECKOUT_OPTIONS;
+  const [c, setC] = useDefaultState<string>(lock ? "mandatory" : checkout);
   const [p, setP] = useDefaultState<string>(lock ? "mandatory" : portal);
+  const followC = FOLLOWS_LINE1.has(row.key) && line1Hidden?.checkout === true;
+  const followP = FOLLOWS_LINE1.has(row.key) && line1Hidden?.portal === true;
   return (
     <SettingRow
       label={row.label}
@@ -151,28 +178,48 @@ function FieldStateRow({
       placement="end"
       control={
         <div className="flex flex-col gap-2 sm:flex-row">
-          <SurfaceSelect
-            caption="Checkout"
-            name={row.key}
-            ariaLabel={`${row.label} at checkout`}
-            value={c}
-            onValueChange={setC}
-            options={checkoutNoHidden ? CHECKOUT_NO_HIDDEN : CHECKOUT_OPTIONS}
-            disabled={lock != null}
-          />
-          <SurfaceSelect
-            caption="Portal"
-            name={portalInputName(row.key)}
-            ariaLabel={`${row.label} in the portal`}
-            value={p}
-            onValueChange={setP}
-            options={neverHidden(row.key) ? PORTAL_NO_HIDDEN : PORTAL_OPTIONS}
-            disabled={lock != null}
-          />
+          {followC ? (
+            <FollowsLine1 caption="Checkout" name={row.key} value={c} />
+          ) : (
+            <SurfaceSelect
+              caption="Checkout"
+              name={row.key}
+              ariaLabel={`${row.label} at checkout`}
+              value={c}
+              onValueChange={(v) => {
+                setC(v);
+                onChange?.("checkout", v);
+              }}
+              options={checkoutOptions}
+              disabled={lock != null}
+            />
+          )}
+          {followP ? (
+            <FollowsLine1 caption="Portal" name={portalInputName(row.key)} value={p} />
+          ) : (
+            <SurfaceSelect
+              caption="Portal"
+              name={portalInputName(row.key)}
+              ariaLabel={`${row.label} in the portal`}
+              value={p}
+              onValueChange={(v) => {
+                setP(v);
+                onChange?.("portal", v);
+              }}
+              options={keptVisible ? PORTAL_EDITABLE : PORTAL_OPTIONS}
+              disabled={lock != null}
+            />
+          )}
         </div>
       }
       consequence={
-        lock ?? consequence?.(c as CheckoutFieldState, p as PortalFieldState) ?? undefined
+        lock ??
+        keptVisible ??
+        (followC || followP
+          ? "Address line 1 is hidden, so this line is hidden too."
+          : undefined) ??
+        consequence?.(c as CheckoutFieldState, p as PortalFieldState) ??
+        undefined
       }
     />
   );
@@ -275,6 +322,10 @@ export function CheckoutFieldsCards({
   collectsPoNumber: boolean;
   hostedPagesHref: string;
 }) {
+  // Lines 2 and 3 follow line 1's live value on each surface.
+  const [line1C, setLine1C] = useDefaultState<string>(checkout["billing.line1"]);
+  const [line1P, setLine1P] = useDefaultState<string>(portal["billing.line1"]);
+  const line1Hidden = { checkout: line1C === "hide", portal: line1P === "hide" };
   const row = (
     r: Row,
     consequence?: (c: CheckoutFieldState, p: PortalFieldState) => React.ReactNode,
@@ -286,6 +337,12 @@ export function CheckoutFieldsCards({
       portal={portal[r.key]}
       locks={locks}
       consequence={consequence}
+      line1Hidden={line1Hidden}
+      onChange={
+        r.key === "billing.line1"
+          ? (surface, v) => (surface === "checkout" ? setLine1C(v) : setLine1P(v))
+          : undefined
+      }
     />
   );
   return (

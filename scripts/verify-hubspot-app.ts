@@ -21,7 +21,7 @@ import type { AddressInfo } from "node:net";
 process.env.HUBSPOT_CLIENT_ID = "verify-client-id";
 process.env.HUBSPOT_CLIENT_SECRET = "verify-client-secret";
 process.env.HUBSPOT_REDIRECT_URI = "http://localhost:4100/integrations/hubspot/callback";
-process.env.WEBHOOK_BASE_URL = "https://api.billing.test";
+process.env.ADVERTISED_API_URL = "https://api.billing.test";
 process.env.DASHBOARD_BASE_URL = "https://dash.billing.test";
 
 const SECRET = "verify-client-secret";

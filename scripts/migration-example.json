@@ -1,0 +1,41 @@
+{
+  "plans": [
+    { "id": "pro_monthly", "name": "Pro", "amountMinor": 4900, "currency": "USD", "interval": "month", "intervalCount": 1 },
+    { "id": "team_yearly", "name": "Team", "amountMinor": 99000, "currency": "USD", "interval": "year", "intervalCount": 1 }
+  ],
+  "customers": [
+    {
+      "id": "cust_alice",
+      "email": "alice@example.com",
+      "name": "Alice",
+      "paymentMethod": {
+        "provider": "stripe",
+        "providerCustomerId": "cus_alice123",
+        "providerPaymentMethodId": "pm_alice123",
+        "brand": "visa",
+        "last4": "4242"
+      }
+    },
+    { "id": "cust_bob", "email": "bob@example.com", "name": "Bob" }
+  ],
+  "subscriptions": [
+    {
+      "id": "sub_alice",
+      "customerId": "cust_alice",
+      "planId": "pro_monthly",
+      "quantity": 1,
+      "status": "active",
+      "currency": "USD",
+      "currentTermEnd": "2026-07-15T00:00:00Z"
+    },
+    {
+      "id": "sub_bob",
+      "customerId": "cust_bob",
+      "planId": "team_yearly",
+      "quantity": 3,
+      "status": "non_renewing",
+      "currency": "USD",
+      "currentTermEnd": "2027-01-01T00:00:00Z"
+    }
+  ]
+}

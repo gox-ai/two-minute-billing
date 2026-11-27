@@ -72,8 +72,8 @@ export function BizTile({
   );
 }
 
-type StepState = "todo" | "current" | "done" | "warn" | "error";
-interface Step {
+export type StepState = "todo" | "current" | "done" | "warn" | "error";
+export interface Step {
   label: string;
   sub: string;
   state: StepState;
@@ -193,8 +193,11 @@ export function RouteBand({
   to,
   aside,
   steps,
+  label = "Copy route",
   children,
 }: {
+  /** The band's accessible name. */
+  label?: string;
   from: React.ReactNode;
   to: React.ReactNode;
   aside?: React.ReactNode;
@@ -203,10 +206,7 @@ export function RouteBand({
   children?: React.ReactNode;
 }) {
   return (
-    <section
-      aria-label="Copy route"
-      className="anim-rise overflow-hidden rounded-xl border bg-card"
-    >
+    <section aria-label={label} className="anim-rise overflow-hidden rounded-xl border bg-card">
       <div className="flex flex-col gap-4 p-5 max-sm:p-4">
         <div className="flex flex-wrap items-center gap-3">
           {from}
